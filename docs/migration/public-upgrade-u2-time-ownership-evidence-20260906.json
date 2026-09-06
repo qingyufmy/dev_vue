@@ -1,0 +1,925 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "70d7ff33",
+  "reviewSha256": "b302782daa1b1248eb85ad64ea54394c3d8e580b314254107d0df1b983824e2d",
+  "scope": "identity-account-time-provenance",
+  "executable": false,
+  "fieldCount": 39,
+  "referenceCatalog": {
+    "pool": {
+      "file": "server/db.js",
+      "from": 5,
+      "to": 64,
+      "fileSha256": "0a19666e458f0a1ccd2253b4432062fbdabfc4ab8e4d51a10304035ffcc5e22a"
+    },
+    "userDeletion": {
+      "file": "server/admin/user-deletion.js",
+      "from": 29,
+      "to": 36,
+      "fileSha256": "f5012121f88c67323fbe6e1afdf88b1586cd85176a028d30fb2ce0c65e173ca1"
+    },
+    "userExpiry": {
+      "file": "server/admin/user-profile.js",
+      "from": 15,
+      "to": 23,
+      "fileSha256": "9ee4f245c09b12f1451fea63feeaf1bd8f8146e1b97bdd56795510b3aac85684"
+    },
+    "presence": {
+      "file": "server/index.js",
+      "from": 289,
+      "to": 289,
+      "fileSha256": "aded6a4d20f2ca6dbe69cd17ac2aee5f725ea65a61faf4171bdbde19e1331da5"
+    },
+    "verification": {
+      "file": "server/routes/auth.js",
+      "from": 646,
+      "to": 648,
+      "fileSha256": "7eca0f97bcf0f5ace3ee7a8e4af65f4f64b6455f4c39e8d0b90b67259c0250ed"
+    },
+    "sms": {
+      "file": "server/sms.js",
+      "from": 92,
+      "to": 99,
+      "fileSha256": "7b12e111089ad3750ad98d4b62c6c89aa6ba3738e534d24ef664024609e8ae82"
+    },
+    "pairing": {
+      "file": "server/bridge-pairing.js",
+      "from": 44,
+      "to": 49,
+      "fileSha256": "9e4205da2b987a6afce0168a8abad9364f9353e2a4e1dc6054340ca4b36d4d66"
+    },
+    "refresh": {
+      "file": "server/bridge-auth-session.js",
+      "from": 40,
+      "to": 95,
+      "fileSha256": "e0cb3d1fc9b5d053ee69091255f6f3d84df25ad2adf42c60500ee46a6814100e"
+    },
+    "account": {
+      "file": "server/routes/ai/risk-state.js",
+      "from": 510,
+      "to": 636,
+      "fileSha256": "3076f8cb1f4badb5ce03b5e4adc977a2c063b4456e01f77db8f698dfd9b1e8ce"
+    },
+    "manualAccount": {
+      "file": "server/routes/ai/strategy-ownership.js",
+      "from": 568,
+      "to": 580,
+      "fileSha256": "67e0c410c019f2656f07dbe2493996c90173cc4f7507bf265f49fcc85ebb5c64"
+    },
+    "historicalSeed": {
+      "file": "server/migrations.js",
+      "from": 3227,
+      "to": 3265,
+      "fileSha256": "8d8225e40fa39ba2fcc60267b5066ba240e6d114078756552d770b5e66d8d395"
+    },
+    "terminalDefaults": {
+      "file": "server/migrations.js",
+      "from": 4100,
+      "to": 4125,
+      "fileSha256": "8d8225e40fa39ba2fcc60267b5066ba240e6d114078756552d770b5e66d8d395"
+    },
+    "terminal": {
+      "file": "server/bridge-v3/read-model.js",
+      "from": 276,
+      "to": 301,
+      "fileSha256": "3d731485ed4175e99fd0ff742b268dc704cff3a050d7435553d68e00a8716e88"
+    },
+    "observer": {
+      "file": "server/routes/ai/observer-channels.js",
+      "from": 288,
+      "to": 489,
+      "fileSha256": "6ac5862e88e915e17e79c9e8bbfa969962ac87757c6671851590c6c3aa46fd7b"
+    }
+  },
+  "history": [
+    {
+      "commit": "645f4f7e",
+      "date": "2026-06-10",
+      "evidence": "beijingNow_introduced"
+    },
+    {
+      "commit": "29599418",
+      "date": "2026-07-08",
+      "evidence": "pool_set_time_zone_introduced"
+    },
+    {
+      "commit": "fa6bf23a",
+      "date": "2026-07-22",
+      "evidence": "ownership_history_writer_uses_beijingNow"
+    }
+  ],
+  "fields": [
+    {
+      "source": "users.plan_expires_at",
+      "sourceType": "datetime",
+      "sourceNullable": true,
+      "currentTarget": "users.plan_expires_at",
+      "writeFamily": "mixed_user_writers",
+      "references": [
+        "pool",
+        "userExpiry",
+        "userDeletion",
+        "presence"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "preserve_null_without_offset",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "users.last_seen_at",
+      "sourceType": "datetime",
+      "sourceNullable": true,
+      "currentTarget": "users.last_seen_at_utc",
+      "writeFamily": "mixed_user_writers",
+      "references": [
+        "pool",
+        "userExpiry",
+        "userDeletion",
+        "presence"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "preserve_null_without_offset",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "users.bridge_heartbeat",
+      "sourceType": "datetime",
+      "sourceNullable": true,
+      "currentTarget": "history-proposal:users.bridge_heartbeat",
+      "writeFamily": "retired_writer_not_resolved",
+      "references": [
+        "pool"
+      ],
+      "basisCandidate": null,
+      "basisEvidenceLevel": "unresolved",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "preserve_null_without_offset",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "users.created_at",
+      "sourceType": "datetime",
+      "sourceNullable": true,
+      "currentTarget": "users.created_at",
+      "writeFamily": "mixed_user_writers",
+      "references": [
+        "pool",
+        "userExpiry",
+        "userDeletion",
+        "presence"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "preserve_null_without_offset",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "users.updated_at",
+      "sourceType": "datetime",
+      "sourceNullable": true,
+      "currentTarget": "users.updated_at",
+      "writeFamily": "mixed_user_writers",
+      "references": [
+        "pool",
+        "userExpiry",
+        "userDeletion",
+        "presence"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "preserve_null_without_offset",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "users.deleted_at",
+      "sourceType": "datetime",
+      "sourceNullable": true,
+      "currentTarget": "users.deleted_at",
+      "writeFamily": "mixed_user_writers",
+      "references": [
+        "pool",
+        "userExpiry",
+        "userDeletion",
+        "presence"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "preserve_null_without_offset",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "verification_codes.expires_at",
+      "sourceType": "datetime",
+      "sourceNullable": false,
+      "currentTarget": "encrypted-snapshot:verification_codes.expires_at",
+      "writeFamily": "explicit_beijing_expiry_and_sql_default",
+      "references": [
+        "pool",
+        "verification",
+        "sms"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "verification_codes.created_at",
+      "sourceType": "datetime",
+      "sourceNullable": true,
+      "currentTarget": "encrypted-snapshot:verification_codes.created_at",
+      "writeFamily": "explicit_beijing_expiry_and_sql_default",
+      "references": [
+        "pool",
+        "verification",
+        "sms"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "preserve_null_without_offset",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "bridge_device_pairings.expires_at",
+      "sourceType": "datetime",
+      "sourceNullable": false,
+      "currentTarget": "encrypted-snapshot:bridge_device_pairings.expires_at",
+      "writeFamily": "sql_now_and_date_add",
+      "references": [
+        "pool",
+        "pairing"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "bridge_device_pairings.approved_at",
+      "sourceType": "datetime",
+      "sourceNullable": true,
+      "currentTarget": "encrypted-snapshot:bridge_device_pairings.approved_at",
+      "writeFamily": "sql_now_and_date_add",
+      "references": [
+        "pool",
+        "pairing"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "preserve_null_without_offset",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "bridge_device_pairings.consumed_at",
+      "sourceType": "datetime",
+      "sourceNullable": true,
+      "currentTarget": "encrypted-snapshot:bridge_device_pairings.consumed_at",
+      "writeFamily": "sql_now_and_date_add",
+      "references": [
+        "pool",
+        "pairing"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "preserve_null_without_offset",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "bridge_device_pairings.created_at",
+      "sourceType": "datetime",
+      "sourceNullable": false,
+      "currentTarget": "encrypted-snapshot:bridge_device_pairings.created_at",
+      "writeFamily": "sql_now_and_date_add",
+      "references": [
+        "pool",
+        "pairing"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "bridge_device_pairings.updated_at",
+      "sourceType": "datetime",
+      "sourceNullable": false,
+      "currentTarget": "encrypted-snapshot:bridge_device_pairings.updated_at",
+      "writeFamily": "sql_now_and_date_add",
+      "references": [
+        "pool",
+        "pairing"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "bridge_refresh_sessions.expires_at",
+      "sourceType": "datetime",
+      "sourceNullable": false,
+      "currentTarget": "bridge_refresh_sessions.expires_at",
+      "writeFamily": "sql_now_and_date_add",
+      "references": [
+        "pool",
+        "refresh",
+        "userDeletion"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "bridge_refresh_sessions.revoked_at",
+      "sourceType": "datetime",
+      "sourceNullable": true,
+      "currentTarget": "bridge_refresh_sessions.revoked_at",
+      "writeFamily": "sql_now_and_date_add",
+      "references": [
+        "pool",
+        "refresh",
+        "userDeletion"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "preserve_null_without_offset",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "bridge_refresh_sessions.last_used_at",
+      "sourceType": "datetime",
+      "sourceNullable": true,
+      "currentTarget": "bridge_refresh_sessions.last_used_at",
+      "writeFamily": "sql_now_and_date_add",
+      "references": [
+        "pool",
+        "refresh",
+        "userDeletion"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "preserve_null_without_offset",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "bridge_refresh_sessions.created_at",
+      "sourceType": "datetime",
+      "sourceNullable": false,
+      "currentTarget": "bridge_refresh_sessions.created_at",
+      "writeFamily": "sql_now_and_date_add",
+      "references": [
+        "pool",
+        "refresh",
+        "userDeletion"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "bridge_refresh_sessions.updated_at",
+      "sourceType": "datetime",
+      "sourceNullable": false,
+      "currentTarget": "bridge_refresh_sessions.updated_at",
+      "writeFamily": "sql_now_and_date_add",
+      "references": [
+        "pool",
+        "refresh",
+        "userDeletion"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "trading_accounts.created_at",
+      "sourceType": "datetime",
+      "sourceNullable": false,
+      "currentTarget": "trading_accounts.created_at_utc",
+      "writeFamily": "explicit_beijing_and_historical_updates",
+      "references": [
+        "pool",
+        "account",
+        "manualAccount",
+        "userDeletion"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "trading_accounts.updated_at",
+      "sourceType": "datetime",
+      "sourceNullable": false,
+      "currentTarget": "trading_accounts.updated_at_utc",
+      "writeFamily": "explicit_beijing_and_historical_updates",
+      "references": [
+        "pool",
+        "account",
+        "manualAccount",
+        "userDeletion"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "trading_accounts.observed_until",
+      "sourceType": "datetime",
+      "sourceNullable": true,
+      "currentTarget": "user_trading_account_settings.observed_until_utc",
+      "writeFamily": "explicit_beijing_and_historical_updates",
+      "references": [
+        "pool",
+        "account",
+        "manualAccount",
+        "userDeletion"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "preserve_null_without_offset",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "trading_accounts.identity_verified_at",
+      "sourceType": "datetime",
+      "sourceNullable": true,
+      "currentTarget": "user_trading_account_settings.identity_verified_at_utc",
+      "writeFamily": "explicit_beijing_and_historical_updates",
+      "references": [
+        "pool",
+        "account",
+        "manualAccount",
+        "userDeletion"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "preserve_null_without_offset",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "trading_accounts.first_verified_at",
+      "sourceType": "datetime",
+      "sourceNullable": true,
+      "currentTarget": "user_trading_account_settings.first_verified_at_utc",
+      "writeFamily": "explicit_beijing_and_historical_updates",
+      "references": [
+        "pool",
+        "account",
+        "manualAccount",
+        "userDeletion"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "preserve_null_without_offset",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "mt5_account_bindings.last_verified_at",
+      "sourceType": "datetime",
+      "sourceNullable": false,
+      "currentTarget": "proposal:current-account-owner.last_verified_at",
+      "writeFamily": "explicit_beijing_and_copy_backfill",
+      "references": [
+        "pool",
+        "account",
+        "historicalSeed"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "mt5_account_bindings.created_at",
+      "sourceType": "datetime",
+      "sourceNullable": false,
+      "currentTarget": "proposal:current-account-owner.created_at",
+      "writeFamily": "explicit_beijing_and_copy_backfill",
+      "references": [
+        "pool",
+        "account",
+        "historicalSeed"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "mt5_account_bindings.updated_at",
+      "sourceType": "datetime",
+      "sourceNullable": false,
+      "currentTarget": "proposal:current-account-owner.updated_at",
+      "writeFamily": "explicit_beijing_and_copy_backfill",
+      "references": [
+        "pool",
+        "account",
+        "historicalSeed"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "mt5_account_bindings.first_connected_at",
+      "sourceType": "datetime",
+      "sourceNullable": true,
+      "currentTarget": "proposal:current-account-owner.first_connected_at",
+      "writeFamily": "explicit_beijing_and_copy_backfill",
+      "references": [
+        "pool",
+        "account",
+        "historicalSeed"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "preserve_null_without_offset",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "mt5_account_bindings.last_connected_at",
+      "sourceType": "datetime",
+      "sourceNullable": true,
+      "currentTarget": "proposal:current-account-owner.last_connected_at",
+      "writeFamily": "explicit_beijing_and_copy_backfill",
+      "references": [
+        "pool",
+        "account",
+        "historicalSeed"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "preserve_null_without_offset",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "mt5_account_ownership_history.started_at",
+      "sourceType": "datetime",
+      "sourceNullable": false,
+      "currentTarget": "trading_account_ownership_intervals.started_at_utc",
+      "writeFamily": "explicit_beijing_and_copy_backfill",
+      "references": [
+        "pool",
+        "account",
+        "historicalSeed"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "mt5_account_ownership_history.ended_at",
+      "sourceType": "datetime",
+      "sourceNullable": true,
+      "currentTarget": "trading_account_ownership_intervals.ended_at_utc",
+      "writeFamily": "explicit_beijing_and_copy_backfill",
+      "references": [
+        "pool",
+        "account",
+        "historicalSeed"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "preserve_null_without_offset",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "mt5_account_ownership_history.created_at",
+      "sourceType": "datetime",
+      "sourceNullable": false,
+      "currentTarget": "proposal:account-ownership-intervals.created_at",
+      "writeFamily": "explicit_beijing_and_copy_backfill",
+      "references": [
+        "pool",
+        "account",
+        "historicalSeed"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "mt5_account_ownership_history.updated_at",
+      "sourceType": "datetime",
+      "sourceNullable": false,
+      "currentTarget": "proposal:account-ownership-intervals.updated_at",
+      "writeFamily": "explicit_beijing_and_copy_backfill",
+      "references": [
+        "pool",
+        "account",
+        "historicalSeed"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "bridge_v3_terminal_sessions.created_at",
+      "sourceType": "datetime(3)",
+      "sourceNullable": false,
+      "currentTarget": "history-proposal:bridge-terminal.created_at",
+      "writeFamily": "sql_defaults_separate_from_epoch",
+      "references": [
+        "pool",
+        "terminalDefaults",
+        "terminal"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "bridge_v3_terminal_sessions.updated_at",
+      "sourceType": "datetime(3)",
+      "sourceNullable": false,
+      "currentTarget": "history-proposal:bridge-terminal.updated_at",
+      "writeFamily": "sql_defaults_separate_from_epoch",
+      "references": [
+        "pool",
+        "terminalDefaults",
+        "terminal"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "ai_observer_sources.created_at",
+      "sourceType": "datetime",
+      "sourceNullable": false,
+      "currentTarget": "observer_sources.created_at_utc",
+      "writeFamily": "sql_now",
+      "references": [
+        "pool",
+        "observer"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "ai_observer_sources.updated_at",
+      "sourceType": "datetime",
+      "sourceNullable": false,
+      "currentTarget": "observer_sources.updated_at_utc",
+      "writeFamily": "sql_now",
+      "references": [
+        "pool",
+        "observer"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "ai_observer_channels.created_at",
+      "sourceType": "datetime",
+      "sourceNullable": false,
+      "currentTarget": "observer_channels.created_at_utc",
+      "writeFamily": "sql_now",
+      "references": [
+        "pool",
+        "observer"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "ai_observer_channels.updated_at",
+      "sourceType": "datetime",
+      "sourceNullable": false,
+      "currentTarget": "observer_channels.updated_at_utc",
+      "writeFamily": "sql_now",
+      "references": [
+        "pool",
+        "observer"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    },
+    {
+      "source": "ai_observer_channel_assignments.created_at",
+      "sourceType": "datetime",
+      "sourceNullable": false,
+      "currentTarget": "observer_channel_accesses.granted_at_utc",
+      "writeFamily": "sql_now",
+      "references": [
+        "pool",
+        "observer"
+      ],
+      "basisCandidate": "+08:00",
+      "basisEvidenceLevel": "source_code_candidate",
+      "historicalRowProvenanceVerified": false,
+      "writerInventoryExhaustive": false,
+      "nullDisposition": "reject_null",
+      "nonNullDisposition": "preserve_wall_clock_until_row_basis_admitted",
+      "readyForConversion": false
+    }
+  ],
+  "observation": {
+    "observedAt": "2026-09-06T11:31:54.911Z",
+    "identity": {
+      "database_name": "dev_vue_m1_source_20260905_01",
+      "server_uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+      "mysql_version": "8.4.8"
+    },
+    "queries": {
+      "intervals": "SELECT COUNT(*) rows_count,SUM(ended_at IS NULL) open_count,SUM(ended_at IS NOT NULL AND ended_at < started_at) reversed_count,SUM(ended_at = started_at) zero_duration_count,SUM(end_reason='historical_backfill') historical_backfill_end_count,MIN(started_at) earliest_start,MAX(started_at) latest_start FROM mt5_account_ownership_history",
+      "overlaps": "SELECT COUNT(*) overlapping_pairs,SUM(a.user_id<>b.user_id) cross_user_pairs FROM mt5_account_ownership_history a JOIN mt5_account_ownership_history b ON a.id<b.id AND BINARY UPPER(a.broker_server_key)=BINARY UPPER(b.broker_server_key) AND BINARY a.login_account=BINARY b.login_account WHERE (a.ended_at IS NULL OR a.ended_at>a.started_at) AND (b.ended_at IS NULL OR b.ended_at>b.started_at) AND (b.ended_at IS NULL OR a.started_at<b.ended_at) AND (a.ended_at IS NULL OR b.started_at<a.ended_at)",
+      "duplicate_settings": "SELECT COUNT(*) duplicate_groups,SUM(n) source_rows,SUM(user_count=n) distinct_user_groups FROM (SELECT COUNT(*) n,COUNT(DISTINCT user_id) user_count FROM trading_accounts GROUP BY BINARY UPPER(broker_server),BINARY login_account HAVING COUNT(*)>1) x",
+      "time_origins": "SELECT end_reason,COUNT(*) rows_count,SUM(created_at=started_at) created_equals_start,SUM(updated_at=ended_at) updated_equals_end FROM mt5_account_ownership_history GROUP BY end_reason ORDER BY end_reason"
+    },
+    "results": {
+      "intervals": [
+        {
+          "rows_count": "274",
+          "open_count": "3",
+          "reversed_count": "0",
+          "zero_duration_count": "0",
+          "historical_backfill_end_count": "0",
+          "earliest_start": "2026-07-25 18:44:23",
+          "latest_start": "2026-08-27 12:27:35"
+        }
+      ],
+      "overlaps": [
+        {
+          "overlapping_pairs": "0",
+          "cross_user_pairs": null
+        }
+      ],
+      "duplicate_settings": [
+        {
+          "duplicate_groups": "1",
+          "source_rows": "2",
+          "distinct_user_groups": "1"
+        }
+      ],
+      "time_origins": [
+        {
+          "end_reason": null,
+          "rows_count": "3",
+          "created_equals_start": "3",
+          "updated_equals_end": null
+        },
+        {
+          "end_reason": "account_transferred",
+          "rows_count": "271",
+          "created_equals_start": "271",
+          "updated_equals_end": "271"
+        }
+      ]
+    },
+    "wallClockComparisonOnly": true,
+    "historicalUtcBasisVerified": false,
+    "readyForBackfill": false
+  },
+  "preservationDraft": {
+    "accountEntityCandidates": 3,
+    "sourceAccountRows": 4,
+    "separateUserSettings": 4,
+    "legacyOwnershipIntervals": 274,
+    "currentOwnerCandidates": 3,
+    "mergeExecuted": false,
+    "grantsCreated": false,
+    "requireAllHistoricalIntervalsPreserved": true,
+    "blockers": [
+      "historical_row_time_basis",
+      "entity_margin_mode_and_timestamp_reduction",
+      "source_content_seal",
+      "business_writer_and_independent_reconciliation"
+    ]
+  }
+}
