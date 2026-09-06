@@ -1,5 +1,7 @@
 # 数据库逐表迁移矩阵
 
+> 2026-09-06 全面规范化接续方案：[数据库结构优化与全面规范化实施方案](database-standardization-execution-plan-20260906.md)。原始观测和历史设计保留；新实施以实际结构复核、全量字段合同及追加迁移为准。
+
 > 状态：阶段 7 逻辑设计基线；M1 已完成双库结构安装，尚未回填旧数据。
 >
 > 最新执行依据：[M1 回填方案](./stage-m1-data-backfill-and-reconciliation-plan.md) 与 [165 表物理差异清单](./migration/m1-source-target-gap-matrix-20260905.md)。下列候选目标不代表已经建成，禁止直接据此复制数据。
