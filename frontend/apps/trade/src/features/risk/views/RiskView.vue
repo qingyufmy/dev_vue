@@ -14,6 +14,7 @@ import RiskPolicyEditorSheet from '../components/RiskPolicyEditorSheet.vue'
 import RiskPolicySummary from '../components/RiskPolicySummary.vue'
 import RiskStateCard from '../components/RiskStateCard.vue'
 import { useRiskWorkspace } from '../composables/use-risk-workspace'
+import { terminalDisplayTimezone } from '~/lib/terminal-display-time'
 import { formatDateTime } from '../model/risk-presentation'
 
 const route = useRoute()
@@ -31,6 +32,7 @@ function selectDecision(id: string) {
 }
 
 const workspace = useRiskWorkspace(selectedDecisionId, selectDecision)
+const displayTimezone = computed(() => terminalDisplayTimezone(workspace.summary.value?.terminalTimezoneOffsetMinutes, workspace.summary.value?.clockStatus))
 const realtimeLabel = computed(() => ({ live: '实时同步', connecting: '连接中', recovering: '正在恢复', offline: '快照模式', idle: '未连接' })[workspace.realtime.value])
 
 async function savePolicy(value: Parameters<typeof workspace.savePolicy>[0]) {
@@ -103,7 +105,7 @@ watch(decisionOpen, (open) => { if (!open) selectDecision('') })
           <dl class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
             <div class="rounded-lg bg-muted/40 p-3"><dt class="text-xs text-muted-foreground">业务日期</dt><dd class="mt-1 font-mono font-medium">{{ workspace.summary.value?.businessDate ?? '--' }}</dd></div>
             <div class="rounded-lg bg-muted/40 p-3"><dt class="text-xs text-muted-foreground">连续亏损</dt><dd class="mt-1 font-mono font-medium">{{ workspace.summary.value?.consecutiveLosses ?? '--' }} 次</dd></div>
-            <div class="rounded-lg bg-muted/40 p-3"><dt class="text-xs text-muted-foreground">终端时区</dt><dd class="mt-1 font-mono font-medium">{{ workspace.summary.value?.terminalTimezoneOffsetMinutes === null || workspace.summary.value?.terminalTimezoneOffsetMinutes === undefined ? '--' : `UTC${workspace.summary.value.terminalTimezoneOffsetMinutes >= 0 ? '+' : ''}${workspace.summary.value.terminalTimezoneOffsetMinutes / 60}` }}</dd></div>
+            <div class="rounded-lg bg-muted/40 p-3"><dt class="text-xs text-muted-foreground">显示时区</dt><dd class="mt-1 font-mono font-medium">{{ displayTimezone.label }}</dd><dd class="mt-1 text-xs text-muted-foreground">{{ displayTimezone.statusLabel }}；业务日期由服务端确定</dd></div>
             <div class="rounded-lg bg-muted/40 p-3"><dt class="text-xs text-muted-foreground">冷静期截止</dt><dd class="mt-1 font-mono text-xs font-medium">{{ formatDateTime(workspace.summary.value?.cooldownUntil, workspace.summary.value?.terminalTimezoneOffsetMinutes) }}</dd></div>
           </dl>
         </section>

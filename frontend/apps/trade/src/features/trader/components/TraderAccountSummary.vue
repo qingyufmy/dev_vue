@@ -6,7 +6,8 @@ import { Badge } from '@aurum/ui/badge'
 import { Button } from '@aurum/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@aurum/ui/card'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@aurum/ui/select'
-import { clockStatusLabel, formatDateTime, formatDecimal } from '../model/trader-presentation'
+import { terminalDisplayTimezone } from '~/lib/terminal-display-time'
+import { formatDateTime, formatDecimal } from '../model/trader-presentation'
 
 const props = withDefaults(defineProps<{
   accounts?: TradingAccount[]
@@ -33,6 +34,7 @@ const emit = defineEmits<{
   refresh: []
 }>()
 
+const displayTimezone = computed(() => terminalDisplayTimezone(props.snapshot?.timezoneOffsetMinutes, props.snapshot?.clockStatus))
 const selectedId = computed(() => props.accountId ?? props.account?.id ?? undefined)
 const accountName = computed(() => {
   if (!props.account) return '等待选择交易账户'
@@ -115,16 +117,16 @@ function accountOptionLabel(account: TradingAccount) {
         <p class="mt-1 font-mono text-base font-semibold tabular-nums" :class="metricClass(metric)">{{ formatMetric(metric.value, metric.suffix) }}</p>
       </div>
       <div class="bg-card px-5 py-4 sm:col-span-2 lg:col-span-5 lg:flex lg:items-center lg:justify-between">
-        <div class="flex items-center gap-2 text-xs text-muted-foreground">
+        <div class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <WalletCards class="size-4" aria-hidden="true" />
           <span>终端杠杆</span>
           <strong class="font-mono text-foreground">{{ props.snapshot?.leverage ? `1:${props.snapshot.leverage}` : '--' }}</strong>
           <span aria-hidden="true">·</span>
-          <span>时钟状态</span>
-          <span>{{ clockStatusLabel(props.snapshot?.clockStatus) }}</span>
+          <span>显示时区 {{ displayTimezone.label }}</span>
+          <span>{{ displayTimezone.statusLabel }}</span>
         </div>
         <p class="mt-2 text-xs text-muted-foreground lg:mt-0">
-          {{ props.snapshot ? `终端时间 ${formatDateTime(props.snapshot.observedAt, props.snapshot.timezoneOffsetMinutes)}` : '等待账户快照，当前仅显示账户连接信息' }}
+          {{ props.snapshot ? `快照时间 ${formatDateTime(props.snapshot.observedAt, props.snapshot.timezoneOffsetMinutes)}` : '等待账户快照，当前仅显示账户连接信息' }}
         </p>
       </div>
     </CardContent>

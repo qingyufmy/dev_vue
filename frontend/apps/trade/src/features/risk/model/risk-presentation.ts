@@ -1,3 +1,4 @@
+import { terminalDisplayDate } from '~/lib/terminal-display-time'
 import type { RiskPolicy, RiskSummary } from '@aurum/contracts'
 
 export const manualReleaseRuleLabels: Record<string, string> = {
@@ -103,8 +104,7 @@ export function formatDateTime(value: string | null | undefined, timezoneOffsetM
   if (!value) return '--'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '--'
-  if (timezoneOffsetMinutes === null) return new Intl.DateTimeFormat('zh-CN', { hour12: false, dateStyle: 'short', timeStyle: 'medium' }).format(date)
-  const shifted = new Date(date.getTime() + timezoneOffsetMinutes * 60_000)
+  const shifted = terminalDisplayDate(date, timezoneOffsetMinutes)
   return new Intl.DateTimeFormat('zh-CN', { timeZone: 'UTC', hour12: false, dateStyle: 'short', timeStyle: 'medium' }).format(shifted)
 }
 

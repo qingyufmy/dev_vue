@@ -42,7 +42,7 @@ onBeforeUnmount(workspace.stop)
     <template v-else>
       <AccountSummaryCard :accounts="workspace.accounts.value" :observers="workspace.observers.value" :account-id="workspace.context.value?.accountId ?? null" :observer-channel-id="workspace.context.value?.observerChannelId ?? null" :snapshot="workspace.snapshot.value" :loading="workspace.loading.value" @select="workspace.selectAccount" @observer="workspace.selectObserver" @leave-observer="workspace.leaveObserver" />
       <div class="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.9fr)_minmax(21rem,0.7fr)]">
-        <MarketWorkspaceCard :symbols="workspace.symbols.value" :symbol="workspace.symbol.value" :timeframe="workspace.timeframe.value" :quote="workspace.quote.value" :candles="workspace.candles.value" :realtime="realtimeState" :history-version="workspace.marketHistoryVersion.value" @symbol="workspace.selectSymbol" @timeframe="workspace.selectTimeframe" />
+        <MarketWorkspaceCard :timezone-offset-minutes="workspace.snapshot.value?.timezoneOffsetMinutes" :symbols="workspace.symbols.value" :symbol="workspace.symbol.value" :timeframe="workspace.timeframe.value" :quote="workspace.quote.value" :candles="workspace.candles.value" :realtime="realtimeState" :history-version="workspace.marketHistoryVersion.value" @symbol="workspace.selectSymbol" @timeframe="workspace.selectTimeframe" />
         <LatestSignalCard :analysis="workspace.latestAnalysis.value" :strategies="workspace.analysisStrategies.value" :loading="workspace.analysisLoading.value" :error="workspace.analysisError.value" />
       </div>
       <TradingResourcesCard :positions="workspace.positions.value" :orders="workspace.pendingOrders.value" />

@@ -6,8 +6,9 @@ import { Button } from '@aurum/ui/button'
 import { Card, CardContent, CardHeader } from '@aurum/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@aurum/ui/select'
 import TradingChart from './TradingChart.vue'
+import { terminalDisplayDate, terminalDisplayTimezone } from '~/lib/terminal-display-time'
 
-defineProps<{ symbols: string[]; symbol: string; timeframe: Timeframe; quote: MarketQuote | null; candles: MarketCandle[]; realtime: string; historyVersion: number }>()
+defineProps<{ symbols: string[]; symbol: string; timeframe: Timeframe; quote: MarketQuote | null; candles: MarketCandle[]; realtime: string; historyVersion: number; timezoneOffsetMinutes?: number | null }>()
 const emit = defineEmits<{ symbol: [value: string]; timeframe: [value: Timeframe] }>()
 const periods: Timeframe[] = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1']
 </script>
@@ -32,13 +33,13 @@ const periods: Timeframe[] = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1']
       </div>
     </CardHeader>
     <CardContent class="p-0">
-      <div v-if="candles.length" class="relative"><TradingChart :candles="candles" :history-version="historyVersion" /></div>
+      <div v-if="candles.length" class="relative"><TradingChart :timezone-offset-minutes="timezoneOffsetMinutes" :candles="candles" :history-version="historyVersion" /></div>
       <div v-else class="flex h-[25rem] flex-col items-center justify-center gap-2 text-center text-muted-foreground">
         <RadioTower class="size-8" aria-hidden="true" /><p class="text-sm">等待终端提供 {{ symbol || '当前品种' }} K 线</p>
       </div>
       <div class="flex min-h-11 items-center gap-2 border-t px-4 text-xs text-muted-foreground">
         <Badge variant="outline">{{ timeframe }}</Badge><span>{{ realtime === 'live' ? '实时增量已连接' : '使用最近快照' }}</span>
-        <span class="ml-auto font-mono">{{ quote?.observedAt ? new Date(quote.observedAt).toLocaleTimeString('zh-CN', { hour12: false }) : '--:--:--' }}</span>
+        <span class="ml-auto font-mono">{{ quote?.observedAt ? terminalDisplayDate(new Date(quote.observedAt), timezoneOffsetMinutes).toLocaleTimeString('zh-CN', { hour12: false, timeZone: 'UTC' }) : '--:--:--' }} {{ terminalDisplayTimezone(timezoneOffsetMinutes).label }}</span>
         <Button variant="ghost" size="icon-sm" aria-label="全屏查看行情" disabled><Maximize2 /></Button>
       </div>
     </CardContent>

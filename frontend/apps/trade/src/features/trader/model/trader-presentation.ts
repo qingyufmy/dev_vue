@@ -1,3 +1,4 @@
+import { terminalDisplayDate } from '~/lib/terminal-display-time'
 import type {
   OpenPosition,
   PendingOrder,
@@ -125,7 +126,7 @@ export function formatDateTime(value: NullableValue, timezoneOffsetMinutes: numb
   if (value === null || value === undefined || value === '') return '--'
   const date = new Date(String(value))
   if (Number.isNaN(date.getTime())) return String(value)
-  const displayDate = timezoneOffsetMinutes === null ? date : new Date(date.getTime() + timezoneOffsetMinutes * 60_000)
+  const displayDate = terminalDisplayDate(date, timezoneOffsetMinutes)
   return new Intl.DateTimeFormat('zh-CN', {
     month: '2-digit',
     day: '2-digit',
@@ -133,7 +134,7 @@ export function formatDateTime(value: NullableValue, timezoneOffsetMinutes: numb
     minute: '2-digit',
     second: '2-digit',
     hour12: false,
-    ...(timezoneOffsetMinutes === null ? {} : { timeZone: 'UTC' }),
+    timeZone: 'UTC',
   }).format(displayDate)
 }
 

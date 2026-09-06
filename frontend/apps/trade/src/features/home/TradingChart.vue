@@ -1,15 +1,23 @@
 <script setup lang="ts">
-import { CandlestickSeries, ColorType, HistogramSeries, createChart, type IChartApi, type ISeriesApi, type UTCTimestamp } from 'lightweight-charts'
+import { CandlestickSeries, ColorType, HistogramSeries, createChart, type IChartApi, type ISeriesApi, type UTCTimestamp, type Time, type TickMarkType } from 'lightweight-charts'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { MarketCandle } from '@aurum/contracts'
+import { chartDisplayTime } from './chart-display-time'
 
-const props = defineProps<{ candles: MarketCandle[]; historyVersion: number }>()
+const props = defineProps<{ candles: MarketCandle[]; historyVersion: number; timezoneOffsetMinutes?: number | null }>()
 const host = ref<HTMLElement | null>(null)
 let chart: IChartApi | null = null
 let candleSeries: ISeriesApi<'Candlestick'> | null = null
 let volumeSeries: ISeriesApi<'Histogram'> | null = null
 let resizeObserver: ResizeObserver | null = null
 let renderedKey = ''
+
+function displayOptions() {
+  return {
+    localization: { timeFormatter: (time: Time) => chartDisplayTime(time, props.timezoneOffsetMinutes) },
+    timeScale: { tickMarkFormatter: (time: Time, tick: TickMarkType) => chartDisplayTime(time, props.timezoneOffsetMinutes, tick) },
+  }
+}
 
 function color(name: string) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() }
 function toTime(value: string) { return Math.floor(new Date(value).getTime() / 1000) as UTCTimestamp }
@@ -36,6 +44,7 @@ onMounted(() => {
     rightPriceScale: { borderColor: color('--border') }, timeScale: { borderColor: color('--border'), timeVisible: true, secondsVisible: false, minBarSpacing: 2 },
     crosshair: { vertLine: { labelBackgroundColor: color('--primary') }, horzLine: { labelBackgroundColor: color('--primary') } },
   })
+  chart.applyOptions(displayOptions())
   candleSeries = chart.addSeries(CandlestickSeries, { upColor: color('--trade-up'), downColor: color('--trade-down'), wickUpColor: color('--trade-up'), wickDownColor: color('--trade-down'), borderVisible: false, priceLineVisible: true })
   volumeSeries = chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, priceScaleId: 'volume', lastValueVisible: false, priceLineVisible: false })
   chart.priceScale('volume').applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } })
@@ -43,6 +52,7 @@ onMounted(() => {
   resizeObserver.observe(host.value)
   renderHistory(props.candles)
 })
+watch(() => props.timezoneOffsetMinutes, () => chart?.applyOptions(displayOptions()))
 watch(() => props.historyVersion, () => renderHistory(props.candles))
 watch(() => props.candles.at(-1), () => renderLatest(props.candles), { deep: false })
 onBeforeUnmount(() => { resizeObserver?.disconnect(); chart?.remove(); chart = null })

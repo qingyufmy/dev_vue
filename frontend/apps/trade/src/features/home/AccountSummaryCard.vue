@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Cable, Eye, LogOut, ShieldCheck } from '@lucide/vue'
 import { computed } from 'vue'
+import { terminalDisplayTimezone } from '~/lib/terminal-display-time'
 import type { AccountSnapshot, ObserverChannel, TradingAccount } from '@aurum/contracts'
 import { Badge } from '@aurum/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@aurum/ui/card'
@@ -9,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 
 const props = defineProps<{ accounts: TradingAccount[]; observers: ObserverChannel[]; accountId: string | null; observerChannelId: string | null; snapshot: AccountSnapshot | null; loading: boolean }>()
 const emit = defineEmits<{ select: [accountId: string]; observer: [observerChannelId: string]; leaveObserver: [] }>()
+const displayTimezone = computed(() => terminalDisplayTimezone(props.snapshot?.timezoneOffsetMinutes, props.snapshot?.clockStatus))
 const selection = computed(() => props.observerChannelId ? `observer:${props.observerChannelId}` : props.accountId ? `account:${props.accountId}` : undefined)
 function select(value: unknown) {
   const selection = String(value)
@@ -27,6 +29,7 @@ const money = (value?: string, currency = '') => value === undefined ? '--' : `$
           {{ snapshot ? `${snapshot.platform.toUpperCase()} · ${snapshot.login}` : '等待账户快照' }}
         </CardTitle>
         <p class="mt-1 truncate text-xs text-muted-foreground">{{ snapshot?.server ?? '连接量见智桥后显示服务器信息' }}</p>
+        <p class="mt-1 text-xs text-muted-foreground">显示时区 {{ displayTimezone.label }} · {{ displayTimezone.statusLabel }}</p>
       </div>
       <div class="flex flex-wrap items-center gap-2">
         <Badge v-if="observerChannelId" variant="secondary"><Eye aria-hidden="true" />观摩模式</Badge>
