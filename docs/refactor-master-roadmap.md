@@ -543,3 +543,5 @@ U2历史时间与账户承接已进一步收敛：[39字段依据及承接合同
 阶段 76：恢复副本真实写入 25 条 opening，提交后断连经 verifyOnly 确认；独立重跑 0 INSERT，余额和原 271007 行不变。当前库期初仍待写入，见 [阶段 76](migration/dev-vue-inplace-stage76-20260907.md)。
 
 阶段 77：当前 dev_vue 写入 25 条 opening，独立重跑 0 INSERT/0 余额更新；原 271007 行一致，21 项测试通过。推荐应用财务事务与全库迁移仍待完成，见 [阶段 77](migration/dev-vue-inplace-stage77-20260907.md)。
+
+阶段 78：运行账本/余额同事务写入原语已实现，19 项测试、类型检查与构建通过；尚无业务接口接入或真实财务变动，下一步 MySQL 事务/并发验证，见 [阶段 78](migration/dev-vue-inplace-stage78-20260907.md)。
