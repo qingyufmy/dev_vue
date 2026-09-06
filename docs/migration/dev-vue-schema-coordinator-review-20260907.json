@@ -1,0 +1,253 @@
+{
+  "kind": "inplace-schema-coordinator-review/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "result": {
+    "apply": false,
+    "steps": [
+      {
+        "id": "inplace_001_01_users_last_seen_at_utc",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_02_users_profile_revision",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_03_bridge_refresh_sessions_credential_version",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_04_bridge_refresh_sessions_installation_id",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_05_bridge_refresh_sessions_profile_id",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_06_bridge_refresh_sessions_generation",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_07_bridge_refresh_sessions_migration_key",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_08_bridge_refresh_sessions_source_fingerprint",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_09_bridge_refresh_sessions_source_refresh_session_id",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_01_auth_sessions",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_02_auth_authorization_codes",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_03_terminal_profiles",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_04_bridge_connection_capacity_grants",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_05_data_migration_runs",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_06_data_migration_checkpoints",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_07_data_migration_batches",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_08_data_migration_id_maps",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_09_data_migration_row_receipts",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_003_01_trading_accounts_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_003_02_trading_account_ownership_intervals_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_003_03_trading_account_ownerships_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_003_04_user_trading_account_settings_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_004_01_data_migration_source_rows",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_005_01_strategies",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_005_02_strategy_versions",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_005_03_strategy_active_version_fk",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_006_01_strategy_subscriptions_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_006_02_subscription_schedules_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_006_03_subscription_execution_preferences_v4_build",
+        "status": "completed"
+      }
+    ],
+    "structureComplete": true,
+    "fullNormalizationComplete": false
+  },
+  "steps": [
+    {
+      "id": "inplace_001_01_users_last_seen_at_utc",
+      "checksum": "cd91b878646811a8ad3604e9861c7f5d19dd8afa9eb4b287dcfd0c1b6ae683d4"
+    },
+    {
+      "id": "inplace_001_02_users_profile_revision",
+      "checksum": "a053ce52693557d13f7cb4973b67889f0b5e451973b6366a1ceed807f01e5ef1"
+    },
+    {
+      "id": "inplace_001_03_bridge_refresh_sessions_credential_version",
+      "checksum": "453d8c021b9030198d3315c4b23efd99e0bda3b6394c28b030d5e89444c10cac"
+    },
+    {
+      "id": "inplace_001_04_bridge_refresh_sessions_installation_id",
+      "checksum": "ae9bc21f503e64360e6cbe144fb057d2038a7969749dbd372079d30dc9a6ec60"
+    },
+    {
+      "id": "inplace_001_05_bridge_refresh_sessions_profile_id",
+      "checksum": "1852e848e099d078ad5ff184a2570d8c082297b7df4e3141281c7122f62311ef"
+    },
+    {
+      "id": "inplace_001_06_bridge_refresh_sessions_generation",
+      "checksum": "8957dba504685e97a3ebe8d84d0d3bd049800d39c5782f5fa94f06fff7361669"
+    },
+    {
+      "id": "inplace_001_07_bridge_refresh_sessions_migration_key",
+      "checksum": "9a2263e53e38ca20a60da68e3f014cdece5be6e891e731dc7a0a3e5402e71b87"
+    },
+    {
+      "id": "inplace_001_08_bridge_refresh_sessions_source_fingerprint",
+      "checksum": "c1c57acee488ff3a68ea900f725ead51abb1438954179fe6ed727286c5196ab0"
+    },
+    {
+      "id": "inplace_001_09_bridge_refresh_sessions_source_refresh_session_id",
+      "checksum": "2746ee2692c307e74b493831d2f918a33e1e325f6812448ff47657e81780c115"
+    },
+    {
+      "id": "inplace_002_01_auth_sessions",
+      "checksum": "48f6d3796a7a0f8a862ef477e69b5cd97c346e3284ebbf9170788d4156bd0e4a"
+    },
+    {
+      "id": "inplace_002_02_auth_authorization_codes",
+      "checksum": "158ee33d5c0e1359e2b777b8c01a009e3b47f4443baf1193a5baf839694de365"
+    },
+    {
+      "id": "inplace_002_03_terminal_profiles",
+      "checksum": "d6d2a687adce9d5c9280a00f6ac4f3a5b08932ae7613106c36d193b9daa1d688"
+    },
+    {
+      "id": "inplace_002_04_bridge_connection_capacity_grants",
+      "checksum": "a5f23554dad296277da0863d49215cf9402fec71079f3e04ed5ffdb222025058"
+    },
+    {
+      "id": "inplace_002_05_data_migration_runs",
+      "checksum": "ffe6d67303fa66e5e5ef90a2057ea93e3c3918f0789a18531c2db472b94a6a30"
+    },
+    {
+      "id": "inplace_002_06_data_migration_checkpoints",
+      "checksum": "0f9217892fa398c076967967a86319a25d55998f6ec51b356bffad73099d1271"
+    },
+    {
+      "id": "inplace_002_07_data_migration_batches",
+      "checksum": "af28984895255bebe9530a5203873528229345d1ec8311464b6ddaf3f62dab38"
+    },
+    {
+      "id": "inplace_002_08_data_migration_id_maps",
+      "checksum": "8af2fc24d9cb4bef9cbfb39c74e4edcd59237af990731d3649d678e0b38401fd"
+    },
+    {
+      "id": "inplace_002_09_data_migration_row_receipts",
+      "checksum": "ccddcf2dd2b1be9ae89dd1cbfd89963a68d3658765df3357c73e0ed13b18a02b"
+    },
+    {
+      "id": "inplace_003_01_trading_accounts_v4_build",
+      "checksum": "814f7b8a5f07a344b21371952a2107417d36498b26b361ac0bbc19c331768e1d"
+    },
+    {
+      "id": "inplace_003_02_trading_account_ownership_intervals_v4_build",
+      "checksum": "f1cae5e187123c4c26b3072b0901cf2099c113fbb7d7057c79fb33ca0c9c6560"
+    },
+    {
+      "id": "inplace_003_03_trading_account_ownerships_v4_build",
+      "checksum": "12c5bc764f95c4fb06a9391c0017adb73c0c7bf8f0be6f18ffbde38a30dab307"
+    },
+    {
+      "id": "inplace_003_04_user_trading_account_settings_v4_build",
+      "checksum": "54440c8bcf20c4ebad8cda1cb9d5e169b004ed7a4b35cb49063fc1145a489998"
+    },
+    {
+      "id": "inplace_004_01_data_migration_source_rows",
+      "checksum": "b8855e891a7cf3e7830a8b4311844764f42078c2a5f72fbed6d0954e101026fe"
+    },
+    {
+      "id": "inplace_005_01_strategies",
+      "checksum": "c3ecdab295a7e4acaf102d5521696316adf07eb00468e4a5c43d6bc16fe25dbb"
+    },
+    {
+      "id": "inplace_005_02_strategy_versions",
+      "checksum": "0821d9ae7c6322b0d7ade0feea07cfd14c929f8cdebc9ffac0bba876c01acd35"
+    },
+    {
+      "id": "inplace_005_03_strategy_active_version_fk",
+      "checksum": "24dbdf2987fa31116e323445724e436eb7083bb99e1a6d8a1900ac3c76ed1b9e"
+    },
+    {
+      "id": "inplace_006_01_strategy_subscriptions_v4_build",
+      "checksum": "d8684953218327f93648a3dfe29ca37b8fdef43b987e53018c2db3034906fb85"
+    },
+    {
+      "id": "inplace_006_02_subscription_schedules_v4_build",
+      "checksum": "b9b7ae1e00e9516b89871419c270ce9774a8d5a2a684eca21455ee21cbe644a3"
+    },
+    {
+      "id": "inplace_006_03_subscription_execution_preferences_v4_build",
+      "checksum": "d92169c09ad04d95739764520628b77c84e29df573311cbce825ba8e19db06c6"
+    }
+  ],
+  "originalTables": 165,
+  "originalRows": "271007",
+  "originalParityHash": "1acdcef31318fdb532899bd8f5260b878cd357fbd597ec01d21a6640154fe872",
+  "databaseWrites": 0,
+  "fullNormalizationComplete": false
+}
