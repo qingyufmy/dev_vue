@@ -537,3 +537,5 @@ U2历史时间与账户承接已进一步收敛：[39字段依据及承接合同
 阶段 73：011 已在开发参考库真实建表，2 条合法写入/10 类拒绝及完整回滚通过；当前 dev_vue 尚未安装，待第 47 步恢复演练，见 [阶段 73](migration/dev-vue-inplace-stage73-20260907.md)。
 
 阶段 74：账本第 47 步在恢复副本和当前库完成，真实断连恢复与独立重复通过；当前 198 表/47 completed，25 条推荐账户及原 271007 行不变，账本期初待写入，见 [阶段 74](migration/dev-vue-inplace-stage74-20260907.md)。
+
+阶段 75：期初账本事务 writer 和 verifyOnly 恢复核验已实现，20 项测试通过；只 INSERT opening、不 UPDATE 余额，真实期初回填待演练，见 [阶段 75](migration/dev-vue-inplace-stage75-20260907.md)。
