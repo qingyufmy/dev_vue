@@ -1,9 +1,12 @@
 import type { StrategyVersion } from '../../strategies/domain/strategy.js'
+import { parseStrategyMarketDataPlan } from '../../strategies/index.js'
 import type { AnalysisInputSnapshot, AnalysisRun, JsonObject } from '../domain/inference.js'
 
 export interface AnalysisMarketPlan {
   timeframes: Array<'M1' | 'M5' | 'M15' | 'M30' | 'H1' | 'H4' | 'D1'>
   candleLimit: number
+  candleLimits?: Record<string, number>
+  primaryTimeframe?: string
 }
 
 export interface AnalysisMarketSource {
@@ -21,6 +24,13 @@ export type MacroEvidencePlan =
 const allowedTimeframes = new Set<AnalysisMarketPlan['timeframes'][number]>(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'])
 
 export function marketPlan(config: Record<string, unknown>): AnalysisMarketPlan {
+  if (config.market_data_plan !== undefined) {
+    if (config.timeframes !== undefined || config.candle_limit !== undefined) throw new Error('market_data_plan_conflict')
+    const plan = parseStrategyMarketDataPlan(config.market_data_plan)
+    return { timeframes: plan.timeframes.map(item => item.timeframe as AnalysisMarketPlan['timeframes'][number]),
+      candleLimit: Math.max(...plan.timeframes.map(item => item.kline_count)),
+      candleLimits: Object.fromEntries(plan.timeframes.map(item => [item.timeframe, item.kline_count])), primaryTimeframe: plan.primary_timeframe }
+  }
   const requested = Array.isArray(config.timeframes) ? config.timeframes.filter((value): value is AnalysisMarketPlan['timeframes'][number] => typeof value === 'string' && allowedTimeframes.has(value as AnalysisMarketPlan['timeframes'][number])) : []
   const candleLimit = Number(config.candle_limit)
   return {

@@ -15,7 +15,7 @@ export class TradingAnalysisMarketSource implements AnalysisMarketSource {
       const candles: Record<string, JsonObject[]> = {}
       let complete = true
       for (const timeframe of input.plan.timeframes) {
-        const items = await this.trading.listCandles(account.id, input.symbol, timeframe as Timeframe, input.plan.candleLimit)
+        const items = await this.trading.listCandles(account.id, input.symbol, timeframe as Timeframe, input.plan.candleLimits?.[timeframe] ?? input.plan.candleLimit)
         if (items.length === 0) { complete = false; break }
         candles[timeframe] = items.map(item => ({
           open_time: item.openTime, open: item.open, high: item.high, low: item.low, close: item.close,
@@ -28,6 +28,9 @@ export class TradingAnalysisMarketSource implements AnalysisMarketSource {
         symbol: input.symbol,
         quote: { bid: quote.bid, ask: quote.ask, last: quote.last, spread: quote.spread, trade_mode: quote.tradeMode, observed_at: quote.observedAt, revision: quote.revision },
         candles,
+        ...(input.plan.primaryTimeframe ? { primary_timeframe: input.plan.primaryTimeframe,
+          market_data_plan: { version: 1, primary_timeframe: input.plan.primaryTimeframe,
+            timeframes: input.plan.timeframes.map(timeframe => ({ timeframe, kline_count: input.plan.candleLimits?.[timeframe] ?? input.plan.candleLimit })) } } : {}),
       } satisfies JsonObject
     }
     throw new InferenceError('market_snapshot_unavailable', 409)

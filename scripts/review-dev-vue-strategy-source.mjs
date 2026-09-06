@@ -11,11 +11,14 @@ import { reviewSubscriptionConfig } from './lib/v4-subscription-config-review.mj
 
 import { convertStrategyMetadata } from './lib/v4-strategy-metadata-conversion.mjs'
 
+import { convertStrategyMarketPlan } from './lib/v4-strategy-market-plan-conversion.mjs'
+
 const root = new URL('../', import.meta.url)
 let connection
 try {
   const [mode] = process.argv.slice(2)
-  if (process.argv.length !== 3 || !['--write', '--verify', '--write-symbols', '--verify-symbols', '--write-scopes', '--verify-scopes', '--write-schedules', '--verify-schedules', '--write-config', '--verify-config', '--write-metadata', '--verify-metadata'].includes(mode)) throw new Error('strategy_source_arguments')
+  if (process.argv.length !== 3 || !['--write', '--verify', '--write-symbols', '--verify-symbols', '--write-scopes', '--verify-scopes', '--write-schedules', '--verify-schedules', '--write-config', '--verify-config', '--write-metadata', '--verify-metadata', '--write-market-plan', '--verify-market-plan'].includes(mode)) throw new Error('strategy_source_arguments')
+  const marketMode = mode.endsWith('-market-plan')
   const metadataMode = mode.endsWith('-metadata')
   const configMode = mode.endsWith('-config')
   const scheduleMode = mode.endsWith('-schedules')
@@ -55,7 +58,7 @@ try {
   }
   await connection.rollback()
   const report = { observedAt: new Date().toISOString(), identity, ...review }
-  if (symbolMode || scheduleMode || configMode || metadataMode) {
+  if (symbolMode || scheduleMode || configMode || metadataMode || marketMode) {
     const previousSource = JSON.parse(await readFile(new URL('docs/migration/dev-vue-strategy-source-review-20260906.json', root), 'utf8'))
     if (previousSource.sourceHash !== review.sourceHash) throw new Error('strategy_source_changed')
   }
@@ -70,15 +73,17 @@ try {
     report.scheduleConversions = subscriptions.map(row => ({ locatorHash: hash(row.id), sourceRowHash: hash(row), ...convertSubscriptionSchedule(row) }))
     report.scheduleConversionReady = report.scheduleConversions.every(row => row.status === 'converted')
   }
+  if (marketMode) report.marketPlanConversions = strategies.map(row => ({ locatorHash: hash(row.id), sourceRowHash: hash(row), ...convertStrategyMarketPlan(row.market_data_plan_json) }))
   if (metadataMode) report.metadataConversions = strategies.map(row => ({ sourceRowHash: hash(row), ...convertStrategyMetadata(row, new Set(users.map(user => user.id))) }))
   if (configMode) report.configReview = configReview
-  const path = new URL(metadataMode ? 'docs/migration/dev-vue-strategy-metadata-review-20260907.json' : configMode ? 'docs/migration/dev-vue-subscription-config-review-20260907.json' : scheduleMode ? 'docs/migration/dev-vue-subscription-schedule-review-20260907.json' : scopeMode ? 'docs/migration/dev-vue-subscription-account-review-20260907.json' : symbolMode ? 'docs/migration/dev-vue-subscription-symbol-review-20260907.json' : 'docs/migration/dev-vue-strategy-source-review-20260906.json', root)
+  const path = new URL(marketMode ? 'docs/migration/dev-vue-strategy-market-plan-review-20260907.json' : metadataMode ? 'docs/migration/dev-vue-strategy-metadata-review-20260907.json' : configMode ? 'docs/migration/dev-vue-subscription-config-review-20260907.json' : scheduleMode ? 'docs/migration/dev-vue-subscription-schedule-review-20260907.json' : scopeMode ? 'docs/migration/dev-vue-subscription-account-review-20260907.json' : symbolMode ? 'docs/migration/dev-vue-subscription-symbol-review-20260907.json' : 'docs/migration/dev-vue-strategy-source-review-20260906.json', root)
   if (mode.startsWith('--verify')) {
     const old = JSON.parse(await readFile(path, 'utf8'))
     const stable = ({ observedAt, ...value }) => value
     if (hash(stable(old)) !== hash(stable(report))) throw new Error('strategy_source_changed')
   } else await writeFile(path, JSON.stringify(report, null, 2) + '\n', { flag: 'wx' })
   console.log(JSON.stringify({ counts: report.counts, issues: report.issues, blockers: report.blockers,
+    ...(marketMode ? { marketPlanConversions: report.marketPlanConversions } : {}),
     ...(metadataMode ? { metadataConversions: report.metadataConversions } : {}),
     ...(configMode ? { configReview: report.configReview } : {}),
     ...(scheduleMode ? { scheduleConversionReady: report.scheduleConversionReady, scheduleConversions: report.scheduleConversions } : scopeMode ? { accountScopes: report.accountScopes } : symbolMode ? { symbolConversionReady: report.symbolConversionReady, symbolConversions: report.symbolConversions } : {}), businessWritesPerformed: false }))

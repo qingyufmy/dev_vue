@@ -1,4 +1,5 @@
 export * from './domain/strategy.js'
+export * from './domain/strategy-market-plan.js'
 export * from './domain/subscription-window.js'
 export * from './domain/subscription-take-profit.js'
 export * from './application/strategy-service.js'
