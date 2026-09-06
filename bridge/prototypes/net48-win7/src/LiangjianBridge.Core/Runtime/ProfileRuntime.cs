@@ -38,6 +38,8 @@ namespace Liangjian.BridgeV4.Runtime
     {
         private readonly ProfileRuntimeConfiguration configuration;
         private bool disposed;
+        private bool ledgerClosed;
+        private bool dataClosed;
 
         public ProfileRuntime(ProfileRuntimeConfiguration configuration)
         {
@@ -117,9 +119,13 @@ namespace Liangjian.BridgeV4.Runtime
             {
                 return;
             }
+            List<Exception> errors = new List<Exception>();
+            try { if (!ledgerClosed) CommandLedger.Dispose(); ledgerClosed = true; }
+            catch (Exception error) { errors.Add(error); }
+            try { if (!dataClosed) DataStore.Dispose(); dataClosed = true; }
+            catch (Exception error) { errors.Add(error); }
+            if (errors.Count != 0) throw new AggregateException("bridge_runtime_close_failed", errors);
             disposed = true;
-            CommandLedger.Dispose();
-            DataStore.Dispose();
         }
 
         private void EnsureNotDisposed()

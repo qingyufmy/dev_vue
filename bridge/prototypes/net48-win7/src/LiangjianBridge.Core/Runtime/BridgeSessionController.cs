@@ -15,6 +15,7 @@ namespace Liangjian.BridgeV4.Runtime
         public string TradePermission { get; set; }
         public int? TimezoneOffsetMinutes { get; set; }
         public string ClockStatus { get; set; }
+        public Func<long, IDictionary<string, object>> AccountFactsProvider { get; set; }
     }
 
     public sealed class BridgeSessionController
@@ -75,8 +76,9 @@ namespace Liangjian.BridgeV4.Runtime
             HeartbeatIntervalMsc = 0;
             NextHeartbeatAtUtcMsc = 0;
             HeartbeatAckDeadlineUtcMsc = 0;
+            IDictionary<string, object> payload = HelloPayload(nowUtcMsc);
             State = "awaiting_welcome";
-            return Envelope("session.hello", null, HelloPayload(), nowUtcMsc);
+            return Envelope("session.hello", null, payload, nowUtcMsc);
         }
 
         public string Handle(string json, long nowUtcMsc)
@@ -190,7 +192,7 @@ namespace Liangjian.BridgeV4.Runtime
             State = "active";
         }
 
-        private IDictionary<string, object> HelloPayload()
+        private IDictionary<string, object> HelloPayload(long nowUtcMsc)
         {
             ProfileRuntimeConfiguration route = runtime.Configuration;
             Dictionary<string, object> account = new Dictionary<string, object>
@@ -203,6 +205,10 @@ namespace Liangjian.BridgeV4.Runtime
                 { "trade_permission", configuration.TradePermission }, { "timezone_offset_minutes", configuration.TimezoneOffsetMinutes },
                 { "clock_status", configuration.ClockStatus }
             };
+            // Compatibility callers may omit facts; production supplies a fresh
+            // terminal query on every Begin, including reconnects.
+            if (configuration.AccountFactsProvider != null)
+                terminal.Add("account_facts", configuration.AccountFactsProvider(nowUtcMsc));
             return new Dictionary<string, object>
             {
                 { "session_id", sessionId }, { "installation_id", configuration.InstallationId },

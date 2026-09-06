@@ -83,6 +83,11 @@ namespace Liangjian.BridgeV4.SmokeTests
             Run("mt4_missing_session_is_pre_send_failure", TerminalCommandSourceSmokeTests.TestMt4MissingSessionIsPreSendFailure);
             Run("profile_session_hello_heartbeat_and_backoff", SessionLifecycleSmokeTests.TestHelloHeartbeatAndBackoff);
             Run("profile_worker_reconnects_independently", SessionLifecycleSmokeTests.TestWorkerReconnects);
+            Run("profile_worker_stop_rejects_late_connect", SessionLifecycleSmokeTests.TestWorkerStopRejectsLateConnect);
+            Run("profile_worker_pause_during_connect_resumes", SessionLifecycleSmokeTests.TestWorkerPauseDuringConnectResumes);
+            Run("bridge_account_facts_fresh_exact_route", BridgeAccountFactsSmokeTests.RunAll);
+            Run("profile_worker_stop_retains_runtime_and_lease", SessionLifecycleSmokeTests.TestWorkerStopRetainsRuntimeAndLease);
+            Run("profile_manager_retries_close_and_cleans_independently", SessionLifecycleSmokeTests.TestManagerRetriesFailedCloseAndCleansOtherProfiles);
             Run("profile_worker_pauses_and_resumes_for_update", SessionLifecycleSmokeTests.TestWorkerPauseAndResumeForUpdate);
             Run("profile_worker_reports_release_status", SessionLifecycleSmokeTests.TestWorkerReportsReleaseStatus);
             Run("update_restart_waits_for_server_time_and_idle", SessionLifecycleSmokeTests.TestUpdateRestartGate);

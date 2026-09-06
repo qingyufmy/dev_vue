@@ -10,7 +10,7 @@ using Liangjian.BridgeV4.Update;
 
 namespace Liangjian.BridgeV4.SmokeTests
 {
-    internal static class SessionLifecycleSmokeTests
+    internal static partial class SessionLifecycleSmokeTests
     {
         private const long Now = 1788307200000;
 

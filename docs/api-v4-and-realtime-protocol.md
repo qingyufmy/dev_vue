@@ -554,6 +554,10 @@ Bridge 必须先把命令写入本地命令账本，再回复 `command.accepted`
 
 `session.hello` 必须报告 `platform`、Bridge 版本、协议版本、安装 ID、档案 ID、可用资源、可用命令、最大页大小和功能标志。服务端按能力精准降级，不按客户端版本猜测。
 
+2026-09-06 首次账户登记扩展：终端项可携带 `account_facts: { currency, login, broker_server, observed_at_utc_msc }`，字段以 `contracts/bridge-v4.schema.json` 为准。缺少该扩展的旧客户端只能连接已有有效 owner 的账户。新版生产客户端每次连接（含重连）在申请服务器通道前直接查询 `account.snapshot`，MT4 使用 `login/broker_server/currency/connected`，MT5 使用 `login/server/currency/terminal_connected`；适配器校验终端路线，客户端再次将快照 login/server 与档案精确比较，不使用缓存或手填币种。失败或离线不发送 hello。
+
+服务端验证 facts 路线与 hello 一致，币种为 1–12 个 ASCII 字符（字母/数字开头，后续可含 `._-`），事实时间距接收最多 60 秒且不超前 5 秒。既有账户币种与新事实不一致时返回冲突，保留原数据，不自动修改财务语义。这是受认证设备提交的终端事实，不是券商签名的账户产权证明；只允许创建从未登记的新账户及首次 owner，不能补领已有无主、撤销、软删除或他人账户，也不凭终端字符串转移归属。账户、owner 区间与当前投影、档案/绑定、pending session 在同一短事务内落库，失败全部回滚；区间起点使用服务端时间，历史数据不能反向扩张授权区间。Redis 额度申请在事务外，额度失败不删除已经成立的账户历史。发布顺序为支持扩展的服务端先行、客户端后行，旧服务端的严格 hello 校验不保证接受新版扩展。
+
 MT4 不支持的 stop-limit、字段或历史证据必须明确返回 `capability_not_supported`；不得静默改成另一种订单。MT4/MT5 的枚举和字段差异在 Bridge 内转换成 V4 统一语义，同时保留原始代码供审计。终端自身对价格、手数、权限或市场状态的拒绝属于执行结果，Bridge 原样回传，不在客户端再维护一套经纪商交易规则。
 
 ### 8.8 设备认证、流控和更新

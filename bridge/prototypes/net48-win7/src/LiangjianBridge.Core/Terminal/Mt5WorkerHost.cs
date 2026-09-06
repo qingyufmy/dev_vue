@@ -262,15 +262,17 @@ namespace Liangjian.BridgeV4.Terminal
                 if (terminalInstanceId != null)
                 {
                     sessions.TryGetValue(terminalInstanceId, out session);
-                    if (session != null)
-                    {
-                        sessions.Remove(terminalInstanceId);
-                    }
                 }
             }
             if (session != null)
             {
                 session.Dispose();
+                lock (stateLock)
+                {
+                    Mt5WorkerSession current;
+                    if (sessions.TryGetValue(terminalInstanceId, out current) && ReferenceEquals(current, session))
+                        sessions.Remove(terminalInstanceId);
+                }
             }
         }
 
@@ -279,18 +281,20 @@ namespace Liangjian.BridgeV4.Terminal
             List<Mt5WorkerSession> active;
             lock (stateLock)
             {
-                if (disposed)
+                if (disposed && sessions.Count == 0)
                 {
                     return;
                 }
                 disposed = true;
                 active = new List<Mt5WorkerSession>(sessions.Values);
-                sessions.Clear();
             }
+            List<Exception> errors = new List<Exception>();
             foreach (Mt5WorkerSession session in active)
             {
-                session.Dispose();
+                try { Disconnect(session.TerminalInstanceId); }
+                catch (Exception error) { errors.Add(error); }
             }
+            if (errors.Count != 0) throw new AggregateException("bridge_mt5_host_close_failed", errors);
         }
 
         private void OnSessionDisconnected(object sender, Mt5WorkerSessionEventArgs eventArgs)
@@ -702,7 +706,12 @@ namespace Liangjian.BridgeV4.Terminal
                 catch (Exception) { }
                 finally
                 {
-                    ownedProcess.Dispose();
+                    try { ownedProcess.Dispose(); }
+                    catch
+                    {
+                        lock (requestLock) if (process == null) process = ownedProcess;
+                        throw;
+                    }
                 }
             }
             if (raise)

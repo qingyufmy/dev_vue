@@ -1,6 +1,7 @@
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import type { BridgeGatewayRouteRepository } from '../application/bridge-gateway-ports.js'
-import { BridgeGatewayError, type BridgeGatewayRoute } from '../domain/bridge-gateway.js'
+import { assertTerminalAccountFacts, BridgeGatewayError, type BridgeGatewayRoute } from '../domain/bridge-gateway.js'
+import { insertFirstAccount, insertFirstOwnership } from './mysql-bridge-first-account-claim.js'
 import {
   assertAuthorizeContext, assertFrozenRouteProof, boundedText, deviceId, epoch, gatewayError, hasFrozenRouteProof,
   ownershipRevision, profileDisplayName, routeId, translateStorageError,
@@ -11,6 +12,7 @@ interface AccountRow extends RowDataPacket {
   platform: 'mt4' | 'mt5' | string
   broker_server?: string
   account_login?: string
+  currency: string
 }
 
 interface CredentialRow extends RowDataPacket {
@@ -45,7 +47,7 @@ interface SessionProofRow extends RowDataPacket {
   ownership_revision: string | number
 }
 
-const ACCOUNT_COLUMNS = `CAST(a.id AS CHAR) id,a.platform,a.broker_server,a.account_login`
+const ACCOUNT_COLUMNS = `CAST(a.id AS CHAR) id,a.platform,a.broker_server,a.account_login,a.currency`
 const PROFILE_COLUMNS = 'p.id,p.user_id,p.platform,p.installation_id,p.deleted_at_utc'
 const BINDING_COLUMNS = 'b.terminal_profile_id,CAST(b.trading_account_id AS CHAR) trading_account_id,b.terminal_instance_id,b.unbound_at_utc'
 
@@ -62,13 +64,20 @@ export class MysqlBridgeGatewayRouteRepository implements BridgeGatewayRouteRepo
 
   async authorizeAndOpen(input: Parameters<BridgeGatewayRouteRepository['authorizeAndOpen']>[0]) {
     const context = assertAuthorizeContext(input.claims, input.hello, input.connectionId, input.connectedAt)
+    const facts = assertTerminalAccountFacts(context.terminal, Date.parse(context.connectedAt))
     return inTransaction(this.pool, async connection => {
       const account = await selectAccount(connection, context.terminal.platform, context.terminal.route.account_ref.broker_server,
         context.terminal.route.account_ref.login)
-      if (!account) throw gatewayError('bridge_route_account_not_found', 403)
-      const accountId = databaseId(account.id)
+      if (!account && !facts) throw gatewayError('bridge_route_account_not_found', 403)
+      if (account && facts && account.currency !== facts.currency) {
+        throw gatewayError('bridge_session_account_currency_mismatch', 409)
+      }
+      // Only an INSERT protected by the durable identity key can establish a new
+      // account. Deleted/collation-conflicting identities fail; never revive them.
+      const accountId = account ? databaseId(account.id)
+        : await insertFirstAccount(connection, context.terminal.platform, facts!, context.connectedAt)
 
-      const ownership = await selectCurrentOwnership(connection, context.claims.userId, accountId)
+      const ownership = account ? await selectCurrentOwnership(connection, context.claims.userId, accountId) : '1'
       if (!ownership) throw gatewayError('bridge_route_binding_invalid', 403)
 
       // Keep the same account -> owner -> credential -> profile -> binding /
@@ -80,6 +89,7 @@ export class MysqlBridgeGatewayRouteRepository implements BridgeGatewayRouteRepo
         context.claims.installationId, context.terminal.platform)
       await assertProfile(profile, context.claims.userId, context.claims.profileId, context.claims.installationId,
         context.terminal.platform)
+      if (!account) await insertFirstOwnership(connection, context.claims.userId, accountId, context.connectedAt)
 
       // Fence the incoming epoch before any active binding is closed. The
       // profile lock above scopes the fence: two profiles can share a terminal

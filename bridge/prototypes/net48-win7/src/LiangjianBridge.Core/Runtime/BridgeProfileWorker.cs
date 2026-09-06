@@ -61,6 +61,8 @@ namespace Liangjian.BridgeV4.Runtime
     public sealed class BridgeProfileWorker : IDisposable
     {
         private readonly object gate = new object();
+        private readonly object controllerGate = new object();
+        private readonly object disposeGate = new object();
         private readonly object releaseStatusGate = new object();
         private readonly ProfileRuntime runtime;
         private readonly BridgeSessionController controller;
@@ -73,6 +75,7 @@ namespace Liangjian.BridgeV4.Runtime
         private int activeOperations;
         private bool pausedForUpdate;
         private bool disposed;
+        private bool stopping;
         private string lastReleaseStatusFingerprint;
         private long nextReleaseStatusCheckUtcMsc;
 
@@ -100,12 +103,12 @@ namespace Liangjian.BridgeV4.Runtime
 
         public string State
         {
-            get { lock (gate) return disposed ? "stopped" : pausedForUpdate ? "update_wait" : controller.State; }
+            get { lock (gate) return disposed ? "stopped" : stopping ? "stopping" : pausedForUpdate ? "update_wait" : controller.State; }
         }
 
         public string ConnectionId
         {
-            get { lock (gate) return controller.ConnectionId; }
+            get { lock (gate) return stopping ? null : controller.ConnectionId; }
         }
 
         public int ActiveOperations
@@ -122,7 +125,7 @@ namespace Liangjian.BridgeV4.Runtime
         {
             lock (gate)
             {
-                if (disposed) throw new ObjectDisposedException("BridgeProfileWorker");
+                if (stopping || disposed) throw new ObjectDisposedException("BridgeProfileWorker");
                 if (thread != null) return;
                 thread = new Thread(Run);
                 thread.Name = "LiangjianBridgeV4.Profile." + runtime.Configuration.ProfileId;
@@ -141,7 +144,7 @@ namespace Liangjian.BridgeV4.Runtime
             IBridgeMessageChannel channel;
             lock (gate)
             {
-                if (disposed) return false;
+                if (stopping || disposed) return false;
                 pausedForUpdate = true;
                 channel = activeChannel;
             }
@@ -174,7 +177,7 @@ namespace Liangjian.BridgeV4.Runtime
         {
             lock (gate)
             {
-                if (disposed) return;
+                if (stopping || disposed) return;
                 pausedForUpdate = false;
             }
             RaiseStateChanged();
@@ -182,21 +185,42 @@ namespace Liangjian.BridgeV4.Runtime
 
         public void Dispose()
         {
+            lock (disposeGate) DisposeCore();
+        }
+
+        private void DisposeCore()
+        {
             Thread current;
             IBridgeMessageChannel channel;
             lock (gate)
             {
                 if (disposed) return;
-                disposed = true;
+                stopping = true;
                 stop.Set();
                 current = thread;
-                thread = null;
                 channel = activeChannel;
-                activeChannel = null;
             }
-            if (channel != null) channel.Dispose();
-            if (current != null && current != Thread.CurrentThread) current.Join(5000);
-            stop.Dispose();
+            Exception closeError = null;
+            if (channel != null)
+            {
+                try { channel.Dispose(); }
+                catch (Exception error) { closeError = error; }
+            }
+            if (current != null && (current == Thread.CurrentThread || !current.Join(5000)))
+                throw new TimeoutException("bridge_worker_stop_pending", closeError);
+            // Run may have received a late connection after the first close attempt.
+            lock (gate) channel = activeChannel;
+            if (channel != null)
+            {
+                channel.Dispose();
+                SetActiveChannel(null);
+            }
+            lock (gate)
+            {
+                disposed = true;
+                thread = null;
+                stop.Dispose();
+            }
         }
 
         private void Run()
@@ -220,9 +244,18 @@ namespace Liangjian.BridgeV4.Runtime
                 Thread heartbeat = null;
                 try
                 {
-                    channel = factory.Connect();
-                    SetActiveChannel(channel);
-                    channel.Send(controller.Begin(UtcNowMsc()));
+                    string hello;
+                    if (!TryBeginOperation()) continue;
+                    try
+                    {
+                        lock (controllerGate) hello = controller.Begin(UtcNowMsc());
+                        if (IsStoppingOrPaused()) continue;
+                        channel = factory.Connect();
+                        SetActiveChannel(channel);
+                        if (IsStoppingOrPaused()) continue;
+                        channel.Send(hello);
+                    }
+                    finally { EndOperation(); }
                     lock (releaseStatusGate)
                     {
                         lastReleaseStatusFingerprint = null;
@@ -241,15 +274,15 @@ namespace Liangjian.BridgeV4.Runtime
                         try
                         {
                             string response;
-                            lock (gate)
+                            lock (controllerGate)
                             {
                                 response = controller.Handle(incoming, UtcNowMsc());
                             }
                             RaiseStateChanged();
-                            if (response != null)
+                            if (response != null && !IsStoppingOrPaused())
                             {
                                 channel.Send(response);
-                                lock (gate) controller.AfterResponseSent(UtcNowMsc());
+                                lock (controllerGate) controller.AfterResponseSent(UtcNowMsc());
                             }
                             TrySendReleaseStatus(channel, UtcNowMsc());
                         }
@@ -266,15 +299,26 @@ namespace Liangjian.BridgeV4.Runtime
                 finally
                 {
                     connectionStop.Set();
-                    if (channel != null) channel.Dispose();
-                    SetActiveChannel(null);
-                    if (heartbeat != null && heartbeat != Thread.CurrentThread) heartbeat.Join(2000);
+                    bool closed = true;
+                    if (channel != null)
+                    {
+                        try { channel.Dispose(); }
+                        catch (Exception error)
+                        {
+                            closed = false;
+                            lock (gate) { stopping = true; stop.Set(); }
+                            RaiseConnectionError(error);
+                        }
+                    }
+                    if (closed) SetActiveChannel(null);
+                    // Keep both wait handles and runtime alive until heartbeat work has exited.
+                    if (heartbeat != null && heartbeat != Thread.CurrentThread) heartbeat.Join();
                     connectionStop.Dispose();
-                }
-                if (!stop.WaitOne(0))
-                {
-                    lock (gate) controller.MarkDisconnected(UtcNowMsc());
-                    RaiseStateChanged();
+                    if (!stop.WaitOne(0))
+                    {
+                        lock (controllerGate) controller.MarkDisconnected(UtcNowMsc());
+                        RaiseStateChanged();
+                    }
                 }
             }
         }
@@ -287,7 +331,7 @@ namespace Liangjian.BridgeV4.Runtime
                 {
                     string heartbeat;
                     bool active;
-                    lock (gate)
+                    lock (controllerGate)
                     {
                         active = controller.State == "active";
                         if (controller.HeartbeatExpired(UtcNowMsc()))
@@ -323,7 +367,7 @@ namespace Liangjian.BridgeV4.Runtime
         {
             lock (gate)
             {
-                if (disposed || pausedForUpdate) return false;
+                if (stopping || disposed || pausedForUpdate) return false;
                 activeOperations++;
                 return true;
             }
@@ -333,6 +377,7 @@ namespace Liangjian.BridgeV4.Runtime
         {
             lock (releaseStatusGate)
             {
+                if (IsStoppingOrPaused()) return;
                 if (releaseStatus == null || nowUtcMsc < nextReleaseStatusCheckUtcMsc) return;
                 nextReleaseStatusCheckUtcMsc = checked(nowUtcMsc + 1000L);
                 ReleaseActivationStatus status;
@@ -342,7 +387,8 @@ namespace Liangjian.BridgeV4.Runtime
                 catch (InvalidDataException) { nextReleaseStatusCheckUtcMsc = checked(nowUtcMsc + 30000L); return; }
                 if (status == null || status.Fingerprint == lastReleaseStatusFingerprint) return;
                 string envelope;
-                lock (gate) envelope = controller.CreateReleaseStatus(status, nowUtcMsc);
+                lock (controllerGate) envelope = controller.CreateReleaseStatus(status, nowUtcMsc);
+                if (IsStoppingOrPaused()) return;
                 channel.Send(envelope);
                 lastReleaseStatusFingerprint = status.Fingerprint;
             }
@@ -360,6 +406,11 @@ namespace Liangjian.BridgeV4.Runtime
         private bool IsPausedForUpdate()
         {
             lock (gate) return pausedForUpdate;
+        }
+
+        private bool IsStoppingOrPaused()
+        {
+            lock (gate) return stopping || pausedForUpdate;
         }
 
         private void SetActiveChannel(IBridgeMessageChannel channel)

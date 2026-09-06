@@ -195,6 +195,17 @@
               "route": { "$ref": "#/$defs/Route" },
               "platform": { "type": "string", "enum": ["mt4", "mt5"] },
               "terminal_version": { "type": "string", "maxLength": 64 },
+              "account_facts": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["currency", "login", "broker_server", "observed_at_utc_msc"],
+                "properties": {
+                  "currency": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,11}(?![\\s\\S])" },
+                  "login": { "type": "string", "minLength": 1, "maxLength": 64 },
+                  "broker_server": { "type": "string", "minLength": 1, "maxLength": 128 },
+                  "observed_at_utc_msc": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+                }
+              },
               "trade_permission": { "type": "string", "enum": ["full", "read_only", "disabled", "unknown"] },
               "timezone_offset_minutes": { "type": ["integer", "null"], "minimum": -840, "maximum": 840 },
               "clock_status": { "type": "string", "enum": ["calibrated", "observer_bootstrap", "stale", "unavailable"] }

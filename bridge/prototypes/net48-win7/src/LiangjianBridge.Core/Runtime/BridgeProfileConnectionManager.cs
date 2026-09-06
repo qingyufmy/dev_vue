@@ -20,17 +20,29 @@ namespace Liangjian.BridgeV4.Runtime
     internal sealed class ManagedProfileConnection : IDisposable
     {
         private readonly object gate = new object();
+        private readonly object disposeGate = new object();
         private readonly ProfileRuntime runtime;
         private readonly BridgeProfileWorker worker;
         private readonly Mt5WorkerHost mt5Live;
         private readonly Mt5WorkerHost mt5Archive;
         private readonly string terminalInstanceId;
         private readonly IDisposable profileLease;
+        private readonly string profileId;
         private string lastErrorCode;
         private bool disposed;
+        private bool stopping;
+        private bool archiveClosed;
+        private bool liveClosed;
+        private bool runtimeClosed;
 
         public ManagedProfileConnection(ProfileRuntime runtimeValue, BridgeProfileWorker workerValue,
             string terminalId, Mt5WorkerHost liveHost, Mt5WorkerHost archiveHost, IDisposable lease)
+            : this(runtimeValue, workerValue, terminalId, liveHost, archiveHost, lease, runtimeValue.Configuration.ProfileId)
+        {
+        }
+
+        public ManagedProfileConnection(ProfileRuntime runtimeValue, BridgeProfileWorker workerValue,
+            string terminalId, Mt5WorkerHost liveHost, Mt5WorkerHost archiveHost, IDisposable lease, string profileIdValue)
         {
             runtime = runtimeValue;
             worker = workerValue;
@@ -38,14 +50,20 @@ namespace Liangjian.BridgeV4.Runtime
             mt5Live = liveHost;
             mt5Archive = archiveHost;
             profileLease = lease;
-            worker.ConnectionError += OnConnectionError;
-            worker.StateChanged += OnStateChanged;
+            profileId = profileIdValue;
+            stopping = worker == null;
+            if (worker != null)
+            {
+                worker.ConnectionError += OnConnectionError;
+                worker.StateChanged += OnStateChanged;
+            }
         }
 
         public event EventHandler StateChanged;
 
         public void Start()
         {
+            if (worker == null) throw new InvalidOperationException("bridge_profile_cleanup_pending");
             worker.Start();
         }
 
@@ -54,6 +72,7 @@ namespace Liangjian.BridgeV4.Runtime
             lock (gate)
             {
                 if (disposed) return new UpdateActivitySnapshot();
+                if (stopping) return new UpdateActivitySnapshot { PendingCriticalWrites = 1 };
                 CommandLedgerActivity ledger = runtime.CommandLedger.ReadUpdateActivity(
                     runtime.Configuration.ProfileId);
                 return new UpdateActivitySnapshot
@@ -67,18 +86,18 @@ namespace Liangjian.BridgeV4.Runtime
 
         public bool PauseForUpdate(int timeoutMilliseconds)
         {
-            lock (gate) if (disposed) return false;
+            lock (gate) if (stopping || disposed) return false;
             return worker.PauseForUpdate(timeoutMilliseconds);
         }
 
         public PendingBridgeRelease ReadPendingRelease()
         {
-            lock (gate) return disposed ? null : worker.PendingRelease;
+            lock (gate) return stopping || disposed ? null : worker.PendingRelease;
         }
 
         public void ResumeAfterUpdate()
         {
-            lock (gate) if (disposed) return;
+            lock (gate) if (stopping || disposed) return;
             worker.ResumeAfterUpdate();
         }
 
@@ -88,9 +107,9 @@ namespace Liangjian.BridgeV4.Runtime
             {
                 return new BridgeProfileConnectionSnapshot
                 {
-                    ProfileId = runtime.Configuration.ProfileId,
-                    State = disposed ? "stopped" : worker.State,
-                    ConnectionId = disposed ? null : worker.ConnectionId,
+                    ProfileId = profileId,
+                    State = disposed ? "stopped" : stopping ? "stopping" : worker.State,
+                    ConnectionId = stopping || disposed ? null : worker.ConnectionId,
                     TerminalState = terminalState,
                     LastErrorCode = lastErrorCode
                 };
@@ -99,18 +118,32 @@ namespace Liangjian.BridgeV4.Runtime
 
         public void Dispose()
         {
-            lock (gate)
+            lock (disposeGate)
             {
-                if (disposed) return;
-                disposed = true;
+                lock (gate)
+                {
+                    if (disposed) return;
+                    stopping = true;
+                }
+                // A timed-out worker still owns the runtime and profile lease.
+                // Retain every resource and this connection so Stop can be retried.
+                if (worker != null) worker.Dispose();
+                List<Exception> errors = new List<Exception>();
+                try { if (!archiveClosed && mt5Archive != null) mt5Archive.Disconnect(terminalInstanceId); archiveClosed = true; }
+                catch (Exception error) { errors.Add(error); }
+                try { if (!liveClosed && mt5Live != null) mt5Live.Disconnect(terminalInstanceId); liveClosed = true; }
+                catch (Exception error) { errors.Add(error); }
+                try { if (!runtimeClosed && runtime != null) runtime.Dispose(); runtimeClosed = true; }
+                catch (Exception error) { errors.Add(error); }
+                if (errors.Count != 0) throw new AggregateException("bridge_profile_close_failed", errors);
+                profileLease.Dispose();
+                if (worker != null)
+                {
+                    worker.ConnectionError -= OnConnectionError;
+                    worker.StateChanged -= OnStateChanged;
+                }
+                lock (gate) disposed = true;
             }
-            worker.ConnectionError -= OnConnectionError;
-            worker.StateChanged -= OnStateChanged;
-            worker.Dispose();
-            if (mt5Archive != null) mt5Archive.Disconnect(terminalInstanceId);
-            if (mt5Live != null) mt5Live.Disconnect(terminalInstanceId);
-            try { runtime.Dispose(); }
-            finally { profileLease.Dispose(); }
             RaiseStateChanged();
         }
 
@@ -145,8 +178,12 @@ namespace Liangjian.BridgeV4.Runtime
     public sealed class BridgeProfileConnectionManager : IDisposable
     {
         private readonly object gate = new object();
+        private readonly object disposeGate = new object();
         private readonly Dictionary<string, ManagedProfileConnection> connections =
             new Dictionary<string, ManagedProfileConnection>(StringComparer.Ordinal);
+        private sealed class StartAttempt { public bool Cancelled; }
+        private readonly Dictionary<string, StartAttempt> pendingStarts =
+            new Dictionary<string, StartAttempt>(StringComparer.Ordinal);
         private readonly TerminalSessionHost mt4Host;
         private readonly Mt5WorkerHost mt5Live = new Mt5WorkerHost("LiangjianBridgeV4.Mt5.Live");
         private readonly Mt5WorkerHost mt5Archive = new Mt5WorkerHost("LiangjianBridgeV4.Mt5.Archive");
@@ -156,7 +193,9 @@ namespace Liangjian.BridgeV4.Runtime
         private readonly ReleaseActivationStatusStore releaseStatus;
         private readonly IBridgeSessionTokenProvider sessionTokens;
         private bool updateQuiescing;
+        private int activeCreations;
         private bool disposed;
+        private bool stopping;
 
         public BridgeProfileConnectionManager(TerminalSessionHost terminalHost, BridgeProfileStore store,
             string installationIdValue, string dataRoot, IBridgeSessionTokenProvider sessionTokenProvider)
@@ -178,9 +217,30 @@ namespace Liangjian.BridgeV4.Runtime
         public void Start(BridgeProfileSettings profile)
         {
             BridgeProfileStore.ValidateProfile(profile, false);
+            StartAttempt attempt;
             lock (gate)
             {
                 EnsureOpen();
+                if (updateQuiescing) throw new InvalidOperationException("bridge_update_quiescing");
+                if (connections.ContainsKey(profile.ProfileId) || pendingStarts.ContainsKey(profile.ProfileId)) return;
+                attempt = new StartAttempt();
+                pendingStarts.Add(profile.ProfileId, attempt);
+                activeCreations++;
+            }
+            try { StartCore(profile, attempt); }
+            finally
+            {
+                lock (gate) { activeCreations--; pendingStarts.Remove(profile.ProfileId); }
+            }
+        }
+
+        private void StartCore(BridgeProfileSettings profile, StartAttempt attempt)
+        {
+            BridgeProfileStore.ValidateProfile(profile, false);
+            lock (gate)
+            {
+                EnsureOpen();
+                if (attempt.Cancelled) return;
                 if (updateQuiescing) throw new InvalidOperationException("bridge_update_quiescing");
                 if (connections.ContainsKey(profile.ProfileId)) return;
             }
@@ -189,47 +249,79 @@ namespace Liangjian.BridgeV4.Runtime
             connection.StateChanged += OnConnectionStateChanged;
             try
             {
-                lock (gate)
+                if (!RegisterAndStart(profile.ProfileId, attempt, connection))
                 {
-                    EnsureOpen();
-                    if (connections.ContainsKey(profile.ProfileId))
-                    {
-                        connection.Dispose();
-                        return;
-                    }
-                    connections.Add(profile.ProfileId, connection);
+                    connection.Dispose();
+                    connection.StateChanged -= OnConnectionStateChanged;
+                    return;
                 }
             }
             catch
             {
-                connection.StateChanged -= OnConnectionStateChanged;
-                connection.Dispose();
-                throw;
-            }
-            try
-            {
-                connection.Start();
-            }
-            catch
-            {
-                Stop(profile.ProfileId);
+                DisposeAfterStartFailure(profile.ProfileId, connection);
                 throw;
             }
             RaiseStateChanged();
         }
 
-        public bool Stop(string profileId)
+        private void DisposeAfterStartFailure(string profileId, ManagedProfileConnection connection)
         {
-            ManagedProfileConnection connection = null;
+            // A cancelled/closing creation may never have reached registration.
+            // Preserve its cleanup ownership if disposal fails too.
+            lock (gate)
+            {
+                if (!connections.ContainsKey(profileId)) connections.Add(profileId, connection);
+            }
+            connection.Dispose();
+            connection.StateChanged -= OnConnectionStateChanged;
+            lock (gate)
+            {
+                ManagedProfileConnection current;
+                if (connections.TryGetValue(profileId, out current) && ReferenceEquals(current, connection))
+                    connections.Remove(profileId);
+            }
+        }
+
+        private bool RegisterAndStart(string profileId, StartAttempt attempt, ManagedProfileConnection connection)
+        {
             lock (gate)
             {
                 EnsureOpen();
-                if (profileId != null && connections.TryGetValue(profileId, out connection))
+                if (updateQuiescing) throw new InvalidOperationException("bridge_update_quiescing");
+                if (attempt.Cancelled || connections.ContainsKey(profileId)) return false;
+                connections.Add(profileId, connection);
+                connection.Start();
+                return true;
+            }
+        }
+
+        public bool Stop(string profileId)
+        {
+            ManagedProfileConnection connection = null;
+            bool cancelledStart = false;
+            lock (gate)
+            {
+                EnsureNotDisposed();
+                if (profileId != null)
+                {
+                    StartAttempt attempt;
+                    if (pendingStarts.TryGetValue(profileId, out attempt))
+                    {
+                        attempt.Cancelled = true;
+                        cancelledStart = true;
+                    }
+                    connections.TryGetValue(profileId, out connection);
+                }
+            }
+            if (connection == null) return cancelledStart;
+            connection.Dispose();
+            connection.StateChanged -= OnConnectionStateChanged;
+            lock (gate)
+            {
+                ManagedProfileConnection current;
+                if (connections.TryGetValue(profileId, out current) && ReferenceEquals(current, connection))
                     connections.Remove(profileId);
             }
-            if (connection == null) return false;
-            connection.StateChanged -= OnConnectionStateChanged;
-            connection.Dispose();
             RaiseStateChanged();
             return true;
         }
@@ -240,7 +332,7 @@ namespace Liangjian.BridgeV4.Runtime
             ManagedProfileConnection connection;
             lock (gate)
             {
-                EnsureOpen();
+                EnsureNotDisposed();
                 if (!connections.TryGetValue(profile.ProfileId, out connection))
                 {
                     return new BridgeProfileConnectionSnapshot
@@ -342,44 +434,67 @@ namespace Liangjian.BridgeV4.Runtime
 
         public void Dispose()
         {
+            lock (disposeGate) DisposeCore();
+        }
+
+        private void DisposeCore()
+        {
             List<ManagedProfileConnection> active;
             lock (gate)
             {
                 if (disposed) return;
-                disposed = true;
+                stopping = true;
                 updateQuiescing = false;
                 active = new List<ManagedProfileConnection>(connections.Values);
-                connections.Clear();
             }
+            List<Exception> errors = new List<Exception>();
             foreach (ManagedProfileConnection connection in active)
             {
-                connection.StateChanged -= OnConnectionStateChanged;
-                connection.Dispose();
+                try
+                {
+                    connection.Dispose();
+                    connection.StateChanged -= OnConnectionStateChanged;
+                    lock (gate)
+                    {
+                        string key = null;
+                        foreach (KeyValuePair<string, ManagedProfileConnection> item in connections)
+                            if (ReferenceEquals(item.Value, connection)) { key = item.Key; break; }
+                        if (key != null) connections.Remove(key);
+                    }
+                }
+                catch (Exception error) { errors.Add(error); }
             }
-            mt5Archive.Dispose();
-            mt5Live.Dispose();
+            lock (gate)
+            {
+                if (activeCreations != 0) errors.Add(new InvalidOperationException("bridge_profile_creation_stop_pending"));
+            }
+            if (errors.Count != 0) throw new AggregateException("bridge_connections_stop_pending", errors);
+            try { mt5Archive.Dispose(); } catch (Exception error) { errors.Add(error); }
+            try { mt5Live.Dispose(); } catch (Exception error) { errors.Add(error); }
+            if (errors.Count != 0) throw new AggregateException("bridge_hosts_close_failed", errors);
+            lock (gate) disposed = true;
         }
 
         private ManagedProfileConnection Create(BridgeProfileSettings profile)
         {
             IDisposable lease = ProfileAccountDataLocation.AcquireLease(profileDataRoot, profile);
-            try { return Create(profile, lease); }
-            catch { lease.Dispose(); throw; }
+            return Create(profile, lease);
         }
 
         private ManagedProfileConnection Create(BridgeProfileSettings profile, IDisposable lease)
         {
-            ProfileAccountDataLocation location = ProfileAccountDataLocation.Resolve(profileDataRoot, profile);
-            string directory = location.DirectoryPath;
-            string databasePath = location.DatabasePath;
-            long epoch = location.ConnectionEpoch;
-            ProfileRuntime runtime = new ProfileRuntime(new ProfileRuntimeConfiguration(databasePath,
-                profile.ProfileId, profile.TerminalInstanceId, profile.Platform, profile.BrokerServer,
-                profile.Login, epoch));
+            ProfileRuntime runtime = null;
             bool liveConnected = false;
             bool archiveConnected = false;
             try
             {
+                ProfileAccountDataLocation location = ProfileAccountDataLocation.Resolve(profileDataRoot, profile);
+                string directory = location.DirectoryPath;
+                string databasePath = location.DatabasePath;
+                long epoch = location.ConnectionEpoch;
+                runtime = new ProfileRuntime(new ProfileRuntimeConfiguration(databasePath,
+                    profile.ProfileId, profile.TerminalInstanceId, profile.Platform, profile.BrokerServer,
+                    profile.Login, epoch));
                 ITerminalQuerySource terminal;
                 ITerminalCommandSource commands;
                 Mt5WorkerHost live = null;
@@ -408,8 +523,12 @@ namespace Liangjian.BridgeV4.Runtime
                     commands = new Mt4TerminalCommandSource(mt4Host);
                 }
                 BridgeProfileSession session = new BridgeProfileSession(runtime, terminal, commands);
-                BridgeSessionController controller = new BridgeSessionController(runtime, session,
-                    SessionConfiguration(profile));
+                BridgeSessionConfiguration configuration = SessionConfiguration(profile);
+                configuration.AccountFactsProvider = delegate(long nowUtcMsc)
+                {
+                    return BridgeAccountFacts.Read(runtime, terminal, nowUtcMsc);
+                };
+                BridgeSessionController controller = new BridgeSessionController(runtime, session, configuration);
                 Func<string> acquireSessionToken = delegate
                 {
                     string refreshToken = profileStore.ReadRefreshToken(profile);
@@ -432,9 +551,11 @@ namespace Liangjian.BridgeV4.Runtime
             }
             catch
             {
-                if (archiveConnected) mt5Archive.Disconnect(profile.TerminalInstanceId);
-                if (liveConnected) mt5Live.Disconnect(profile.TerminalInstanceId);
-                runtime.Dispose();
+                ManagedProfileConnection cleanup = new ManagedProfileConnection(runtime, null,
+                    profile.TerminalInstanceId, liveConnected ? mt5Live : null,
+                    archiveConnected ? mt5Archive : null, lease, profile.ProfileId);
+                cleanup.StateChanged += OnConnectionStateChanged;
+                DisposeAfterStartFailure(profile.ProfileId, cleanup);
                 throw;
             }
         }
@@ -511,7 +632,8 @@ namespace Liangjian.BridgeV4.Runtime
                 && activity.PendingCriticalWrites == 0;
         }
         private void RaiseStateChanged() { EventHandler handler = StateChanged; if (handler != null) handler(this, EventArgs.Empty); }
-        private void EnsureOpen() { if (disposed) throw new ObjectDisposedException("BridgeProfileConnectionManager"); }
+        private void EnsureOpen() { if (stopping || disposed) throw new ObjectDisposedException("BridgeProfileConnectionManager"); }
+        private void EnsureNotDisposed() { if (disposed) throw new ObjectDisposedException("BridgeProfileConnectionManager"); }
         private static string NormalizeClock(string value)
         {
             return value == "calibrated" || value == "observer_bootstrap" || value == "stale" ? value : "unavailable";

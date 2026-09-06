@@ -39,6 +39,7 @@ namespace Liangjian.BridgeV4.App
         private bool configurationAvailable;
         private bool legacyReadyWritten;
         private volatile bool updateActivationStarted;
+        private bool shutdownRequested;
 
         public MainForm()
             : this(new LegacyLaunchRequest())
@@ -111,14 +112,34 @@ namespace Liangjian.BridgeV4.App
                 if (profile.AutoConnect) StartProfile(profile);
         }
 
+        protected override void OnFormClosing(FormClosingEventArgs eventArgs)
+        {
+            base.OnFormClosing(eventArgs);
+            if (eventArgs.Cancel) return;
+            shutdownRequested = true;
+            refreshTimer.Stop();
+            addButton.Enabled = editButton.Enabled = connectButton.Enabled = false;
+            disconnectButton.Enabled = deleteButton.Enabled = false;
+            try
+            {
+                connections.Dispose();
+                terminalHost.Dispose();
+            }
+            catch (Exception)
+            {
+                eventArgs.Cancel = true;
+                summary.Text = "正在停止连接，尚未安全退出";
+                detail.Text = "档案仍保留锁定。请稍候再次关闭窗口，重试完成清理。";
+            }
+        }
+
         protected override void OnFormClosed(FormClosedEventArgs eventArgs)
         {
             refreshTimer.Stop();
             connections.StateChanged -= OnRuntimeChanged;
             terminalHost.SessionsChanged -= OnRuntimeChanged;
             terminalHost.HostError -= OnTerminalHostError;
-            connections.Dispose();
-            terminalHost.Dispose();
+            refreshTimer.Dispose();
             base.OnFormClosed(eventArgs);
         }
 
@@ -309,8 +330,8 @@ namespace Liangjian.BridgeV4.App
                     int index = catalog.Profiles.IndexOf(current);
                     BridgeProfileCatalog candidate = CopyCatalog();
                     candidate.Profiles[index] = editor.Profile;
-                    profileStore.Save(candidate);
                     if (routeChanged) StopProfile(current.ProfileId);
+                    profileStore.Save(candidate);
                     catalog = candidate;
                     RefreshProfiles();
                     SelectProfile(editor.Profile.ProfileId);
@@ -329,8 +350,8 @@ namespace Liangjian.BridgeV4.App
             {
                 BridgeProfileCatalog candidate = CopyCatalog();
                 candidate.Profiles.RemoveAt(catalog.Profiles.IndexOf(profile));
-                profileStore.Save(candidate);
                 StopProfile(profile.ProfileId);
+                profileStore.Save(candidate);
                 catalog = candidate;
                 RefreshProfiles();
             }
@@ -385,6 +406,7 @@ namespace Liangjian.BridgeV4.App
 
         private void RefreshProfiles()
         {
+            if (shutdownRequested) return;
             if (IsDisposed) return;
             string selected = SelectedProfileId();
             profileList.BeginUpdate();
@@ -426,6 +448,7 @@ namespace Liangjian.BridgeV4.App
 
         private void CheckForUpdates()
         {
+            if (shutdownRequested) return;
             if (updates == null || updateActivationStarted || IsDisposed) return;
             PendingBridgeRelease newest = null;
             foreach (PendingBridgeRelease release in connections.ReadObservedReleases())
@@ -587,6 +610,7 @@ namespace Liangjian.BridgeV4.App
                 case "backoff": return "等待重连";
                 case "disconnected": return "准备连接";
                 case "update_wait": return "等待更新";
+                case "stopping": return "正在停止";
                 default: return "已断开";
             }
         }

@@ -1,7 +1,8 @@
 import type { Pool } from 'mysql2/promise'
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import type { BridgeGatewayRoute, BridgeSessionHelloEnvelope } from '../src/modules/bridge/domain/bridge-gateway.js'
-import { BridgeGatewayError } from '../src/modules/bridge/domain/bridge-gateway.js'
+import { assertSessionHello, BridgeGatewayError } from '../src/modules/bridge/domain/bridge-gateway.js'
 import { MysqlBridgeGatewayRouteRepository } from '../src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.js'
 
 const NOW = '2026-09-06T00:00:00.000Z'
@@ -14,6 +15,7 @@ interface Account {
   login: string
   deletedAt: string | null
   ownershipRevision: string
+  currency?: string
 }
 
 interface Credential {
@@ -79,6 +81,7 @@ interface State {
   profiles: Profile[]
   bindings: Binding[]
   ownerships: Ownership[]
+  intervals: Array<{ id: string; userId: number; accountId: string; startedAt: string }>
   sessions: Session[]
   nextSessionId: number
 }
@@ -106,7 +109,7 @@ class FakePool {
   state: State = {
     accounts: [{
       id: '42', platform: 'mt5', brokerServer: 'DPrime-Demo 5', login: '8950701',
-      deletedAt: null, ownershipRevision: '3',
+      deletedAt: null, ownershipRevision: '3', currency: 'EUR',
     }],
     credentials: [{
       userId: 7, installationId: 'install-1', profileId: 'profile-1', generation: 2,
@@ -114,6 +117,7 @@ class FakePool {
       deletionStatus: 'active', deletedAt: null,
     }],
     profiles: [],
+    intervals: [],
     bindings: [],
     ownerships: [{
       userId: 7, accountId: '42', revision: '3', intervalId: 'interval-42', role: 'owner', revokedAt: null,
@@ -127,6 +131,8 @@ class FakePool {
   readonly calls: Array<{ sql: string; params: unknown[] }> = []
   readonly transactions: string[] = []
   failOn: string | null = null
+  failureCode = 'ER_LOCK_WAIT_TIMEOUT'
+  private lastAccountId = ''
   private transactionState: State | null = null
 
   private get current(): State { return this.transactionState ?? this.state }
@@ -161,7 +167,7 @@ class FakePool {
     this.calls.push({ sql, params })
     if (this.failOn && sql.includes(this.failOn)) {
       this.failOn = null
-      throw sqlError('simulated storage failure', 'ER_LOCK_WAIT_TIMEOUT')
+      throw sqlError('simulated storage failure', this.failureCode)
     }
 
     if (sql.includes('SELECT s.user_id,s.generation')) {
@@ -176,7 +182,7 @@ class FakePool {
       const [platform, server, login] = params.map(String)
       const rows = this.current.accounts.filter(row => row.platform === platform
         && row.brokerServer === server && row.login === login && row.deletedAt === null)
-        .map(row => ({ id: row.id, platform: row.platform, broker_server: row.brokerServer, account_login: row.login }))
+        .map(row => ({ id: row.id, platform: row.platform, broker_server: row.brokerServer, account_login: row.login, currency: row.currency }))
       return [rows as T, []]
     }
 
@@ -216,6 +222,33 @@ class FakePool {
 
     if (sql.includes('SELECT s.id,CAST(a.ownership_revision AS CHAR)')) {
       return [this.sessionProofRows(sql, params) as T, []]
+    }
+
+    if (sql.includes('INSERT INTO trading_accounts')) {
+      const [platform, brokerServer, login, currency] = params.map(String)
+      if (this.current.accounts.some(row => row.platform === platform
+        && row.brokerServer.toLowerCase() === brokerServer!.toLowerCase() && row.login === login)) {
+        throw sqlError('duplicate account', 'ER_DUP_ENTRY')
+      }
+      this.lastAccountId = String(Math.max(42, ...this.current.accounts.map(row => Number(row.id))) + 1)
+      this.current.accounts.push({ id: this.lastAccountId, platform: platform as 'mt4' | 'mt5',
+        brokerServer: brokerServer!, login: login!, currency: currency!, deletedAt: null, ownershipRevision: '1' })
+      return [{ affectedRows: 1 } as T, []]
+    }
+    if (sql.includes('SELECT CAST(LAST_INSERT_ID() AS CHAR)')) return [[{ id: this.lastAccountId }] as T, []]
+    if (sql.includes('INSERT INTO trading_account_ownership_intervals')) {
+      const [id, userId, accountId, startedAt] = params
+      this.current.intervals.push({ id: String(id), userId: Number(userId), accountId: String(accountId), startedAt: String(startedAt) })
+      return [{ affectedRows: 1 } as T, []]
+    }
+    if (sql.includes('INSERT INTO trading_account_ownerships')) {
+      const [userId, accountId, grantedAt, intervalId] = params
+      const interval = this.current.intervals.find(row => row.id === intervalId && row.userId === userId && row.accountId === accountId)
+      if (!interval) throw sqlError('missing interval')
+      this.current.ownerships.push({ userId: Number(userId), accountId: String(accountId), revision: '1',
+        intervalId: String(intervalId), role: 'owner', revokedAt: null, intervalRole: 'owner',
+        intervalStart: interval.startedAt, intervalEnd: null, grantedAt: String(grantedAt) })
+      return [{ affectedRows: 1 } as T, []]
     }
 
     if (sql.includes('INSERT INTO terminal_profiles')) {
@@ -420,6 +453,149 @@ function addAccount(pool: FakePool, id: string, login: string, revision: string,
 }
 
 describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
+  function firstInput(options: InputOptions = {}) {
+    const input = registrationInput(options)
+    const terminal = input.hello.payload.terminals[0]!
+    terminal.account_facts = { ...terminal.route.account_ref, currency: 'EUR', observed_at_utc_msc: Date.parse(input.connectedAt) }
+    return input
+  }
+
+  it('creates a never registered account and one owner interval from server time, reusing them on reconnect', async () => {
+    const pool = new FakePool()
+    pool.state.accounts = []
+    pool.state.ownerships = []
+    const repository = new MysqlBridgeGatewayRouteRepository(pool.asPool())
+    const input = firstInput()
+    input.hello.payload.terminals[0]!.account_facts!.observed_at_utc_msc -= 59_000
+    const route = await repository.authorizeAndOpen(input)
+    expect(route).toMatchObject({ accountId: '43', ownershipRevision: '1', userId: 7 })
+    expect(pool.state.accounts).toEqual([expect.objectContaining({ currency: 'EUR', ownershipRevision: '1' })])
+    expect(pool.state.ownerships).toEqual([expect.objectContaining({ grantedAt: NOW, intervalStart: NOW, revision: '1' })])
+    expect(pool.state.intervals).toHaveLength(1)
+    await repository.activate(route, NOW)
+    expect(await repository.isAuthorized(route)).toBe(true)
+    await open(repository, { epoch: 2, connectionId: 'connection-2' })
+    expect(pool.state.accounts).toHaveLength(1)
+    expect(pool.state.ownerships).toHaveLength(1)
+    expect(pool.state.intervals).toHaveLength(1)
+  })
+
+  it('never adds ownership to existing orphan, revoked, or other-owner accounts despite valid facts', async () => {
+    for (const kind of ['orphan', 'revoked', 'other'] as const) {
+      const pool = new FakePool()
+      if (kind === 'orphan') pool.state.ownerships = []
+      if (kind === 'revoked') pool.state.ownerships[0]!.revokedAt = NOW
+      if (kind === 'other') pool.state.ownerships[0]!.userId = 8
+      const before = structuredClone(pool.state)
+      await expect(new MysqlBridgeGatewayRouteRepository(pool.asPool()).authorizeAndOpen(firstInput()))
+        .rejects.toMatchObject({ code: 'bridge_route_binding_invalid', status: 403 })
+      expect(pool.state).toEqual(before)
+    }
+  })
+
+  it('preserves a claimed account against a different authenticated user and never overwrites its currency', async () => {
+    const pool = new FakePool()
+    pool.state.accounts = []
+    pool.state.ownerships = []
+    const repository = new MysqlBridgeGatewayRouteRepository(pool.asPool())
+    await repository.authorizeAndOpen(firstInput())
+    pool.state.credentials.push({ ...pool.state.credentials[0]!, userId: 8, profileId: 'profile-2' })
+    const before = structuredClone(pool.state)
+    await expect(repository.authorizeAndOpen(firstInput({ userId: 8, profileId: 'profile-2', connectionId: 'connection-2' })))
+      .rejects.toMatchObject({ code: 'bridge_route_binding_invalid' })
+    const mismatch = firstInput({ epoch: 2, connectionId: 'connection-2' })
+    mismatch.hello.payload.terminals[0]!.account_facts!.currency = 'USD'
+    await expect(repository.authorizeAndOpen(mismatch)).rejects.toMatchObject({ code: 'bridge_session_account_currency_mismatch', status: 409 })
+    expect(pool.state).toEqual(before)
+  })
+
+  it('refuses soft-deleted and collation-conflicting identities without reviving or adopting them', async () => {
+    for (const kind of ['deleted', 'case'] as const) {
+      const pool = new FakePool()
+      if (kind === 'deleted') pool.state.accounts[0]!.deletedAt = NOW
+      const before = structuredClone(pool.state)
+      const input = firstInput(kind === 'case' ? { brokerServer: 'dprime-demo 5' } : {})
+      await expect(new MysqlBridgeGatewayRouteRepository(pool.asPool()).authorizeAndOpen(input))
+        .rejects.toMatchObject({ code: 'bridge_route_conflict', status: 409 })
+      expect(pool.state).toEqual(before)
+    }
+  })
+
+  it('requires first-account facts and rejects malformed, mismatched and stale facts even for existing owners', async () => {
+    const pool = new FakePool()
+    pool.state.accounts = []
+    await expect(open(new MysqlBridgeGatewayRouteRepository(pool.asPool())))
+      .rejects.toMatchObject({ code: 'bridge_route_account_not_found' })
+    const cases = [
+      { currency: undefined }, { currency: '' }, { currency: 'USD\n' }, { currency: '1234567890123' }, { currency: '欧元' },
+      { login: 'other' }, { broker_server: 'other' }, { observed_at_utc_msc: 0 },
+      { observed_at_utc_msc: Number.MAX_SAFE_INTEGER + 1 }, { observed_at_utc_msc: Date.parse(NOW) - 60_001 },
+      { observed_at_utc_msc: Date.parse(NOW) + 5_001 },
+    ]
+    for (const patch of cases) {
+      const existing = new FakePool()
+      const input = firstInput()
+      Object.assign(input.hello.payload.terminals[0]!.account_facts!, patch)
+      await expect(new MysqlBridgeGatewayRouteRepository(existing.asPool()).authorizeAndOpen(input)).rejects.toBeInstanceOf(BridgeGatewayError)
+      expect(existing.calls).toHaveLength(0)
+      if ('currency' in patch) expect(() => assertSessionHello(input.hello)).toThrow(BridgeGatewayError)
+    }
+  })
+
+  it('accepts the inclusive account-fact time boundaries', async () => {
+    for (const offset of [-60_000, 5_000]) {
+      const pool = new FakePool()
+      const input = firstInput()
+      input.hello.payload.terminals[0]!.account_facts!.observed_at_utc_msc += offset
+      await expect(new MysqlBridgeGatewayRouteRepository(pool.asPool()).authorizeAndOpen(input)).resolves.toMatchObject({ accountId: '42' })
+    }
+  })
+
+  it('keeps the published currency alphabet consistent with runtime validation', () => {
+    const schema = JSON.parse(readFileSync(new URL('../../contracts/bridge-v4.schema.json', import.meta.url), 'utf8'))
+    const helloSchema = schema.$defs.SessionHelloPayload
+    const pattern = new RegExp(helloSchema.properties.terminals.items.properties.account_facts.properties.currency.pattern)
+    for (const currency of ['USD', 'USC', 'EUR', 'a._-123456789', 'USD\n', '\nUSD', 'USD ', '', '-USD', '欧元', '1234567890123']) {
+      const input = firstInput()
+      input.hello.payload.terminals[0]!.account_facts!.currency = currency
+      if (pattern.test(currency)) expect(() => assertSessionHello(input.hello), currency).not.toThrow()
+      else expect(() => assertSessionHello(input.hello), currency).toThrow(BridgeGatewayError)
+    }
+  })
+
+  it('rolls back all first-account writes when credentials, profiles or later storage reject the registration', async () => {
+    for (const kind of ['credential', 'entitlement', 'profile', 'interval', 'owner', 'session'] as const) {
+      const pool = new FakePool()
+      pool.state.accounts = []
+      pool.state.ownerships = []
+      if (kind === 'credential') pool.state.credentials[0]!.revokedAt = NOW
+      if (kind === 'entitlement') pool.state.credentials[0]!.plan = 'free'
+      if (kind === 'profile') pool.state.profiles.push({ id: 'profile-1', userId: 8, platform: 'mt5', installationId: 'install-1', deletedAt: null })
+      if (kind === 'interval') pool.failOn = 'INSERT INTO trading_account_ownership_intervals'
+      if (kind === 'owner') pool.failOn = 'INSERT INTO trading_account_ownerships'
+      if (kind === 'session') pool.failOn = 'INSERT INTO bridge_connection_sessions'
+      const before = structuredClone(pool.state)
+      await expect(new MysqlBridgeGatewayRouteRepository(pool.asPool()).authorizeAndOpen(firstInput())).rejects.toBeInstanceOf(BridgeGatewayError)
+      expect(pool.state).toEqual(before)
+      expect(pool.transactions).toEqual(['begin', 'rollback', 'release'])
+    }
+  })
+
+  it('fails competing first-account inserts without retrying or overwriting the winner', async () => {
+    for (const [code, status] of [['ER_DUP_ENTRY', 409], ['ER_LOCK_DEADLOCK', 503]] as const) {
+      const pool = new FakePool()
+      pool.state.accounts = []
+      pool.state.ownerships = []
+      pool.failOn = 'INSERT INTO trading_accounts'
+      pool.failureCode = code
+      await expect(new MysqlBridgeGatewayRouteRepository(pool.asPool()).authorizeAndOpen(firstInput())).rejects.toMatchObject({ status })
+      expect(pool.state.accounts).toHaveLength(0)
+      expect(pool.state.ownerships).toHaveLength(0)
+      expect(pool.calls.filter(call => call.sql.includes('INSERT INTO trading_accounts'))).toHaveLength(1)
+      expect(pool.transactions).toEqual(['begin', 'rollback', 'release'])
+    }
+  })
+
   it('registers a first profile and owner binding, then returns frozen proof', async () => {
     const pool = new FakePool()
     const route = await open(new MysqlBridgeGatewayRouteRepository(pool.asPool()))

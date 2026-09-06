@@ -35,6 +35,9 @@ namespace Liangjian.BridgeV4.SmokeTests
                         "mt5_account_not_mapped");
                     Assert(host.Operations.Count == 2 && host.Operations[0] == "quote"
                         && host.Operations[1] == "collect_snapshot", "mt5_query_operation_route_wrong");
+                    IDictionary<string, object> facts = BridgeAccountFacts.Read(runtime, source, Now + 2);
+                    Assert((string)facts["currency"] == "EUR" && (string)facts["login"] == "10001"
+                        && (string)facts["broker_server"] == "Demo", "mt5_account_facts_adapter_not_mapped");
                 }
             }
             finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
@@ -108,7 +111,9 @@ namespace Liangjian.BridgeV4.SmokeTests
                             {
                                 { "source_time_msc", Now + 1 },
                                 { "streams", new Dictionary<string, object>
-                                    { { "account", new Dictionary<string, object> { { "balance", 1000.0 } } } } }
+                                    { { "account", new Dictionary<string, object>
+                                        { { "balance", 1000.0 }, { "login", 10001 }, { "server", "Demo" },
+                                          { "currency", "EUR" }, { "terminal_connected", true } } } } }
                             }
                         }
                     });

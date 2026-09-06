@@ -10,6 +10,12 @@ export interface BridgeTerminalHello {
   trade_permission: 'full' | 'read_only' | 'disabled' | 'unknown'
   timezone_offset_minutes?: number | null
   clock_status: 'calibrated' | 'observer_bootstrap' | 'stale' | 'unavailable'
+  account_facts?: {
+    currency: string
+    login: string
+    broker_server: string
+    observed_at_utc_msc: number
+  }
 }
 
 export interface BridgeSessionHelloEnvelope {
@@ -115,6 +121,7 @@ export function assertSessionHello(value: BridgeSessionHelloEnvelope) {
     fail('bridge_session_capabilities_invalid')
   }
   assertWireRoute(terminal.route)
+  assertTerminalAccountFacts(terminal)
   if (typeof terminal.terminal_version !== 'string' || terminal.terminal_version.length > 64) fail('bridge_session_terminal_version_invalid')
   if (!['full', 'read_only', 'disabled', 'unknown'].includes(terminal.trade_permission)) fail('bridge_session_trade_permission_invalid')
   if (!['calibrated', 'observer_bootstrap', 'stale', 'unavailable'].includes(terminal.clock_status)) fail('bridge_session_clock_invalid')
@@ -124,6 +131,24 @@ export function assertSessionHello(value: BridgeSessionHelloEnvelope) {
   }
   limits(payload.limits)
   return value
+}
+
+/** Authenticated client facts; these do not independently prove broker ownership. */
+export function assertTerminalAccountFacts(terminal: BridgeTerminalHello, receivedAtMsc?: number) {
+  if (terminal.account_facts === undefined) return undefined
+  const facts = terminal.account_facts
+  if (!facts || typeof facts !== 'object' || Array.isArray(facts)
+    || Object.keys(facts).some(key => !['currency', 'login', 'broker_server', 'observed_at_utc_msc'].includes(key))
+    || typeof facts.currency !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,11}$/.test(facts.currency) || /\s/.test(facts.currency)
+    || facts.login !== terminal.route.account_ref.login || facts.broker_server !== terminal.route.account_ref.broker_server
+    || !Number.isSafeInteger(facts.observed_at_utc_msc) || facts.observed_at_utc_msc < 1) {
+    fail('bridge_session_account_facts_invalid')
+  }
+  if (receivedAtMsc !== undefined && (!Number.isFinite(receivedAtMsc)
+    || facts.observed_at_utc_msc < receivedAtMsc - 60_000 || facts.observed_at_utc_msc > receivedAtMsc + 5_000)) {
+    fail('bridge_session_account_facts_stale')
+  }
+  return facts
 }
 
 export function assertHeartbeat(value: unknown): BridgeHeartbeatEnvelope {
