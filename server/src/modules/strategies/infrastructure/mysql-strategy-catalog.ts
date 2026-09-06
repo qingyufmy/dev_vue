@@ -6,6 +6,7 @@ import type {
   UpdateStrategyMetadataInput, UpdateStrategySubscriptionInput,
 } from '../domain/strategy.js'
 import { StrategyAccessError } from '../domain/strategy.js'
+import { initializeSubscriptionExecutionPreferences } from './mysql-subscription-execution-preferences.js'
 
 interface StrategyRow extends RowDataPacket {
   id: string
@@ -201,6 +202,7 @@ export class MysqlStrategyCatalog implements StrategyCatalog, StrategyManagement
         }
         const [inserted] = await connection.execute<ResultSetHeader>(`INSERT INTO strategy_subscriptions (user_id,trading_account_id,standard_symbol,analysis_strategy_id,analysis_strategy_version_id,trader_strategy_id,trader_strategy_version_id,analysis_enabled,trader_enabled,trade_send_enabled,status,revision,created_at_utc,updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,1,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))`, [input.userId, input.tradingAccountId, input.standardSymbol, input.analysisStrategyId, analysis.activeVersionId, input.traderStrategyId, trader?.activeVersionId ?? null, input.analysisEnabled ? 1 : 0, input.traderEnabled ? 1 : 0, input.tradeSendEnabled ? 1 : 0, input.status])
         await connection.execute(`INSERT INTO subscription_schedules (subscription_id,cadence_seconds,receive_timezone,receive_window_json,next_due_at_utc,revision,updated_at_utc) VALUES (?,300,'UTC','{"enabled":false}',?,1,UTC_TIMESTAMP(3))`, [inserted.insertId, input.nextDueAt])
+        await initializeSubscriptionExecutionPreferences(connection, String(inserted.insertId))
         const row = await selectSubscription(connection, input.userId, String(inserted.insertId), false)
         if (!row) throw new StrategyAccessError('strategy_subscription_not_found', 404)
         return subscription(row)
