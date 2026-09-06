@@ -28,6 +28,12 @@
 
 ## 两轮复核
 
+阶段 118 的已验证追加结构固定为 13 列：id、chain、address_index、address、created_at_utc、custody_reference、custody_evidence_sha256、custody_verified_at_utc、revision、origin、migration_run_id、source_sha256、imported_at_utc。仅承接派生钱包登记，固定收款配置继续独立处理。未验证托管时三项 custody 字段全部 NULL；验证后必须三项俱全，且 hash 为小写十六进制。该约束只保证证据完整性，不证明证据内容真实。
+
+结构第一轮复核：保留现有单一派生登记范围的 chain/index 唯一性，不创建替代旧地址的签名入口；跨链相同地址文本仍可分别登记。后续多密钥来源或轮换需先扩展派生范围身份，不能改旧 custody_reference 后悄悄把同一索引指向另一地址。
+
+结构第二轮复核：地址精确大小写比较，并用字节长度阻断尾空格（不能依赖 MySQL PAD SPACE 字符串相等）；导入必须有 migration run、来源 hash 和导入时间，native 必须有创建时间。legacy created_at_utc 可 NULL 仅用于源 created_at 原本为 NULL；四条现存非 NULL 墙钟未有依据前仍阻断回填，不能利用可空字段绕过时间问题。空表安装与业务导入分别验收。
+
 阶段 117 已补实测关系：八条监控中一条匹配派生钱包，七条仅匹配当前固定 TRON 配置，详见 [关系核对](dev-vue-inplace-stage117-20260907.md)。因此不得对全部历史监控强制建立派生钱包外键；固定配置与派生身份分别承接，历史 recipient 快照保持独立。
 
 第一轮（覆盖与职责）：五字段全部有主处置，地址记录与密钥托管独立；数据库不成为私钥管理器。当前资产仅 TRON，不提前按未出现的链扩建多个钱包框架。

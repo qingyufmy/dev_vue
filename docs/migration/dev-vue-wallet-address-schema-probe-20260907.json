@@ -1,0 +1,79 @@
+{
+  "kind": "wallet-address-schema-probe/v1",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "sourceSqlSha256": "43c688824b9dc4c23c6f1578103bdca4b9c5ea47531fcaf1f5f61c0c99d13211",
+  "ddl": "CREATE TABLE `payment_wallet_addresses` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `chain` varchar(10) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `address_index` int NOT NULL,\n  `address` varchar(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `created_at_utc` datetime(3) DEFAULT NULL,\n  `custody_reference` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `custody_evidence_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `custody_verified_at_utc` datetime(3) DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `origin` varchar(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `migration_run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `source_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `imported_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_payment_wallet_chain_index` (`chain`,`address_index`),\n  UNIQUE KEY `uk_payment_wallet_chain_address` (`chain`,`address`),\n  KEY `fk_payment_wallet_migration_run` (`migration_run_id`),\n  CONSTRAINT `fk_payment_wallet_migration_run` FOREIGN KEY (`migration_run_id`) REFERENCES `data_migration_runs` (`id`),\n  CONSTRAINT `chk_payment_wallet_address` CHECK (((char_length(`address`) > 0) and (length(`address`) = length(trim(`address`))))),\n  CONSTRAINT `chk_payment_wallet_chain` CHECK (((`chain` in (_utf8mb4'TRON',_utf8mb4'ETH',_utf8mb4'BSC',_utf8mb4'SOL')) and (length(`chain`) = (case `chain` when _utf8mb4'TRON' then 4 else 3 end)))),\n  CONSTRAINT `chk_payment_wallet_custody` CHECK ((((`custody_reference` is null) and (`custody_evidence_sha256` is null) and (`custody_verified_at_utc` is null)) or ((`custody_reference` is not null) and (char_length(trim(`custody_reference`)) > 0) and (`custody_evidence_sha256` is not null) and (`custody_verified_at_utc` is not null)))),\n  CONSTRAINT `chk_payment_wallet_hashes` CHECK ((((`custody_evidence_sha256` is null) or regexp_like(`custody_evidence_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c')) and ((`source_sha256` is null) or regexp_like(`source_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c')))),\n  CONSTRAINT `chk_payment_wallet_index` CHECK ((`address_index` >= 0)),\n  CONSTRAINT `chk_payment_wallet_origin` CHECK ((((`origin` = _utf8mb4'native') and (`created_at_utc` is not null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null)) or ((`origin` = _utf8mb4'legacy_import') and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null)))),\n  CONSTRAINT `chk_payment_wallet_revision` CHECK ((`revision` > 0))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+  "acceptedRows": 3,
+  "rejectedCases": [
+    {
+      "name": "negative_index",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "unknown_chain",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "empty_address",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "trailing_address_space",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "trailing_chain_space",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "zero_revision",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "partial_custody",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "invalid_custody_hash",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "native_missing_creation",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "native_import_binding",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "legacy_missing_binding",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "unknown_origin",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "duplicate_index",
+      "code": "ER_DUP_ENTRY"
+    },
+    {
+      "name": "duplicate_address",
+      "code": "ER_DUP_ENTRY"
+    },
+    {
+      "name": "missing_run",
+      "code": "ER_NO_REFERENCED_ROW_2"
+    }
+  ],
+  "stateRoundtrip": true,
+  "fixturesRolledBack": true,
+  "remainingRows": 0,
+  "addressValidityVerified": false,
+  "custodyVerified": false,
+  "currentDevVueWritten": false
+}
