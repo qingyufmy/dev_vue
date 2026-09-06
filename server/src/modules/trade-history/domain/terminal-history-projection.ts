@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { BridgeHistoryResource } from '../../bridge/domain/bridge-query.js'
+import { combineMoneyCurrencies, recordMoneyCurrency, type TradeMoneyCurrency } from './trade-money-currency.js'
 
 export interface TerminalHistoryContext {
   accountId: string
@@ -32,7 +33,7 @@ export interface TerminalOrderFact {
   evidenceJson: string
 }
 
-export interface TerminalDealFact {
+export interface TerminalDealFact extends TradeMoneyCurrency {
   kind: 'deal'
   ticket: string
   orderTicket: string | null
@@ -77,7 +78,7 @@ export interface Mt4ClosedTrade {
 
 export type TerminalHistoryFact = TerminalOrderFact | TerminalDealFact
 
-export interface AccountTradeProjection {
+export interface AccountTradeProjection extends TradeMoneyCurrency {
   stableKey: string
   primaryTicket: string
   positionId: string | null
@@ -133,12 +134,14 @@ export function projectMt5Position(positionId: string, facts: TerminalDealFact[]
   if (compare(closed, opened) !== 0) return null
   const grossProfit = sum(trades.map(fact => fact.grossProfit)); const commission = sum(facts.map(fact => fact.commission))
   const swap = sum(facts.map(fact => fact.swap)); const fee = sum(facts.map(fact => fact.fee))
+  const currency = combineMoneyCurrencies(facts)
   return {
+    accountCurrency: currency.accountCurrency, currencyEvidence: currency.currencyEvidence,
     stableKey: `mt5:position:${positionId}`, primaryTicket: positionId, positionId, symbol, side: tradeSide,
     volumeOpened: opened, volumeClosed: closed, entryPrice: weighted(entries), exitPrice: weighted(exits), stopLoss: null, takeProfit: null,
     grossProfit, commission, swap, fee, netProfit: sum([grossProfit, commission, swap, fee]),
     openedAtUtcMsc: entries[0]!.occurredAtUtcMsc, closedAtUtcMsc: exits.at(-1)!.occurredAtUtcMsc,
-    evidenceHash: createHash('sha256').update(facts.map(fact => fact.evidenceHash).sort().join('|')).digest('hex'), evidenceStatus: 'complete',
+    evidenceHash: createHash('sha256').update(facts.map(fact => fact.evidenceHash).sort().join('|')).digest('hex'), evidenceStatus: currency.conflicting ? 'conflicted' : 'complete',
     dealTickets: facts.map(fact => ({ ticket: fact.ticket, role: fact.dealKind === 'trade' ? (fact.entryKind === 'in' ? 'entry' : 'exit') : 'fee' })),
   }
 }
@@ -147,6 +150,7 @@ export function projectMt4Trade(fact: TerminalDealFact): AccountTradeProjection 
   const trade = fact.mt4Trade
   if (!trade) return null
   return { ...trade, volumeOpened: trade.volume, volumeClosed: trade.volume,
+    accountCurrency: fact.accountCurrency, currencyEvidence: fact.currencyEvidence,
     netProfit: sum([trade.grossProfit, trade.commission, trade.swap, trade.fee]), evidenceHash: fact.evidenceHash,
     evidenceStatus: 'complete', dealTickets: [{ ticket: fact.ticket, role: 'exit' }] }
 }
@@ -172,7 +176,7 @@ function deal(value: Record<string, unknown>): TerminalDealFact {
   const evidence = canonicalEvidence(value)
   const dealType = value.deal_kind ?? value.type
   return {
-    kind: 'deal', ticket: id(value, ['deal_ticket', 'ticket']), orderTicket: nullableId(value, ['order_ticket', 'order']),
+    kind: 'deal', ...recordMoneyCurrency(value), ticket: id(value, ['deal_ticket', 'ticket']), orderTicket: nullableId(value, ['order_ticket', 'order']),
     positionId: nullableId(value, ['position_id', 'position_ticket']), symbol: text(value.symbol, 64),
     dealKind: dealKind(dealType), entryKind: entry(value.entry_kind ?? value.entry), side: side(value.side ?? value.direction ?? dealType),
     volume: decimal(value.volume ?? value.lots), price: decimal(value.price ?? value.deal_price),
@@ -198,7 +202,7 @@ function mt4Trade(value: Record<string, unknown>): TerminalDealFact {
   const grossProfit = decimal(value.profit) ?? '0'; const commission = decimal(value.commission) ?? '0'
   const swap = decimal(value.swap) ?? '0'; const fee = decimal(value.fee) ?? '0'
   return {
-    kind: 'deal', ticket: closeTicket, orderTicket: ticket, positionId: nullableId(value, ['position_id', 'position_ticket']) ?? ticket,
+    kind: 'deal', ...recordMoneyCurrency(value), ticket: closeTicket, orderTicket: ticket, positionId: nullableId(value, ['position_id', 'position_ticket']) ?? ticket,
     symbol, dealKind: 'trade', entryKind: 'out', side: tradeSide === 'buy' ? 'sell' : 'buy', volume, price: exitPrice,
     grossProfit, commission, swap, fee, magic: integerText(value.magic), terminalReason: boundedText(value.reason, 32), terminalComment: boundedText(value.comment, 512),
     occurredAtUtcMsc: closedAt, evidenceHash: evidence.hash, evidenceJson: evidence.json,

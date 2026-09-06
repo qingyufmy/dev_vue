@@ -160,10 +160,10 @@ async function insertOrder(connection: PoolConnection, route: BridgeGatewayRoute
 
 async function insertDeal(connection: PoolConnection, route: BridgeGatewayRoute, fact: TerminalDealFact, observed: number, now: Date) {
   await connection.execute(`INSERT IGNORE INTO terminal_history_deals_v4
-    (id,trading_account_id,platform,deal_ticket,order_ticket,position_id,symbol,deal_kind,entry_kind,side,volume,price,gross_profit,commission,swap_amount,fee_amount,magic,terminal_reason,terminal_comment,occurred_at_utc,terminal_timezone_offset_minutes,evidence_sha256,evidence_json,observed_at_utc,created_at_utc,updated_at_utc)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [randomUUID(), route.accountId, route.platform, fact.ticket, fact.orderTicket, fact.positionId, fact.symbol,
+    (id,trading_account_id,platform,deal_ticket,order_ticket,position_id,symbol,deal_kind,entry_kind,side,volume,price,gross_profit,commission,swap_amount,fee_amount,magic,terminal_reason,terminal_comment,occurred_at_utc,terminal_timezone_offset_minutes,evidence_sha256,evidence_json,observed_at_utc,created_at_utc,updated_at_utc,account_currency,currency_evidence)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [randomUUID(), route.accountId, route.platform, fact.ticket, fact.orderTicket, fact.positionId, fact.symbol,
     fact.dealKind, fact.entryKind, fact.side, fact.volume, fact.price, fact.grossProfit, fact.commission, fact.swap, fact.fee, fact.magic, fact.terminalReason,
-    fact.terminalComment, date(fact.occurredAtUtcMsc), route.timezoneOffsetMinutes, fact.evidenceHash, fact.evidenceJson, date(observed), now, now])
+    fact.terminalComment, date(fact.occurredAtUtcMsc), route.timezoneOffsetMinutes, fact.evidenceHash, fact.evidenceJson, date(observed), now, now, fact.accountCurrency, fact.currencyEvidence])
 }
 
 async function loadPositionDeals(connection: PoolConnection, accountId: string, positionId: string) {
@@ -189,9 +189,10 @@ async function upsertTradeRecord(connection: PoolConnection, route: BridgeGatewa
   await connection.execute(`INSERT INTO account_trade_records_v4
     (id,user_id,trading_account_id,stable_trade_key,platform,primary_ticket,position_id,symbol,side,status,source_classification,attribution_status,evidence_status,
       volume_opened,volume_closed,entry_price,exit_price,stop_loss,take_profit,gross_profit,commission,swap_amount,fee_amount,net_profit,opened_at_utc,closed_at_utc,
-      close_business_date,terminal_timezone_offset_minutes,evidence_sha256,observed_at_utc,legacy_source_table,legacy_id,created_at_utc,updated_at_utc,revision,ownership_interval_id)
-    VALUES (?,?,?,?,?,?,?,?,?,'closed','unknown','unresolved',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,?,?,1,?)
+      close_business_date,terminal_timezone_offset_minutes,evidence_sha256,observed_at_utc,legacy_source_table,legacy_id,created_at_utc,updated_at_utc,revision,ownership_interval_id,account_currency,currency_evidence)
+    VALUES (?,?,?,?,?,?,?,?,?,'closed','unknown','unresolved',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,NULL,NULL,?,?,1,?,?,?)
     ON DUPLICATE KEY UPDATE ownership_interval_id=IF(user_id IS NULL OR user_id=VALUES(user_id),VALUES(ownership_interval_id),NULL),
+      account_currency=VALUES(account_currency),currency_evidence=VALUES(currency_evidence),
       user_id=COALESCE(user_id,VALUES(user_id)),evidence_status=VALUES(evidence_status),volume_opened=VALUES(volume_opened),volume_closed=VALUES(volume_closed),
       entry_price=VALUES(entry_price),exit_price=VALUES(exit_price),stop_loss=VALUES(stop_loss),take_profit=VALUES(take_profit),gross_profit=VALUES(gross_profit),
       commission=VALUES(commission),swap_amount=VALUES(swap_amount),fee_amount=VALUES(fee_amount),net_profit=VALUES(net_profit),opened_at_utc=VALUES(opened_at_utc),
@@ -200,7 +201,7 @@ async function upsertTradeRecord(connection: PoolConnection, route: BridgeGatewa
     randomUUID(), owner?.userId ?? null, route.accountId, projection.stableKey, route.platform, projection.primaryTicket, projection.positionId, projection.symbol, projection.side,
     projection.evidenceStatus, projection.volumeOpened, projection.volumeClosed, projection.entryPrice, projection.exitPrice, projection.stopLoss, projection.takeProfit,
     projection.grossProfit, projection.commission, projection.swap, projection.fee, projection.netProfit, date(projection.openedAtUtcMsc), date(projection.closedAtUtcMsc),
-    businessDate, route.timezoneOffsetMinutes, projection.evidenceHash, date(observed), now, now, owner?.intervalId ?? null,
+    businessDate, route.timezoneOffsetMinutes, projection.evidenceHash, date(observed), now, now, owner?.intervalId ?? null, projection.accountCurrency, projection.currencyEvidence,
   ])
   const [records] = await connection.execute<RecordRow[]>(`SELECT id FROM account_trade_records_v4
     WHERE trading_account_id=? AND stable_trade_key=? FOR UPDATE`, [route.accountId, projection.stableKey])

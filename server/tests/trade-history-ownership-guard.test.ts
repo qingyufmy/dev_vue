@@ -52,12 +52,30 @@ describe('P3 complete lifecycle ownership resolution', () => {
 })
 
 describe('P3 MySQL adapter statements using offline fixtures (not a SQL engine)', () => {
+  it('binds explicit MT4 record currency to both raw and projected rows', async () => {
+    const f = collectorFixture([interval()])
+    const page = response()
+    page.payload.items = page.payload.items.map(item => ({ ...item, account_currency: 'EUR', currency_evidence: 'explicit_record' }))
+    await new MysqlTradeHistoryCollectorRepository(f.pool).persistPage(route, 'history.trades', page, now)
+    for (const table of ['terminal_history_deals_v4', 'account_trade_records_v4']) {
+      const insert = f.calls.find(call => call.sql.includes('INSERT') && call.sql.includes(`INTO ${table}`))!
+      expect(insert.params.slice(-2)).toEqual(['EUR', 'explicit_record'])
+      expect(insert.sql.match(/\?/g)?.length ?? 0).toBe(insert.params.length)
+    }
+    expect(f.committed()).toBe(true)
+  })
   it('persists old facts with the proven old owner and checks account lock before sync lock', async () => {
     const f = collectorFixture([interval()])
     await new MysqlTradeHistoryCollectorRepository(f.pool).persistPage(route, 'history.trades', response(), now)
     const insert = f.calls.find(call => call.sql.includes('INSERT INTO account_trade_records_v4'))!
     expect(insert.params[1]).toBe(1)
-    expect(insert.params.at(-1)).toBe(interval().id)
+    expect(insert.params.at(-3)).toBe(interval().id)
+    expect(insert.params.slice(-2)).toEqual([null, 'unknown'])
+    for (const call of f.calls.filter(call => call.sql.includes('INSERT'))) {
+      expect(call.sql.match(/\?/g)?.length ?? 0).toBe(call.params.length)
+    }
+    const dealInsert = f.calls.find(call => call.sql.includes('INSERT IGNORE INTO terminal_history_deals_v4'))!
+    expect(dealInsert.params.slice(-2)).toEqual([null, 'unknown'])
     expect(f.calls[0]!.sql).toContain('SELECT id FROM trading_accounts')
     expect(f.calls[1]!.sql).toContain('trade_history_sync_states_v4')
     expect(f.calls.find(call => call.sql.includes('FROM trading_account_ownership_intervals'))?.sql).toContain('LIMIT 2 FOR SHARE')
@@ -71,7 +89,7 @@ describe('P3 MySQL adapter statements using offline fixtures (not a SQL engine)'
     expect(f.calls.some(call => call.sql.includes('INSERT IGNORE INTO terminal_history_deals_v4'))).toBe(true)
     const insert = f.calls.find(call => call.sql.includes('INSERT INTO account_trade_records_v4'))!
     expect(insert.params[1]).toBeNull()
-    expect(insert.params.at(-1)).toBeNull()
+    expect(insert.params.at(-3)).toBeNull()
     expect(f.committed()).toBe(true)
   })
   it('keeps history access independent of current owner and restricts all list/summary/freshness queries', async () => {
