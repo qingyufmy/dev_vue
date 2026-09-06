@@ -55,7 +55,9 @@ export function sourcePageQuery(metadata, cursorPk, limit) {
   })
   let where = ''
   if (cursorPk !== null) where = ' WHERE ' + metadata.pk.map((column, i) => '(' + metadata.pk.slice(0, i + 1).map((part, j) => safeIdentifier(part.name) + (j === i ? '>' : '=') + operand(part, cursorPk[j], params)).join(' AND ') + ')').join(' OR ')
-  params.push(limit)
+  // mysql2 sends JS numbers as DOUBLE; MySQL 8.4 rejects that type for LIMIT.
+  // Keep a bound parameter, using the already-validated integer as decimal text.
+  params.push(String(limit))
   const sql = `SELECT CAST((${total}) AS CHAR) AS byte_size,${columns.join(',')} FROM ${safeIdentifier(metadata.table)}${where} ORDER BY ${metadata.pk.map(c => safeIdentifier(c.name) + ' ASC').join(',')} LIMIT ?`
   check(Buffer.byteLength(sql) <= 256 * 1024, 'backfill_source_query_too_large')
   return { sql, params, perRowBytes }

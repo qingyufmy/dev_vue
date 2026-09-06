@@ -32,10 +32,14 @@ function fixture(database = 'frozen') {
       if (/^(SET |START TRANSACTION)/.test(sql)) return [[]]
       throw new Error('unexpected query')
     }),
-    execute: vi.fn(async sql => {
+    execute: vi.fn(async (sql, params) => {
       if (sql.includes('FROM information_schema.COLUMNS')) return [f.columns]
       if (sql.includes('FROM information_schema.STATISTICS')) return [f.indexes]
-      if (sql.startsWith('SELECT CAST(')) return [f.pages.shift() ?? []]
+      if (sql.startsWith('SELECT CAST(')) {
+        // Reproduce the live MySQL 8.4 prepared LIMIT parameter rejection.
+        if (typeof params.at(-1) !== 'string') throw Object.assign(new Error('Incorrect arguments to mysqld_stmt_execute'), { code: 'ER_WRONG_ARGUMENTS' })
+        return [f.pages.shift() ?? []]
+      }
       throw new Error('unexpected execute')
     }), rollback: vi.fn(), destroy: vi.fn(),
   }
@@ -83,7 +87,7 @@ describe('stable read-only source pages', () => {
     expect(q.sql).toContain('(`id`>CAST(? AS SIGNED)) OR (`id`=CAST(? AS SIGNED) AND `tag`>CONVERT(? USING utf8mb4) COLLATE utf8mb4_bin)')
     expect(q.sql).toContain('ORDER BY `id` ASC,`tag` ASC LIMIT ?')
     expect(q.sql).not.toMatch(/OFFSET|9007199254740993|OR 1=1/)
-    expect(q.params.slice(-4)).toEqual(['9007199254740993', '9007199254740993', "x' OR 1=1", 10])
+    expect(q.params.slice(-4)).toEqual(['9007199254740993', '9007199254740993', "x' OR 1=1", '10'])
   })
   it('binds cursors to source/snapshot/table metadata and closes on mismatch', async () => {
     const f = fixture(); f.pages.push([row('1', 'a', 'data')])
@@ -144,7 +148,9 @@ describe('stable read-only source pages', () => {
     const f = fixture(), m = await readTableMetadata(f.connection, 'samples')
     expect(() => sourcePageQuery(m, [{ type: 'integer', value: '9223372036854775808' }, { type: 'text', value: 'a' }], 1)).toThrow('backfill_cursor_integer_out_of_range')
     await expect(openBackfillSourceReader(f.connection, source(), 'samples;DROP', tableHash)).rejects.toThrow('backfill_identifier_invalid')
-    expect(() => sourcePageQuery(m, null, 501)).toThrow('backfill_page_limit_invalid')
+    for (const limit of [0, -1, 1.5, 501, NaN, Infinity, '10', '1;DROP']) {
+      expect(() => sourcePageQuery(m, null, limit)).toThrow('backfill_page_limit_invalid')
+    }
   })
 })
 

@@ -1,0 +1,697 @@
+{
+  "ok": true,
+  "mode": "source-only-read-audit",
+  "repeatedContentMatched": true,
+  "first": {
+    "startedAt": "2026-09-06T11:20:45.899Z",
+    "completedAt": "2026-09-06T11:20:48.092Z",
+    "source": {
+      "database": "dev_vue_m1_source_20260905_01",
+      "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+      "originalDatabase": "dev_vue",
+      "snapshotHash": "af5ed95821a392b62acc24779a3c802dba8d60fb32e713fead5ed25c7817e08c",
+      "structureHash": "8f41a7923c89a61e23590cf8d3d1d7f8a1a4ac5b740df4e0bd0aeac008c9a5a7"
+    },
+    "tables": {
+      "users": {
+        "rows": 25,
+        "pages": 1,
+        "metadataHash": "e8e4923bf4d0486b2d0d7ccdbc97e7b5d8757afebe64e5c87dd69760e97b8695",
+        "orderedContentHash": "1627c2b985e6cad7e73c8906570c57a7cd4e89088c9457ebb123c7fd2885dae9",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      },
+      "verification_codes": {
+        "rows": 17,
+        "pages": 1,
+        "metadataHash": "db10f6cc84fe1506d70cc99d3d1fd4edaaa36739f228589d6fe8338bad274e47",
+        "orderedContentHash": "8b28ab8479ab9d971883948ccb2d03820087cac9072f34cd3c9ffad40ba2eac6",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      },
+      "bridge_device_pairings": {
+        "rows": 1,
+        "pages": 1,
+        "metadataHash": "084cf1177b38601200415172c13c47ed9b76cbf4fca4853f88e7c142a233ead3",
+        "orderedContentHash": "52f27c6c2b4b9907cc3571516f47d1ca0dca7bd50bf804a2bab305ce575982c2",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      },
+      "bridge_refresh_sessions": {
+        "rows": 17,
+        "pages": 1,
+        "metadataHash": "1ff93de21a17b402d091d17e803ca43d41bb98c53660e30d0fad27ba2f44af39",
+        "orderedContentHash": "162330a8eb15803cee3cafdd18ca8f7afbb44f5922c0bd9addda0b4d4cf2c9a3",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      },
+      "trading_accounts": {
+        "rows": 4,
+        "pages": 1,
+        "metadataHash": "c8686b30e54e67d73db7415c3de4109fe0193a9bc19642750659517a948b8501",
+        "orderedContentHash": "dbae2693fefe3db455771b18ec78abed7441a4759bd045d8bb27a0f492a773dd",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      },
+      "mt5_account_bindings": {
+        "rows": 3,
+        "pages": 1,
+        "metadataHash": "83bd2ec4e46814c0cfd397c696d070785d3b971dfdbb627a71b066e798725d3c",
+        "orderedContentHash": "d92d70c48cadaf27ac20dcacfd6de5096754280aeba4277ee2f1de3fcf10da36",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      },
+      "mt5_account_ownership_history": {
+        "rows": 274,
+        "pages": 3,
+        "metadataHash": "b5db153b5b02f95d0535cc1a99902baa890edb945c212237063c73ac0fd4632d",
+        "orderedContentHash": "232a9d4d758bf2bf98a1b645d551dc7843b2d1aea4693a3ccbf40464288e31fc",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      },
+      "bridge_v3_terminal_sessions": {
+        "rows": 7,
+        "pages": 1,
+        "metadataHash": "140bd75766fd19f55698f1349962f3e37851b9912bce359e12a7b9c07aab23ed",
+        "orderedContentHash": "1b1d985708fd738f535c761261ffa55d7883737fbcf5662867834005d2cbd7be",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      },
+      "ai_observer_sources": {
+        "rows": 2,
+        "pages": 1,
+        "metadataHash": "3643fb56039fee24fca689900362c244c2c01b176e54ca9d6c2d254426a9e899",
+        "orderedContentHash": "bff98dc3e72b544028aa75ebb8d7b5cba12bcb08cfe2c5d06009d4909c3eda95",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      },
+      "ai_observer_channels": {
+        "rows": 2,
+        "pages": 1,
+        "metadataHash": "6cbf808467fcfe47c194b5052ed9dc2e454fd9d4af5de60f872a55d094381043",
+        "orderedContentHash": "58dc2f05a4db4e78d90e754708b7ad012ffd12ba6a4e911ad4846b427e5b1c78",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      },
+      "ai_observer_channel_assignments": {
+        "rows": 0,
+        "pages": 1,
+        "metadataHash": "d029899220c0bdb05eb14a8e7ca3fcb7de0f9d7d8af3f3aa6c42a40064ea4ec7",
+        "orderedContentHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      }
+    },
+    "reviewHash": "074fc9fccb51c031507a42c524840ea93e50a9ed95e34bdfb880d4918e6f9b2c",
+    "inputHash": "9c0130b9e3565cded623e1f9038062acbc96f860ac1460b66846754191272729",
+    "counts": {
+      "users": {
+        "rows": 25,
+        "candidateFields": 400,
+        "deferredFields": 450,
+        "blockedFields": 0
+      },
+      "verification_codes": {
+        "rows": 17,
+        "candidateFields": 0,
+        "deferredFields": 170,
+        "blockedFields": 0
+      },
+      "bridge_device_pairings": {
+        "rows": 1,
+        "candidateFields": 0,
+        "deferredFields": 14,
+        "blockedFields": 0
+      },
+      "bridge_refresh_sessions": {
+        "rows": 17,
+        "candidateFields": 51,
+        "deferredFields": 119,
+        "blockedFields": 0
+      },
+      "trading_accounts": {
+        "rows": 4,
+        "candidateFields": 16,
+        "deferredFields": 44,
+        "blockedFields": 0
+      },
+      "mt5_account_bindings": {
+        "rows": 3,
+        "candidateFields": 3,
+        "deferredFields": 27,
+        "blockedFields": 0
+      },
+      "mt5_account_ownership_history": {
+        "rows": 274,
+        "candidateFields": 0,
+        "deferredFields": 2740,
+        "blockedFields": 0
+      },
+      "bridge_v3_terminal_sessions": {
+        "rows": 7,
+        "candidateFields": 0,
+        "deferredFields": 140,
+        "blockedFields": 0
+      },
+      "ai_observer_sources": {
+        "rows": 2,
+        "candidateFields": 0,
+        "deferredFields": 20,
+        "blockedFields": 0
+      },
+      "ai_observer_channels": {
+        "rows": 2,
+        "candidateFields": 0,
+        "deferredFields": 22,
+        "blockedFields": 0
+      },
+      "ai_observer_channel_assignments": {
+        "rows": 0,
+        "candidateFields": 0,
+        "deferredFields": 0,
+        "blockedFields": 0
+      }
+    },
+    "lifecycle": {
+      "rows": 25,
+      "inconsistent": 0,
+      "loginEligible": 6,
+      "issues": []
+    },
+    "ownership": {
+      "counts": {
+        "users": 25,
+        "accounts": 4,
+        "intervals": 274,
+        "bindings": 3
+      },
+      "issueCounts": {
+        "account_identity_merge_unresolved": 1,
+        "binding_identity_unresolved": 3,
+        "interval_identity_unresolved": 274
+      },
+      "relationClassification": {
+        "intervals": {
+          "ascii_case_only": 274
+        },
+        "bindings": {
+          "ascii_case_only": 3
+        }
+      },
+      "temporalOrderVerified": false
+    },
+    "accountCandidates": {
+      "candidates": [
+        {
+          "locatorHash": "a2362004f45b9012c2a4be3d42e9f0202e12ad393721c2936974727feef9133a",
+          "candidateKey": "33c28389ef6f4fddb46a4691f275cdf2d63c686b987ff94b8fce81825119dd37",
+          "issues": [],
+          "terminalEvidenceHashes": [
+            "8e886576d385cb3ba46b8a8136897d3514f29b2ec2f990b7c5343b7fc1aa1e3a",
+            "a1d4292233e5814bbb221cf5c883703ed8ac6a5ee46a9dc388c00304dafe47bf"
+          ],
+          "bindingEvidenceHashes": [
+            "11d00f69198028914cc8920e576c090561872e280c852584e676b971401f07df"
+          ]
+        },
+        {
+          "locatorHash": "8df6471193b82b270214daccace079a956e168028fb3c533193acc4f105b4dc2",
+          "candidateKey": "8f41b3df68c5280ed39c5e20c6aa585ce046b9ef4abdaae2771e9c94cc2ef1be",
+          "issues": [],
+          "terminalEvidenceHashes": [
+            "643f6ee90c44acd36814b645375d3dd1fe7a6a83c0ebda9f8d5d237f6f0b4be3"
+          ],
+          "bindingEvidenceHashes": [
+            "e1068d2dc832e06d06782f35bebea0c8fdafa6d4060ca5fe2cce0e65c0de27c4"
+          ]
+        },
+        {
+          "locatorHash": "4ddb5107cb307309de19d14c5fe1c7089702e858955a7804eea0efb8bf5f49cb",
+          "candidateKey": "4606da540d7396b30df2acec42506767eab084ec3db4f121d0f5705fc3220e6d",
+          "issues": [],
+          "terminalEvidenceHashes": [
+            "c6d1d616bfdd769529182b8c1f3c6dde8c715fac7a1deb62bde48824a2c24739"
+          ],
+          "bindingEvidenceHashes": [
+            "f2e5329023eb0ff86277e5ca58dd11f8a2609626107972f46befcc6199c61455"
+          ]
+        },
+        {
+          "locatorHash": "836d8d55f36432577c3e9f391404746a371b493eae305f12f84692d74615d3b6",
+          "candidateKey": "8f41b3df68c5280ed39c5e20c6aa585ce046b9ef4abdaae2771e9c94cc2ef1be",
+          "issues": [],
+          "terminalEvidenceHashes": [
+            "7656456b2b7ff7b272c2103ae26b09fc28da809bd13538f63c263da67f10746b",
+            "ae0b4d0be17254d9a4bf935eaec42040e3ccaeeacff3a5f04417ad22b5a45ffb"
+          ],
+          "bindingEvidenceHashes": [
+            "e1068d2dc832e06d06782f35bebea0c8fdafa6d4060ca5fe2cce0e65c0de27c4"
+          ]
+        }
+      ],
+      "groups": [
+        {
+          "candidateKey": "33c28389ef6f4fddb46a4691f275cdf2d63c686b987ff94b8fce81825119dd37",
+          "memberLocators": [
+            "a2362004f45b9012c2a4be3d42e9f0202e12ad393721c2936974727feef9133a"
+          ],
+          "mergeReviewRequired": false,
+          "settingsConflict": false
+        },
+        {
+          "candidateKey": "4606da540d7396b30df2acec42506767eab084ec3db4f121d0f5705fc3220e6d",
+          "memberLocators": [
+            "4ddb5107cb307309de19d14c5fe1c7089702e858955a7804eea0efb8bf5f49cb"
+          ],
+          "mergeReviewRequired": false,
+          "settingsConflict": false
+        },
+        {
+          "candidateKey": "8f41b3df68c5280ed39c5e20c6aa585ce046b9ef4abdaae2771e9c94cc2ef1be",
+          "memberLocators": [
+            "8df6471193b82b270214daccace079a956e168028fb3c533193acc4f105b4dc2",
+            "836d8d55f36432577c3e9f391404746a371b493eae305f12f84692d74615d3b6"
+          ],
+          "mergeReviewRequired": true,
+          "settingsConflict": false
+        }
+      ],
+      "blockers": [
+        "historical_platform_and_currency_coverage_unverified",
+        "identity_merge_not_approved",
+        "ownership_time_and_target_id_maps_pending",
+        "complete_source_unverified"
+      ],
+      "readyForBackfill": false
+    },
+    "timeChecks": {
+      "total": 1448,
+      "codes": {
+        "epoch_semantics_valid": 21,
+        "historical_time_basis_unverified": 1427
+      },
+      "byTable": {
+        "users": {
+          "historical_time_basis_unverified": 150
+        },
+        "verification_codes": {
+          "historical_time_basis_unverified": 34
+        },
+        "bridge_device_pairings": {
+          "historical_time_basis_unverified": 5
+        },
+        "bridge_refresh_sessions": {
+          "historical_time_basis_unverified": 85
+        },
+        "trading_accounts": {
+          "historical_time_basis_unverified": 20
+        },
+        "mt5_account_bindings": {
+          "historical_time_basis_unverified": 15
+        },
+        "mt5_account_ownership_history": {
+          "historical_time_basis_unverified": 1096
+        },
+        "bridge_v3_terminal_sessions": {
+          "epoch_semantics_valid": 21,
+          "historical_time_basis_unverified": 14
+        },
+        "ai_observer_sources": {
+          "historical_time_basis_unverified": 4
+        },
+        "ai_observer_channels": {
+          "historical_time_basis_unverified": 4
+        },
+        "ai_observer_channel_assignments": {}
+      }
+    },
+    "timeNulls": {
+      "wallClockNull": 74,
+      "wallClockPresent": 1353,
+      "epochNull": 14,
+      "epochPresent": 7
+    },
+    "valueIssues": [],
+    "scopeTablesFullyRead": true,
+    "completeSourceVerified": false,
+    "readyForBackfill": false
+  },
+  "second": {
+    "startedAt": "2026-09-06T11:20:48.093Z",
+    "completedAt": "2026-09-06T11:20:49.121Z",
+    "source": {
+      "database": "dev_vue_m1_source_20260905_01",
+      "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+      "originalDatabase": "dev_vue",
+      "snapshotHash": "af5ed95821a392b62acc24779a3c802dba8d60fb32e713fead5ed25c7817e08c",
+      "structureHash": "8f41a7923c89a61e23590cf8d3d1d7f8a1a4ac5b740df4e0bd0aeac008c9a5a7"
+    },
+    "tables": {
+      "users": {
+        "rows": 25,
+        "pages": 1,
+        "metadataHash": "e8e4923bf4d0486b2d0d7ccdbc97e7b5d8757afebe64e5c87dd69760e97b8695",
+        "orderedContentHash": "1627c2b985e6cad7e73c8906570c57a7cd4e89088c9457ebb123c7fd2885dae9",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      },
+      "verification_codes": {
+        "rows": 17,
+        "pages": 1,
+        "metadataHash": "db10f6cc84fe1506d70cc99d3d1fd4edaaa36739f228589d6fe8338bad274e47",
+        "orderedContentHash": "8b28ab8479ab9d971883948ccb2d03820087cac9072f34cd3c9ffad40ba2eac6",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      },
+      "bridge_device_pairings": {
+        "rows": 1,
+        "pages": 1,
+        "metadataHash": "084cf1177b38601200415172c13c47ed9b76cbf4fca4853f88e7c142a233ead3",
+        "orderedContentHash": "52f27c6c2b4b9907cc3571516f47d1ca0dca7bd50bf804a2bab305ce575982c2",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      },
+      "bridge_refresh_sessions": {
+        "rows": 17,
+        "pages": 1,
+        "metadataHash": "1ff93de21a17b402d091d17e803ca43d41bb98c53660e30d0fad27ba2f44af39",
+        "orderedContentHash": "162330a8eb15803cee3cafdd18ca8f7afbb44f5922c0bd9addda0b4d4cf2c9a3",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      },
+      "trading_accounts": {
+        "rows": 4,
+        "pages": 1,
+        "metadataHash": "c8686b30e54e67d73db7415c3de4109fe0193a9bc19642750659517a948b8501",
+        "orderedContentHash": "dbae2693fefe3db455771b18ec78abed7441a4759bd045d8bb27a0f492a773dd",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      },
+      "mt5_account_bindings": {
+        "rows": 3,
+        "pages": 1,
+        "metadataHash": "83bd2ec4e46814c0cfd397c696d070785d3b971dfdbb627a71b066e798725d3c",
+        "orderedContentHash": "d92d70c48cadaf27ac20dcacfd6de5096754280aeba4277ee2f1de3fcf10da36",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      },
+      "mt5_account_ownership_history": {
+        "rows": 274,
+        "pages": 3,
+        "metadataHash": "b5db153b5b02f95d0535cc1a99902baa890edb945c212237063c73ac0fd4632d",
+        "orderedContentHash": "232a9d4d758bf2bf98a1b645d551dc7843b2d1aea4693a3ccbf40464288e31fc",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      },
+      "bridge_v3_terminal_sessions": {
+        "rows": 7,
+        "pages": 1,
+        "metadataHash": "140bd75766fd19f55698f1349962f3e37851b9912bce359e12a7b9c07aab23ed",
+        "orderedContentHash": "1b1d985708fd738f535c761261ffa55d7883737fbcf5662867834005d2cbd7be",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      },
+      "ai_observer_sources": {
+        "rows": 2,
+        "pages": 1,
+        "metadataHash": "3643fb56039fee24fca689900362c244c2c01b176e54ca9d6c2d254426a9e899",
+        "orderedContentHash": "bff98dc3e72b544028aa75ebb8d7b5cba12bcb08cfe2c5d06009d4909c3eda95",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      },
+      "ai_observer_channels": {
+        "rows": 2,
+        "pages": 1,
+        "metadataHash": "6cbf808467fcfe47c194b5052ed9dc2e454fd9d4af5de60f872a55d094381043",
+        "orderedContentHash": "58dc2f05a4db4e78d90e754708b7ad012ffd12ba6a4e911ad4846b427e5b1c78",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      },
+      "ai_observer_channel_assignments": {
+        "rows": 0,
+        "pages": 1,
+        "metadataHash": "d029899220c0bdb05eb14a8e7ca3fcb7de0f9d7d8af3f3aa6c42a40064ea4ec7",
+        "orderedContentHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+        "exhausted": true,
+        "sameTransactionCountMatched": true
+      }
+    },
+    "reviewHash": "074fc9fccb51c031507a42c524840ea93e50a9ed95e34bdfb880d4918e6f9b2c",
+    "inputHash": "9c0130b9e3565cded623e1f9038062acbc96f860ac1460b66846754191272729",
+    "counts": {
+      "users": {
+        "rows": 25,
+        "candidateFields": 400,
+        "deferredFields": 450,
+        "blockedFields": 0
+      },
+      "verification_codes": {
+        "rows": 17,
+        "candidateFields": 0,
+        "deferredFields": 170,
+        "blockedFields": 0
+      },
+      "bridge_device_pairings": {
+        "rows": 1,
+        "candidateFields": 0,
+        "deferredFields": 14,
+        "blockedFields": 0
+      },
+      "bridge_refresh_sessions": {
+        "rows": 17,
+        "candidateFields": 51,
+        "deferredFields": 119,
+        "blockedFields": 0
+      },
+      "trading_accounts": {
+        "rows": 4,
+        "candidateFields": 16,
+        "deferredFields": 44,
+        "blockedFields": 0
+      },
+      "mt5_account_bindings": {
+        "rows": 3,
+        "candidateFields": 3,
+        "deferredFields": 27,
+        "blockedFields": 0
+      },
+      "mt5_account_ownership_history": {
+        "rows": 274,
+        "candidateFields": 0,
+        "deferredFields": 2740,
+        "blockedFields": 0
+      },
+      "bridge_v3_terminal_sessions": {
+        "rows": 7,
+        "candidateFields": 0,
+        "deferredFields": 140,
+        "blockedFields": 0
+      },
+      "ai_observer_sources": {
+        "rows": 2,
+        "candidateFields": 0,
+        "deferredFields": 20,
+        "blockedFields": 0
+      },
+      "ai_observer_channels": {
+        "rows": 2,
+        "candidateFields": 0,
+        "deferredFields": 22,
+        "blockedFields": 0
+      },
+      "ai_observer_channel_assignments": {
+        "rows": 0,
+        "candidateFields": 0,
+        "deferredFields": 0,
+        "blockedFields": 0
+      }
+    },
+    "lifecycle": {
+      "rows": 25,
+      "inconsistent": 0,
+      "loginEligible": 6,
+      "issues": []
+    },
+    "ownership": {
+      "counts": {
+        "users": 25,
+        "accounts": 4,
+        "intervals": 274,
+        "bindings": 3
+      },
+      "issueCounts": {
+        "account_identity_merge_unresolved": 1,
+        "binding_identity_unresolved": 3,
+        "interval_identity_unresolved": 274
+      },
+      "relationClassification": {
+        "intervals": {
+          "ascii_case_only": 274
+        },
+        "bindings": {
+          "ascii_case_only": 3
+        }
+      },
+      "temporalOrderVerified": false
+    },
+    "accountCandidates": {
+      "candidates": [
+        {
+          "locatorHash": "a2362004f45b9012c2a4be3d42e9f0202e12ad393721c2936974727feef9133a",
+          "candidateKey": "33c28389ef6f4fddb46a4691f275cdf2d63c686b987ff94b8fce81825119dd37",
+          "issues": [],
+          "terminalEvidenceHashes": [
+            "8e886576d385cb3ba46b8a8136897d3514f29b2ec2f990b7c5343b7fc1aa1e3a",
+            "a1d4292233e5814bbb221cf5c883703ed8ac6a5ee46a9dc388c00304dafe47bf"
+          ],
+          "bindingEvidenceHashes": [
+            "11d00f69198028914cc8920e576c090561872e280c852584e676b971401f07df"
+          ]
+        },
+        {
+          "locatorHash": "8df6471193b82b270214daccace079a956e168028fb3c533193acc4f105b4dc2",
+          "candidateKey": "8f41b3df68c5280ed39c5e20c6aa585ce046b9ef4abdaae2771e9c94cc2ef1be",
+          "issues": [],
+          "terminalEvidenceHashes": [
+            "643f6ee90c44acd36814b645375d3dd1fe7a6a83c0ebda9f8d5d237f6f0b4be3"
+          ],
+          "bindingEvidenceHashes": [
+            "e1068d2dc832e06d06782f35bebea0c8fdafa6d4060ca5fe2cce0e65c0de27c4"
+          ]
+        },
+        {
+          "locatorHash": "4ddb5107cb307309de19d14c5fe1c7089702e858955a7804eea0efb8bf5f49cb",
+          "candidateKey": "4606da540d7396b30df2acec42506767eab084ec3db4f121d0f5705fc3220e6d",
+          "issues": [],
+          "terminalEvidenceHashes": [
+            "c6d1d616bfdd769529182b8c1f3c6dde8c715fac7a1deb62bde48824a2c24739"
+          ],
+          "bindingEvidenceHashes": [
+            "f2e5329023eb0ff86277e5ca58dd11f8a2609626107972f46befcc6199c61455"
+          ]
+        },
+        {
+          "locatorHash": "836d8d55f36432577c3e9f391404746a371b493eae305f12f84692d74615d3b6",
+          "candidateKey": "8f41b3df68c5280ed39c5e20c6aa585ce046b9ef4abdaae2771e9c94cc2ef1be",
+          "issues": [],
+          "terminalEvidenceHashes": [
+            "7656456b2b7ff7b272c2103ae26b09fc28da809bd13538f63c263da67f10746b",
+            "ae0b4d0be17254d9a4bf935eaec42040e3ccaeeacff3a5f04417ad22b5a45ffb"
+          ],
+          "bindingEvidenceHashes": [
+            "e1068d2dc832e06d06782f35bebea0c8fdafa6d4060ca5fe2cce0e65c0de27c4"
+          ]
+        }
+      ],
+      "groups": [
+        {
+          "candidateKey": "33c28389ef6f4fddb46a4691f275cdf2d63c686b987ff94b8fce81825119dd37",
+          "memberLocators": [
+            "a2362004f45b9012c2a4be3d42e9f0202e12ad393721c2936974727feef9133a"
+          ],
+          "mergeReviewRequired": false,
+          "settingsConflict": false
+        },
+        {
+          "candidateKey": "4606da540d7396b30df2acec42506767eab084ec3db4f121d0f5705fc3220e6d",
+          "memberLocators": [
+            "4ddb5107cb307309de19d14c5fe1c7089702e858955a7804eea0efb8bf5f49cb"
+          ],
+          "mergeReviewRequired": false,
+          "settingsConflict": false
+        },
+        {
+          "candidateKey": "8f41b3df68c5280ed39c5e20c6aa585ce046b9ef4abdaae2771e9c94cc2ef1be",
+          "memberLocators": [
+            "8df6471193b82b270214daccace079a956e168028fb3c533193acc4f105b4dc2",
+            "836d8d55f36432577c3e9f391404746a371b493eae305f12f84692d74615d3b6"
+          ],
+          "mergeReviewRequired": true,
+          "settingsConflict": false
+        }
+      ],
+      "blockers": [
+        "historical_platform_and_currency_coverage_unverified",
+        "identity_merge_not_approved",
+        "ownership_time_and_target_id_maps_pending",
+        "complete_source_unverified"
+      ],
+      "readyForBackfill": false
+    },
+    "timeChecks": {
+      "total": 1448,
+      "codes": {
+        "epoch_semantics_valid": 21,
+        "historical_time_basis_unverified": 1427
+      },
+      "byTable": {
+        "users": {
+          "historical_time_basis_unverified": 150
+        },
+        "verification_codes": {
+          "historical_time_basis_unverified": 34
+        },
+        "bridge_device_pairings": {
+          "historical_time_basis_unverified": 5
+        },
+        "bridge_refresh_sessions": {
+          "historical_time_basis_unverified": 85
+        },
+        "trading_accounts": {
+          "historical_time_basis_unverified": 20
+        },
+        "mt5_account_bindings": {
+          "historical_time_basis_unverified": 15
+        },
+        "mt5_account_ownership_history": {
+          "historical_time_basis_unverified": 1096
+        },
+        "bridge_v3_terminal_sessions": {
+          "epoch_semantics_valid": 21,
+          "historical_time_basis_unverified": 14
+        },
+        "ai_observer_sources": {
+          "historical_time_basis_unverified": 4
+        },
+        "ai_observer_channels": {
+          "historical_time_basis_unverified": 4
+        },
+        "ai_observer_channel_assignments": {}
+      }
+    },
+    "timeNulls": {
+      "wallClockNull": 74,
+      "wallClockPresent": 1353,
+      "epochNull": 14,
+      "epochPresent": 7
+    },
+    "valueIssues": [],
+    "scopeTablesFullyRead": true,
+    "completeSourceVerified": false,
+    "readyForBackfill": false
+  },
+  "boundaries": {
+    "businessWrites": false,
+    "crossTableSingleSnapshot": false,
+    "backupContentReverified": false,
+    "all165TablesContentRead": false,
+    "targetReconciliation": false
+  },
+  "provenance": {
+    "sourceReaderSha256": "125c10ee99eed7c9830a8372e18cd6787b668ae250e330281fe89744434f931d",
+    "runtimeDirectory": "/www/wwwroot/aurum-ai",
+    "probeSha256": "542133b186fe18cf8e9ce583006a2d2e9b03dadbf2e74041f080f7edac50b733",
+    "bundleSha256": "5a1300f6ac26a3cff5f58de7cad024d35f9f4dc939417d8927638d90cc24d277",
+    "correction": "Validated LIMIT integer bound as decimal text instead of JS number",
+    "host": "debian",
+    "initialFailure": {
+      "sqlState": "HY000",
+      "code": "backfill_source_read_failed",
+      "table": "users",
+      "mysqlCode": "ER_WRONG_ARGUMENTS"
+    },
+    "runtimeCommit": "61610c3c3dc055974d1da90700ecf5336f19434c",
+    "baseCommit": "eb9cabe9",
+    "runtimeBranch": "dev_codex"
+  }
+}
