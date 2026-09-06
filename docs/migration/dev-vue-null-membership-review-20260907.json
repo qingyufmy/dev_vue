@@ -1,0 +1,57 @@
+{
+  "kind": "membership-null-expiry-review/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "schemaSteps": 51,
+  "sourceProjection": "membership-source/v1",
+  "sourceHash": "bb3e7853f75081debf916faaaca9e24586595378e966fd66601895e6fedba008",
+  "sourceRows": 21,
+  "allUserSourceHash": "e5b08047fdbe15e855a02965c7386a474594d9eff2e472bde87cf9b41f7d01d0",
+  "allUserRows": 25,
+  "deferredNonNullExpiryRows": 4,
+  "plans": [
+    {
+      "plan": "free",
+      "rows": 20
+    },
+    {
+      "plan": "pro",
+      "rows": 1
+    }
+  ],
+  "rule": {
+    "sourcePredicate": "plan_expires_at IS NULL",
+    "targetExpirationKind": "no_expiry",
+    "targetExpiresAtUtc": null,
+    "sourceUpdatedAtDisposition": "preserve_raw_archive",
+    "observedAtDisposition": "migration_registration_time",
+    "createsPurchaseOrHistoricalGrant": false,
+    "convertsHistoricalTime": false
+  },
+  "policyCases": [
+    {
+      "plan": "free",
+      "legacy": "free",
+      "normalized": "free"
+    },
+    {
+      "plan": "plus",
+      "legacy": "plus",
+      "normalized": "plus"
+    },
+    {
+      "plan": "pro",
+      "legacy": "pro",
+      "normalized": "pro"
+    }
+  ],
+  "referencePath": "D:/dev_codex/wall-street-skill-local/server/membership.js",
+  "referenceSha256": "e9886162b9c47d5f8eda1f47714bacec6909dabb36058e4d1463c2010ce94eee",
+  "normalizedDomainSourceSha256": "b64c2ad3c71aefbf9f116b13732f3cc440fd8b3f4414f2c75794f57a254d53be",
+  "normalizedDomainBuildSha256": "32085e7e3b92bda9a2c9ffcdb5e2b2fe96ab17db8866fd1207d22d3db132816d",
+  "sourceDatabaseWritten": false,
+  "businessCutoverAuthorized": false,
+  "fullMembershipConverted": false
+}
