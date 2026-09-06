@@ -37,6 +37,7 @@
     "verify:v4-migration-target": "node scripts/verify-v4-migration-target.mjs",
     "verify:v4-backup": "node scripts/verify-v4-backup.mjs",
     "migrate:v4-schema": "node scripts/migrate-v4-schema.mjs",
+    "upgrade:dev-vue-schema": "node scripts/upgrade-dev-vue-schema.mjs",
     "rehearse:trade-history": "node scripts/rehearse-trade-history-migration.mjs"
   },
   "dependencies": {
