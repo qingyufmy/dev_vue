@@ -1,0 +1,189 @@
+{
+  "kind": "wallet-watch-links-review/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "schemaSteps": 53,
+  "columns": [
+    {
+      "name": "id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collationName": null
+    },
+    {
+      "name": "chain",
+      "type": "varchar(10)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collationName": "utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "address_index",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collationName": null
+    },
+    {
+      "name": "address",
+      "type": "varchar(100)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collationName": "utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": "now()",
+      "collationName": null
+    }
+  ],
+  "indexes": [
+    {
+      "name": "PRIMARY",
+      "nonUnique": 0,
+      "position": 1,
+      "columnName": "id"
+    },
+    {
+      "name": "uk_wallet_chain_address",
+      "nonUnique": 0,
+      "position": 1,
+      "columnName": "chain"
+    },
+    {
+      "name": "uk_wallet_chain_address",
+      "nonUnique": 0,
+      "position": 2,
+      "columnName": "address"
+    },
+    {
+      "name": "uk_wallet_chain_index",
+      "nonUnique": 0,
+      "position": 1,
+      "columnName": "chain"
+    },
+    {
+      "name": "uk_wallet_chain_index",
+      "nonUnique": 0,
+      "position": 2,
+      "columnName": "address_index"
+    }
+  ],
+  "result": {
+    "version": "wallet-watch-links/v1",
+    "projection": "id,chain,address,wallet_index",
+    "walletSourceHash": "8fcb1191a9ce206534571b81db39dba55d49be12abe887ba3be960ee550b0557",
+    "watchProjectionHash": "d3d7ce7c49f4e5f1dbb09d0bfe00580ed582ffc9825aac0c70425064085727f9",
+    "entries": [
+      {
+        "watchSourceId": "7",
+        "watchSourceHash": "29bf3f811596f29de754933659d7adec899c9ed028f616281901f804461ec6a9",
+        "status": "exact_address",
+        "walletSourceId": "1",
+        "walletSourceHash": "5961d5f953269e2bf00702e25bebf19b569ac60e4d7ab6b8bdc554f5e77527f5",
+        "indexEvidence": "recorded",
+        "sourceIndex": "0",
+        "custodyVerified": false
+      },
+      {
+        "watchSourceId": "9",
+        "watchSourceHash": "44a1739ac3e103d3c76d033f1aebc5b02bf26f8b919c9e2aece70624383fdf21",
+        "status": "address_not_registered",
+        "walletSourceId": null,
+        "walletSourceHash": null,
+        "indexEvidence": "recorded",
+        "sourceIndex": "0",
+        "custodyVerified": false
+      },
+      {
+        "watchSourceId": "10",
+        "watchSourceHash": "8ee17771448c0d987d4537137bcf2e79465813cb9a3cc80482f1dfbe39d159ca",
+        "status": "address_not_registered",
+        "walletSourceId": null,
+        "walletSourceHash": null,
+        "indexEvidence": "recorded",
+        "sourceIndex": "0",
+        "custodyVerified": false
+      },
+      {
+        "watchSourceId": "13",
+        "watchSourceHash": "0a7deac3f7c02ad0463e6b7f3477bb05779b4c846b26e36c06a5d31a4c37701f",
+        "status": "address_not_registered",
+        "walletSourceId": null,
+        "walletSourceHash": null,
+        "indexEvidence": "recorded",
+        "sourceIndex": "0",
+        "custodyVerified": false
+      },
+      {
+        "watchSourceId": "14",
+        "watchSourceHash": "1e04ff208fa3fe538aa058aaf0ccf43b4a861c7a4ec58a42e02f7260d401feed",
+        "status": "address_not_registered",
+        "walletSourceId": null,
+        "walletSourceHash": null,
+        "indexEvidence": "recorded",
+        "sourceIndex": "0",
+        "custodyVerified": false
+      },
+      {
+        "watchSourceId": "15",
+        "watchSourceHash": "8dc4fb5bfe68d43721b0f3d4a00a4bb2c13d426c90fe1c9db8661b268c5c6f42",
+        "status": "address_not_registered",
+        "walletSourceId": null,
+        "walletSourceHash": null,
+        "indexEvidence": "recorded",
+        "sourceIndex": "0",
+        "custodyVerified": false
+      },
+      {
+        "watchSourceId": "16",
+        "watchSourceHash": "a609c1de692a6910bcf0f121944d66283f2dd6c1214d69b7cec5e26a3ee067d7",
+        "status": "address_not_registered",
+        "walletSourceId": null,
+        "walletSourceHash": null,
+        "indexEvidence": "recorded",
+        "sourceIndex": "0",
+        "custodyVerified": false
+      },
+      {
+        "watchSourceId": "17",
+        "watchSourceHash": "b1d3f7677d763bceddc7abf1c11a3b154eea2ef968feb8508ed5855b025d3aaa",
+        "status": "address_not_registered",
+        "walletSourceId": null,
+        "walletSourceHash": null,
+        "indexEvidence": "recorded",
+        "sourceIndex": "0",
+        "custodyVerified": false
+      }
+    ],
+    "unreferencedWalletIds": [
+      "2",
+      "3",
+      "4"
+    ],
+    "fullWatchReviewed": false,
+    "addressControlVerified": false,
+    "databaseWritten": false
+  },
+  "referenceFiles": [
+    {
+      "path": "server/crypto/wallet.js",
+      "sha256": "8e1e80eaa5c298a680bd9a2bcd485fc538a1a5490b451859b3594781bf22ce52"
+    },
+    {
+      "path": "server/crypto/monitor.js",
+      "sha256": "31ee70c75ed3192dec6af8c0a56195abec2c441ad8ba27cc69896e2c02133934"
+    },
+    {
+      "path": "server/routes/payment.js",
+      "sha256": "9775953bba4258595ca7e02ff947c9295181b554db8b1d5defe83503f713bcf5"
+    }
+  ],
+  "sourceDatabaseWritten": false,
+  "businessConsumersSwitched": false
+}
