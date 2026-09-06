@@ -1,0 +1,20 @@
+{
+  "kind": "dev_vue_account_writer_rehearsal",
+  "status": "verified",
+  "database": "dev_vue_m1_source_20260906_01",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "completedAtUtc": "2026-09-06T14:45:09.309Z",
+  "syntheticSourceRows": 2,
+  "committedEntities": 1,
+  "committedSettings": 2,
+  "rollbackVerified": true,
+  "committedResponseLossRecovered": true,
+  "repeatDidNotInvokeWriter": true,
+  "fixtureCleanupVerified": true,
+  "originalTablesVerified": 165,
+  "originalRowsVerified": "271007",
+  "historicalTimeBasisConfirmed": false,
+  "sourceDatabaseWritten": false,
+  "temporaryAccountAutoIncrementMayAdvance": true,
+  "schemaHash": "580a062c4329cff29ed76b7db76151d81972809c85d824012b0354864b97e461"
+}
