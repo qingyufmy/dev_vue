@@ -1,0 +1,13 @@
+# 同库升级第二批：独立日志与增量列
+
+2026-09-06。完整目标仍为当前dev_vue自动无损升级、全面规范化及删除已确认不需要的旧结构。本批是执行器基础，不是数据库升级完成。
+
+已实现独立database_upgrade_steps_v4日志DDL，保留旧schema_migrations原始214条记录；新增日志不伪造旧bootstrap或编号迁移完成。server/db/migrations/inplace/002_user_bridge_columns.sql包含users两列和bridge_refresh_sessions七列扩展。默认credential_version=3，旧令牌不自动升级为V4；last_seen_at_utc初始NULL，未猜测转换旧历史时间。当前尚未添加所需索引、修改旧列类型或做历史回填，不可据此启用V4全部业务。
+
+执行核心先预检全批列定义和回执，任何后续列冲突都会在本批写入前拒绝；日志started先于DDL，确认后置列定义后记completed。DDL已生效但响应丢失时按实际结构恢复完成，不重放；旧checksum、错误列定义、无回执预存列、完成记录对应列消失均拒绝继续。调用者必须持有全程同库独占升级锁。
+
+MySQL适配器及只读CLI已接入：node scripts/upgrade-dev-vue-columns.mjs --plan。真实dev_vue预检9步均pending，日志不存在。当前CLI仅开放plan；下一批完成独占锁、备份/恢复证据及真实失败演练后开放apply。不能把Mock事务/DDL检查称为真实恢复证明。
+
+验证：新执行核心4项回归、原安装器34项共38项通过，真实只读预检与diff检查通过。没有执行DDL/DML、删表、部署或交易。原安装器和001–025正文未改。
+
+下一步：完善独立日志定义检查/未知步骤检查与数据库锁；串联现有备份恢复工具，先在隔离副本演练实际DDL提交响应丢失，再执行当前dev_vue首批增量；继续处理索引、历史字段转换和其余同名表。对最终删除建立源行receipt、代码/约束/对象引用、业务可用性和恢复验证清单，用户本轮已明确要求删除不需要的结构，不以无业务语义的旧表永久保留替代完成。

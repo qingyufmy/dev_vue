@@ -390,3 +390,6 @@ U2历史时间与账户承接已进一步收敛：[39字段依据及承接合同
 
 
 2026-09-06用户收敛为开发期当前dev_vue同库直接升级，不涉及公网、不要求改连空库。[第一批已实施](migration/dev-vue-inplace-stage1-20260906.md)：.env只读实查165表/2598列，对照113张SQL计划业务表，12张同名冲突及旧schema_migrations需专门兼容。生成实际元数据、覆盖产物和可重复校验器，3项测试通过；没有DDL/DML。下一批优先同库journal与users/bridge_refresh_sessions完整差异预检，沿用同库增量路线。
+
+
+同库升级执行核心第二批见[报告](migration/dev-vue-inplace-stage2-20260906.md)：独立journal及首批9列脚本、逐步恢复核心和MySQL只读预检已实现，38项测试通过。尚未开放实际apply、未执行DDL/DML；最终自动升级和已替代结构删除目标保持进行中。
