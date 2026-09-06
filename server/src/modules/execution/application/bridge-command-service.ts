@@ -50,7 +50,14 @@ export class BridgeCommandService {
       || activeRoute.connectionEpoch !== command.route.connectionEpoch) {
       return this.repository.markPreDispatchFailed(command.id, command.revision, 'bridge_route_unavailable', now.toISOString())
     }
-    const dispatched = await this.repository.markDispatched(command.id, command.revision, now.toISOString())
+    let dispatched
+    try { dispatched = await this.repository.markDispatched(command.id, command.revision, now.toISOString()) }
+    catch (error) {
+      if (error instanceof BridgeCommandError && ['execution_subscription_changed', 'execution_schedule_invalid', 'execution_schedule_closed'].includes(error.code)) {
+        return this.repository.markPreDispatchFailed(command.id, command.revision, error.code, new Date().toISOString())
+      }
+      throw error
+    }
     try {
       await transport.send(dispatched.request, dispatched.accountId, commandScope(dispatched))
       return dispatched

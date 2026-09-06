@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  BridgeCommandService, canonicalHash, createBridgeCommand,
+  BridgeCommandService, BridgeCommandError, canonicalHash, createBridgeCommand,
   type BridgeCommand, type BridgeCommandAcceptedEnvelope, type BridgeCommandRepository,
   type BridgeCommandResultEnvelope, type BridgeCommandTransport, type BridgeResultPersistence,
   type BridgeCommandRequestEnvelope, type BridgeCommandReconcileEnvelope,
@@ -10,6 +10,14 @@ const NOW = new Date('2026-09-03T09:00:00.000Z')
 const route = { terminalInstanceId: 'terminal_12345678', brokerServer: 'DPrime-Demo', login: '596520', connectionEpoch: 7 }
 
 describe('Bridge V4 server command lifecycle', () => {
+  it.each(['execution_subscription_changed', 'execution_schedule_invalid', 'execution_schedule_closed'])('fails before socket write and releases reservation for %s', async code => {
+    const repo = new MemoryBridgeRepository(), transport = new MemoryTransport(repo.trace)
+    repo.markDispatched = async () => { throw new BridgeCommandError(code, 409) }
+    const service = new BridgeCommandService(repo), command = await service.create(input(), NOW)
+    expect((await service.dispatch(command.id, transport, NOW)).status).toBe('failed')
+    expect(repo.reservation).toBe('released')
+    expect(transport.messages).toEqual([])
+  })
   it('persists and marks dispatched before the first transport write', async () => {
     const repo = new MemoryBridgeRepository()
     const trace: string[] = repo.trace

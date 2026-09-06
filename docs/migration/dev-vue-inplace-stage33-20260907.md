@@ -1,0 +1,9 @@
+# 同库升级第三十三批：风险决策执行窗口
+
+风险决策来源在 persistPreparedExecution 写入意图/预留前，以及 markDispatched 转为已发送前，使用事务内 assertRiskDecisionWindow 复查。查询绑定风险决策、交易决策、交易员run的用户/账户、订阅revision、策略/version、active/trader_enabled/trade_send_enabled、当前owner及活跃交易员策略；窗口同事务共享读取，启用窗口时读取有来源终端时钟。损坏合同、订阅变更、窗外分别返回稳定错误码。
+
+BridgeCommandService 仅对这三种已确认的发送前拒绝调用已有 markPreDispatchFailed，释放预留并记录失败，且不调用transport.send。数据库/其他未知异常继续向上传播，不伪装成已确认拒绝；已发送命令和unknown/uncertain处理保持原状态机，不因时段关闭重发或取消已发生副作用。
+
+5项新增测试加26项命令/持久化边界回归共31项通过，类型检查和构建通过。验证窗口独立读取、结束分钟排除、signals_only不授权执行、拒绝不发送且释放预留。模拟数据库不能证明新SQL已在实际V4结构验证；本批没有DDL/DML、运行角色或交易指令。
+
+覆盖范围为 risk_decision 来源，尚未覆盖 strategy_distribution/distribution_close。人工user_command不是订阅策略动作，不能直接套用此查询。发送时事务提交与socket写入之间仍有系统不可消除的外部I/O边界，代码保证在标记dispatched前作最后检查，不持有SQL事务发送网络请求。窗口revision冻结、其它来源检查、真实SQL演练、全量迁移和旧结构清理仍待完成。

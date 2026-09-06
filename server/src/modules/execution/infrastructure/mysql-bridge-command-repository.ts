@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { assertRiskDecisionWindow } from './mysql-execution-window.js'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import type {
   BridgeCommandRepository, BridgeResultPersistence,
@@ -7,7 +8,7 @@ import {
   BridgeCommandError, bridgeCommandInputMatches, routeContinues, routeMatches,
   type BridgeCommand, type BridgeCommandAcceptedEnvelope, type BridgeCommandResultEnvelope, type BridgeWireRoute,
 } from '../domain/bridge-command.js'
-import { sha256Canonical } from '../domain/execution.js'
+import { ExecutionError, sha256Canonical } from '../domain/execution.js'
 import type { TraderAction } from '../../inference/domain/inference.js'
 
 interface CommandRow extends RowDataPacket {
@@ -106,6 +107,13 @@ export class MysqlBridgeCommandRepository implements BridgeCommandRepository {
     return this.locked(commandId, async (connection, command, intent) => {
       if (command.status !== 'queued' || command.revision !== expectedRevision) conflict()
       if (Date.parse(command.deadlineAt) <= Date.parse(now)) throw new BridgeCommandError('bridge_command_deadline_expired', 409)
+      if (intent.source_type === 'risk_decision') {
+        try { await assertRiskDecisionWindow(connection, intent.source_id, intent.user_id, intent.trading_account_id, new Date()) }
+        catch (error) {
+          if (error instanceof ExecutionError) throw new BridgeCommandError(error.code, 409)
+          throw error
+        }
+      }
       const next = await moveCommand(connection, command, 'dispatched', now, null, { dispatched: now })
       await moveIntent(connection, intent, 'dispatching', now, null)
       await refreshOperation(connection, intent.operation_id, now)

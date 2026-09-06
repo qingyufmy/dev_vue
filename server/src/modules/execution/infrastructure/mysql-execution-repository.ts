@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { assertRiskDecisionWindow } from './mysql-execution-window.js'
 import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise'
 import type { TraderAction } from '../../inference/domain/inference.js'
 import { DEFAULT_RISK_POLICY, resolveRiskPolicy, riskPolicyHash, type AccountRiskPolicyPatch, type EffectiveRiskPolicy, type RiskEvaluationResult } from '../../risk/domain/risk.js'
@@ -88,6 +89,7 @@ export class MysqlExecutionRepository implements ExecutionRepository {
 
       const revisions = await currentRevisions(connection, row.trade_decision_id)
       assertExpectedRevisions(currentSource.approvedActions, revisions)
+      await assertRiskDecisionWindow(connection, input.riskDecisionId, input.userId, input.accountId, new Date())
       const policy = await effectivePolicy(connection, input.userId, input.accountId)
       if (policy.platformPolicyVersionId !== currentSource.platformPolicyVersionId
         || policy.accountPolicyVersionId !== currentSource.accountPolicyVersionId
