@@ -1,0 +1,46 @@
+{
+  "kind": "settings-schema-probe/v1",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "definitions": [
+    {
+      "table": "system_settings",
+      "file": "018_system_settings.sql",
+      "sourceSqlSha256": "10b268783df16910a7a0395ddca0287eeb3d873f7edf3ab3509989e92e6657c4",
+      "ddl": "CREATE TABLE `system_settings` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `namespace` varchar(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `setting_key` varchar(100) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `value_type` varchar(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `value_text` mediumtext,\n  `sensitivity` varchar(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `label` varchar(255) DEFAULT NULL,\n  `sort_order` int DEFAULT NULL,\n  `created_at_utc` datetime(3) DEFAULT NULL,\n  `updated_at_utc` datetime(3) DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `origin` varchar(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `migration_run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `source_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `imported_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_system_setting_name` (`namespace`,`setting_key`),\n  KEY `fk_system_setting_run` (`migration_run_id`),\n  CONSTRAINT `fk_system_setting_run` FOREIGN KEY (`migration_run_id`) REFERENCES `data_migration_runs` (`id`),\n  CONSTRAINT `chk_system_setting_array` CHECK (((`value_type` <> _utf8mb4'json_array') or (`value_text` is null) or (0 <> (case when json_valid(`value_text`) then (json_type(cast(`value_text` as json)) = _utf8mb4'ARRAY') else false end)))),\n  CONSTRAINT `chk_system_setting_boolean` CHECK (((`value_type` <> _utf8mb4'boolean') or (`value_text` is null) or regexp_like(`value_text`,_utf8mb4'^(true|false)$',_utf8mb4'c'))),\n  CONSTRAINT `chk_system_setting_credential` CHECK (((`value_type` <> _utf8mb4'credential') or (`value_text` is null) or (length(`value_text`) = 0) or (0 <> (case when json_valid(`value_text`) then ((json_type(cast(`value_text` as json)) = _utf8mb4'OBJECT') and json_contains_path(cast(`value_text` as json),_utf8mb4'all',_utf8mb4'$.v',_utf8mb4'$.ct',_utf8mb4'$.iv',_utf8mb4'$.tag')) else false end)))),\n  CONSTRAINT `chk_system_setting_hash` CHECK (((`source_sha256` is null) or regexp_like(`source_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c'))),\n  CONSTRAINT `chk_system_setting_identity` CHECK ((regexp_like(`namespace`,_utf8mb4'^[a-z][a-z0-9_]{0,99}$',_utf8mb4'c') and regexp_like(`setting_key`,_utf8mb4'^[a-z][a-z0-9_]{0,99}$',_utf8mb4'c'))),\n  CONSTRAINT `chk_system_setting_integer` CHECK (((`value_type` <> _utf8mb4'integer') or (`value_text` is null) or regexp_like(`value_text`,_utf8mb4'^(0|-?[1-9][0-9]*)$',_utf8mb4'c'))),\n  CONSTRAINT `chk_system_setting_origin` CHECK ((((cast(`origin` as char charset binary) = cast(_utf8mb4'native' as char charset binary)) and (`created_at_utc` is not null) and (`updated_at_utc` is not null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null)) or ((cast(`origin` as char charset binary) = cast(_utf8mb4'legacy_import' as char charset binary)) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null)))),\n  CONSTRAINT `chk_system_setting_revision` CHECK ((`revision` > 0)),\n  CONSTRAINT `chk_system_setting_sensitivity` CHECK ((regexp_like(`sensitivity`,_utf8mb4'^(public|restricted|secret)$',_utf8mb4'c') and ((`value_type` <> _utf8mb4'credential') or (`sensitivity` = _utf8mb4'secret')))),\n  CONSTRAINT `chk_system_setting_type` CHECK (regexp_like(`value_type`,_utf8mb4'^(string|boolean|integer|enum|json_array|credential)$',_utf8mb4'c'))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+    },
+    {
+      "table": "system_setting_changes",
+      "file": "019_system_setting_changes.sql",
+      "sourceSqlSha256": "76d89a3a06da88a101f65e056f2b761455e8cb12be4c0d88b047b55fcfda1101",
+      "ddl": "CREATE TABLE `system_setting_changes` (\n  `setting_id` int NOT NULL,\n  `revision` bigint unsigned NOT NULL,\n  `request_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `actor_user_id` int NOT NULL,\n  `previous_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `current_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `recorded_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`setting_id`,`revision`),\n  UNIQUE KEY `uk_system_setting_request` (`request_id`,`setting_id`),\n  KEY `fk_system_setting_change_actor` (`actor_user_id`),\n  CONSTRAINT `fk_system_setting_change_actor` FOREIGN KEY (`actor_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_system_setting_change_setting` FOREIGN KEY (`setting_id`) REFERENCES `system_settings` (`id`),\n  CONSTRAINT `chk_system_setting_change_hash` CHECK ((regexp_like(`previous_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c') and regexp_like(`current_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c'))),\n  CONSTRAINT `chk_system_setting_change_request` CHECK (regexp_like(`request_id`,_utf8mb4'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',_utf8mb4'c')),\n  CONSTRAINT `chk_system_setting_change_revision` CHECK ((`revision` > 1))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+    }
+  ],
+  "rejected": [
+    "identity_space",
+    "uppercase",
+    "type",
+    "boolean",
+    "integer",
+    "invalid_json",
+    "json_object",
+    "plaintext_secret",
+    "public_secret",
+    "revision",
+    "native_time",
+    "origin_space",
+    "legacy_missing"
+  ],
+  "acceptedRows": 3,
+  "auditRequestUnique": true,
+  "exactPrecision": true,
+  "rolledBack": true,
+  "counts": {
+    "settings": 0,
+    "changes": 0
+  },
+  "currentDevVueWritten": false
+}
