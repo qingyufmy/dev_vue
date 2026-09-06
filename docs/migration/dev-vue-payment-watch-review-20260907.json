@@ -1,0 +1,95 @@
+{
+  "kind": "payment-watch-source/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "schemaSteps": 47,
+  "orderRows": 12,
+  "orderSourceHash": "4c34f0462b1792e08f9b02ed782c3cc4e05588fddbb68b0c8de652658f7d8532",
+  "watchRows": 8,
+  "watchSourceHash": "fb6dd4e71d28997293279e19eaef635be354b1c4a77824030ae3ab2408c79e79",
+  "sourceFields": 13,
+  "ddl": "CREATE TABLE `crypto_watch_list` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `order_id` varchar(36) NOT NULL,\n  `user_id` int NOT NULL,\n  `chain` varchar(10) NOT NULL,\n  `address` varchar(100) NOT NULL,\n  `expected_amount` decimal(20,8) NOT NULL,\n  `status` varchar(20) DEFAULT 'pending',\n  `tx_hash` varchar(100) DEFAULT NULL,\n  `confirmations` int DEFAULT '0',\n  `required_confirmations` int DEFAULT '19',\n  `wallet_index` int DEFAULT '0',\n  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,\n  `expires_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `idx_watch_tx_hash` (`tx_hash`),\n  KEY `idx_watch_status` (`status`),\n  KEY `idx_watch_address` (`chain`,`address`),\n  KEY `idx_watch_expires` (`expires_at`),\n  KEY `idx_watch_order_cleanup` (`order_id`,`status`)\n) ENGINE=InnoDB AUTO_INCREMENT=18 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+  "statuses": [
+    {
+      "status": "cancelled",
+      "rows": 4
+    },
+    {
+      "status": "expired",
+      "rows": 4
+    }
+  ],
+  "exactAndSqlLinksAgree": true,
+  "duplicateHashGroupsBySql": 0,
+  "blockers": [
+    {
+      "locator": "266aa5886067fbbc1a3a39fe432fc5bbf561abc90e4b8a322215ac17df6ce012",
+      "code": "expiry_time_basis_required"
+    },
+    {
+      "locator": "986b79d4b69dffb1d19836f47b27073d95bf55201b3385aceb7e0687a21d8667",
+      "code": "expiry_time_basis_required"
+    },
+    {
+      "locator": "536549599ec6c3b859cd3970025779a13d061783c73e663fea7f963e98379aa8",
+      "code": "expiry_time_basis_required"
+    },
+    {
+      "locator": "e23f8f39182c82127c1bef3cbfd9b54e30e1df4916da81dcfc2a801c23f3bf01",
+      "code": "expiry_time_basis_required"
+    },
+    {
+      "locator": "789d9e7dc67f986660d9b28f5946cce995f9b145e4c2ef61828679cee07bb316",
+      "code": "expiry_time_basis_required"
+    },
+    {
+      "locator": "47cea6234e51694af3ba37750e249b15a6cd79dce68ac582e3075bb28393b5ea",
+      "code": "expiry_time_basis_required"
+    },
+    {
+      "locator": "17eed2c0e7c9788d0b46fafdf328b3e955aa0a22132c16cde72aa4f32dcd5282",
+      "code": "expiry_time_basis_required"
+    },
+    {
+      "locator": "e4bb04eec661be0b6c4cde1d3e6dca3fff3c9bdbb8c1244061f85bab274505e9",
+      "code": "expiry_time_basis_required"
+    }
+  ],
+  "ordersWithoutWatch": [
+    {
+      "locator": "c393fd8dc1b914b0a6d7b77ccfc8a0bb30d22645052bd70b87c7afebf6c2a317",
+      "status": "paid",
+      "appliedCredit": "5.00000000",
+      "expectedAmount": null,
+      "hasTransactionHash": false
+    },
+    {
+      "locator": "4ed39c44a26d6cc42e8f0af019fd6148aa1a1523662fe39fa4b8c40e5efb567b",
+      "status": "paid",
+      "appliedCredit": "5.00000000",
+      "expectedAmount": null,
+      "hasTransactionHash": false
+    },
+    {
+      "locator": "2eecac45827ede372449b7bd78a82139db639d810ebce98caef91e5d1a2fe422",
+      "status": "paid",
+      "appliedCredit": "5.00000000",
+      "expectedAmount": null,
+      "hasTransactionHash": false
+    },
+    {
+      "locator": "d509ce63dfefa7da40085207db0bba3bc80d25065f2d47b184b4eb305617817e",
+      "status": "paid",
+      "appliedCredit": "5.00000000",
+      "expectedAmount": null,
+      "hasTransactionHash": false
+    }
+  ],
+  "orderBlockers": [],
+  "createdAtUtcRows": 8,
+  "sessionOffset": "+00:00",
+  "databaseWrites": 0,
+  "fullPaymentConverted": false
+}
