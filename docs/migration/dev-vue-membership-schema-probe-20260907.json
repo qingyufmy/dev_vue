@@ -1,0 +1,61 @@
+{
+  "kind": "membership-schema-probe/v1",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "sourceSqlSha256": "b3f7053dbd2145624bd48d84b76797b1ed6df5e47f9ef12ee445e1a1e92e3055",
+  "ddl": "CREATE TABLE `memberships` (\n  `user_id` int NOT NULL,\n  `plan_code` varchar(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `billing_period_code` varchar(20) DEFAULT NULL,\n  `source_code` varchar(20) DEFAULT NULL,\n  `expiration_kind` varchar(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `expires_at_utc` datetime(3) DEFAULT NULL,\n  `current_state_observed_at_utc` datetime(3) NOT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `origin` varchar(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `migration_run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `source_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `imported_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`user_id`),\n  KEY `idx_membership_expiry` (`expiration_kind`,`expires_at_utc`,`user_id`),\n  KEY `fk_membership_migration` (`migration_run_id`),\n  CONSTRAINT `fk_membership_migration` FOREIGN KEY (`migration_run_id`) REFERENCES `data_migration_runs` (`id`),\n  CONSTRAINT `fk_membership_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `ck_membership_expiration` CHECK ((((`expiration_kind` = _utf8mb4'no_expiry') and (`expires_at_utc` is null)) or ((`expiration_kind` = _utf8mb4'at_time') and (`expires_at_utc` is not null)))),\n  CONSTRAINT `ck_membership_origin` CHECK ((((`origin` = _utf8mb4'legacy_import') and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null)) or ((`origin` = _utf8mb4'native') and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null)))),\n  CONSTRAINT `ck_membership_plan` CHECK ((`plan_code` in (_utf8mb4'free',_utf8mb4'plus',_utf8mb4'pro'))),\n  CONSTRAINT `ck_membership_revision` CHECK ((`revision` > 0))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+  "acceptedInserts": 2,
+  "rejectedCases": [
+    {
+      "name": "unknown_plan",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "no_expiry_with_time",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "at_time_without_time",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "unknown_expiration",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "zero_revision",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "missing_origin_evidence",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "native_with_import",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "missing_run",
+      "code": "ER_NO_REFERENCED_ROW_2"
+    },
+    {
+      "name": "missing_user",
+      "code": "ER_NO_REFERENCED_ROW_2"
+    },
+    {
+      "name": "duplicate_user",
+      "code": "ER_DUP_ENTRY"
+    },
+    {
+      "name": "missing_observation",
+      "code": "ER_BAD_NULL_ERROR"
+    }
+  ],
+  "stateRoundtrip": true,
+  "rolledBack": true,
+  "membershipRows": 0,
+  "sourceDatabaseWritten": false
+}
