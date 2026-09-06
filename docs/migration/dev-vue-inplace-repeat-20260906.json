@@ -1,0 +1,49 @@
+{
+  "apply": true,
+  "steps": [
+    {
+      "id": "inplace_001_01_users_last_seen_at_utc",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_001_02_users_profile_revision",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_001_03_bridge_refresh_sessions_credential_version",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_001_04_bridge_refresh_sessions_installation_id",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_001_05_bridge_refresh_sessions_profile_id",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_001_06_bridge_refresh_sessions_generation",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_001_07_bridge_refresh_sessions_migration_key",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_001_08_bridge_refresh_sessions_source_fingerprint",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_001_09_bridge_refresh_sessions_source_refresh_session_id",
+      "status": "completed"
+    }
+  ],
+  "database": "dev_vue",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "originalTablesVerified": 165,
+  "originalRowsVerified": "271007",
+  "backupSnapshotId": "sha256:9eebdd97aebf89b94c186bfbeda19dc7c028e672d3b27fae1ee4cf45e162bbee",
+  "completedAtUtc": "2026-09-06T13:29:40.481Z",
+  "dataPreserved": true,
+  "fullNormalizationComplete": false
+}
