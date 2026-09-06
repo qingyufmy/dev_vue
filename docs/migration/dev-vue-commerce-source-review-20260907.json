@@ -1,0 +1,368 @@
+{
+  "kind": "commerce-source-review/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "schemaSteps": 46,
+  "originalTablesVerified": 165,
+  "originalRowsVerified": "271007",
+  "tables": [
+    {
+      "table": "orders",
+      "rows": "12",
+      "ddl": "CREATE TABLE `orders` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `order_no` varchar(100) NOT NULL,\n  `order_id` varchar(100) DEFAULT NULL,\n  `user_id` int NOT NULL,\n  `plan` varchar(50) NOT NULL,\n  `plan_label` varchar(50) DEFAULT '',\n  `period` varchar(20) DEFAULT 'month',\n  `period_label` varchar(50) DEFAULT '',\n  `amount` decimal(20,8) NOT NULL DEFAULT '0.00000000',\n  `amount_confirmed` decimal(20,8) NOT NULL DEFAULT '0.00000000',\n  `referral_credit_applied` decimal(20,8) NOT NULL DEFAULT '0.00000000',\n  `currency` varchar(10) DEFAULT 'USD',\n  `status` varchar(20) DEFAULT 'pending',\n  `status_label` varchar(50) DEFAULT '',\n  `payment_method` varchar(50) DEFAULT '',\n  `paid_at` datetime DEFAULT NULL,\n  `created_at` datetime DEFAULT (now()),\n  `crypto_chain` varchar(10) DEFAULT NULL,\n  `crypto_address` varchar(100) DEFAULT NULL,\n  `crypto_amount` decimal(20,8) DEFAULT NULL,\n  `crypto_tx_hash` varchar(100) DEFAULT NULL,\n  `crypto_confirmations` int DEFAULT '0',\n  `crypto_expires_at` datetime DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `order_no` (`order_no`),\n  UNIQUE KEY `order_id` (`order_id`),\n  UNIQUE KEY `idx_orders_crypto_tx_hash` (`crypto_tx_hash`),\n  KEY `idx_orders_user_status` (`user_id`,`status`),\n  KEY `idx_orders_expired_cleanup_expiry` (`status`,`crypto_expires_at`,`id`),\n  KEY `idx_orders_expired_cleanup_created` (`status`,`created_at`,`id`)\n) ENGINE=InnoDB AUTO_INCREMENT=49 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collation": null
+        },
+        {
+          "name": "order_no",
+          "type": "varchar(100)",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collation": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "order_id",
+          "type": "varchar(100)",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collation": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "user_id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collation": null
+        },
+        {
+          "name": "plan",
+          "type": "varchar(50)",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collation": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "plan_label",
+          "type": "varchar(50)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collation": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "period",
+          "type": "varchar(20)",
+          "nullable": "YES",
+          "defaultValue": "month",
+          "collation": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "period_label",
+          "type": "varchar(50)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collation": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "amount",
+          "type": "decimal(20,8)",
+          "nullable": "NO",
+          "defaultValue": "0.00000000",
+          "collation": null
+        },
+        {
+          "name": "amount_confirmed",
+          "type": "decimal(20,8)",
+          "nullable": "NO",
+          "defaultValue": "0.00000000",
+          "collation": null
+        },
+        {
+          "name": "referral_credit_applied",
+          "type": "decimal(20,8)",
+          "nullable": "NO",
+          "defaultValue": "0.00000000",
+          "collation": null
+        },
+        {
+          "name": "currency",
+          "type": "varchar(10)",
+          "nullable": "YES",
+          "defaultValue": "USD",
+          "collation": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "status",
+          "type": "varchar(20)",
+          "nullable": "YES",
+          "defaultValue": "pending",
+          "collation": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "status_label",
+          "type": "varchar(50)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collation": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "payment_method",
+          "type": "varchar(50)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collation": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "paid_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collation": null
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "defaultValue": "now()",
+          "collation": null
+        },
+        {
+          "name": "crypto_chain",
+          "type": "varchar(10)",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collation": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "crypto_address",
+          "type": "varchar(100)",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collation": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "crypto_amount",
+          "type": "decimal(20,8)",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collation": null
+        },
+        {
+          "name": "crypto_tx_hash",
+          "type": "varchar(100)",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collation": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "crypto_confirmations",
+          "type": "int",
+          "nullable": "YES",
+          "defaultValue": "0",
+          "collation": null
+        },
+        {
+          "name": "crypto_expires_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collation": null
+        }
+      ]
+    },
+    {
+      "table": "referrals",
+      "rows": "0",
+      "ddl": "CREATE TABLE `referrals` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `referrer_id` int NOT NULL,\n  `referred_id` int NOT NULL,\n  `order_id` varchar(100) DEFAULT NULL,\n  `status` varchar(20) DEFAULT 'pending',\n  `commission` decimal(20,8) NOT NULL DEFAULT '0.00000000',\n  `cash_amount` decimal(20,8) NOT NULL DEFAULT '0.00000000',\n  `plan_label` varchar(50) DEFAULT '',\n  `attributed_at` datetime DEFAULT NULL,\n  `created_at` datetime DEFAULT (now()),\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uq_referrals_order_id` (`order_id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collation": null
+        },
+        {
+          "name": "referrer_id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collation": null
+        },
+        {
+          "name": "referred_id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collation": null
+        },
+        {
+          "name": "order_id",
+          "type": "varchar(100)",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collation": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "status",
+          "type": "varchar(20)",
+          "nullable": "YES",
+          "defaultValue": "pending",
+          "collation": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "commission",
+          "type": "decimal(20,8)",
+          "nullable": "NO",
+          "defaultValue": "0.00000000",
+          "collation": null
+        },
+        {
+          "name": "cash_amount",
+          "type": "decimal(20,8)",
+          "nullable": "NO",
+          "defaultValue": "0.00000000",
+          "collation": null
+        },
+        {
+          "name": "plan_label",
+          "type": "varchar(50)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collation": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "attributed_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collation": null
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "defaultValue": "now()",
+          "collation": null
+        }
+      ]
+    },
+    {
+      "table": "referral_rules",
+      "rows": "4",
+      "ddl": "CREATE TABLE `referral_rules` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `plan` varchar(20) NOT NULL,\n  `period` varchar(20) NOT NULL,\n  `rate_bps` int NOT NULL DEFAULT '1000',\n  `enabled` tinyint NOT NULL DEFAULT '1',\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_plan_period` (`plan`,`period`)\n) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+      "fields": [
+        {
+          "name": "id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collation": null
+        },
+        {
+          "name": "plan",
+          "type": "varchar(20)",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collation": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "period",
+          "type": "varchar(20)",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collation": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "rate_bps",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": "1000",
+          "collation": null
+        },
+        {
+          "name": "enabled",
+          "type": "tinyint",
+          "nullable": "NO",
+          "defaultValue": "1",
+          "collation": null
+        }
+      ]
+    }
+  ],
+  "ordersRead": 12,
+  "orderProjectionHash": "3c61fb7d8389c605f0cae3cbee5adc60de7afc0ca556dc94b2f4f22282cd6652",
+  "amountScale": 8,
+  "groups": [
+    {
+      "status": "cancelled",
+      "currency": "USD",
+      "rows": 4,
+      "amountUnits": "30100000000",
+      "cashUnits": "100000000",
+      "creditUnits": "0",
+      "creditedOrders": 0
+    },
+    {
+      "status": "expired",
+      "currency": "USD",
+      "rows": 4,
+      "amountUnits": "1600000000",
+      "cashUnits": "1600000000",
+      "creditUnits": "0",
+      "creditedOrders": 0
+    },
+    {
+      "status": "paid",
+      "currency": "USD",
+      "rows": 4,
+      "amountUnits": "2000000000",
+      "cashUnits": "0",
+      "creditUnits": "2000000000",
+      "creditedOrders": 4
+    }
+  ],
+  "pendingCreditObligations": [],
+  "exceptions": [],
+  "rules": [
+    {
+      "id": "1",
+      "plan": "plus",
+      "period": "monthly",
+      "rate_bps": "1000",
+      "enabled": "1"
+    },
+    {
+      "id": "2",
+      "plan": "plus",
+      "period": "yearly",
+      "rate_bps": "1000",
+      "enabled": "1"
+    },
+    {
+      "id": "3",
+      "plan": "pro",
+      "period": "monthly",
+      "rate_bps": "1000",
+      "enabled": "1"
+    },
+    {
+      "id": "4",
+      "plan": "pro",
+      "period": "yearly",
+      "rate_bps": "1000",
+      "enabled": "1"
+    }
+  ],
+  "invalidRules": [],
+  "coverage": "order_money_identity_status_projection_and_rule_rows",
+  "historicalCurrencyBasisProven": false,
+  "databaseWrites": 0,
+  "fullNormalizationComplete": false
+}
