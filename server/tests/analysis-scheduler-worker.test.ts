@@ -109,7 +109,7 @@ describe('Stage 12B analysis scheduling and worker', () => {
     const worker = new AnalysisWorker(inferenceRepository, service, new StrategyService(new Strategies()), contexts, {
       profileId: '2', provider: 'test', model: 'analysis-model', timeoutMs: 5_000, maxAttempts: 2,
       async analyze() { attempts += 1; if (attempts === 1) throw new ModelInvocationError('provider_busy', 'failed', true); return { result, usage: { total_tokens: 100 } } },
-    }, 'worker-1')
+    }, 'worker-1', { async assertAllowed() {} })
     await expect(worker.process(base.id, new Date('2026-09-03T08:00:00.000Z'))).resolves.toMatchObject({ status: 'succeeded' })
     expect(attempts).toBe(2)
     expect(completed[0]).toMatchObject({ attemptId: 'attempt-2', fencingToken: 1 })
@@ -120,6 +120,35 @@ describe('Stage 12B analysis scheduling and worker', () => {
     expect(traderTaskMode('long_setup', false, false)).toBe('entry')
     expect(traderTaskMode('none', true, false)).toBe('manage')
     expect(traderTaskMode('short_setup', false, true)).toBe('both')
+  })
+
+  it.each([1, 2, 3])('stops a closed schedule at preparation or provider attempt %s', async blockedCheck => {
+    const base = run('window-boundary'), failures: string[] = []
+    let checks = 0, calls = 0
+    const inferenceRepository = repository({
+      async getAnalysisRun() { return base },
+      async failQueuedAnalysis(_id, code) { failures.push(code) },
+      async beginAnalysis(input) {
+        return { run: { ...base, status: 'running', revision: 2 }, taskId: input.taskId, attemptId: input.attemptId, attemptNumber: 1, fencingToken: 1 }
+      },
+      async failAnalysisAttempt(input) {
+        failures.push(input.errorCode)
+        if (!input.retryable) return null
+        return { run: { ...base, status: 'running', revision: 2 }, taskId: input.taskId, attemptId: 'retry', attemptNumber: 2, fencingToken: 1 }
+      },
+    })
+    const strategies = new StrategyService(new Strategies())
+    const contexts = new AnalysisContextBuilder(
+      { async read() { return { source_account_id: '7', symbol: 'XAUUSD', quote: { revision: 9 }, candles: { M5: [] } } } },
+      { async latest() { return null } },
+    )
+    const worker = new AnalysisWorker(inferenceRepository, new InferenceService(inferenceRepository, strategies), strategies, contexts, {
+      profileId: null, provider: 'test', model: 'analysis', timeoutMs: 1000, maxAttempts: 2,
+      async analyze() { calls += 1; throw new ModelInvocationError('provider_busy', 'failed', true) },
+    }, 'worker', { async assertAllowed() { if (++checks === blockedCheck) throw new InferenceError('analysis_schedule_closed', 409) } })
+    expect(await worker.process(base.id)).toMatchObject({ status: 'failed', code: 'analysis_schedule_closed' })
+    expect(calls).toBe(blockedCheck === 3 ? 1 : 0)
+    expect(failures.at(-1)).toBe('analysis_schedule_closed')
   })
 
   it('does not retry a model result after a newer analysis supersedes its fenced write', async () => {
@@ -142,7 +171,7 @@ describe('Stage 12B analysis scheduling and worker', () => {
     const worker = new AnalysisWorker(inferenceRepository, service, new StrategyService(new Strategies()), contexts, {
       profileId: null, provider: 'test', model: 'analysis-model', timeoutMs: 5_000, maxAttempts: 3,
       async analyze() { modelCalls += 1; return { result, usage: null } },
-    }, 'worker-1')
+    }, 'worker-1', { async assertAllowed() {} })
     await expect(worker.process(base.id, new Date('2026-09-03T08:00:00.000Z'))).resolves.toEqual({ status: 'ignored', code: 'analysis_revision_conflict' })
     expect(modelCalls).toBe(1)
     expect(failureCalls).toBe(0)
@@ -166,7 +195,7 @@ describe('Stage 12B analysis scheduling and worker', () => {
     const worker = new AnalysisWorker(inferenceRepository, service, new StrategyService(new Strategies()), contexts, {
       profileId: null, provider: 'test', model: 'analysis-model', timeoutMs: 5_000, maxAttempts: 3,
       async analyze() { return { result: { ...result, opportunity: 'invalid' as MarketAnalysisResult['opportunity'] }, usage: null } },
-    }, 'worker-1')
+    }, 'worker-1', { async assertAllowed() {} })
     await expect(worker.process(base.id, new Date('2026-09-03T08:00:00.000Z'))).resolves.toEqual({ status: 'failed', code: 'market_opportunity_invalid' })
     expect(failureStatus).toBe('contract_invalid')
   })

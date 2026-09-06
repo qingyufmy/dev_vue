@@ -8,6 +8,7 @@ import {
   AnalysisContextBuilder, AnalysisWorker, InferenceService, loadCredentialKeyring,
   MysqlAnalysisModelGatewayResolver, MysqlInferenceRepository, MysqlMacroSnapshotReader, MysqlModelUsageLedger,
   MysqlRuntimeModelProfileCatalog, TradingAnalysisMarketSource,
+  MysqlAnalysisWindowGuard,
 } from '../modules/inference/index.js'
 import { MysqlStrategyCatalog, StrategyService } from '../modules/strategies/index.js'
 import { MysqlTradingRepository } from '../modules/trading/index.js'
@@ -42,6 +43,7 @@ async function main() {
       console.error('[worker-analysis] model usage settlement failed')
     }),
     `analysis:${process.pid}`,
+    new MysqlAnalysisWindowGuard(pool, (accountId, userId) => trading.getAccountSnapshot(accountId, userId)),
   )
   const worker = new Worker<AnalysisRunJob>(ANALYSIS_QUEUE, async job => {
     if (job.name !== 'analysis.run' || !job.data.analysisId) throw new Error('analysis_job_invalid')

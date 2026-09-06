@@ -4,6 +4,7 @@ import { InferenceError } from '../domain/inference.js'
 import type { AnalysisContextBuilder } from './analysis-context-builder.js'
 import type { InferenceRepository } from './inference-ports.js'
 import type { InferenceService } from './inference-service.js'
+import type { AnalysisWindowGuard } from './analysis-window-guard.js'
 
 export interface AnalysisModelGateway {
   readonly profileId: string | null
@@ -32,6 +33,8 @@ export class AnalysisWorker {
     private readonly contexts: AnalysisContextBuilder,
     private readonly modelSource: AnalysisModelGateway | AnalysisModelGatewayResolver,
     private readonly workerId: string,
+    private readonly windows: AnalysisWindowGuard,
+    private readonly currentTime: () => Date = () => new Date(),
   ) {}
 
   async process(runId: string, now = new Date()) {
@@ -40,6 +43,7 @@ export class AnalysisWorker {
 
     let strategy
     try {
+      await this.windows.assertAllowed(run, this.currentTime())
       strategy = await this.strategies.requireActiveVersion(run.userId, run.strategyId, 'analysis')
       if (strategy.id !== run.strategyVersionId) throw new InferenceError('strategy_version_conflict', 409)
     } catch (error) {
@@ -76,6 +80,8 @@ export class AnalysisWorker {
     while (true) {
       let output
       try {
+        // Context preparation and provider retries can cross a window boundary.
+        await this.windows.assertAllowed(run, this.currentTime())
         output = await model.analyze({ taskId: claim.taskId, attemptId: claim.attemptId, snapshot, signal: AbortSignal.timeout(timeoutMs) })
       } catch (error) {
         const failure = modelFailure(error)
