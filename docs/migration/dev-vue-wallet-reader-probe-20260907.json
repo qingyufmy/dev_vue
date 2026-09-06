@@ -1,0 +1,48 @@
+{
+  "kind": "wallet-reader-probe/v1",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "toolManifest": [
+    {
+      "path": "package.json",
+      "sha256": "6a28d132e349a7d7958232e4b3ed156caa268486b5e90d183226b4454ce8d54b"
+    },
+    {
+      "path": "scripts/lib/v4-backup-artifact.mjs",
+      "sha256": "4e66ff5a47c862dd494ef3d9800f413b07de19ca1a81e1e61eece4da8ef22591"
+    },
+    {
+      "path": "scripts/lib/v4-backup-io.mjs",
+      "sha256": "0b6082e0b18e30a42ffad895e5f3cbd4a2645e87f623d02b5c1844d53f6f7171"
+    },
+    {
+      "path": "scripts/probe-wallet-reader-host.mjs",
+      "sha256": "8724a0b015bd80872368b62beac7034e2848f0cfa9f41df9aaf4c4ab3327a55f"
+    },
+    {
+      "path": "scripts/run-wallet-reader-host.py",
+      "sha256": "587023f62bc0f5dc77d12d50ef8d548efaba15bb53e1337fd7d0e5c72de89f3c"
+    },
+    {
+      "path": "server/dist-v4/modules/commerce/infrastructure/mysql-wallet-address-reader.js",
+      "sha256": "00210ebce3ad17633afc42f03899f842b5c7aa722362fd128adc5aaabcbd2490"
+    },
+    {
+      "path": "server/src/modules/commerce/infrastructure/mysql-wallet-address-reader.ts",
+      "sha256": "d373708504602b1acb57f3e7ef87a480ce773874444d80fa2557a057cf970d8d"
+    }
+  ],
+  "fixtureOnly": true,
+  "exactRevisionAndMilliseconds": true,
+  "sparseIndicesAndIds": true,
+  "chainScopeVerified": true,
+  "custodyStatesVerified": true,
+  "actualCustodyControlVerified": false,
+  "rolledBack": true,
+  "finalCount": "0",
+  "currentDevVueWritten": false,
+  "consumersSwitched": false
+}
