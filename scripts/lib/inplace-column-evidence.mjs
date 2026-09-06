@@ -42,12 +42,12 @@ export function originalDefinition(name, ddl) {
   return ddl.split('\n').filter(line => !added.has(/^  `([a-z][a-z0-9_]*)` /.exec(line)?.[1])).join('\n')
 }
 
-export async function verifyOriginalSchema(connection, expectedSha256) {
+export async function verifyOriginalSchema(connection, expectedSha256, verifiedAddedTables = []) {
   const [schemas] = await connection.query('SELECT DEFAULT_CHARACTER_SET_NAME charset_name,DEFAULT_COLLATION_NAME collation_name FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=DATABASE()')
   const [tables] = await connection.query('SELECT TABLE_NAME name,TABLE_TYPE type FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME')
   const definitions = []
   for (const table of tables) {
-    if (table.name === 'database_upgrade_steps_v4') continue
+    if (table.name === 'database_upgrade_steps_v4' || verifiedAddedTables.includes(table.name)) continue
     check(table.type === 'BASE TABLE', 'inplace_original_object_changed')
     const [[row]] = await connection.query(`SHOW CREATE TABLE ${quote(table.name)}`)
     definitions.push({ name: table.name, ddl: originalDefinition(table.name, row['Create Table']) })

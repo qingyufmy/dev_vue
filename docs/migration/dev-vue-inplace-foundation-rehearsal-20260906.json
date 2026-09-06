@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "kind": "dev_vue_foundation_rehearsal",
+  "status": "verified",
+  "target": "dev_vue_m1_source_20260906_01",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "backupSnapshotId": "sha256:9eebdd97aebf89b94c186bfbeda19dc7c028e672d3b27fae1ee4cf45e162bbee",
+  "completedAtUtc": "2026-09-06T13:48:01.922Z",
+  "stepChecksums": [
+    {
+      "id": "inplace_002_01_auth_sessions",
+      "checksum": "48f6d3796a7a0f8a862ef477e69b5cd97c346e3284ebbf9170788d4156bd0e4a",
+      "expectedHash": "93fdf62a0b4a7eedc3f1381e4415c848a13b09cf2c5301cd6338422776871b41"
+    },
+    {
+      "id": "inplace_002_02_auth_authorization_codes",
+      "checksum": "158ee33d5c0e1359e2b777b8c01a009e3b47f4443baf1193a5baf839694de365",
+      "expectedHash": "d4d3a5bf3923c2caa7a078701cdbc37a8271a5b872646367a5af79b41b35b695"
+    },
+    {
+      "id": "inplace_002_03_terminal_profiles",
+      "checksum": "d6d2a687adce9d5c9280a00f6ac4f3a5b08932ae7613106c36d193b9daa1d688",
+      "expectedHash": "e796241d28dd63d6ee3b60b846184bc9f2b73c574dd33dd31240c873d604a13c"
+    },
+    {
+      "id": "inplace_002_04_bridge_connection_capacity_grants",
+      "checksum": "a5f23554dad296277da0863d49215cf9402fec71079f3e04ed5ffdb222025058",
+      "expectedHash": "0097e963de0cecdef7e7e99feacd71d88264c309ffee2ebc98c1454647dc2f78"
+    },
+    {
+      "id": "inplace_002_05_data_migration_runs",
+      "checksum": "ffe6d67303fa66e5e5ef90a2057ea93e3c3918f0789a18531c2db472b94a6a30",
+      "expectedHash": "7aa4ec51dfbb2b317ee2facf4a6de7401e1d3a82379f15317aa6d396157ac7cb"
+    },
+    {
+      "id": "inplace_002_06_data_migration_checkpoints",
+      "checksum": "0f9217892fa398c076967967a86319a25d55998f6ec51b356bffad73099d1271",
+      "expectedHash": "63b25e568b62520e5b4da354f5dc2d6ac7914568a9e6cb8925a88bef74023ffb"
+    },
+    {
+      "id": "inplace_002_07_data_migration_batches",
+      "checksum": "af28984895255bebe9530a5203873528229345d1ec8311464b6ddaf3f62dab38",
+      "expectedHash": "6d7c073609f8bd04f5b7b34938c62c8eb9dff877364c7c4915a72ac9bc699b8b"
+    },
+    {
+      "id": "inplace_002_08_data_migration_id_maps",
+      "checksum": "8af2fc24d9cb4bef9cbfb39c74e4edcd59237af990731d3649d678e0b38401fd",
+      "expectedHash": "e28d01c271e64f9acd262de3bb6ea12401f3700826c171bc83b17da8344beed0"
+    },
+    {
+      "id": "inplace_002_09_data_migration_row_receipts",
+      "checksum": "ccddcf2dd2b1be9ae89dd1cbfd89963a68d3658765df3357c73e0ed13b18a02b",
+      "expectedHash": "c82b221448572f6957a444576a1c33989e0a82dc62805268bf3ff10308977e0b"
+    }
+  ],
+  "recovery": {
+    "apply": true,
+    "steps": [
+      {
+        "id": "inplace_002_01_auth_sessions",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_02_auth_authorization_codes",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_03_terminal_profiles",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_04_bridge_connection_capacity_grants",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_05_data_migration_runs",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_06_data_migration_checkpoints",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_07_data_migration_batches",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_08_data_migration_id_maps",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_09_data_migration_row_receipts",
+        "status": "completed"
+      }
+    ]
+  },
+  "ddlExecutions": 9,
+  "repeatNoop": true,
+  "originalTablesVerified": 165,
+  "originalRowsVerified": "271007",
+  "resumedAfterDefinitionCheck": false,
+  "verificationOfCompletedRun": true,
+  "ddlExecutionsThisVerification": 0,
+  "noBusinessRowsSeeded": true,
+  "sourceModified": false,
+  "fullNormalizationComplete": false
+}

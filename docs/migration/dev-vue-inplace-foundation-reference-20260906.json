@@ -1,0 +1,54 @@
+{
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "tables": [
+    {
+      "name": "auth_sessions",
+      "ddl": "CREATE TABLE `auth_sessions` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `session_hash` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `user_id` int NOT NULL,\n  `client_id` enum('auth','www-web','trade-web','admin-web') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `parent_session_id` bigint unsigned DEFAULT NULL,\n  `auth_time_utc` datetime(3) NOT NULL,\n  `mfa_level` enum('none','otp','strong') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'none',\n  `session_version` int NOT NULL DEFAULT '0',\n  `created_at_utc` datetime(3) NOT NULL,\n  `last_seen_at_utc` datetime(3) NOT NULL,\n  `idle_expires_at_utc` datetime(3) DEFAULT NULL,\n  `absolute_expires_at_utc` datetime(3) NOT NULL,\n  `revoked_at_utc` datetime(3) DEFAULT NULL,\n  `revocation_reason` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_auth_sessions_hash` (`session_hash`),\n  KEY `idx_auth_sessions_user_active` (`user_id`,`revoked_at_utc`,`absolute_expires_at_utc`),\n  KEY `idx_auth_sessions_parent` (`parent_session_id`),\n  KEY `idx_auth_sessions_expiry` (`absolute_expires_at_utc`),\n  CONSTRAINT `fk_auth_sessions_parent` FOREIGN KEY (`parent_session_id`) REFERENCES `auth_sessions` (`id`),\n  CONSTRAINT `fk_auth_sessions_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": 0
+    },
+    {
+      "name": "auth_authorization_codes",
+      "ddl": "CREATE TABLE `auth_authorization_codes` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `code_hash` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `user_id` int NOT NULL,\n  `auth_session_id` bigint unsigned NOT NULL,\n  `client_id` enum('www-web','trade-web','admin-web') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `redirect_uri` varchar(512) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `scope` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `nonce` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `code_challenge` char(43) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `code_challenge_method` enum('S256') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'S256',\n  `created_at_utc` datetime(3) NOT NULL,\n  `expires_at_utc` datetime(3) NOT NULL,\n  `consumed_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_auth_codes_hash` (`code_hash`),\n  KEY `idx_auth_codes_expiry` (`expires_at_utc`),\n  KEY `idx_auth_codes_session` (`auth_session_id`),\n  KEY `fk_auth_codes_user` (`user_id`),\n  CONSTRAINT `fk_auth_codes_session` FOREIGN KEY (`auth_session_id`) REFERENCES `auth_sessions` (`id`),\n  CONSTRAINT `fk_auth_codes_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": 0
+    },
+    {
+      "name": "terminal_profiles",
+      "ddl": "CREATE TABLE `terminal_profiles` (\n  `id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `user_id` int NOT NULL,\n  `display_name` varchar(128) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `platform` enum('mt4','mt5') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `installation_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  `deleted_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_terminal_profile_install` (`user_id`,`installation_id`,`id`),\n  KEY `idx_terminal_profiles_user` (`user_id`,`deleted_at_utc`,`updated_at_utc`),\n  CONSTRAINT `fk_terminal_profiles_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": 0
+    },
+    {
+      "name": "bridge_connection_capacity_grants",
+      "ddl": "CREATE TABLE `bridge_connection_capacity_grants` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `quantity` int unsigned NOT NULL,\n  `source_type` enum('purchase','admin','migration') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `source_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `starts_at_utc` datetime(3) NOT NULL,\n  `expires_at_utc` datetime(3) DEFAULT NULL,\n  `revoked_at_utc` datetime(3) DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_bridge_capacity_source` (`source_type`,`source_id`),\n  KEY `idx_bridge_capacity_active` (`user_id`,`revoked_at_utc`,`starts_at_utc`,`expires_at_utc`),\n  CONSTRAINT `fk_bridge_capacity_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": 0
+    },
+    {
+      "name": "data_migration_runs",
+      "ddl": "CREATE TABLE `data_migration_runs` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `bindings_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `bindings_json` json NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": 0
+    },
+    {
+      "name": "data_migration_checkpoints",
+      "ddl": "CREATE TABLE `data_migration_checkpoints` (\n  `run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `stream_id` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `sequence_number` bigint unsigned NOT NULL DEFAULT '0',\n  `cursor_json` json DEFAULT NULL,\n  `processed_rows` bigint unsigned NOT NULL DEFAULT '0',\n  `updated_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`run_id`,`stream_id`),\n  CONSTRAINT `fk_data_checkpoint_run` FOREIGN KEY (`run_id`) REFERENCES `data_migration_runs` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": 0
+    },
+    {
+      "name": "data_migration_batches",
+      "ddl": "CREATE TABLE `data_migration_batches` (\n  `run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `batch_id` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `stream_id` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `sequence_number` bigint unsigned NOT NULL,\n  `request_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `row_count` int unsigned NOT NULL,\n  `end_cursor_json` json NOT NULL,\n  `recorded_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`run_id`,`batch_id`),\n  UNIQUE KEY `uk_data_batch_sequence` (`run_id`,`stream_id`,`sequence_number`),\n  CONSTRAINT `fk_data_batch_run` FOREIGN KEY (`run_id`) REFERENCES `data_migration_runs` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": 0
+    },
+    {
+      "name": "data_migration_id_maps",
+      "ddl": "CREATE TABLE `data_migration_id_maps` (\n  `logical_source_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `entity_kind` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_pk_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_pk_json` json NOT NULL,\n  `target_json` json NOT NULL,\n  `created_run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`logical_source_id`,`entity_kind`,`source_table`,`source_pk_sha256`),\n  KEY `fk_data_id_map_run` (`created_run_id`),\n  CONSTRAINT `fk_data_id_map_run` FOREIGN KEY (`created_run_id`) REFERENCES `data_migration_runs` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": 0
+    },
+    {
+      "name": "data_migration_row_receipts",
+      "ddl": "CREATE TABLE `data_migration_row_receipts` (\n  `run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `stream_id` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_pk_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `batch_id` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_pk_json` json NOT NULL,\n  `source_bytes_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `transformed_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `targets_json` json NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`run_id`,`stream_id`,`source_pk_sha256`),\n  KEY `fk_data_receipt_batch` (`run_id`,`batch_id`),\n  CONSTRAINT `fk_data_receipt_batch` FOREIGN KEY (`run_id`, `batch_id`) REFERENCES `data_migration_batches` (`run_id`, `batch_id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "rows": 0
+    }
+  ]
+}

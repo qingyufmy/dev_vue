@@ -1,0 +1,49 @@
+{
+  "apply": true,
+  "steps": [
+    {
+      "id": "inplace_002_01_auth_sessions",
+      "status": "applied"
+    },
+    {
+      "id": "inplace_002_02_auth_authorization_codes",
+      "status": "applied"
+    },
+    {
+      "id": "inplace_002_03_terminal_profiles",
+      "status": "applied"
+    },
+    {
+      "id": "inplace_002_04_bridge_connection_capacity_grants",
+      "status": "applied"
+    },
+    {
+      "id": "inplace_002_05_data_migration_runs",
+      "status": "applied"
+    },
+    {
+      "id": "inplace_002_06_data_migration_checkpoints",
+      "status": "applied"
+    },
+    {
+      "id": "inplace_002_07_data_migration_batches",
+      "status": "applied"
+    },
+    {
+      "id": "inplace_002_08_data_migration_id_maps",
+      "status": "applied"
+    },
+    {
+      "id": "inplace_002_09_data_migration_row_receipts",
+      "status": "applied"
+    }
+  ],
+  "database": "dev_vue",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "originalTablesVerified": 165,
+  "originalRowsVerified": "271007",
+  "backupSnapshotId": "sha256:9eebdd97aebf89b94c186bfbeda19dc7c028e672d3b27fae1ee4cf45e162bbee",
+  "completedAtUtc": "2026-09-06T13:49:36.627Z",
+  "dataPreserved": true,
+  "fullNormalizationComplete": false
+}

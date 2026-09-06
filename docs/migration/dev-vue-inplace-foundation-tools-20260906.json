@@ -1,0 +1,142 @@
+[
+  {
+    "path": "scripts/rehearse-dev-vue-foundation.mjs",
+    "sha256": "70af493d9e6ada1f46139fb0258193f0178f19083f647e40d4ece38d59f561f5"
+  },
+  {
+    "path": "scripts/run-dev-vue-foundation-host.py",
+    "sha256": "3f848871bf25b7c51d35ceb56fcf11be17c1c33eb88d48e75bd403a7cdf4368d"
+  },
+  {
+    "path": "scripts/lib/inplace-foundation-upgrade.mjs",
+    "sha256": "9b024fc4ca674cc8ac5cec70754aeeb4c873cf6878d27b312e0876bf74a46f6d"
+  },
+  {
+    "path": "scripts/lib/dev-vue-column-upgrade.mjs",
+    "sha256": "b20ab4ba86a9b9b40ef9ea5ea559c812f3db8166db6b117c3bd94d49b40a41ac"
+  },
+  {
+    "path": "scripts/lib/mysql-inplace-column-store.mjs",
+    "sha256": "c42cfe0811296007b6a9f7fb46270b44b4f22614e0948af499293d95ce1cdafc"
+  },
+  {
+    "path": "scripts/lib/inplace-column-evidence.mjs",
+    "sha256": "7f62a4fae29a8e3ce12c84b6f704aa04f32c4ab324b53a2bf9bc706e66b67349"
+  },
+  {
+    "path": "scripts/lib/v4-schema-fingerprint.mjs",
+    "sha256": "0255e014bbf75e3631d409cf5babec7c70c4c43112a101d6b4f63a6e8b1aabaf"
+  },
+  {
+    "path": "scripts/lib/v4-migration-plan.mjs",
+    "sha256": "087d097447de41bda0781aca7cfd6bab82bf6bedaa5c22fde9e8b80e443c2c37"
+  },
+  {
+    "path": "server/db/migrations/inplace/003_identity_migration_tables.sql",
+    "sha256": "158e5283b3e0fa99545c59ae66ed013db4b54ffdaa6c173013c234b2630a51ee"
+  },
+  {
+    "path": "server/db/migrations/bootstrap/v4-foundation-v1.sql",
+    "sha256": "3a5a1f4b1cd76d505884f3a4702da54f3d67ff379d1fcf832866b31a0f3ff215"
+  },
+  {
+    "path": "server/db/migrations/20260903_001_bridge_v4_device_sessions.sql",
+    "sha256": "2e98051350645fc30b6ccbc2843da08516bd906a6bdf000bfec5080cf0374adf"
+  },
+  {
+    "path": "server/db/migrations/20260903_002_auth_sso_sessions.sql",
+    "sha256": "6d99b0c61769b66fdf934a7fd0f96500b864bb55264c469bd020fe0c4820f728"
+  },
+  {
+    "path": "server/db/migrations/20260903_003_trading_context_and_market_projection.sql",
+    "sha256": "08dbece7f84f47d2d45ce751635e58d251e9252fcff0d82c1405136b6dfee93e"
+  },
+  {
+    "path": "server/db/migrations/20260903_004_ai_strategy_and_inference_core.sql",
+    "sha256": "b5252c385357b9cccec2513a6d3f17634f8a73f194818420de88ed76b0790960"
+  },
+  {
+    "path": "server/db/migrations/20260903_005_analysis_scheduler_and_account_fanout.sql",
+    "sha256": "a256f46c3e6f5592f5b2c7563f471f3b425b405610e72b64586bc5f1e00c5b16"
+  },
+  {
+    "path": "server/db/migrations/20260903_006_account_trader_worker.sql",
+    "sha256": "eac86099de26cef5948bc71464269579b0a466f07ea37fa21dc64538baa9dda8"
+  },
+  {
+    "path": "server/db/migrations/20260903_007_deterministic_risk_review.sql",
+    "sha256": "ed697bb67c7c87d389575f00462a961011cd45d115287cc018bf6e40fbef7d3e"
+  },
+  {
+    "path": "server/db/migrations/20260903_008_manual_risk_release.sql",
+    "sha256": "c27c28fa6aaa1f63aadeb9b43e0858679d927f88f932050a943d2f4b07fe34c1"
+  },
+  {
+    "path": "server/db/migrations/20260903_009_execution_intents_and_reservations.sql",
+    "sha256": "441e93adbe9e7a61976adfaeb6477336a7d2fb76c6acab927503501fde960a5e"
+  },
+  {
+    "path": "server/db/migrations/20260903_010_bridge_v4_command_ledger.sql",
+    "sha256": "6de803b91617807c57cf545a326c3877b2a2c1e4242652c1f11dc24deceb07d1"
+  },
+  {
+    "path": "server/db/migrations/20260904_011_user_execution_commands_and_distributions.sql",
+    "sha256": "59f39b04871bee1a470785f03d3a7de1719c39a4abe22e87c16a2a8d3dc0ca3f"
+  },
+  {
+    "path": "server/db/migrations/20260904_012_review_memory_core.sql",
+    "sha256": "2586fb4a5b9a36a0bd0e4a2e213ff60d6026888eaebe9c83b75840ea99db5b53"
+  },
+  {
+    "path": "server/db/migrations/20260904_013_authoritative_trade_history.sql",
+    "sha256": "6ae01130da3efacc58a9b1aa6a95c98f1bccdf6f24c81b50decb61b19402e258"
+  },
+  {
+    "path": "server/db/migrations/20260904_014_audit_read_indexes.sql",
+    "sha256": "1621ab0b05f3d84c416220e84683b4a6de2ecc9c4b2e1aa6f7e56c364b62db23"
+  },
+  {
+    "path": "server/db/migrations/20260905_015_macro_sources_and_observations.sql",
+    "sha256": "bbc94e17b2b0f34895b09291126c30dc20c23277ea13b5315ca34d295b531444"
+  },
+  {
+    "path": "server/db/migrations/20260905_016_macro_snapshot_research.sql",
+    "sha256": "78d7365ae9feab93bcd8646dcbdeac4de64ccf1536462ee1f4abe19e8455510e"
+  },
+  {
+    "path": "server/db/migrations/20260905_017_economic_calendar.sql",
+    "sha256": "7a29716aefd45691b29d11d97874480e0d58ef1f9ab139bf4049be917e7a1946"
+  },
+  {
+    "path": "server/db/migrations/20260905_018_user_state_and_referral_accounts.sql",
+    "sha256": "64e8b88cd337fe45202d9bf277317cc6af37942ddf8ae3055f155c58d01c9a29"
+  },
+  {
+    "path": "server/db/migrations/20260905_019_account_ownership_intervals.sql",
+    "sha256": "3b17b685274b0eb1fe225305fea9de673fea60cc81c629dc8477a73913a48a1a"
+  },
+  {
+    "path": "server/db/migrations/20260905_020_account_projection_and_history_provenance.sql",
+    "sha256": "9f55df7803e2429e395f253d6396edf694b97d1059f1cc2daadb5eb73c62b2f8"
+  },
+  {
+    "path": "server/db/migrations/20260905_021_observer_sources_and_audiences.sql",
+    "sha256": "aed263e66171f336d7750bbdfa565c03ae8e82f6f69521483a022ec0a3e687d2"
+  },
+  {
+    "path": "server/db/migrations/20260905_022_observer_management_ledger.sql",
+    "sha256": "0d33169447c5f77f158ae028662c55aadcc09a1eb256d9c5befee2abe8d2a863"
+  },
+  {
+    "path": "server/db/migrations/20260906_023_bridge_profile_epoch_scope.sql",
+    "sha256": "ea314526bb0bbbf1f5fd427ecfc71ea5b97a1997b434348c37e283e9ae82ed4a"
+  },
+  {
+    "path": "server/db/migrations/20260906_024_bridge_pairing_requests.sql",
+    "sha256": "acfbcd21fdaa99b6f5e6cd081e56dd4e1c21cae928049dc35a085e67571d624e"
+  },
+  {
+    "path": "server/db/migrations/20260906_025_data_migration_batch_ledger.sql",
+    "sha256": "6523e515b62147be2157c3b8a6e1e6fd1dc96d131343cbfbd02c180cc8cdb107"
+  }
+]
