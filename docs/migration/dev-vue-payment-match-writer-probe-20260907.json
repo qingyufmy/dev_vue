@@ -1,0 +1,115 @@
+{
+  "kind": "payment-match-writer-probe/v1",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "toolManifest": [
+    {
+      "path": "scripts/probe-payment-match-writer-host.mjs",
+      "sha256": "c9309d9ec4aba0fc516f49124cd05662b4c1e27e9310ffd8ebf8b99c0719f1c2"
+    },
+    {
+      "path": "scripts/lib/mysql-payment-match-writer.mjs",
+      "sha256": "ecafdf49ba959f2d1d3da69909dcd9e1c0c42e7c7f758a4369dc29a72bd634f7"
+    },
+    {
+      "path": "scripts/lib/v4-backfill-contract.mjs",
+      "sha256": "4dff263678f769cc2f733861446b9e50d4a0a2d1d2b9f3e1dc1e278d2c3d8810"
+    },
+    {
+      "path": "scripts/lib/v4-payment-match-rows.mjs",
+      "sha256": "e02fe8d632696f4edfff9c0a58f484692036e42a03f366a8247360825df8eb83"
+    },
+    {
+      "path": "scripts/lib/v4-identity-values.mjs",
+      "sha256": "4d6c51c97ef6841c17536c1e2a794eacca715981c0ef497d73c68b998d89fd6e"
+    },
+    {
+      "path": "scripts/lib/v4-identity-time.mjs",
+      "sha256": "aa52d388a8fdb6854b79b8c3be724cf491d476b23560f619396772851f212976"
+    },
+    {
+      "path": "scripts/lib/v4-payment-watch-source.mjs",
+      "sha256": "5395cd3eac0c4a5d4c82acb50ef01fdbf60b063581fd72282de8a5fa0bb6d271"
+    },
+    {
+      "path": "scripts/lib/v4-payment-order-rows.mjs",
+      "sha256": "f8e16e9d54f3796c67fa0ee2ec9e220de1c3fb45c7667d28d044f2690d2a2b2b"
+    },
+    {
+      "path": "scripts/lib/v4-payment-order-source.mjs",
+      "sha256": "095c32f6a06bbd0f428af936108246e50fc7062790e2b9b46dfdcd5862128a8b"
+    },
+    {
+      "path": "scripts/lib/v4-order-credit-conversion.mjs",
+      "sha256": "d78657ee284ff8e8834e5e17f262a3f7674272b688e56f17ebd2f5111eaeab88"
+    },
+    {
+      "path": "scripts/lib/mysql-payment-order-writer.mjs",
+      "sha256": "7431eb9a9fa4d719e55657d1845edd5bba1ddbc6be2e0c9d41ffbfbc34639b24"
+    },
+    {
+      "path": "scripts/lib/v4-payment-match-fact-audit.mjs",
+      "sha256": "26cc96a38602badf3cda10f73f9628016cd421db01fc8eaba290526621125ca0"
+    },
+    {
+      "path": "tests/fixtures/payment-match-fixture.mjs",
+      "sha256": "24d7fefa145679f83b131e9cf728c653e1ee7ea5d7d1d741d8099de388e1e197"
+    },
+    {
+      "path": "scripts/lib/v4-backup-io.mjs",
+      "sha256": "0b6082e0b18e30a42ffad895e5f3cbd4a2645e87f623d02b5c1844d53f6f7171"
+    },
+    {
+      "path": "scripts/lib/v4-backup-artifact.mjs",
+      "sha256": "4e66ff5a47c862dd494ef3d9800f413b07de19ca1a81e1e61eece4da8ef22591"
+    },
+    {
+      "path": "scripts/run-payment-match-writer-host.py",
+      "sha256": "2f2871398053e5abf87a9181fd1687805c385ef738a962075616b2e03907d8ce"
+    }
+  ],
+  "fixtureOnly": true,
+  "first": {
+    "applied": true,
+    "targetHash": "a4e933ca10d677678b2be2097d297e62df2e2d068760e8763b591339a55f00ca"
+  },
+  "repeat": {
+    "applied": false,
+    "targetHash": "a4e933ca10d677678b2be2097d297e62df2e2d068760e8763b591339a55f00ca"
+  },
+  "audit": {
+    "sourceRows": 1,
+    "targetRows": 1,
+    "sourceFactsMatch": true,
+    "differences": [],
+    "checkedFields": [
+      "legacy_watch_id",
+      "user_id",
+      "chain",
+      "recipient_address",
+      "expected_amount",
+      "status",
+      "required_confirmations",
+      "legacy_confirmations",
+      "legacy_wallet_index"
+    ],
+    "timeAssetAndReferencesVerified": false,
+    "fullReconciliationComplete": false
+  },
+  "missingParentRejected": true,
+  "missingVerifyOnlyRejected": true,
+  "parentDriftRejected": true,
+  "matchDriftRejected": true,
+  "rolledBack": true,
+  "finalCounts": {
+    "users_count": 0,
+    "orders_count": 0,
+    "matches_count": 0,
+    "runs_count": 0
+  },
+  "currentDevVueWritten": false,
+  "realHistoricalEvidenceValidated": false
+}
