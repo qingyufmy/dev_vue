@@ -1,0 +1,56 @@
+{
+  "kind": "referral-ledger-schema-probe/v1",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "sourceSqlSha256": "5042d0828467cde1bbbc75b3acefc61eefb4da302e104227f4d15910a8cd7513",
+  "ddl": "CREATE TABLE `referral_credit_ledger` (\n  `user_id` int NOT NULL,\n  `account_revision` bigint unsigned NOT NULL,\n  `event_kind` varchar(24) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_key` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `previous_balance` decimal(20,8) DEFAULT NULL,\n  `delta` decimal(20,8) DEFAULT NULL,\n  `resulting_balance` decimal(20,8) NOT NULL,\n  `migration_run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `source_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `recorded_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`user_id`,`account_revision`),\n  UNIQUE KEY `uq_referral_credit_event` (`user_id`,`event_kind`,`source_key`),\n  KEY `fk_referral_ledger_run` (`migration_run_id`),\n  CONSTRAINT `fk_referral_ledger_account` FOREIGN KEY (`user_id`) REFERENCES `user_referral_accounts` (`user_id`),\n  CONSTRAINT `fk_referral_ledger_run` FOREIGN KEY (`migration_run_id`) REFERENCES `data_migration_runs` (`id`),\n  CONSTRAINT `ck_referral_ledger_amount` CHECK (((`event_kind` = _utf8mb4'opening') or ((`resulting_balance` = (`previous_balance` + `delta`)) and (((`event_kind` = _utf8mb4'order_debit') and (`delta` < 0) and (`resulting_balance` >= 0)) or ((`event_kind` in (_utf8mb4'order_release',_utf8mb4'commission_credit')) and (`delta` > 0)))))),\n  CONSTRAINT `ck_referral_ledger_kind` CHECK ((`event_kind` in (_utf8mb4'opening',_utf8mb4'order_debit',_utf8mb4'order_release',_utf8mb4'commission_credit'))),\n  CONSTRAINT `ck_referral_ledger_shape` CHECK ((((`event_kind` = _utf8mb4'opening') and (`account_revision` = 1) and (`previous_balance` is null) and (`delta` is null) and (`migration_run_id` is not null)) or ((`event_kind` <> _utf8mb4'opening') and (`account_revision` > 1) and (`previous_balance` is not null) and (`delta` is not null) and (`migration_run_id` is null))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+  "acceptedInserts": 2,
+  "rejectedCases": [
+    {
+      "name": "duplicate_revision",
+      "code": "ER_DUP_ENTRY"
+    },
+    {
+      "name": "opening_revision",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "opening_delta",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "opening_without_run",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "duplicate_event",
+      "code": "ER_DUP_ENTRY"
+    },
+    {
+      "name": "missing_account",
+      "code": "ER_NO_REFERENCED_ROW_2"
+    },
+    {
+      "name": "wrong_sum",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "null_delta",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "zero_credit",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    },
+    {
+      "name": "overdraft",
+      "code": "ER_CHECK_CONSTRAINT_VIOLATED"
+    }
+  ],
+  "rolledBack": true,
+  "ledgerRows": 0,
+  "sourceDatabaseWritten": false
+}
