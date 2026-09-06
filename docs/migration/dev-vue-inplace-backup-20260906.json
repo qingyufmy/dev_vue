@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "kind": "v4_backup_restore_receipt",
+  "status": "verified",
+  "completedAtUtc": "2026-09-06T13:20:27.778Z",
+  "source": "dev_vue",
+  "target": "dev_vue_m1_source_20260906_01",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "sourceSnapshotId": "sha256:9eebdd97aebf89b94c186bfbeda19dc7c028e672d3b27fae1ee4cf45e162bbee",
+  "encrypted": {
+    "bytes": "177649475",
+    "sha256": "ad47369ff69953f987d00e695b90f337b7063b8be34db940d41d88ba2e8d4dd9"
+  },
+  "rawSql": {
+    "bytes": "682966225",
+    "sha256": "9eebdd97aebf89b94c186bfbeda19dc7c028e672d3b27fae1ee4cf45e162bbee"
+  },
+  "schemaSha256": "a5031597b419f41ae21ae2cf6cd1cf80616db601473079c0c8a2a542ad3e3e36",
+  "parity": {
+    "tableCount": 165,
+    "rows": "271007",
+    "scope": "ordered_complete_insert_values_and_exact_counts",
+    "matched": true
+  },
+  "decryptionIntegrityVerified": true,
+  "sqlScopeReviewed": true,
+  "businessMigrationComplete": false,
+  "offHostBackupVerified": false,
+  "abModified": false,
+  "terminalContacted": false
+}

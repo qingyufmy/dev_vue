@@ -3,8 +3,10 @@ export function mysqlColumnStore(connection, hasJournal) {
   return {
     async history() {
       if (!hasJournal) return []
-      const [rows] = await connection.query(`SELECT id,checksum_sha256 checksum,status,started_at_utc startedAt,completed_at_utc completedAt FROM ${table} ORDER BY id`)
-      return rows.map(row => ({ ...row, startedAt: row.startedAt?.toISOString(), completedAt: row.completedAt?.toISOString() ?? null }))
+      const [rows] = await connection.query(`SELECT id,checksum_sha256 checksum,status,
+        DATE_FORMAT(started_at_utc,'%Y-%m-%dT%H:%i:%s.%fZ') startedAt,
+        DATE_FORMAT(completed_at_utc,'%Y-%m-%dT%H:%i:%s.%fZ') completedAt FROM ${table} ORDER BY id`)
+      return rows
     },
     async column(tableName, columnName) {
       const [rows] = await connection.execute(`SELECT COLUMN_TYPE type,IS_NULLABLE nullable,COLUMN_DEFAULT defaultValue,COLLATION_NAME collation,EXTRA extra
@@ -45,10 +47,10 @@ export async function verifyInplaceJournal(connection) {
 
 // The connection that owns the lock must also execute every DDL and journal write.
 export async function withInplaceUpgradeLock(connection, database, work) {
-  if (database !== 'dev_vue') throw new Error('inplace_database_mismatch')
+  if (database !== 'dev_vue' && !/^dev_vue_m1_source_\d{8}_\d{2}$/.test(database)) throw new Error('inplace_database_mismatch')
   const [[identity]] = await connection.query('SELECT DATABASE() db, CONNECTION_ID() id')
   if (identity.db !== database) throw new Error('inplace_database_mismatch')
-  const name = 'aurum:inplace:dev_vue'
+  const name = `aurum:inplace:${database}`
   const [[claim]] = await connection.execute('SELECT GET_LOCK(?,0) acquired', [name])
   if (Number(claim.acquired) !== 1) throw new Error('inplace_upgrade_busy')
   let primaryError

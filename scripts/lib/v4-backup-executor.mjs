@@ -65,7 +65,7 @@ export async function executeBackupRehearsal(config, { connect, mysqlDefaultsFd,
   await privatePath(artifactDirectory, { directory: true })
   const file = name => `${artifactDirectory}/${name}`
   const capacityPaths = [artifactDirectory, config.keyDirectory, '/www/server/data']
-  let stage = 'preflight', targetCreated = false, targetCreationAttempted = false
+  let stage = 'preflight', targetCreated = false, targetCreationAttempted = false, ddlGuard = null
   const mark = async name => { stage = name; progress({ stage, atUtc: new Date().toISOString() }) }
   const observe = async database => {
     const connection = await connect(database)
@@ -106,6 +106,11 @@ export async function executeBackupRehearsal(config, { connect, mysqlDefaultsFd,
     }
     check(/Ver 8\.4\.\d+/.test(versions.mysql) && /Ver 8\.4\.\d+/.test(versions.dump), 'backup_version_unsupported')
     check(versions.mysql.match(/Ver (8\.4\.\d+)/)[1] === versions.dump.match(/Ver (8\.4\.\d+)/)[1], 'backup_client_version_mismatch')
+    // Keep DDL frozen through the export. Ordinary InnoDB DML remains available;
+    // the dump owns its consistent snapshot, not these separate observations.
+    ddlGuard = await connect(config.source)
+    await ddlGuard.query('SET SESSION lock_wait_timeout = 10')
+    await ddlGuard.query('LOCK INSTANCE FOR BACKUP')
     const sourceBefore = await observe(config.source)
     check(sourceBefore.mysqlVersion.split('-')[0] === versions.dump.match(/Ver (8\.4\.\d+)/)[1], 'backup_server_version_mismatch')
     await writePrivateJson(file('source-before.json'), sourceBefore)
@@ -143,6 +148,11 @@ export async function executeBackupRehearsal(config, { connect, mysqlDefaultsFd,
     const sourceAfter = await observe(config.source)
     await writePrivateJson(file('source-after.json'), sourceAfter)
     check(sourceBefore.schemaFingerprint.sha256 === sourceAfter.schemaFingerprint.sha256, 'backup_source_schema_changed')
+    // A lost guard connection must fail instead of asserting a frozen schema.
+    await ddlGuard.query('SELECT 1')
+    await ddlGuard.query('UNLOCK INSTANCE')
+    ddlGuard.destroy()
+    ddlGuard = null
     await mark('decrypt-and-sql-review')
     await crypt(true, createReadStream(encrypted), file('decrypted.sql.gz'))
     const decompressed = await run([{ command: config.gzip, args: ['-d', '-c'] }], { input: createReadStream(file('decrypted.sql.gz')), output: rawSql })
@@ -189,5 +199,5 @@ export async function executeBackupRehearsal(config, { connect, mysqlDefaultsFd,
       targetMayExist: targetCreationAttempted, target: config.target,
       atUtc: new Date().toISOString(), preserved: true }).catch(() => {})
     throw error
-  }
+  } finally { if (ddlGuard) ddlGuard.destroy() }
 }

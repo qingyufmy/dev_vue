@@ -1,0 +1,34 @@
+[
+  {
+    "path": "scripts/rehearse-dev-vue-columns.mjs",
+    "sha256": "cd608916735804c916fb1294fc196bf8ddeed0b5b44ef18e2fa3eefe530bb10c"
+  },
+  {
+    "path": "scripts/run-dev-vue-column-rehearsal-host.py",
+    "sha256": "ee1c547dfae77bc20f38de2c2c0fb73fb813fc0b45576721514f9afb3ed032d0"
+  },
+  {
+    "path": "scripts/lib/dev-vue-column-upgrade.mjs",
+    "sha256": "b20ab4ba86a9b9b40ef9ea5ea559c812f3db8166db6b117c3bd94d49b40a41ac"
+  },
+  {
+    "path": "scripts/lib/mysql-inplace-column-store.mjs",
+    "sha256": "c42cfe0811296007b6a9f7fb46270b44b4f22614e0948af499293d95ce1cdafc"
+  },
+  {
+    "path": "scripts/lib/v4-schema-fingerprint.mjs",
+    "sha256": "0255e014bbf75e3631d409cf5babec7c70c4c43112a101d6b4f63a6e8b1aabaf"
+  },
+  {
+    "path": "scripts/lib/v4-migration-plan.mjs",
+    "sha256": "087d097447de41bda0781aca7cfd6bab82bf6bedaa5c22fde9e8b80e443c2c37"
+  },
+  {
+    "path": "server/db/migrations/inplace/001_upgrade_journal.sql",
+    "sha256": "74952b442e780025a01f7626b37bd2de643dfe1ade68b2ac6d4c43db160318c3"
+  },
+  {
+    "path": "server/db/migrations/inplace/002_user_bridge_columns.sql",
+    "sha256": "7a7d90511d271cd7118a9d35de506bd5f2ec18cb6e8455452b254371b513004d"
+  }
+]

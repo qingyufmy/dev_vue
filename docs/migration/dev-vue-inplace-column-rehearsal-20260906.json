@@ -1,0 +1,4812 @@
+{
+  "version": 1,
+  "kind": "dev_vue_column_rehearsal",
+  "status": "verified",
+  "target": "dev_vue_m1_source_20260906_01",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "backupSnapshotId": "sha256:9eebdd97aebf89b94c186bfbeda19dc7c028e672d3b27fae1ee4cf45e162bbee",
+  "completedAtUtc": "2026-09-06T13:20:46.262Z",
+  "originalColumns": [
+    {
+      "name": "admin_position_close_jobs",
+      "columns": [
+        "id",
+        "idempotency_key",
+        "actor_user_id",
+        "source_signal_id",
+        "source_ticket",
+        "source_user_id",
+        "source_trading_account_id",
+        "source_symbol",
+        "source_direction",
+        "source_volume",
+        "source_magic",
+        "reason",
+        "preview_hash",
+        "status",
+        "lease_token",
+        "lease_expires_at",
+        "target_count",
+        "eligible_target_count",
+        "succeeded_target_count",
+        "failed_target_count",
+        "skipped_target_count",
+        "uncertain_target_count",
+        "created_at",
+        "started_at",
+        "completed_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "admin_position_close_targets",
+      "columns": [
+        "id",
+        "job_id",
+        "target_order",
+        "target_role",
+        "is_source",
+        "user_id",
+        "trading_account_id",
+        "ownership_history_id",
+        "outcome_id",
+        "signal_id",
+        "broker_server_key",
+        "login_account",
+        "ticket",
+        "symbol",
+        "direction",
+        "volume",
+        "magic",
+        "user_snapshot_json",
+        "account_snapshot_json",
+        "ownership_snapshot_json",
+        "outcome_snapshot_json",
+        "target_snapshot_json",
+        "bridge_generation",
+        "operation_id",
+        "status",
+        "attempt_count",
+        "lease_token",
+        "lease_expires_at",
+        "send_started_at",
+        "send_finished_at",
+        "reconcile_started_at",
+        "completed_at",
+        "last_result_json",
+        "error_code",
+        "error_message",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "admin_position_protection_jobs",
+      "columns": [
+        "id",
+        "idempotency_key",
+        "actor_user_id",
+        "source_user_id",
+        "source_trading_account_id",
+        "source_outcome_id",
+        "source_signal_id",
+        "source_ticket",
+        "source_symbol",
+        "source_direction",
+        "requested_stop_loss",
+        "requested_take_profit",
+        "sync_scope",
+        "change_reason",
+        "preview_hash",
+        "status",
+        "total_users",
+        "total_positions",
+        "succeeded_positions",
+        "failed_positions",
+        "skipped_positions",
+        "pending_positions",
+        "created_at",
+        "started_at",
+        "completed_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "admin_position_protection_targets",
+      "columns": [
+        "id",
+        "job_id",
+        "target_order",
+        "is_source",
+        "user_id",
+        "trading_account_id",
+        "ownership_history_id",
+        "signal_id",
+        "outcome_id",
+        "broker_server_key",
+        "login_account",
+        "ticket",
+        "symbol",
+        "direction",
+        "volume",
+        "magic",
+        "expected_stop_loss",
+        "expected_take_profit",
+        "status",
+        "attempt_count",
+        "error_code",
+        "error_message",
+        "result_json",
+        "started_at",
+        "completed_at",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "admin_strategy_pending_cancel_jobs",
+      "columns": [
+        "id",
+        "idempotency_key",
+        "actor_user_id",
+        "dispatch_id",
+        "source_signal_id",
+        "reason",
+        "preview_hash",
+        "status",
+        "lease_token",
+        "lease_expires_at",
+        "target_count",
+        "eligible_target_count",
+        "succeeded_target_count",
+        "failed_target_count",
+        "skipped_target_count",
+        "uncertain_target_count",
+        "created_at",
+        "started_at",
+        "completed_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "admin_strategy_pending_cancel_targets",
+      "columns": [
+        "id",
+        "job_id",
+        "dispatch_target_id",
+        "target_order",
+        "target_role",
+        "user_id",
+        "trading_account_id",
+        "ownership_history_id",
+        "outcome_id",
+        "signal_id",
+        "broker_server_key",
+        "login_account",
+        "ticket",
+        "symbol",
+        "direction",
+        "volume",
+        "magic",
+        "eligible",
+        "expected_state_json",
+        "target_snapshot_json",
+        "bridge_generation",
+        "operation_id",
+        "status",
+        "attempt_count",
+        "lease_token",
+        "lease_expires_at",
+        "send_started_at",
+        "send_finished_at",
+        "reconcile_started_at",
+        "completed_at",
+        "last_result_json",
+        "exclusion_reason",
+        "error_code",
+        "error_message",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "admin_strategy_trade_dispatches",
+      "columns": [
+        "id",
+        "idempotency_key",
+        "actor_user_id",
+        "strategy_id",
+        "frozen_strategy_version",
+        "strategy_snapshot_json",
+        "signal_id",
+        "symbol",
+        "direction",
+        "entry_method",
+        "entry_price",
+        "limit_price",
+        "stop_limit_price",
+        "pending_valid_minutes",
+        "stop_loss",
+        "take_profit_1",
+        "take_profit_2",
+        "take_profit_3",
+        "requested_volume",
+        "position_size_tier",
+        "valid_until_utc_msc",
+        "reason",
+        "preview_hash",
+        "status",
+        "lease_token",
+        "lease_expires_at",
+        "source_target_id",
+        "target_count",
+        "eligible_target_count",
+        "succeeded_target_count",
+        "rejected_target_count",
+        "skipped_target_count",
+        "failed_target_count",
+        "uncertain_target_count",
+        "created_at",
+        "confirmed_at",
+        "completed_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "admin_strategy_trade_targets",
+      "columns": [
+        "id",
+        "dispatch_id",
+        "signal_id",
+        "target_role",
+        "user_id",
+        "subscription_id",
+        "trading_account_id",
+        "risk_profile_id",
+        "ownership_history_id",
+        "broker_server_key",
+        "login_account",
+        "bridge_generation",
+        "standard_symbol",
+        "take_profit_mode",
+        "schedule_snapshot_json",
+        "risk_snapshot_json",
+        "ownership_snapshot_json",
+        "account_snapshot_json",
+        "subscription_snapshot_json",
+        "target_snapshot_json",
+        "status",
+        "exclusion_reason",
+        "attempt_count",
+        "lease_token",
+        "lease_expires_at",
+        "order_intent_id",
+        "trade_ticket",
+        "terminal_order_kind",
+        "terminal_order_state",
+        "execution_result_json",
+        "error_code",
+        "created_at",
+        "validating_at",
+        "executing_at",
+        "completed_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_configs",
+      "columns": [
+        "id",
+        "user_id",
+        "session_id",
+        "api_provider",
+        "api_key_encrypted",
+        "api_base_url",
+        "model_name",
+        "temperature",
+        "max_tokens",
+        "enable_auto_trade",
+        "enable_futures_trading",
+        "risk_level",
+        "max_position_size",
+        "selected_take_profit",
+        "system_prompt",
+        "model_sharing_enabled",
+        "auto_config_override",
+        "auto_symbols",
+        "auto_interval_minutes",
+        "is_active",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_feature_flags",
+      "columns": [
+        "id",
+        "scope",
+        "user_id",
+        "review_generation_enabled",
+        "experience_memory_enabled",
+        "memory_compression_enabled",
+        "retrieval_shadow_enabled",
+        "updated_by",
+        "updated_at",
+        "strategy_memory_markdown_preview_enabled",
+        "strategy_memory_consistency_checks_enabled"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_inference_preferences",
+      "columns": [
+        "id",
+        "user_id",
+        "session_id",
+        "system_prompt",
+        "enable_auto_trade",
+        "enable_futures_trading",
+        "risk_level",
+        "max_position_size",
+        "selected_take_profit",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_manual_analysis_jobs",
+      "columns": [
+        "job_id",
+        "user_id",
+        "strategy_id",
+        "strategy_version",
+        "strategy_prompt_hash",
+        "request_hash",
+        "params_json",
+        "model_task_id",
+        "status",
+        "stage",
+        "result_json",
+        "signal_id",
+        "error_code",
+        "error_message",
+        "cancel_requested",
+        "lease_token",
+        "fencing_token",
+        "deadline_at_utc_msc",
+        "completed_at_utc_msc",
+        "created_at_utc_msc",
+        "updated_at_utc_msc"
+      ],
+      "primary": [
+        "job_id"
+      ]
+    },
+    {
+      "name": "ai_market_benchmark_cases",
+      "columns": [
+        "id",
+        "benchmark_set_id",
+        "case_key",
+        "title",
+        "regime_type",
+        "start_time_utc_msc",
+        "decision_time_utc_msc",
+        "end_time_utc_msc",
+        "tags_json",
+        "metrics_json",
+        "sort_order",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_market_benchmark_sets",
+      "columns": [
+        "id",
+        "set_code",
+        "name",
+        "version",
+        "symbol",
+        "status",
+        "description",
+        "case_count",
+        "selection_config_json",
+        "fingerprint",
+        "created_by",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_model_capacity_leases",
+      "columns": [
+        "lease_id",
+        "owner_token",
+        "waiter_id",
+        "model_task_id",
+        "model_profile_id",
+        "user_id",
+        "usage_kind",
+        "queue_class",
+        "status",
+        "acquired_at_utc_msc",
+        "lease_expires_at_utc_msc",
+        "conservative_until_utc_msc",
+        "release_reason",
+        "released_at_utc_msc",
+        "created_at_utc_msc",
+        "updated_at_utc_msc"
+      ],
+      "primary": [
+        "lease_id"
+      ]
+    },
+    {
+      "name": "ai_model_capacity_policies",
+      "columns": [
+        "id",
+        "policy_scope",
+        "model_profile_id",
+        "max_concurrency",
+        "reserve_execution_critical_slots",
+        "background_per_user_cap",
+        "lease_ms",
+        "conservative_lease_ms",
+        "waiter_poll_ms",
+        "starvation_age_ms",
+        "enabled",
+        "created_at_utc_msc",
+        "updated_at_utc_msc"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_model_capacity_waiters",
+      "columns": [
+        "waiter_id",
+        "owner_token",
+        "model_task_id",
+        "model_profile_id",
+        "user_id",
+        "usage_kind",
+        "queue_class",
+        "status",
+        "lease_id",
+        "requested_at_utc_msc",
+        "deadline_at_utc_msc",
+        "granted_at_utc_msc",
+        "cancelled_at_utc_msc",
+        "created_at_utc_msc",
+        "updated_at_utc_msc"
+      ],
+      "primary": [
+        "waiter_id"
+      ]
+    },
+    {
+      "name": "ai_model_compare_checkpoints",
+      "columns": [
+        "id",
+        "job_id",
+        "model_id",
+        "unit_key",
+        "unit_index",
+        "checkpoint_status",
+        "error_code",
+        "decision_time_utc_msc",
+        "outcome_time_utc_msc",
+        "snapshot_id",
+        "strategy_fingerprint",
+        "prompt_hash",
+        "snapshot_fingerprint",
+        "model_config_fingerprint",
+        "output_contract_hash",
+        "market_evidence_hash",
+        "result_json",
+        "telemetry_json",
+        "input_evidence_json",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_model_compare_jobs",
+      "columns": [
+        "id",
+        "user_id",
+        "status",
+        "stage",
+        "progress_percent",
+        "completed_steps",
+        "total_steps",
+        "params_json",
+        "checkpoint_manifest_json",
+        "result_json",
+        "error_code",
+        "cancel_requested",
+        "created_at",
+        "updated_at",
+        "completed_at",
+        "model_task_id"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_model_profiles",
+      "columns": [
+        "id",
+        "owner_user_id",
+        "scope",
+        "provider",
+        "model_name",
+        "api_base_url",
+        "api_key_encrypted",
+        "key_version",
+        "temperature",
+        "max_tokens",
+        "thinking_enabled",
+        "reasoning_effort",
+        "request_timeout_ms",
+        "is_default",
+        "status",
+        "created_at",
+        "updated_at",
+        "deleted_at",
+        "active_default_owner_key"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_model_provider_capabilities",
+      "columns": [
+        "model_profile_id",
+        "provider",
+        "model_name",
+        "api_base_url",
+        "protocol",
+        "supports_stream",
+        "supports_request_id",
+        "supports_poll",
+        "supports_cancel",
+        "supports_idempotency",
+        "supports_structured_output",
+        "supports_usage_split",
+        "context_window_tokens",
+        "max_input_tokens",
+        "max_output_tokens",
+        "context_limit_semantics",
+        "token_limits_source",
+        "token_limits_status",
+        "token_limits_note",
+        "token_limits_updated_by",
+        "token_limits_updated_at_utc_msc",
+        "verification_status",
+        "verified_by_user_id",
+        "verified_at_utc_msc",
+        "updated_at_utc_msc"
+      ],
+      "primary": [
+        "model_profile_id"
+      ]
+    },
+    {
+      "name": "ai_model_provider_incidents",
+      "columns": [
+        "circuit_key",
+        "model_profile_id",
+        "provider",
+        "model_name",
+        "endpoint_host",
+        "status",
+        "first_detected_at",
+        "last_detected_at",
+        "open_until",
+        "probe_lease_until",
+        "recovered_at",
+        "alert_sent_at",
+        "recovery_sent_at",
+        "error_count",
+        "last_error_code",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "circuit_key"
+      ]
+    },
+    {
+      "name": "ai_model_purpose_defaults",
+      "columns": [
+        "id",
+        "owner_user_id",
+        "purpose_key",
+        "model_profile_id",
+        "updated_by",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_model_task_attempts",
+      "columns": [
+        "id",
+        "task_id",
+        "attempt_no",
+        "fencing_token",
+        "provider_request_id",
+        "provider_idempotency_key",
+        "status",
+        "request_started_at_utc_msc",
+        "first_byte_at_utc_msc",
+        "response_received_at_utc_msc",
+        "last_activity_at_utc_msc",
+        "request_bytes",
+        "response_bytes",
+        "input_tokens",
+        "output_tokens",
+        "reasoning_tokens",
+        "cached_tokens",
+        "total_tokens",
+        "finish_reason",
+        "incomplete_details_json",
+        "http_status",
+        "error_code",
+        "error_message",
+        "created_at_utc_msc",
+        "updated_at_utc_msc"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_model_task_events",
+      "columns": [
+        "id",
+        "task_id",
+        "attempt_id",
+        "event_type",
+        "payload_json",
+        "created_at_utc_msc"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_model_tasks",
+      "columns": [
+        "task_id",
+        "task_kind",
+        "queue_class",
+        "owner_user_id",
+        "strategy_id",
+        "domain_type",
+        "domain_id",
+        "idempotency_key",
+        "snapshot_hash",
+        "input_hash",
+        "prompt_hash",
+        "output_contract_hash",
+        "frozen_provider",
+        "frozen_model",
+        "frozen_model_profile_id",
+        "frozen_protocol",
+        "frozen_credential_source",
+        "frozen_context_json",
+        "status",
+        "priority",
+        "attempt_count",
+        "max_attempts",
+        "scheduled_at_utc_msc",
+        "task_deadline_at_utc_msc",
+        "result_valid_until_utc_msc",
+        "lease_token",
+        "fencing_token",
+        "lease_owner",
+        "lease_expires_at_utc_msc",
+        "last_activity_at_utc_msc",
+        "estimated_input_tokens",
+        "selected_output_budget",
+        "schema_need_tokens",
+        "context_window_tokens",
+        "provider_max_input_tokens",
+        "context_limit_semantics",
+        "token_limits_source",
+        "token_limits_status",
+        "token_limits_updated_at_utc_msc",
+        "provider_output_cap",
+        "result_ref",
+        "result_hash",
+        "finish_reason",
+        "incomplete_details_json",
+        "error_code",
+        "error_message",
+        "completed_at_utc_msc",
+        "created_at_utc_msc",
+        "updated_at_utc_msc"
+      ],
+      "primary": [
+        "task_id"
+      ]
+    },
+    {
+      "name": "ai_model_usage_logs",
+      "columns": [
+        "id",
+        "user_id",
+        "model_profile_id",
+        "credential_source",
+        "usage",
+        "request_phase",
+        "strategy_id",
+        "token_count",
+        "request_status",
+        "error_code",
+        "created_at",
+        "request_bytes",
+        "response_bytes",
+        "duration_ms",
+        "input_tokens",
+        "output_tokens",
+        "reasoning_tokens",
+        "cached_tokens",
+        "provider_request_id",
+        "finish_reason",
+        "incomplete_details_json",
+        "accounting_status"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_observer_channel_assignments",
+      "columns": [
+        "channel_id",
+        "user_id",
+        "created_by_user_id",
+        "created_at"
+      ],
+      "primary": [
+        "channel_id",
+        "user_id"
+      ]
+    },
+    {
+      "name": "ai_observer_channels",
+      "columns": [
+        "id",
+        "name",
+        "slug",
+        "description",
+        "source_id",
+        "audience",
+        "status",
+        "is_default",
+        "sort_order",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_observer_sources",
+      "columns": [
+        "id",
+        "name",
+        "bridge_user_id",
+        "trading_account_id",
+        "strategy_id",
+        "status",
+        "notes",
+        "created_by_user_id",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_position_management_commands",
+      "columns": [
+        "id",
+        "task_id",
+        "command_sequence",
+        "operation_id",
+        "command_type",
+        "expected_state_json",
+        "request_json",
+        "send_status",
+        "bridge_command_id",
+        "bridge_result_json",
+        "reconciliation_status",
+        "reconciled_at",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_position_management_evaluations",
+      "columns": [
+        "id",
+        "decision_signal_id",
+        "user_id",
+        "trading_account_id",
+        "outcome_id",
+        "position_id",
+        "management_group_id",
+        "thesis_id",
+        "original_symbol",
+        "standard_symbol",
+        "action",
+        "validation_status",
+        "matched_condition_id",
+        "reason",
+        "evidence_refs_json",
+        "model_evaluation_json",
+        "decision_timeframe",
+        "closed_bar_time_utc_ms",
+        "market_snapshot_hash",
+        "inference_source",
+        "consecutive_exit_count",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_position_management_events",
+      "columns": [
+        "id",
+        "task_id",
+        "from_status",
+        "to_status",
+        "event_type",
+        "summary",
+        "details_json",
+        "actor_type",
+        "actor_user_id",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_position_management_tasks",
+      "columns": [
+        "id",
+        "task_key",
+        "task_type",
+        "execution_mode",
+        "user_id",
+        "trading_account_id",
+        "ownership_history_id",
+        "broker_server_key",
+        "login_account",
+        "bridge_generation",
+        "original_symbol",
+        "standard_symbol",
+        "strategy_id",
+        "strategy_version",
+        "management_group_id",
+        "thesis_id",
+        "origin_signal_id",
+        "decision_signal_id",
+        "outcome_id",
+        "decision_timeframe",
+        "closed_bar_time_utc_ms",
+        "market_snapshot_hash",
+        "candidate_action",
+        "reversal_candidate",
+        "model_evaluation_json",
+        "evidence_validation_json",
+        "confirmation_count",
+        "required_confirmations",
+        "precondition_hash",
+        "status",
+        "state_version",
+        "lease_token",
+        "lease_expires_at",
+        "fencing_token",
+        "candidate_expires_at",
+        "completed_at",
+        "created_at",
+        "updated_at",
+        "decision_source",
+        "position_guard_state_id",
+        "trigger_code",
+        "deterministic_evidence_json"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_signals",
+      "columns": [
+        "id",
+        "user_id",
+        "config_id",
+        "prompt_type_id",
+        "session_id",
+        "source",
+        "symbol",
+        "timeframe",
+        "signal_type",
+        "confidence",
+        "recommended_volume",
+        "position_size_tier",
+        "position_size_factor",
+        "position_size_reason",
+        "analysis",
+        "reasoning",
+        "stop_loss_price",
+        "take_profit_1_price",
+        "take_profit_2_price",
+        "take_profit_3_price",
+        "recommended_take_profit_tier",
+        "market_data_json",
+        "ai_model",
+        "ttl_seconds",
+        "is_executed",
+        "executed_at",
+        "trade_ticket",
+        "execution_result",
+        "entry_method",
+        "limit_price",
+        "stop_limit_price",
+        "pending_valid_until",
+        "order_state",
+        "pending_ticket",
+        "created_at_utc_msc",
+        "terminal_timezone_offset_minutes",
+        "terminal_clock_status",
+        "terminal_clock_source",
+        "created_at",
+        "token_count",
+        "pending_state",
+        "schema_version",
+        "decision_json",
+        "thesis_id",
+        "management_group_id",
+        "inference_task_id"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "ai_trade_theses",
+      "columns": [
+        "thesis_id",
+        "management_group_id",
+        "signal_id",
+        "strategy_id",
+        "strategy_version",
+        "strategy_scope",
+        "owner_user_id",
+        "standard_symbol",
+        "direction",
+        "entry_method",
+        "decision_timeframe",
+        "closed_bar_time_utc_ms",
+        "market_snapshot_hash",
+        "output_contract_version",
+        "model_profile_id",
+        "model_name",
+        "core_entry_reason",
+        "original_stop_loss",
+        "original_take_profits_json",
+        "invalidation_conditions_json",
+        "evidence_refs_json",
+        "status",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "thesis_id"
+      ]
+    },
+    {
+      "name": "audit_logs",
+      "columns": [
+        "id",
+        "user_id",
+        "user_email",
+        "user_nickname",
+        "action",
+        "target_type",
+        "target_id",
+        "detail",
+        "ip",
+        "user_agent",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "auto_prompt_types",
+      "columns": [
+        "id",
+        "title",
+        "description",
+        "system_prompt",
+        "symbols_json",
+        "interval_minutes",
+        "is_active",
+        "sort_order",
+        "created_by",
+        "created_at",
+        "updated_at",
+        "deleted_at",
+        "scope",
+        "owner_user_id",
+        "model_profile_id",
+        "inference_mode",
+        "visibility_status",
+        "version",
+        "version_label",
+        "market_data_plan_json",
+        "strategy_policy_json",
+        "entry_methods_json",
+        "use_chan_analysis",
+        "use_ema34_filter",
+        "include_portfolio_context"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "auto_scheduler",
+      "columns": [
+        "id",
+        "user_id",
+        "enabled",
+        "risk_level",
+        "max_position_size",
+        "selected_take_profit",
+        "enable_auto_trade",
+        "last_run_at",
+        "created_at",
+        "updated_at",
+        "prompt_type_id",
+        "selected_symbols_json"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "auto_signal_deliveries",
+      "columns": [
+        "id",
+        "signal_id",
+        "user_id",
+        "prompt_type_id",
+        "symbol",
+        "delivery_status",
+        "execution_status",
+        "is_executed",
+        "executed_at",
+        "trade_ticket",
+        "pending_ticket",
+        "pending_state",
+        "pending_valid_until",
+        "execution_result",
+        "created_at",
+        "updated_at",
+        "execution_claimed_at",
+        "order_intent_id",
+        "risk_decision_id",
+        "approved_order_json"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "bridge_device_pairings",
+      "columns": [
+        "id",
+        "device_code_hash",
+        "user_code_hash",
+        "user_id",
+        "approved_token_version",
+        "status",
+        "device_name",
+        "created_ip",
+        "approved_ip",
+        "expires_at",
+        "approved_at",
+        "consumed_at",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "bridge_refresh_sessions",
+      "columns": [
+        "id",
+        "user_id",
+        "token_hash",
+        "expires_at",
+        "revoked_at",
+        "last_used_at",
+        "user_agent",
+        "last_ip",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "bridge_update_events",
+      "columns": [
+        "id",
+        "installation_id",
+        "release_id",
+        "target_version",
+        "state",
+        "started_at_utc_msc",
+        "updated_at_utc_msc",
+        "error_code",
+        "bridge_version",
+        "received_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "bridge_v3_account_latest",
+      "columns": [
+        "terminal_instance_id",
+        "connection_epoch",
+        "revision",
+        "observed_at_utc_msc",
+        "source_time_msc",
+        "payload_json",
+        "updated_at"
+      ],
+      "primary": [
+        "terminal_instance_id"
+      ]
+    },
+    {
+      "name": "bridge_v3_command_events",
+      "columns": [
+        "id",
+        "command_id",
+        "event_type",
+        "from_status",
+        "to_status",
+        "detail_json",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "bridge_v3_command_ledger",
+      "columns": [
+        "id",
+        "command_id",
+        "user_id",
+        "terminal_instance_id",
+        "broker_server",
+        "login_account",
+        "connection_epoch",
+        "action",
+        "params_json",
+        "payload_hash",
+        "envelope_hash",
+        "status",
+        "deadline_at_utc_msc",
+        "dispatch_attempt_count",
+        "last_dispatched_at_utc_msc",
+        "completed_at_utc_msc",
+        "result_status",
+        "result_json",
+        "result_hash",
+        "error_code",
+        "error_message",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "bridge_v3_deals",
+      "columns": [
+        "terminal_instance_id",
+        "deal_ticket",
+        "user_id",
+        "connection_epoch",
+        "order_ticket",
+        "position_id",
+        "symbol",
+        "deal_time_msc",
+        "observed_at_utc_msc",
+        "source_time_msc",
+        "payload_json",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "terminal_instance_id",
+        "deal_ticket"
+      ]
+    },
+    {
+      "name": "bridge_v3_orders_latest",
+      "columns": [
+        "terminal_instance_id",
+        "ticket",
+        "connection_epoch",
+        "revision",
+        "observed_at_utc_msc",
+        "source_time_msc",
+        "payload_json",
+        "updated_at"
+      ],
+      "primary": [
+        "terminal_instance_id",
+        "ticket"
+      ]
+    },
+    {
+      "name": "bridge_v3_positions_latest",
+      "columns": [
+        "terminal_instance_id",
+        "ticket",
+        "connection_epoch",
+        "revision",
+        "observed_at_utc_msc",
+        "source_time_msc",
+        "payload_json",
+        "updated_at"
+      ],
+      "primary": [
+        "terminal_instance_id",
+        "ticket"
+      ]
+    },
+    {
+      "name": "bridge_v3_stream_revisions",
+      "columns": [
+        "terminal_instance_id",
+        "connection_epoch",
+        "stream",
+        "revision",
+        "message_id",
+        "payload_hash",
+        "observed_at_utc_msc",
+        "source_time_msc",
+        "updated_at"
+      ],
+      "primary": [
+        "terminal_instance_id",
+        "connection_epoch",
+        "stream"
+      ]
+    },
+    {
+      "name": "bridge_v3_terminal_sessions",
+      "columns": [
+        "terminal_instance_id",
+        "user_id",
+        "platform",
+        "broker_server",
+        "login_account",
+        "connection_epoch",
+        "session_id",
+        "client_version",
+        "connected",
+        "last_seen_at_utc_msc",
+        "created_at",
+        "updated_at",
+        "installation_id",
+        "bridge_version",
+        "update_release_id",
+        "update_target_version",
+        "update_state",
+        "update_started_at_utc_msc",
+        "update_reported_at_utc_msc",
+        "update_error_code"
+      ],
+      "primary": [
+        "terminal_instance_id"
+      ]
+    },
+    {
+      "name": "broadcast_messages",
+      "columns": [
+        "id",
+        "type",
+        "user_id",
+        "nickname",
+        "group_name",
+        "message",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "chan_structure_anchors",
+      "columns": [
+        "id",
+        "source_id",
+        "standard_symbol",
+        "timeframe",
+        "algorithm_version",
+        "anchor_time_utc_msc",
+        "last_confirmed_segment_time_utc_msc",
+        "bootstrap_core_stable_id",
+        "bootstrap_entry_segment_stable_id",
+        "bootstrap_observation_time_utc_msc",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "close_config",
+      "columns": [
+        "user_id",
+        "enabled",
+        "check_interval_seconds",
+        "model_name",
+        "api_provider",
+        "api_base_url",
+        "api_key_encrypted",
+        "temperature",
+        "max_tokens",
+        "system_prompt",
+        "rule_soft_sl",
+        "rule_soft_tp",
+        "rule_timeout_minutes",
+        "rule_max_loss_pct",
+        "rule_reverse_signal",
+        "updated_at"
+      ],
+      "primary": [
+        "user_id"
+      ]
+    },
+    {
+      "name": "close_signal_tickets",
+      "columns": [
+        "id",
+        "user_id",
+        "original_ticket",
+        "close_signal_id",
+        "close_price",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "comment_likes",
+      "columns": [
+        "id",
+        "user_id",
+        "comment_id",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "comments",
+      "columns": [
+        "id",
+        "episode_id",
+        "user_id",
+        "text",
+        "parent_id",
+        "likes",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "course_resources",
+      "columns": [
+        "id",
+        "episode_id",
+        "type",
+        "title",
+        "content",
+        "url",
+        "structure",
+        "sort_order",
+        "stored_file_id"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "courses",
+      "columns": [
+        "id",
+        "episode_id",
+        "number",
+        "title",
+        "description",
+        "category",
+        "content_type",
+        "duration",
+        "youtube_id",
+        "cover",
+        "gradient",
+        "article_url",
+        "article_object_key",
+        "access_level",
+        "has_stream_video",
+        "cf_stream_id",
+        "bilibili_id",
+        "local_video_path",
+        "quiz_count",
+        "knowledge_count",
+        "mindmap_count",
+        "structure_count",
+        "status",
+        "sort_order",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "credential_migration_runs",
+      "columns": [
+        "id",
+        "status",
+        "migrated_count",
+        "rotated_count",
+        "failed_count",
+        "legacy_cleared",
+        "error_code",
+        "started_at",
+        "completed_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "crypto_watch_list",
+      "columns": [
+        "id",
+        "order_id",
+        "user_id",
+        "chain",
+        "address",
+        "expected_amount",
+        "status",
+        "tx_hash",
+        "confirmations",
+        "required_confirmations",
+        "wallet_index",
+        "created_at",
+        "expires_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "experience_long_term_memories",
+      "columns": [
+        "id",
+        "user_id",
+        "strategy_id",
+        "strategy_version",
+        "memory_category",
+        "period_review_case_id",
+        "period_review_version_id",
+        "period_key",
+        "symbol",
+        "timeframe",
+        "direction",
+        "entry_method",
+        "market_regime",
+        "source_memory_ids_json",
+        "source_set_hash",
+        "summary_text",
+        "conditions_json",
+        "applicability_json",
+        "avoid_when_json",
+        "strategy_compatibility_hash",
+        "confidence",
+        "support_count",
+        "token_count",
+        "status",
+        "candidate_reason",
+        "confirmed_at",
+        "revoked_at",
+        "last_matched_at",
+        "match_count",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "experience_memory_items",
+      "columns": [
+        "id",
+        "user_id",
+        "review_case_id",
+        "review_version_id",
+        "period_review_case_id",
+        "period_review_version_id",
+        "period_key",
+        "strategy_id",
+        "strategy_version",
+        "memory_tier",
+        "memory_category",
+        "symbol",
+        "timeframe",
+        "direction",
+        "entry_method",
+        "market_regime",
+        "scope_json",
+        "conditions_json",
+        "applicability_json",
+        "avoid_when_json",
+        "strategy_compatibility_hash",
+        "lesson_text",
+        "anti_pattern_text",
+        "evidence_refs_json",
+        "ancestor_memory_ids_json",
+        "content_hash",
+        "token_count",
+        "confidence",
+        "status",
+        "confirmed_at",
+        "expires_at",
+        "last_matched_at",
+        "match_count",
+        "revoked_at",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "experience_memory_summaries",
+      "columns": [
+        "id",
+        "user_id",
+        "strategy_id",
+        "memory_category",
+        "applicability_json",
+        "avoid_when_json",
+        "strategy_compatibility_hash",
+        "scope_key",
+        "period_review_case_id",
+        "period_review_version_id",
+        "period_key",
+        "version_no",
+        "source_memory_ids_json",
+        "source_set_hash",
+        "summary_text",
+        "token_count",
+        "status",
+        "model_profile_id",
+        "credential_source",
+        "created_at",
+        "invalidated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "feedback",
+      "columns": [
+        "id",
+        "user_id",
+        "type",
+        "title",
+        "description",
+        "contact",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "global_auto_config",
+      "columns": [
+        "id",
+        "interval_minutes",
+        "api_provider",
+        "model_name",
+        "api_key_encrypted",
+        "api_base_url",
+        "temperature",
+        "max_tokens",
+        "risk_level",
+        "max_position_size",
+        "selected_take_profit",
+        "enable_auto_trade",
+        "pending_orders_enabled",
+        "updated_at",
+        "selected_prompt_id",
+        "thinking_enabled",
+        "reasoning_effort"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "global_position_guard_control",
+      "columns": [
+        "id",
+        "enabled",
+        "changed_by",
+        "reason",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "global_position_management_control",
+      "columns": [
+        "id",
+        "maximum_mode",
+        "ai_pending_order_enabled",
+        "ai_pending_cancel_enabled",
+        "block_new_risk",
+        "freeze_automatic_operations",
+        "emergency_flatten_enabled",
+        "changed_by",
+        "reason",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "global_risk_control",
+      "columns": [
+        "id",
+        "global_kill_switch",
+        "reason",
+        "changed_by",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "history_range_preferences",
+      "columns": [
+        "id",
+        "user_id",
+        "trading_account_id",
+        "scope",
+        "start_date",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "inference_snapshots",
+      "columns": [
+        "id",
+        "signal_id",
+        "strategy_id",
+        "strategy_version",
+        "strategy_scope",
+        "owner_user_id",
+        "standard_symbol",
+        "market_source",
+        "system_prompt",
+        "user_prompt",
+        "prompt_hash",
+        "model_profile_id",
+        "provider",
+        "model_name",
+        "credential_source",
+        "output_schema_version",
+        "klines_json",
+        "market_snapshot_json",
+        "strategy_runtime_json",
+        "memory_mode",
+        "evidence_status",
+        "omitted_fields_json",
+        "content_hash",
+        "byte_size",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "manual_trade_review_aggregate_cases",
+      "columns": [
+        "id",
+        "client_request_id",
+        "user_id",
+        "trading_account_id",
+        "strategy_id",
+        "strategy_versions_json",
+        "selection_hash",
+        "frozen_source_set_json",
+        "frozen_source_set_hash",
+        "strategy_snapshot_json",
+        "strategy_snapshot_hash",
+        "input_hash",
+        "prompt_hash",
+        "output_contract_hash",
+        "status",
+        "generation_no",
+        "attempt_count",
+        "max_attempts",
+        "lease_token",
+        "lease_expires_at",
+        "task_deadline_at",
+        "model_profile_id",
+        "credential_source",
+        "model_task_id",
+        "progress_stage",
+        "stage_updated_at",
+        "current_version_id",
+        "approved_version_id",
+        "last_error_code",
+        "last_failure_generation_no",
+        "last_failure_at",
+        "next_attempt_at",
+        "completed_at",
+        "created_at",
+        "updated_at",
+        "model_runtime_json",
+        "model_runtime_hash"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "manual_trade_review_aggregate_sources",
+      "columns": [
+        "id",
+        "aggregate_case_id",
+        "source_case_id",
+        "source_version_id",
+        "source_content_hash",
+        "source_user_id",
+        "source_trading_account_id",
+        "source_strategy_id",
+        "source_strategy_version",
+        "confirmation_status",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "manual_trade_review_aggregate_versions",
+      "columns": [
+        "id",
+        "aggregate_case_id",
+        "generation_no",
+        "version_no",
+        "parent_version_id",
+        "author_type",
+        "author_user_id",
+        "model_profile_id",
+        "source_set_hash",
+        "content_json",
+        "content_hash",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "manual_trade_review_cases",
+      "columns": [
+        "id",
+        "client_request_id",
+        "user_id",
+        "trading_account_id",
+        "strategy_id",
+        "strategy_version",
+        "strategy_scope",
+        "strategy_snapshot_json",
+        "strategy_snapshot_hash",
+        "user_thesis_text",
+        "user_thesis_hash",
+        "selection_hash",
+        "evidence_json",
+        "evidence_hash",
+        "evidence_status",
+        "evidence_reason",
+        "status",
+        "current_version_id",
+        "approved_version_id",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "manual_trade_review_counterfactual_points",
+      "columns": [
+        "id",
+        "case_id",
+        "job_id",
+        "generation_no",
+        "candidate_key",
+        "decision_time_utc_msc",
+        "offset_bars",
+        "status",
+        "model_task_id",
+        "market_snapshot_hash",
+        "input_hash",
+        "normalized_output_json",
+        "normalized_output_hash",
+        "last_error_code",
+        "created_at",
+        "updated_at",
+        "completed_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "manual_trade_review_jobs",
+      "columns": [
+        "id",
+        "case_id",
+        "generation_no",
+        "idempotency_key",
+        "status",
+        "attempt_count",
+        "max_attempts",
+        "task_deadline_at",
+        "lease_token",
+        "lease_expires_at",
+        "model_profile_id",
+        "credential_source",
+        "model_task_id",
+        "progress_stage",
+        "stage_updated_at",
+        "last_error_code",
+        "next_attempt_at",
+        "completed_at",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "manual_trade_review_sources",
+      "columns": [
+        "id",
+        "case_id",
+        "source_identity_hash",
+        "trade_source_hash",
+        "trading_account_id",
+        "terminal_instance_id",
+        "broker_server",
+        "login_account",
+        "position_id",
+        "entry_order_ticket",
+        "entry_time_utc_msc",
+        "close_time_utc_msc",
+        "symbol",
+        "direction",
+        "normalized_trade_json",
+        "manual_classification_json",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "manual_trade_review_stage_runs",
+      "columns": [
+        "id",
+        "case_id",
+        "job_id",
+        "generation_no",
+        "stage",
+        "status",
+        "model_task_id",
+        "frozen_runtime_json",
+        "frozen_runtime_hash",
+        "input_hash",
+        "normalized_output_json",
+        "normalized_output_hash",
+        "last_error_code",
+        "created_at",
+        "updated_at",
+        "completed_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "manual_trade_review_versions",
+      "columns": [
+        "id",
+        "case_id",
+        "version_no",
+        "parent_version_id",
+        "author_type",
+        "author_user_id",
+        "content_json",
+        "content_hash",
+        "change_note",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "market_candles",
+      "columns": [
+        "id",
+        "source_id",
+        "broker_symbol",
+        "standard_symbol",
+        "timeframe",
+        "open_time_utc_msc",
+        "broker_time",
+        "open_price",
+        "high_price",
+        "low_price",
+        "close_price",
+        "tick_volume",
+        "spread",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "market_clock_samples",
+      "columns": [
+        "id",
+        "source_id",
+        "raw_tick_time_msc",
+        "normalized_utc_msc",
+        "timezone_offset_minutes",
+        "residual_ms",
+        "status",
+        "sampled_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "market_data_sources",
+      "columns": [
+        "id",
+        "bridge_user_id",
+        "broker_server",
+        "account_login",
+        "source_key",
+        "timezone_offset_minutes",
+        "clock_status",
+        "clock_residual_ms",
+        "last_calibrated_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "membership_expiry_notifications",
+      "columns": [
+        "id",
+        "user_id",
+        "plan",
+        "plan_expires_at",
+        "days_before",
+        "channel",
+        "status",
+        "attempt_count",
+        "next_attempt_at",
+        "sent_at",
+        "read_at",
+        "last_error",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "memory_compression_jobs",
+      "columns": [
+        "id",
+        "user_id",
+        "scope_key",
+        "source_memory_ids_json",
+        "source_set_hash",
+        "status",
+        "attempt_count",
+        "max_attempts",
+        "lease_token",
+        "lease_expires_at",
+        "last_error_code",
+        "created_at",
+        "updated_at",
+        "completed_at",
+        "model_task_id"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "memory_injection_logs",
+      "columns": [
+        "id",
+        "user_id",
+        "signal_id",
+        "inference_snapshot_id",
+        "strategy_id",
+        "strategy_version",
+        "symbol",
+        "mode",
+        "experiment_group",
+        "selected_item_ids_json",
+        "selected_summary_ids_json",
+        "selected_long_memory_ids_json",
+        "token_count",
+        "retrieval_reasons_json",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "mt5_account_bindings",
+      "columns": [
+        "broker_server_key",
+        "login_account",
+        "current_user_id",
+        "current_trading_account_id",
+        "last_verified_at",
+        "created_at",
+        "updated_at",
+        "first_connected_at",
+        "last_connected_at",
+        "account_currency"
+      ],
+      "primary": [
+        "broker_server_key",
+        "login_account"
+      ]
+    },
+    {
+      "name": "mt5_account_ownership_history",
+      "columns": [
+        "id",
+        "broker_server_key",
+        "login_account",
+        "user_id",
+        "trading_account_id",
+        "started_at",
+        "ended_at",
+        "end_reason",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "mt5_account_performance_daily",
+      "columns": [
+        "ownership_history_id",
+        "trading_account_id",
+        "business_date",
+        "account_currency",
+        "trade_profit",
+        "commission",
+        "swap",
+        "fee",
+        "pnl_adjustment",
+        "realized_net",
+        "deposit",
+        "withdrawal",
+        "credit_change",
+        "other_capital_change",
+        "exit_deal_count",
+        "closed_position_count",
+        "winning_exit_count",
+        "losing_exit_count",
+        "closed_volume",
+        "first_deal_time_msc",
+        "last_deal_time_msc",
+        "last_deal_ticket",
+        "source_hash",
+        "data_complete",
+        "data_issue",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "ownership_history_id",
+        "business_date"
+      ]
+    },
+    {
+      "name": "mt5_account_performance_sync_state",
+      "columns": [
+        "ownership_history_id",
+        "trading_account_id",
+        "sync_from_date",
+        "synced_through_date",
+        "timezone_offset_minutes",
+        "sync_status",
+        "last_error",
+        "last_attempt_at",
+        "last_success_at",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "ownership_history_id"
+      ]
+    },
+    {
+      "name": "mt5_account_performance_totals",
+      "columns": [
+        "ownership_history_id",
+        "trading_account_id",
+        "account_currency",
+        "period_start_date",
+        "period_end_date",
+        "realized_net",
+        "deposit",
+        "withdrawal",
+        "credit_change",
+        "other_capital_change",
+        "net_funding",
+        "net_account_change",
+        "exit_deal_count",
+        "closed_position_count",
+        "winning_exit_count",
+        "losing_exit_count",
+        "closed_volume",
+        "data_complete",
+        "last_synced_at",
+        "updated_at"
+      ],
+      "primary": [
+        "ownership_history_id"
+      ]
+    },
+    {
+      "name": "notification_campaigns",
+      "columns": [
+        "id",
+        "title",
+        "message",
+        "priority",
+        "requires_ack",
+        "link",
+        "recipient_scope",
+        "recipient_filter_json",
+        "preview_recipient_count",
+        "recipient_count",
+        "in_app_enabled",
+        "email_enabled",
+        "in_app_sent_count",
+        "email_sent_count",
+        "email_failed_count",
+        "email_skipped_count",
+        "status",
+        "created_by",
+        "idempotency_key",
+        "created_at",
+        "started_at",
+        "completed_at",
+        "cancelled_at",
+        "last_error"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "notification_deliveries",
+      "columns": [
+        "id",
+        "campaign_id",
+        "user_id",
+        "notification_id",
+        "channel",
+        "status",
+        "attempt_count",
+        "next_attempt_at",
+        "sent_at",
+        "read_at",
+        "acknowledged_at",
+        "message_id",
+        "provider_response_summary",
+        "last_error",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "notification_idempotency_keys",
+      "columns": [
+        "id",
+        "actor_user_id",
+        "operation",
+        "idempotency_key",
+        "campaign_id",
+        "response_json",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "notifications",
+      "columns": [
+        "id",
+        "user_id",
+        "type",
+        "title",
+        "message",
+        "priority",
+        "requires_ack",
+        "link",
+        "dedupe_key",
+        "campaign_id",
+        "is_read",
+        "read_at",
+        "acknowledged_at",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "order_intents",
+      "columns": [
+        "id",
+        "idempotency_key",
+        "user_id",
+        "trading_account_id",
+        "source_type",
+        "source_id",
+        "client_request_id",
+        "action",
+        "symbol",
+        "request_json",
+        "risk_json",
+        "bridge_payload_json",
+        "status",
+        "lease_token",
+        "lease_expires_at",
+        "bridge_command_ref",
+        "trade_ticket",
+        "pending_ticket",
+        "result_json",
+        "error_code",
+        "created_at",
+        "updated_at",
+        "completed_at",
+        "original_order_json",
+        "approved_order_json",
+        "risk_decision_id"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "orders",
+      "columns": [
+        "id",
+        "order_no",
+        "order_id",
+        "user_id",
+        "plan",
+        "plan_label",
+        "period",
+        "period_label",
+        "amount",
+        "amount_confirmed",
+        "referral_credit_applied",
+        "currency",
+        "status",
+        "status_label",
+        "payment_method",
+        "paid_at",
+        "created_at",
+        "crypto_chain",
+        "crypto_address",
+        "crypto_amount",
+        "crypto_tx_hash",
+        "crypto_confirmations",
+        "crypto_expires_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "payment_side_effects",
+      "columns": [
+        "id",
+        "order_id",
+        "user_id",
+        "status",
+        "attempt_count",
+        "next_attempt_at",
+        "locked_at",
+        "completed_at",
+        "last_error",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "pending_orders",
+      "columns": [
+        "id",
+        "user_id",
+        "signal_id",
+        "symbol",
+        "side",
+        "pending_type",
+        "price",
+        "sl",
+        "tp",
+        "volume",
+        "mt5_ticket",
+        "state",
+        "valid_until",
+        "created_at",
+        "resolved_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "period_review_cases",
+      "columns": [
+        "id",
+        "period_type",
+        "period_key",
+        "user_id",
+        "trading_account_id",
+        "strategy_id",
+        "strategy_version",
+        "strategy_versions_json",
+        "strategy_compatibility_hash",
+        "strategy_scope",
+        "timezone_offset_minutes",
+        "period_start_utc_msc",
+        "period_end_utc_msc",
+        "status",
+        "evidence_status",
+        "evidence_reason",
+        "evidence_json",
+        "evidence_hash",
+        "source_count",
+        "current_version_id",
+        "approved_version_id",
+        "superseded_by_case_id",
+        "superseded_reason",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "period_review_derivation_jobs",
+      "columns": [
+        "id",
+        "period_case_id",
+        "period_version_id",
+        "user_id",
+        "target_type",
+        "status",
+        "attempt_count",
+        "max_attempts",
+        "next_attempt_at",
+        "lease_token",
+        "lease_expires_at",
+        "last_error_code",
+        "completed_at",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "period_review_job_events",
+      "columns": [
+        "id",
+        "job_id",
+        "period_case_id",
+        "attempt_no",
+        "stage",
+        "event_status",
+        "message_code",
+        "metadata_json",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "period_review_jobs",
+      "columns": [
+        "id",
+        "period_case_id",
+        "job_type",
+        "job_slot",
+        "idempotency_key",
+        "status",
+        "progress_stage",
+        "stage_updated_at",
+        "attempt_count",
+        "max_attempts",
+        "lease_token",
+        "lease_expires_at",
+        "next_attempt_at",
+        "model_profile_id",
+        "credential_source",
+        "last_error_code",
+        "evidence_retry_count",
+        "evidence_last_checked_at",
+        "created_at",
+        "updated_at",
+        "completed_at",
+        "model_task_id",
+        "memory_library_version_no",
+        "memory_library_content_hash",
+        "memory_library_snapshot_text",
+        "memory_strategy_snapshot_text"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "period_review_monthly_checkpoints",
+      "columns": [
+        "id",
+        "period_review_job_id",
+        "evidence_hash",
+        "source_hash",
+        "chunk_index",
+        "chunk_count",
+        "max_days",
+        "expected_period_case_ids_json",
+        "expected_ids_hash",
+        "sources_json",
+        "status",
+        "attempt_count",
+        "max_attempts",
+        "next_attempt_at_utc_msc",
+        "model_task_id",
+        "lease_token",
+        "lease_owner",
+        "fencing_token",
+        "lease_expires_at_utc_msc",
+        "content_json",
+        "content_hash",
+        "reused_from_checkpoint_id",
+        "error_code",
+        "error_message",
+        "superseded_reason",
+        "completed_at_utc_msc",
+        "created_at_utc_msc",
+        "updated_at_utc_msc"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "period_review_sources",
+      "columns": [
+        "id",
+        "period_case_id",
+        "outcome_id",
+        "trade_review_case_id",
+        "source_period_case_id",
+        "source_hash",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "period_review_user_states",
+      "columns": [
+        "period_case_id",
+        "user_id",
+        "last_seen_version_id",
+        "first_seen_at",
+        "last_seen_at",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "period_case_id",
+        "user_id"
+      ]
+    },
+    {
+      "name": "period_review_versions",
+      "columns": [
+        "id",
+        "period_case_id",
+        "version_no",
+        "parent_version_id",
+        "author_type",
+        "author_user_id",
+        "content_json",
+        "content_hash",
+        "change_note",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "platform_model_usage_policy",
+      "columns": [
+        "id",
+        "share_for_manual",
+        "share_for_auto",
+        "share_for_review",
+        "share_for_memory_compression",
+        "allowed_plans",
+        "daily_requests_per_user",
+        "daily_tokens_per_user",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "platform_strategy_experience_items",
+      "columns": [
+        "id",
+        "strategy_id",
+        "memory_tier",
+        "memory_category",
+        "review_case_id",
+        "review_version_id",
+        "period_review_case_id",
+        "period_review_version_id",
+        "period_key",
+        "source_admin_user_id",
+        "lesson_text",
+        "context_json",
+        "applicability_json",
+        "avoid_when_json",
+        "strategy_compatibility_hash",
+        "content_hash",
+        "status",
+        "platform_version",
+        "published_by",
+        "published_at",
+        "revoked_at",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "platform_strategy_experience_logs",
+      "columns": [
+        "id",
+        "strategy_id",
+        "signal_id",
+        "inference_snapshot_id",
+        "policy_mode",
+        "selected_item_ids_json",
+        "token_count",
+        "symbol",
+        "timeframe",
+        "retrieval_context_json",
+        "selection_details_json",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "platform_strategy_experience_policies",
+      "columns": [
+        "strategy_id",
+        "mode",
+        "max_items",
+        "runtime_token_budget",
+        "policy_version",
+        "updated_by",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "strategy_id"
+      ]
+    },
+    {
+      "name": "position_guard_position_states",
+      "columns": [
+        "id",
+        "outcome_id",
+        "user_id",
+        "trading_account_id",
+        "ownership_history_id",
+        "ticket",
+        "original_symbol",
+        "standard_symbol",
+        "profile_version_id",
+        "config_hash",
+        "pivot_business_date",
+        "pivot_snapshot_json",
+        "pivot_d1_time_utc_ms",
+        "pivot_tp_done",
+        "first_target_done",
+        "break_even_done",
+        "break_even_pending",
+        "pending_break_even_price",
+        "pending_break_even_trigger",
+        "pivot_cross_since_utc_ms",
+        "pending_task_id",
+        "retry_after",
+        "last_error_code",
+        "state_version",
+        "last_evaluated_at",
+        "last_completed_at",
+        "completed_at",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "position_guard_profile_versions",
+      "columns": [
+        "id",
+        "profile_id",
+        "version_no",
+        "config_json",
+        "config_hash",
+        "reason",
+        "created_by",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "position_guard_profiles",
+      "columns": [
+        "id",
+        "standard_symbol",
+        "status",
+        "current_version_id",
+        "changed_by",
+        "reason",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "position_management_account_rollouts",
+      "columns": [
+        "trading_account_id",
+        "user_id",
+        "enabled",
+        "maximum_mode",
+        "auto_exit_daily_limit",
+        "cooldown_minutes",
+        "approved_by",
+        "reason",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "trading_account_id"
+      ]
+    },
+    {
+      "name": "post_assets",
+      "columns": [
+        "id",
+        "asset_id",
+        "user_id",
+        "file_name",
+        "file_type",
+        "file_size",
+        "url",
+        "created_at",
+        "stored_file_id"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "post_replies",
+      "columns": [
+        "id",
+        "post_id",
+        "user_id",
+        "content",
+        "content_html",
+        "content_text",
+        "images",
+        "asset_ids",
+        "quote_reply_id",
+        "floor_number",
+        "likes",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "post_reports",
+      "columns": [
+        "id",
+        "post_id",
+        "reply_id",
+        "user_id",
+        "reason",
+        "detail",
+        "status",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "post_tags",
+      "columns": [
+        "id",
+        "slug",
+        "label",
+        "count"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "posts",
+      "columns": [
+        "id",
+        "user_id",
+        "board",
+        "title",
+        "content",
+        "content_html",
+        "content_text",
+        "category",
+        "tags",
+        "images",
+        "asset_ids",
+        "pinned",
+        "featured",
+        "locked",
+        "reply_count",
+        "view_count",
+        "image_count",
+        "last_reply_at",
+        "last_reply_user_id",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "progress",
+      "columns": [
+        "id",
+        "user_id",
+        "episode_id",
+        "watched_seconds",
+        "total_duration",
+        "completed",
+        "quiz_passed",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "quiz_questions",
+      "columns": [
+        "id",
+        "episode_id",
+        "question",
+        "options",
+        "correct_index",
+        "explanation",
+        "explanations",
+        "hint",
+        "status",
+        "sort_order"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "referral_rules",
+      "columns": [
+        "id",
+        "plan",
+        "period",
+        "rate_bps",
+        "enabled"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "referrals",
+      "columns": [
+        "id",
+        "referrer_id",
+        "referred_id",
+        "order_id",
+        "status",
+        "commission",
+        "cash_amount",
+        "plan_label",
+        "attributed_at",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "risk_account_state",
+      "columns": [
+        "trading_account_id",
+        "user_id",
+        "business_date",
+        "day_start_equity",
+        "day_realized_net",
+        "day_floating_pnl",
+        "cumulative_cash_flow",
+        "equity_high_water",
+        "drawdown_pct",
+        "consecutive_losses",
+        "cooldown_until",
+        "halt_status",
+        "halt_reason",
+        "halt_started_at",
+        "halt_reason_changed_at",
+        "last_recovered_at",
+        "user_kill_switch",
+        "data_complete",
+        "last_success_open_at",
+        "created_at",
+        "updated_at",
+        "last_deal_time_msc",
+        "last_deal_ticket",
+        "last_risk_snapshot_at",
+        "data_incomplete_reason",
+        "manual_reset_business_date",
+        "manual_reset_floating_baseline",
+        "risk_calculation_version"
+      ],
+      "primary": [
+        "trading_account_id"
+      ]
+    },
+    {
+      "name": "risk_decisions",
+      "columns": [
+        "id",
+        "order_intent_id",
+        "policy_version_ids_json",
+        "original_order_json",
+        "approved_order_json",
+        "rule_results_json",
+        "decision_status",
+        "reject_code",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "risk_policy_change_items",
+      "columns": [
+        "id",
+        "policy_set_id",
+        "field_code",
+        "old_value_json",
+        "new_value_json",
+        "change_class",
+        "status",
+        "requested_by",
+        "reason",
+        "effective_at",
+        "cancelled_at",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "risk_policy_sets",
+      "columns": [
+        "id",
+        "scope",
+        "owner_user_id",
+        "trading_account_id",
+        "name",
+        "active_version_id",
+        "status",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "risk_policy_versions",
+      "columns": [
+        "id",
+        "policy_set_id",
+        "version_no",
+        "config_json",
+        "created_by",
+        "change_reason",
+        "effective_at",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "risk_profiles",
+      "columns": [
+        "id",
+        "user_id",
+        "name",
+        "config_json",
+        "status",
+        "created_at",
+        "updated_at",
+        "deleted_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "risk_reservations",
+      "columns": [
+        "id",
+        "order_intent_id",
+        "user_id",
+        "trading_account_id",
+        "symbol",
+        "reserved_volume",
+        "reserved_risk_amount",
+        "status",
+        "expires_at",
+        "created_at",
+        "updated_at",
+        "reserved_daily_count",
+        "reserved_notional"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "risk_rule_rollouts",
+      "columns": [
+        "rule_code",
+        "mode",
+        "forced_enforce",
+        "updated_by",
+        "updated_at"
+      ],
+      "primary": [
+        "rule_code"
+      ]
+    },
+    {
+      "name": "schema_migrations",
+      "columns": [
+        "id",
+        "applied_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "signal_outcome_deals",
+      "columns": [
+        "id",
+        "outcome_id",
+        "user_id",
+        "trading_account_id",
+        "deal_ticket",
+        "position_id",
+        "order_ticket",
+        "entry_type",
+        "magic",
+        "reason",
+        "comment",
+        "volume",
+        "price",
+        "profit",
+        "commission",
+        "swap",
+        "fee",
+        "deal_time",
+        "raw_json",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "signal_outcomes",
+      "columns": [
+        "id",
+        "signal_id",
+        "delivery_id",
+        "order_intent_id",
+        "user_id",
+        "trading_account_id",
+        "strategy_id",
+        "strategy_version",
+        "thesis_id",
+        "management_group_id",
+        "ownership_history_id",
+        "broker_server_key",
+        "login_account",
+        "margin_mode",
+        "symbol",
+        "original_symbol",
+        "entry_direction",
+        "system_magic",
+        "entry_order_ticket",
+        "entry_deal_ticket",
+        "pending_ticket",
+        "position_id",
+        "expected_volume",
+        "original_stop_loss",
+        "original_take_profits_json",
+        "actual_stop_loss",
+        "actual_take_profit",
+        "authorized_stop_loss",
+        "authorized_take_profit",
+        "protection_revision",
+        "protection_updated_by",
+        "protection_updated_at",
+        "protection_job_id",
+        "protection_status",
+        "protection_modified",
+        "last_position_snapshot_json",
+        "entry_volume",
+        "closed_volume",
+        "gross_profit",
+        "commission",
+        "swap",
+        "fee",
+        "net_profit",
+        "status",
+        "attribution_status",
+        "external_intervention",
+        "intervention_json",
+        "closing_candidate_hash",
+        "fee_stable_at",
+        "fully_closed_at",
+        "review_eligible_at",
+        "last_scan_at",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "storage_upload_sessions",
+      "columns": [
+        "id",
+        "stored_file_id",
+        "provider",
+        "purpose",
+        "object_key",
+        "original_name",
+        "mime_type",
+        "size_bytes",
+        "owner_type",
+        "owner_id",
+        "created_by",
+        "config_version",
+        "status",
+        "expires_at",
+        "created_at",
+        "confirmed_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "stored_files",
+      "columns": [
+        "id",
+        "purpose",
+        "storage_provider",
+        "object_key",
+        "original_name",
+        "mime_type",
+        "extension",
+        "size_bytes",
+        "sha256",
+        "visibility",
+        "owner_type",
+        "owner_id",
+        "status",
+        "created_by",
+        "created_at",
+        "updated_at",
+        "deleted_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "strategy_memory_compression_jobs",
+      "columns": [
+        "id",
+        "strategy_id",
+        "trigger_type",
+        "source_version_no",
+        "source_content_hash",
+        "source_set_hash",
+        "pending_update_ids_json",
+        "target_chars",
+        "status",
+        "attempt_count",
+        "max_attempts",
+        "lease_token",
+        "lease_expires_at",
+        "next_attempt_at",
+        "model_task_id",
+        "last_error_code",
+        "result_revision_id",
+        "result_content_hash",
+        "result_validation_status",
+        "result_validation_json",
+        "created_at",
+        "updated_at",
+        "completed_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "strategy_memory_conflict_bindings",
+      "columns": [
+        "id",
+        "conflict_id",
+        "strategy_id",
+        "strategy_version",
+        "library_version_no",
+        "library_content_hash",
+        "memory_block_id",
+        "memory_block_hash",
+        "memory_excerpt",
+        "memory_claim_hash",
+        "strategy_excerpt",
+        "strategy_rule_hash",
+        "location_status",
+        "detector_contract_version",
+        "consistency_job_id",
+        "created_at",
+        "validated_at",
+        "superseded_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "strategy_memory_conflict_occurrences",
+      "columns": [
+        "id",
+        "conflict_id",
+        "strategy_id",
+        "period_review_case_id",
+        "period_review_version_id",
+        "evidence_json",
+        "created_at",
+        "binding_id",
+        "strategy_version",
+        "library_version_no",
+        "library_content_hash",
+        "memory_block_id",
+        "memory_block_hash",
+        "memory_excerpt",
+        "conflict_kind"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "strategy_memory_conflicts",
+      "columns": [
+        "id",
+        "strategy_id",
+        "conflict_key",
+        "conflict_category",
+        "conflict_summary",
+        "strategy_excerpt",
+        "suggested_change",
+        "evidence_count",
+        "alert_threshold",
+        "status",
+        "first_observed_at",
+        "last_observed_at",
+        "resolved_at",
+        "resolved_by_user_id",
+        "resolution_note",
+        "created_at",
+        "updated_at",
+        "identity_version",
+        "conflict_kind",
+        "strategy_rule_hash",
+        "canonical_lineage_key",
+        "detection_count",
+        "verification_status",
+        "last_detected_at",
+        "last_validated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "strategy_memory_consistency_jobs",
+      "columns": [
+        "id",
+        "strategy_id",
+        "strategy_version",
+        "library_version_no",
+        "library_content_hash",
+        "strategy_content_hash",
+        "strategy_text_snapshot",
+        "memory_content_snapshot",
+        "trigger_type",
+        "input_set_hash",
+        "detector_contract_version",
+        "status",
+        "attempt_count",
+        "max_attempts",
+        "next_attempt_at",
+        "lease_token",
+        "lease_expires_at",
+        "model_task_id",
+        "conflict_count",
+        "matched_count",
+        "stale_count",
+        "result_hash",
+        "result_json",
+        "last_error_code",
+        "created_at",
+        "updated_at",
+        "completed_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "strategy_memory_injection_logs",
+      "columns": [
+        "id",
+        "strategy_id",
+        "library_version_no",
+        "library_content_hash",
+        "char_count",
+        "estimated_token_count",
+        "usage_kind",
+        "user_id",
+        "signal_id",
+        "inference_snapshot_id",
+        "period_review_case_id",
+        "model_task_id",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "strategy_memory_libraries",
+      "columns": [
+        "strategy_id",
+        "strategy_scope",
+        "owner_user_id",
+        "content_text",
+        "version_no",
+        "content_hash",
+        "char_count",
+        "estimated_token_count",
+        "capacity_chars",
+        "compression_target_ratio",
+        "conflict_alert_threshold",
+        "pending_update_count",
+        "compression_status",
+        "last_compacted_at",
+        "updated_by_user_id",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "strategy_id"
+      ]
+    },
+    {
+      "name": "strategy_memory_library_revisions",
+      "columns": [
+        "id",
+        "strategy_id",
+        "version_no",
+        "change_reason",
+        "source_type",
+        "source_id",
+        "content_text",
+        "content_hash",
+        "char_count",
+        "estimated_token_count",
+        "actor_user_id",
+        "source_metadata_json",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "strategy_memory_pending_updates",
+      "columns": [
+        "id",
+        "strategy_id",
+        "update_kind",
+        "source_period_case_id",
+        "source_period_review_version_id",
+        "content_text",
+        "content_hash",
+        "source_refs_json",
+        "status",
+        "merged_revision_id",
+        "created_at",
+        "updated_at",
+        "completed_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "strategy_subscriptions",
+      "columns": [
+        "id",
+        "user_id",
+        "trading_account_id",
+        "strategy_id",
+        "risk_profile_id",
+        "symbols_json",
+        "execution_enabled",
+        "memory_mode",
+        "conflicting_strategy_id",
+        "is_deleted",
+        "created_at",
+        "updated_at",
+        "schedule_enabled",
+        "schedule_timezone",
+        "schedule_weekdays_json",
+        "schedule_windows_json",
+        "outside_window_behavior",
+        "take_profit_mode",
+        "active_execution_user_key"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "system_config",
+      "columns": [
+        "id",
+        "category",
+        "key",
+        "value",
+        "label",
+        "sort_order",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "system_prompts",
+      "columns": [
+        "id",
+        "name",
+        "description",
+        "content",
+        "is_active",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "trade_audit_logs",
+      "columns": [
+        "id",
+        "user_id",
+        "action",
+        "symbol",
+        "request_json",
+        "result_json",
+        "status",
+        "trading_account_id",
+        "created_at_utc_msc",
+        "terminal_timezone_offset_minutes",
+        "terminal_clock_status",
+        "terminal_clock_source",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "trade_review_cases",
+      "columns": [
+        "id",
+        "outcome_id",
+        "signal_id",
+        "user_id",
+        "trading_account_id",
+        "status",
+        "evidence_status",
+        "evidence_reason",
+        "evidence_json",
+        "evidence_hash",
+        "path_evidence_status",
+        "path_evidence_reason",
+        "path_evidence_hash",
+        "trade_process_issue_status",
+        "review_content_status",
+        "current_version_id",
+        "approved_version_id",
+        "deferred_at",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "trade_review_jobs",
+      "columns": [
+        "id",
+        "case_id",
+        "idempotency_key",
+        "status",
+        "attempt_count",
+        "max_attempts",
+        "lease_token",
+        "lease_expires_at",
+        "model_profile_id",
+        "credential_source",
+        "last_error_code",
+        "created_at",
+        "updated_at",
+        "completed_at",
+        "model_task_id"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "trade_review_versions",
+      "columns": [
+        "id",
+        "case_id",
+        "version_no",
+        "parent_version_id",
+        "author_type",
+        "author_user_id",
+        "content_json",
+        "content_hash",
+        "change_note",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "trades",
+      "columns": [
+        "id",
+        "user_id",
+        "trade_date",
+        "title",
+        "symbol",
+        "direction",
+        "result",
+        "entry_price",
+        "exit_price",
+        "profit_pct",
+        "notes",
+        "screenshot_url",
+        "is_public",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "trading_accounts",
+      "columns": [
+        "id",
+        "user_id",
+        "broker_server",
+        "login_account",
+        "nickname",
+        "margin_mode",
+        "review_status",
+        "observe_status",
+        "is_deleted",
+        "created_at",
+        "updated_at",
+        "observed_until",
+        "identity_verified_at",
+        "first_verified_at",
+        "anomaly_code"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "user_bridge_settings",
+      "columns": [
+        "user_id",
+        "trade_send_enabled",
+        "auto_reasoning_enabled",
+        "connection_enabled",
+        "connection_control_revision",
+        "connection_control_changed_at",
+        "updated_at",
+        "observation_mode"
+      ],
+      "primary": [
+        "user_id"
+      ]
+    },
+    {
+      "name": "user_memory_settings",
+      "columns": [
+        "user_id",
+        "enabled",
+        "runtime_token_budget",
+        "retrieval_mode",
+        "updated_at"
+      ],
+      "primary": [
+        "user_id"
+      ]
+    },
+    {
+      "name": "user_model_defaults",
+      "columns": [
+        "user_id",
+        "model_profile_id",
+        "created_at",
+        "updated_at"
+      ],
+      "primary": [
+        "user_id"
+      ]
+    },
+    {
+      "name": "user_notices",
+      "columns": [
+        "id",
+        "user_id",
+        "notice_id",
+        "type",
+        "title",
+        "body",
+        "link",
+        "source",
+        "read",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "user_position_guard_settings",
+      "columns": [
+        "user_id",
+        "trading_account_id",
+        "enabled",
+        "enabled_at",
+        "disabled_at",
+        "updated_at"
+      ],
+      "primary": [
+        "user_id",
+        "trading_account_id"
+      ]
+    },
+    {
+      "name": "user_position_management_settings",
+      "columns": [
+        "user_id",
+        "execution_mode",
+        "auto_exit_daily_limit",
+        "auto_reverse_daily_limit",
+        "cooldown_minutes",
+        "updated_at"
+      ],
+      "primary": [
+        "user_id"
+      ]
+    },
+    {
+      "name": "users",
+      "columns": [
+        "id",
+        "uid",
+        "email",
+        "email_verified",
+        "auth_method",
+        "password",
+        "nickname",
+        "avatar",
+        "role",
+        "plan",
+        "plan_period",
+        "plan_expires_at",
+        "telegram_id",
+        "telegram_username",
+        "telegram_name",
+        "telegram_chat_id",
+        "telegram_group_status",
+        "telegram_bot_started_at",
+        "telegram_joined_at",
+        "telegram_last_invite_sent_at",
+        "referral_code",
+        "referral_credit",
+        "referred_by",
+        "last_seen_at",
+        "bridge_heartbeat",
+        "created_at",
+        "updated_at",
+        "phone",
+        "phone_verified",
+        "changelog_seen_version",
+        "token_version",
+        "plan_source",
+        "deleted_at",
+        "deletion_status"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "verification_codes",
+      "columns": [
+        "id",
+        "email",
+        "code",
+        "purpose",
+        "expires_at",
+        "used",
+        "verify_token",
+        "created_at",
+        "phone",
+        "token_used"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "video_streams",
+      "columns": [
+        "id",
+        "episode_id",
+        "bilibili_id",
+        "local_path",
+        "qiniu_key",
+        "quality",
+        "duration",
+        "file_size",
+        "access_level",
+        "title",
+        "created_at",
+        "stored_file_id",
+        "video_source"
+      ],
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "name": "wallet_keys",
+      "columns": [
+        "id",
+        "chain",
+        "address_index",
+        "address",
+        "created_at"
+      ],
+      "primary": [
+        "id"
+      ]
+    }
+  ],
+  "parity": [
+    {
+      "name": "admin_position_close_jobs",
+      "rows": 2,
+      "sha256": "55ffadf08ae4934c8589bfacefdaef0d773a6ee0c1dd2bd951846d43fc01e223"
+    },
+    {
+      "name": "admin_position_close_targets",
+      "rows": 4,
+      "sha256": "505728ee9f11825d793a408019dac4cee9fbfca7b4d32340cf86532a7ca5fa28"
+    },
+    {
+      "name": "admin_position_protection_jobs",
+      "rows": 2,
+      "sha256": "5dc1ae1342e764d98f2ce36ea268b914f343bb75b19f5b1e25e0578f432010c0"
+    },
+    {
+      "name": "admin_position_protection_targets",
+      "rows": 3,
+      "sha256": "72a17c52cbf6df07cfc5ee4b3a7157f38d06a115e6aa48f21daaa2608dbb5b73"
+    },
+    {
+      "name": "admin_strategy_pending_cancel_jobs",
+      "rows": 3,
+      "sha256": "ef62d84f77fbf70f09ed183238ad9663c747fa4718483a45e75114f876de371a"
+    },
+    {
+      "name": "admin_strategy_pending_cancel_targets",
+      "rows": 9,
+      "sha256": "fe23f3297bcc650767089ddba65fc23402b6dfcde3efeb102bfcddaad4b56063"
+    },
+    {
+      "name": "admin_strategy_trade_dispatches",
+      "rows": 7,
+      "sha256": "a1cb0c15f370a91245ae070205b52f8551a1a5eb8a3eea252cfe1e342d0d278d"
+    },
+    {
+      "name": "admin_strategy_trade_targets",
+      "rows": 22,
+      "sha256": "13493712740bec5781c74fdd1bef49d961112be2718b16ab7773be95c484064f"
+    },
+    {
+      "name": "ai_configs",
+      "rows": 3,
+      "sha256": "58f770f951bae5824ebc63b7b88cb0732589af2a37b7549f44619472f52e83b0"
+    },
+    {
+      "name": "ai_feature_flags",
+      "rows": 1,
+      "sha256": "f29ffc12f7bb918a805aed1065b6316337f6b04831eeb17d3fc84135ac2d0f48"
+    },
+    {
+      "name": "ai_inference_preferences",
+      "rows": 2,
+      "sha256": "43fc95df8eb2b5dfe20b56ca9ddee5fdaa60f541d9b677d0dd6286e3494927a0"
+    },
+    {
+      "name": "ai_manual_analysis_jobs",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "ai_market_benchmark_cases",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "ai_market_benchmark_sets",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "ai_model_capacity_leases",
+      "rows": 9165,
+      "sha256": "3ff2d8f858bafa66fea7496a341a8a29f5d0f8b17c5afed91b15db674d6a7ff9"
+    },
+    {
+      "name": "ai_model_capacity_policies",
+      "rows": 1,
+      "sha256": "0ff3b8a149939200decff698b7289c6c7467cd41e615cb259280825b8b2b5913"
+    },
+    {
+      "name": "ai_model_capacity_waiters",
+      "rows": 9165,
+      "sha256": "8c48c2a90f54930e8f5ee31edd2a9d7559c2d5611dce2ffb54a1286a624d928c"
+    },
+    {
+      "name": "ai_model_compare_checkpoints",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "ai_model_compare_jobs",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "ai_model_profiles",
+      "rows": 6,
+      "sha256": "1b438424f7e47949087a195c5f2385726f64b32f8cc8ed3824fcdd4239504559"
+    },
+    {
+      "name": "ai_model_provider_capabilities",
+      "rows": 5,
+      "sha256": "9626a1ecf3759ab47c7b80292f06da60eb3978723deb5f2dc8ba2a0883684c0b"
+    },
+    {
+      "name": "ai_model_provider_incidents",
+      "rows": 3,
+      "sha256": "0d84beadf8cf5092c76a4b4689744d92b2f6f14e7f4edbd435c8390e760fe289"
+    },
+    {
+      "name": "ai_model_purpose_defaults",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "ai_model_task_attempts",
+      "rows": 9179,
+      "sha256": "436db7a4f4b8b2a5dceb5e5c5dfe853e95da0765dce7a79c52ce7930aa0f31c9"
+    },
+    {
+      "name": "ai_model_task_events",
+      "rows": 121821,
+      "sha256": "1ec537055598ab61e2921600233743ff021a9ea63677ef666668770853f9f239"
+    },
+    {
+      "name": "ai_model_tasks",
+      "rows": 9317,
+      "sha256": "04fa169a65134a9feb1513affe1b5fbe734af443291bfb64b3dbc0788a9fc2cd"
+    },
+    {
+      "name": "ai_model_usage_logs",
+      "rows": 12139,
+      "sha256": "da646e5a75d101717bb1b809433d71c0e412ddbb7c7321a9fc2d74e12a510a0c"
+    },
+    {
+      "name": "ai_observer_channel_assignments",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "ai_observer_channels",
+      "rows": 2,
+      "sha256": "e23d45a34b57a96bf6395851929f60147ce396ed3894ccd472d3c19a3dbc2eee"
+    },
+    {
+      "name": "ai_observer_sources",
+      "rows": 2,
+      "sha256": "b375d7b684955e2a1df2801200202dacc761455a67325f22b5d6964ca3c0ca24"
+    },
+    {
+      "name": "ai_position_management_commands",
+      "rows": 85,
+      "sha256": "46e2f4e6a0afc81ccc2cb0fe718ace4418cc98d66077e7930ab7b316f37ac001"
+    },
+    {
+      "name": "ai_position_management_evaluations",
+      "rows": 4415,
+      "sha256": "876a23350d69b10939a91db5c06a6de3518057d50fe12bdb28d8ba9a8167d9d8"
+    },
+    {
+      "name": "ai_position_management_events",
+      "rows": 1235,
+      "sha256": "d682c4fbe75d53c4429e11a627b11bf7d6011bac6426a7678eef209375eebd6f"
+    },
+    {
+      "name": "ai_position_management_tasks",
+      "rows": 419,
+      "sha256": "0a8a684dfa93853ebadbfed85882ecbe8c21fac7909f184938ef97a9e279988e"
+    },
+    {
+      "name": "ai_signals",
+      "rows": 1764,
+      "sha256": "2f27ba7788dd167ed7588fb4c1c5defa0008a1e975e9b9e34576de07d2232da0"
+    },
+    {
+      "name": "ai_trade_theses",
+      "rows": 444,
+      "sha256": "7b1918131205368fa2332a9b7a9e2d3c238a5cd4c1f45aa74007d20c013f8821"
+    },
+    {
+      "name": "audit_logs",
+      "rows": 1409,
+      "sha256": "6c9b24fc1570ce87b155a61d2ac619a28e8f00e4ffd66f47dc251a8d54ec9665"
+    },
+    {
+      "name": "auto_prompt_types",
+      "rows": 3,
+      "sha256": "d42e436d83d1cfa6554714405e0af3a25742aac27ed497f829f5b40c55a2c6c4"
+    },
+    {
+      "name": "auto_scheduler",
+      "rows": 18,
+      "sha256": "b6aab9ced7ed95b41a40489a433cd65b39d6b823b0859fdb3149cb355d56e104"
+    },
+    {
+      "name": "auto_signal_deliveries",
+      "rows": 1442,
+      "sha256": "f005d97291822701881812c00ee593942fc8d549f6ad5449625a89d11d9c9a59"
+    },
+    {
+      "name": "bridge_device_pairings",
+      "rows": 1,
+      "sha256": "eeb5801441ffef2196f9e91a8d02bdcbf5376d2c30c576707c3bf573f5038c4c"
+    },
+    {
+      "name": "bridge_refresh_sessions",
+      "rows": 17,
+      "sha256": "a9e78339b935baf61469dbd7d84b59c169ce30d3c488607762c80032a4f9924d"
+    },
+    {
+      "name": "bridge_update_events",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "bridge_v3_account_latest",
+      "rows": 6,
+      "sha256": "ab4551479b519495c17a684aa5bef5a5efe741fffa51a2b641bdbb7e89f65e12"
+    },
+    {
+      "name": "bridge_v3_command_events",
+      "rows": 10506,
+      "sha256": "12da33564480ab473d94d71e834583586f6950bbb888070124cb067365840d4c"
+    },
+    {
+      "name": "bridge_v3_command_ledger",
+      "rows": 3525,
+      "sha256": "de68f2b4177208bbb48f98f12768e3124d3be49685deabb0d82300861789d409"
+    },
+    {
+      "name": "bridge_v3_deals",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "bridge_v3_orders_latest",
+      "rows": 2,
+      "sha256": "53d8e9004fda42ab33b3ae7e194b05a617ea184d1f7a2f2a87045525d2cfd7c0"
+    },
+    {
+      "name": "bridge_v3_positions_latest",
+      "rows": 3,
+      "sha256": "6fd6b090d03b9d67c2a30980ae82c0c98c7dbf71db1664f576c36e741fa13911"
+    },
+    {
+      "name": "bridge_v3_stream_revisions",
+      "rows": 243,
+      "sha256": "cd32fe401d865c4d3f892352ca31a97151d46492145b0a54050e10ede7039eaa"
+    },
+    {
+      "name": "bridge_v3_terminal_sessions",
+      "rows": 7,
+      "sha256": "0d8b9b38d0a5708bfdec917438ef3e8a7f634f8748406d6e741e18dc0d97a352"
+    },
+    {
+      "name": "broadcast_messages",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "chan_structure_anchors",
+      "rows": 6,
+      "sha256": "e2c95f3d4b0d4b62253f1813c8d7b96519b196f4d1df5466a7bafd86b718fd50"
+    },
+    {
+      "name": "close_config",
+      "rows": 4,
+      "sha256": "03f8775ef1d5670d3aceab417e4875b7d9890160e6df019cc79c54858bc7159a"
+    },
+    {
+      "name": "close_signal_tickets",
+      "rows": 30,
+      "sha256": "b42dc40c02a42c702b269e4f1b39e1f0535ec4553a9cdf11e53006c7e37af80e"
+    },
+    {
+      "name": "comment_likes",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "comments",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "course_resources",
+      "rows": 1,
+      "sha256": "20874508f75dcdeeae6fe737d32ee39106e25831fb7eabab6ebe48625aef9130"
+    },
+    {
+      "name": "courses",
+      "rows": 12,
+      "sha256": "b9d817699de0a74c78ef2440bba0cd6e771a07d67bfc4df075990709639ffd0e"
+    },
+    {
+      "name": "credential_migration_runs",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "crypto_watch_list",
+      "rows": 8,
+      "sha256": "62491902c6fab3b1ec640312c7ef16a8d5735f457d7c94c92cb979e4509e3a93"
+    },
+    {
+      "name": "experience_long_term_memories",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "experience_memory_items",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "experience_memory_summaries",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "feedback",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "global_auto_config",
+      "rows": 1,
+      "sha256": "3ec98033829ed35a84addf6b8efac79376ef90172b3b8f6606973775d371d967"
+    },
+    {
+      "name": "global_position_guard_control",
+      "rows": 1,
+      "sha256": "6d359ed84c9ee1c0de16459b776f373d9fb1cae76103ac3fabb6d162fd142c90"
+    },
+    {
+      "name": "global_position_management_control",
+      "rows": 1,
+      "sha256": "c885d75814e64354822a425ed19dcd90d95f5da50dd03c55d4816657f2e5a84c"
+    },
+    {
+      "name": "global_risk_control",
+      "rows": 1,
+      "sha256": "bab40f076e68fae1e371615d22f344944f1c6fd828df6afa65854cbb6d20cb54"
+    },
+    {
+      "name": "history_range_preferences",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "inference_snapshots",
+      "rows": 789,
+      "sha256": "964f55c1308b0d0571bfb82af98f6866c0a11b401eaaeef39f1e22ace0ce6a32"
+    },
+    {
+      "name": "manual_trade_review_aggregate_cases",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "manual_trade_review_aggregate_sources",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "manual_trade_review_aggregate_versions",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "manual_trade_review_cases",
+      "rows": 3,
+      "sha256": "98d0fa1f07677230f444260a237dcbf60f22090e450131d22920fde06f4d8830"
+    },
+    {
+      "name": "manual_trade_review_counterfactual_points",
+      "rows": 27,
+      "sha256": "9a2f77cae420edfe41ec85e2e0e84011fb8cddb0514f29bfd6d4037071829239"
+    },
+    {
+      "name": "manual_trade_review_jobs",
+      "rows": 3,
+      "sha256": "a6e1b095b5bf846e21afb13c52fc78fa7a38df5fdda9e98f521208a8ef3ff4d7"
+    },
+    {
+      "name": "manual_trade_review_sources",
+      "rows": 3,
+      "sha256": "7c82d4980faf6e476b5fcf63a83aac9f133d880697b9e52e3cc7720fb3a6f41a"
+    },
+    {
+      "name": "manual_trade_review_stage_runs",
+      "rows": 18,
+      "sha256": "212c3ec16c11703234125302b268ec7afaff3a8fcbf98da87c7822930725abf2"
+    },
+    {
+      "name": "manual_trade_review_versions",
+      "rows": 1,
+      "sha256": "752456d4f926fe77fb8616549ba356155dd7695e3facd3cb0508ce2b5196c4d5"
+    },
+    {
+      "name": "market_candles",
+      "rows": 35725,
+      "sha256": "f9c30411b9b1a0a1192fef1eebfcf90188bd9335e78ea6ec2407b53a11e05863"
+    },
+    {
+      "name": "market_clock_samples",
+      "rows": 6183,
+      "sha256": "602f0bfc65061406e671e32c28c9cbecab8d4617c63586ba9ef7b45413b8ad6c"
+    },
+    {
+      "name": "market_data_sources",
+      "rows": 3,
+      "sha256": "0412b7ef3644c6fc3dbe82770293323018189e57a55c63eb7b2f34e6f6bbbe8f"
+    },
+    {
+      "name": "membership_expiry_notifications",
+      "rows": 100,
+      "sha256": "f81896d0730c53f0c4508ecb609b9330c79b23553988c537381ac325025f9d53"
+    },
+    {
+      "name": "memory_compression_jobs",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "memory_injection_logs",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "mt5_account_bindings",
+      "rows": 3,
+      "sha256": "2d2f33b4d026ea78b2d32df83cb345c99c6f6fc626df0bfe1e757aeb88707552"
+    },
+    {
+      "name": "mt5_account_ownership_history",
+      "rows": 274,
+      "sha256": "c873e702e7b29cfdbeb6165afc193c79223630e094c7754c025e2fb3301a7d00"
+    },
+    {
+      "name": "mt5_account_performance_daily",
+      "rows": 21,
+      "sha256": "c09b77946ced2b96bc09f1e1907d3ead6c19f397b5e8da3df89209fc9022d323"
+    },
+    {
+      "name": "mt5_account_performance_sync_state",
+      "rows": 3,
+      "sha256": "552b900a80446570c3a1b64932f60c4cbdc7d3ce03caf41a599a123c5680a73c"
+    },
+    {
+      "name": "mt5_account_performance_totals",
+      "rows": 3,
+      "sha256": "b3bed769484b181278f4c82f35a4d9daf922cc06745b827fdc3436124b351aab"
+    },
+    {
+      "name": "notification_campaigns",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "notification_deliveries",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "notification_idempotency_keys",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "notifications",
+      "rows": 15,
+      "sha256": "b20cd8c98f42ee8cf8279cd56e50c6c05dd3184be4db87c5d55d60b42f430e41"
+    },
+    {
+      "name": "order_intents",
+      "rows": 412,
+      "sha256": "b3dcba9780be7d57e024cd06eba5561cc8ccaa84233495b46e0efa101e00d97f"
+    },
+    {
+      "name": "orders",
+      "rows": 12,
+      "sha256": "302058bf9c38ee6895d52cd9891bd622070e8e350569959bf60f1c458f66c741"
+    },
+    {
+      "name": "payment_side_effects",
+      "rows": 4,
+      "sha256": "b86b8d2753deeabbd17ab591c7ab15a98c2c2ba630f910a73e46d5b0832e1204"
+    },
+    {
+      "name": "pending_orders",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "period_review_cases",
+      "rows": 25,
+      "sha256": "7c01ba59f83ffe5c8820059f4d112764e4161ba72c0b490ef8872dbc04e12900"
+    },
+    {
+      "name": "period_review_derivation_jobs",
+      "rows": 12,
+      "sha256": "7271304f015d2e7059bfdc75624eb68a84ef3ca09fcc164d294be7a049351baf"
+    },
+    {
+      "name": "period_review_job_events",
+      "rows": 7208,
+      "sha256": "c918716f59e5f770069270d7a135a94198d0ba1b56af78edd02f53f32ee822a8"
+    },
+    {
+      "name": "period_review_jobs",
+      "rows": 25,
+      "sha256": "146bed298aaeb98b47e8701f4952c361db20c8e4ce2fbd74a6460e161d78beaa"
+    },
+    {
+      "name": "period_review_monthly_checkpoints",
+      "rows": 8,
+      "sha256": "5b84f02b9b491bc980520738eb054bdbf47b34d41cfeede2edb46a058c947ac5"
+    },
+    {
+      "name": "period_review_sources",
+      "rows": 176,
+      "sha256": "4504c5aef023e47dc409242012ee6ee7f6d52ee05996cf8708d4395e48e17fab"
+    },
+    {
+      "name": "period_review_user_states",
+      "rows": 33,
+      "sha256": "3a3ba6717f941d32c0c6f8f8f4efebeffab3cb4548dbbacc1ae2cac3650356b5"
+    },
+    {
+      "name": "period_review_versions",
+      "rows": 33,
+      "sha256": "0b9899f73eee78768e63cf0f8b68cedaf2055a10296b8f466d429fb827e97884"
+    },
+    {
+      "name": "platform_model_usage_policy",
+      "rows": 1,
+      "sha256": "c37c8844961e1c8c0dcb99f77ba0b8bfa5aa8589bf3d0075c0c16142471becdd"
+    },
+    {
+      "name": "platform_strategy_experience_items",
+      "rows": 2,
+      "sha256": "94719581ae641d51d63fbf34fc5b25a760bffad042a77b33c8b6a705631d5626"
+    },
+    {
+      "name": "platform_strategy_experience_logs",
+      "rows": 6093,
+      "sha256": "71b3a4bb5c368b3dc98d1e2665840a4582a06ffc949e6d2900051ac8672b8496"
+    },
+    {
+      "name": "platform_strategy_experience_policies",
+      "rows": 2,
+      "sha256": "d62bb385e4d60dd3992ce5ebf29aa81affebfb67d0bc493780c1bd96454e47b9"
+    },
+    {
+      "name": "position_guard_position_states",
+      "rows": 6,
+      "sha256": "fa6630e6b82e3867fc05bdbd55879d4abd93b0b6c605690615bdd03fec88c4ca"
+    },
+    {
+      "name": "position_guard_profile_versions",
+      "rows": 1,
+      "sha256": "e03253981f346d869e2be801fa6bad694d41bc1c85ca31ae2dff75dc8844e0e1"
+    },
+    {
+      "name": "position_guard_profiles",
+      "rows": 1,
+      "sha256": "80ceb5f8a391629cb344ed5e64be8896a4e0a4c252201dcd0f5043b151fd3af5"
+    },
+    {
+      "name": "position_management_account_rollouts",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "post_assets",
+      "rows": 3,
+      "sha256": "486d92f2f8884deaa58bf002d9bd8a0b95bb06aadc37fc777df554de97c22753"
+    },
+    {
+      "name": "post_replies",
+      "rows": 2,
+      "sha256": "d835757f801efdf3ce2f9b400a1dc0f9fcdd56ce67387a1664b5c4392313f619"
+    },
+    {
+      "name": "post_reports",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "post_tags",
+      "rows": 2,
+      "sha256": "192fca61aa303b71863f68258549ee1d4a7392e12d8b8d47289be10b869f8192"
+    },
+    {
+      "name": "posts",
+      "rows": 6,
+      "sha256": "bf371ce4d3c243e9df03ef3f2cdf873c358d018fee28ec379ed9f086dec85dce"
+    },
+    {
+      "name": "progress",
+      "rows": 5,
+      "sha256": "5596a33106885d28de9e1d7d8a4c3dcdb3e3a47d999a6cb3873ce1e19bd4568b"
+    },
+    {
+      "name": "quiz_questions",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "referral_rules",
+      "rows": 4,
+      "sha256": "b07176cf2004262b4d17bd31ecd97225d4bb0ca72bd695178b0d7934695f49fb"
+    },
+    {
+      "name": "referrals",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "risk_account_state",
+      "rows": 4,
+      "sha256": "aff6e2319b1c39708f8c35979d29cebf00f5e30956f1693b27ee60c1746ad14c"
+    },
+    {
+      "name": "risk_decisions",
+      "rows": 395,
+      "sha256": "091fdc2af5dcc788393216f7f70f1781e2c9fdad77a4edf9f3ac0b29716aeb93"
+    },
+    {
+      "name": "risk_policy_change_items",
+      "rows": 60,
+      "sha256": "0c9c635c16fb4af57aa093109afe2f230e207e40f2e2258b97d4829208c5bf47"
+    },
+    {
+      "name": "risk_policy_sets",
+      "rows": 3,
+      "sha256": "79e466f9fd686b4c4e3151bc56f4e39dd6e5da39f8a937fb1d0514bd29e8ca60"
+    },
+    {
+      "name": "risk_policy_versions",
+      "rows": 10,
+      "sha256": "2a33f9d9720cdac77bf918756963ebc13633498b49b30e31873f038c4f999fbc"
+    },
+    {
+      "name": "risk_profiles",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "risk_reservations",
+      "rows": 362,
+      "sha256": "86e4099f0791f2e6db2df65d9f1b6c1dfafaa29fe1420d3d9b743c286b83ac4a"
+    },
+    {
+      "name": "risk_rule_rollouts",
+      "rows": 19,
+      "sha256": "a09b08cc14d841f525c8be536100e985f412920396d0b85be703250a83c68492"
+    },
+    {
+      "name": "schema_migrations",
+      "rows": 214,
+      "sha256": "44ba6c4e3266404ce127235fb81b54f503c1bae4f32f876e442ee5cc164dcb44"
+    },
+    {
+      "name": "signal_outcome_deals",
+      "rows": 427,
+      "sha256": "c1319ec87c3accad5c2ef13e8fe1d2a66fe5860a62860a3fe1cce32656542d0f"
+    },
+    {
+      "name": "signal_outcomes",
+      "rows": 334,
+      "sha256": "b4b76bc8b01410c7ea7b6b989fd07ff5a3d9f5f2228db1d5e5ef014dd6fa2976"
+    },
+    {
+      "name": "storage_upload_sessions",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "stored_files",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "strategy_memory_compression_jobs",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "strategy_memory_conflict_bindings",
+      "rows": 1,
+      "sha256": "634bfa705d1bedb2db295280af0eacb863f876bc7be1c9946ad46b0c194fdd17"
+    },
+    {
+      "name": "strategy_memory_conflict_occurrences",
+      "rows": 2,
+      "sha256": "34807fc3f4b1be3369970c6df9943dba2915176fdddf830c7bab4ddbd06ed1c2"
+    },
+    {
+      "name": "strategy_memory_conflicts",
+      "rows": 2,
+      "sha256": "ffc058447c57d64f7f496f9bac29dd28608e0e93aea34f71ed5e309025d26ff9"
+    },
+    {
+      "name": "strategy_memory_consistency_jobs",
+      "rows": 48,
+      "sha256": "cf74bac6cd241763865416a846a0875e73fad427a86446fc2aa82ebdeb076dff"
+    },
+    {
+      "name": "strategy_memory_injection_logs",
+      "rows": 5417,
+      "sha256": "e90b8a7412e92a6cc9fe4ed79112b294cd7c0e8579220132196afdc08f45fbd3"
+    },
+    {
+      "name": "strategy_memory_libraries",
+      "rows": 2,
+      "sha256": "04f3948d26337fb0fb2e5906ec879f727f0324fdb537d23c9f11993fdbd49ddd"
+    },
+    {
+      "name": "strategy_memory_library_revisions",
+      "rows": 20,
+      "sha256": "b80708b9ae5e8e42afdaae396a39e203e1490799675676dd5af92579f946b5ca"
+    },
+    {
+      "name": "strategy_memory_pending_updates",
+      "rows": 10,
+      "sha256": "c86aa3b608c01a72b5e90be215cdd52dd11704d7fb33d60c156351c305505b8c"
+    },
+    {
+      "name": "strategy_subscriptions",
+      "rows": 5,
+      "sha256": "36ecc396d3d521d27af7486074c39b97ef28395bdb66166271fe02cbdbd2648c"
+    },
+    {
+      "name": "system_config",
+      "rows": 75,
+      "sha256": "4392190baf087d5737d17f81c44151bae7f1ede7752bbaf084ea15813119bd61"
+    },
+    {
+      "name": "system_prompts",
+      "rows": 1,
+      "sha256": "fdca057160639b12608d5d6c8c1b834e71ac775ae8798ddffaf9a543343bb8c2"
+    },
+    {
+      "name": "trade_audit_logs",
+      "rows": 9660,
+      "sha256": "e35ac145d41ab15093299011fafdde746368f3b6f1184fa6778bd693b69eda9f"
+    },
+    {
+      "name": "trade_review_cases",
+      "rows": 155,
+      "sha256": "7f4b5b9cc93638535b7a4fb9a70b33a0bb1cceae1e866ec52ebc251b0b1e721b"
+    },
+    {
+      "name": "trade_review_jobs",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "trade_review_versions",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "trades",
+      "rows": 2,
+      "sha256": "9867191387dc7083dc5b83c08a37d0ad98dd608db2af245912d48c4a115ea487"
+    },
+    {
+      "name": "trading_accounts",
+      "rows": 4,
+      "sha256": "a873c7d3d5968ff3304f5946bc315dc98fe0d6ec41d80278477e8c5caea04741"
+    },
+    {
+      "name": "user_bridge_settings",
+      "rows": 4,
+      "sha256": "f76e627fd9b61c630cc0e8b9db0a2ba8cdb943f444695401bf511b3f7705302b"
+    },
+    {
+      "name": "user_memory_settings",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "user_model_defaults",
+      "rows": 2,
+      "sha256": "b8ffb7d68d553a0f08fa987642b04ece84620a4350058a6a47b32c35396282ff"
+    },
+    {
+      "name": "user_notices",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "user_position_guard_settings",
+      "rows": 1,
+      "sha256": "c4b05101609ec12574bc692628ef3468abd034a570b5a6d2f0f7d57a96a5df66"
+    },
+    {
+      "name": "user_position_management_settings",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "users",
+      "rows": 25,
+      "sha256": "7cf68138e0324bf209f93aaf360da22dec137d77bf95f32aafdbcfc3f5b24429"
+    },
+    {
+      "name": "verification_codes",
+      "rows": 17,
+      "sha256": "b316a8f0a4205de8ab6243c1f2b823d79d55cada613b3a24eff664f4acc762e7"
+    },
+    {
+      "name": "video_streams",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "wallet_keys",
+      "rows": 4,
+      "sha256": "f7d5d8c9696d1136fc2996224a40cd85406e728d1aec3f44fca80cf966e817f8"
+    }
+  ],
+  "recovery": {
+    "apply": true,
+    "steps": [
+      {
+        "id": "inplace_001_01_users_last_seen_at_utc",
+        "status": "reconciled"
+      },
+      {
+        "id": "inplace_001_02_users_profile_revision",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_001_03_bridge_refresh_sessions_credential_version",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_001_04_bridge_refresh_sessions_installation_id",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_001_05_bridge_refresh_sessions_profile_id",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_001_06_bridge_refresh_sessions_generation",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_001_07_bridge_refresh_sessions_migration_key",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_001_08_bridge_refresh_sessions_source_fingerprint",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_001_09_bridge_refresh_sessions_source_refresh_session_id",
+        "status": "applied"
+      }
+    ]
+  },
+  "ddlExecutions": 9,
+  "repeatNoop": true,
+  "sourceModified": false,
+  "scope": "nine_additive_columns_only",
+  "fullNormalizationComplete": false
+}
