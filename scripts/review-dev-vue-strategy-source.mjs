@@ -4,13 +4,16 @@ import { parse } from 'dotenv'
 import { hash } from './lib/v4-backfill-contract.mjs'
 import { legacyStrategyFields, legacySubscriptionFields, reviewStrategySources } from './lib/v4-strategy-source-review.mjs'
 import { convertSubscriptionSymbols } from './lib/v4-subscription-symbol-conversion.mjs'
+import { planAccountIdMappings } from './lib/v4-account-id-mapping.mjs'
+import { reviewSubscriptionAccountScopes } from './lib/v4-subscription-account-review.mjs'
 
 const root = new URL('../', import.meta.url)
 let connection
 try {
   const [mode] = process.argv.slice(2)
-  if (process.argv.length !== 3 || !['--write', '--verify', '--write-symbols', '--verify-symbols'].includes(mode)) throw new Error('strategy_source_arguments')
-  const symbolMode = mode.endsWith('-symbols')
+  if (process.argv.length !== 3 || !['--write', '--verify', '--write-symbols', '--verify-symbols', '--write-scopes', '--verify-scopes'].includes(mode)) throw new Error('strategy_source_arguments')
+  const scopeMode = mode.endsWith('-scopes')
+  const symbolMode = mode.endsWith('-symbols') || scopeMode
   const env = parse(await readFile(new URL('server/.env', root)))
   if (env.MYSQL_DATABASE !== 'dev_vue') throw new Error('strategy_source_database')
   connection = await mysql.createConnection({ host: env.MYSQL_HOST, port: Number(env.MYSQL_PORT || 3306), user: env.MYSQL_USER,
@@ -27,8 +30,16 @@ try {
   }
   const strategies = await read('auto_prompt_types', legacyStrategyFields), subscriptions = await read('strategy_subscriptions', legacySubscriptionFields)
   const [users] = await connection.query('SELECT CAST(id AS CHAR) id FROM users ORDER BY id')
-  const [accounts] = await connection.query('SELECT CAST(id AS CHAR) id FROM trading_accounts ORDER BY id')
+  const [accounts] = await connection.query('SELECT CAST(id AS CHAR) id,CAST(user_id AS CHAR) userId,broker_server server,login_account login FROM trading_accounts ORDER BY id')
   const review = reviewStrategySources({ strategies, subscriptions, userIds: new Set(users.map(row => row.id)), accountIds: new Set(accounts.map(row => row.id)) })
+  let scopeReview
+  if (scopeMode) {
+    const [terminals] = await connection.query('SELECT terminal_instance_id id,CAST(user_id AS CHAR) userId,platform,broker_server server,login_account login FROM bridge_v3_terminal_sessions ORDER BY terminal_instance_id')
+    const [bindings] = await connection.query('SELECT broker_server_key server,login_account login,CAST(current_user_id AS CHAR) currentUserId,CAST(current_trading_account_id AS CHAR) currentAccountId,account_currency currency FROM mt5_account_bindings ORDER BY broker_server_key,login_account')
+    const input = Object.fromEntries(Object.entries({ accounts, terminals, bindings }).map(([key, rows]) => [key, rows.map(row => ({ ...row, sourceHash: hash({ ...row }) }))]))
+    const accountPlan = planAccountIdMappings('dev_vue', input, accounts.map(row => row.id))
+    scopeReview = reviewSubscriptionAccountScopes({ subscriptions, strategies, accounts, accountPlan })
+  }
   await connection.rollback()
   const report = { observedAt: new Date().toISOString(), identity, ...review }
   if (symbolMode) {
@@ -39,14 +50,15 @@ try {
       ...convertSubscriptionSymbols(row.symbols_json, byId.get(row.strategy_id)?.symbols_json) }))
     report.symbolConversionReady = report.symbolConversions.every(row => row.status === 'converted')
   }
-  const path = new URL(symbolMode ? 'docs/migration/dev-vue-subscription-symbol-review-20260907.json' : 'docs/migration/dev-vue-strategy-source-review-20260906.json', root)
+  if (scopeMode) report.accountScopes = scopeReview
+  const path = new URL(scopeMode ? 'docs/migration/dev-vue-subscription-account-review-20260907.json' : symbolMode ? 'docs/migration/dev-vue-subscription-symbol-review-20260907.json' : 'docs/migration/dev-vue-strategy-source-review-20260906.json', root)
   if (mode.startsWith('--verify')) {
     const old = JSON.parse(await readFile(path, 'utf8'))
     const stable = ({ observedAt, ...value }) => value
     if (hash(stable(old)) !== hash(stable(report))) throw new Error('strategy_source_changed')
   } else await writeFile(path, JSON.stringify(report, null, 2) + '\n', { flag: 'wx' })
   console.log(JSON.stringify({ counts: report.counts, issues: report.issues, blockers: report.blockers,
-    ...(symbolMode ? { symbolConversionReady: report.symbolConversionReady, symbolConversions: report.symbolConversions } : {}), businessWritesPerformed: false }))
+    ...(scopeMode ? { accountScopes: report.accountScopes } : symbolMode ? { symbolConversionReady: report.symbolConversionReady, symbolConversions: report.symbolConversions } : {}), businessWritesPerformed: false }))
 } catch (error) {
   console.error(JSON.stringify({ code: /^strategy_source_/.test(error.message) ? error.message : 'strategy_source_review_failed' }))
   process.exitCode = 1
