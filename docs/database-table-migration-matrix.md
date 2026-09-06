@@ -92,7 +92,7 @@
 新增目标表：
 
 - `plans`、`products`：从受控系统配置和现有订单字段生成；首版只承载已存在的会员及 Bridge 并发连接额度产品，不建设复杂商品中心。
-- `memberships`、`membership_events`：从 `users.plan*` 与支付副作用回填当前态和历史事件。
+- `memberships`、`membership_events`：当前态以 `users.plan*` 原值和经确认的时间/权益规则承接；历史事件必须有独立开通、续费、赠送或撤销证据。`payment_side_effects.completed` 只证明旧投递处理状态，不用于补造会员历史事件，见阶段 97。
 - `entitlement_grants`、`user_connection_capacities`：保存默认/购买/赠送/撤销事实及 MySQL 上限投影；当前 WebSocket 占用不写成永久账户槽位。
 - `outbox_events`：支付、会员、通知等可靠异步副作用；交易执行使用自己的状态机，不把 Bridge 发单简化成普通 outbox 自动重试。
 
