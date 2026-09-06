@@ -1,4 +1,5 @@
-import { loadReferralSchemaCoordinator } from './lib/inplace-referral-schema.mjs'
+import { loadReferralLedgerCoordinator } from './lib/inplace-referral-ledger-schema.mjs'
+import { verifyReferralLedgerProof } from './lib/inplace-referral-ledger-proof.mjs'
 import { verifyReferralSchemaProof } from './lib/inplace-referral-schema-proof.mjs'
 import { verifyOriginalSchemaWithUserDefaults } from './lib/inplace-user-defaults.mjs'
 import { verifyUserDefaultsProof } from './lib/inplace-user-defaults-proof.mjs'
@@ -24,12 +25,13 @@ try {
   const backup = await json('docs/migration/dev-vue-inplace-backup-20260906.json')
   const columns = await json('docs/migration/dev-vue-inplace-column-rehearsal-20260906.json')
   validateColumnEvidence(backup, columns)
-  const plan = await loadReferralSchemaCoordinator(root)
+  const plan = await loadReferralLedgerCoordinator(root)
   const baseProof = await verifyCoordinatorProof(root, await json('docs/migration/dev-vue-schema-coordinator-rehearsal-20260907.json'), backup, columns, { steps: plan.steps.slice(0, 29) })
   const macroProof = await verifyMacroCoordinatorProof(root, await json('docs/migration/dev-vue-macro-schema-rehearsal-20260907.json'), backup, columns, { steps: plan.steps.slice(0, 40) })
   const defaultsProof = await verifyUserDefaultsProof(root, await json('docs/migration/dev-vue-user-defaults-rehearsal-20260907.json'), backup, columns, { steps: plan.steps.slice(0, 45) })
-  const referralProof = await verifyReferralSchemaProof(root, await json('docs/migration/dev-vue-referral-schema-rehearsal-20260907.json'), backup, columns, plan)
-  const proof = { base: baseProof, macro: macroProof, userDefaults: defaultsProof, referral: referralProof }
+  const referralProof = await verifyReferralSchemaProof(root, await json('docs/migration/dev-vue-referral-schema-rehearsal-20260907.json'), backup, columns, { steps: plan.steps.slice(0, 46) })
+  const ledgerProof = await verifyReferralLedgerProof(root, await json('docs/migration/dev-vue-referral-ledger-rehearsal-20260907.json'), backup, columns, plan)
+  const proof = { base: baseProof, macro: macroProof, userDefaults: defaultsProof, referral: referralProof, ledger: ledgerProof }
   const env = parse(await readFile(new URL('server/.env', root)))
   check(env.MYSQL_DATABASE === 'dev_vue', 'inplace_coordinator_database')
   // Reserve an exclusive receipt before any database mutation. Failed attempts remain inspectable.
@@ -46,7 +48,10 @@ try {
   const result = await withInplaceUpgradeLock(connection, 'dev_vue', async () => {
     check(await verifyInplaceJournal(connection), 'inplace_coordinator_journal_required')
     const excluded = [...new Set(plan.steps.filter(step => !step.column).map(step => step.table))]
+    const readReferrals = async () => { const [[table]] = await connection.query("SELECT COUNT(*) n FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='user_referral_accounts'"); if (Number(table.n) === 0) return null; const [rows] = await connection.query('SELECT user_id,referral_code,referred_by_code,referral_credit,revision,updated_at_utc FROM user_referral_accounts ORDER BY user_id'); return sha256(JSON.stringify(rows)) }
+    const referralHash = await readReferrals()
     const verifyOriginal = async () => {
+      if (referralHash !== null) check(await readReferrals() === referralHash, 'inplace_coordinator_referrals_changed')
       await verifyOriginalSchemaWithUserDefaults(connection, backup.schemaSha256, excluded)
       check(JSON.stringify(await readOriginalRows(connection, columns.originalColumns)) === JSON.stringify(columns.parity), 'inplace_coordinator_original_changed')
     }
@@ -68,7 +73,7 @@ try {
     await verifyOriginal()
     return applied
   })
-  const report = { kind: 'dev-vue-schema-upgrade/v4', status: apply ? 'verified' : 'planned', identity, proof,
+  const report = { kind: 'dev-vue-schema-upgrade/v5', status: apply ? 'verified' : 'planned', identity, proof,
     completedAtUtc: new Date().toISOString(), result, ddlExecutions, journalWrites, originalTables: columns.parity.length,
     originalRows: backup.parity.rows, originalParityHash: sha256(JSON.stringify(columns.parity)),
     repeatNoop: apply, businessRowsWritten: false, fullNormalizationComplete: false }
