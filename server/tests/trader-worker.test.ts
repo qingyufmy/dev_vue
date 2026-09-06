@@ -109,7 +109,7 @@ describe('Stage 12C account Trader Worker', () => {
         if (modelCalls === 1) throw new ModelInvocationError('provider_busy', 'failed', true)
         return { result: { action: 'market_order', side: 'buy', confidence: 82, summary: '账户允许候选买入', reasoning: '资金与敞口允许', actions: [{ actionId: 'action-1', kind: 'market_order', parameters: { symbol: 'XAUUSD', side: 'buy', volume: '0.01' }, expectedState: expected(input.snapshot) }] }, usage: { total_tokens: 80 } }
       },
-    }, 'trader-worker-1')
+    }, 'trader-worker-1', { async assertAllowed() {} })
     await expect(worker.process(base.id, new Date('2026-09-03T08:00:10.000Z'))).resolves.toMatchObject({ status: 'succeeded' })
     expect(modelCalls).toBe(2)
     expect(completed).toMatchObject({ attemptId: 'attempt-2', fencingToken: 5 })
@@ -124,6 +124,31 @@ describe('Stage 12C account Trader Worker', () => {
     await expect(service.completeTrader(claim, snapshot, result)).rejects.toMatchObject({ code: 'trader_expected_state_mismatch' })
   })
 
+  it.each([1, 2, 3, 4])('stops a changed window at trader checkpoint %s without completing a decision', async blockedCheck => {
+    const base = run(), failures: string[] = []
+    let checks = 0, calls = 0, completed = false
+    const repo = inferenceRepository({
+      async getTraderRun() { return base }, async getAnalysisDetail() { return analysis },
+      async failQueuedTrader(_id, code) { failures.push(code) },
+      async beginTrader(input) { return { run: { ...base, status: 'running', revision: 2 }, taskId: input.taskId, attemptId: input.attemptId, attemptNumber: 1, fencingToken: 5 } },
+      async failTraderAttempt(input) {
+        failures.push(input.errorCode)
+        return input.retryable ? { run: { ...base, status: 'running', revision: 2 }, taskId: input.taskId, attemptId: 'retry', attemptNumber: 2, fencingToken: 5 } : null
+      },
+      async completeTrader() { completed = true; throw new Error('must_not_complete') },
+    })
+    const strategies = new StrategyService(new Strategies())
+    const contexts = new TraderContextBuilder(repo, tradingRepository(), { async read() { return { revision: 6, data: {} } } }, { async read() { return { revision: 7, data: {} } } })
+    const worker = new TraderWorker(repo, new InferenceService(repo, strategies), strategies, contexts, {
+      profileId: null, provider: 'test', model: 'trader', timeoutMs: 1000, maxAttempts: 2,
+      async decide() { if (++calls === 1) throw new ModelInvocationError('provider_busy', 'failed', true); return { result: {} as TraderDecisionResult, usage: null } },
+    }, 'worker', { async assertAllowed() { if (++checks === blockedCheck) throw new InferenceError('trader_schedule_closed', 409) } })
+    expect(await worker.process(base.id, new Date('2026-09-03T08:00:10.000Z'))).toMatchObject({ status: 'failed', code: 'trader_schedule_closed' })
+    expect(calls).toBe(Math.max(0, blockedCheck - 2))
+    expect(completed).toBe(false)
+    expect(failures.at(-1)).toBe('trader_schedule_closed')
+  })
+
   it('defers a second task for the same account without invoking its model', async () => {
     const base = run(); let modelCalls = 0
     const repo = inferenceRepository({
@@ -134,7 +159,7 @@ describe('Stage 12C account Trader Worker', () => {
       repo, new InferenceService(repo, new StrategyService(new Strategies())), new StrategyService(new Strategies()),
       new TraderContextBuilder(repo, tradingRepository(), { async read() { return { revision: 6, data: {} } } }, { async read() { return { revision: 7, data: {} } } }),
       { profileId: null, provider: 'test', model: 'trader', timeoutMs: 5_000, maxAttempts: 1, async decide() { modelCalls += 1; throw new Error('must not run') } },
-      'worker-2',
+      'worker-2', { async assertAllowed() {} },
     )
     await expect(worker.process(base.id, new Date('2026-09-03T08:00:10.000Z'))).resolves.toEqual({ status: 'deferred', code: 'trader_account_busy', retryAfterMs: 2_000 })
     expect(modelCalls).toBe(0)

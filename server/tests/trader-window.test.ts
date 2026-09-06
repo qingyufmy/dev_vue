@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Pool, PoolConnection } from 'mysql2/promise'
-import { MysqlInferenceRepository, type InferenceRepository } from '../src/modules/inference/index.js'
+import { MysqlInferenceRepository, MysqlTraderWindowGuard, type InferenceRepository, type TraderRun } from '../src/modules/inference/index.js'
 import { traderWindowAllows } from '../src/modules/inference/infrastructure/mysql-trader-window.js'
 import { readTransactionAccountClock } from '../src/modules/trading/index.js'
 
@@ -8,6 +8,24 @@ const config = { version: 1, timezone: 'terminal_server', enabled: true, weekday
 const subscription = { user_id: 42, trading_account_id: '7', receive_timezone: 'terminal_server', receive_window_json: config }
 const now = new Date('2026-09-07T19:00:00Z')
 describe('trader fan-out window', () => {
+  it('rechecks exact subscription revision and releases its transaction on both outcomes', async () => {
+    const events: string[] = []
+    let present = true
+    const connection = {
+      async beginTransaction() { events.push('begin') }, async commit() { events.push('commit') },
+      async rollback() { events.push('rollback') }, release() { events.push('release') },
+      async execute(_sql: string, args: unknown[]) {
+        expect(args).toEqual(['sub', 42, '7', 4, '20', '21'])
+        return [present ? [{ ...subscription, receive_window_json: { enabled: false } }] : []]
+      },
+    }
+    const guard = new MysqlTraderWindowGuard({ async getConnection() { return connection } } as unknown as Pool)
+    const run = { subscriptionId: 'sub', userId: 42, tradingAccountId: '7', subscriptionRevision: 4, strategyId: '20', strategyVersionId: '21' } as TraderRun
+    await guard.assertAllowed(run, now)
+    present = false
+    await expect(guard.assertAllowed(run, now)).rejects.toThrow('subscription_revision_conflict')
+    expect(events).toEqual(['begin', 'commit', 'release', 'begin', 'rollback', 'release'])
+  })
   it('commits completed analysis without creating a trader run or trader outbox outside the window', async () => {
     const writes: string[] = [], events: unknown[] = []
     let committed = false

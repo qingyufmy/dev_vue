@@ -7,7 +7,7 @@ import { RedisBridgeGatewayLeaseStore } from '../modules/bridge/index.js'
 import {
   InferenceService, loadCredentialKeyring, MysqlInferenceRepository, MysqlInstrumentSnapshotReader,
   MysqlModelUsageLedger, MysqlRiskSummaryReader, MysqlRuntimeModelProfileCatalog, MysqlTraderModelGatewayResolver,
-  TraderContextBuilder, TraderWorker,
+  TraderContextBuilder, TraderWorker, MysqlTraderWindowGuard,
 } from '../modules/inference/index.js'
 import { MysqlStrategyCatalog, StrategyService } from '../modules/strategies/index.js'
 import { MysqlTradingRepository } from '../modules/trading/index.js'
@@ -41,6 +41,7 @@ async function main() {
       console.error('[worker-trader] model usage settlement failed')
     }),
     `trader:${process.pid}`,
+    new MysqlTraderWindowGuard(pool),
   )
   const worker = new Worker<TraderRunJob>(TRADER_QUEUE, async (job, token) => {
     if (job.name !== 'trader.run' || !job.data.traderRunId) throw new Error('trader_job_invalid')

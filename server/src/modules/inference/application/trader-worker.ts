@@ -5,6 +5,7 @@ import { ModelInvocationError } from './analysis-worker.js'
 import type { InferenceRepository } from './inference-ports.js'
 import type { InferenceService } from './inference-service.js'
 import type { TraderContextBuilder } from './trader-context-builder.js'
+import type { TraderWindowGuard } from './trader-window-guard.js'
 
 export interface TraderModelGateway {
   readonly profileId: string | null
@@ -27,6 +28,8 @@ export class TraderWorker {
     private readonly contexts: TraderContextBuilder,
     private readonly modelSource: TraderModelGateway | TraderModelGatewayResolver,
     private readonly workerId: string,
+    private readonly windows: TraderWindowGuard,
+    private readonly currentTime: () => Date = () => new Date(),
   ) {}
 
   async process(runId: string, now = new Date()) {
@@ -35,6 +38,7 @@ export class TraderWorker {
 
     let strategy
     try {
+      await this.windows.assertAllowed(run, this.currentTime())
       strategy = await this.strategies.requireActiveVersion(run.userId, run.strategyId, 'trader')
       if (strategy.id !== run.strategyVersionId) throw new InferenceError('strategy_version_conflict', 409)
     } catch (error) {
@@ -78,6 +82,7 @@ export class TraderWorker {
     while (true) {
       let output
       try {
+        await this.windows.assertAllowed(run, this.currentTime())
         output = await model.decide({ taskId: claim.taskId, attemptId: claim.attemptId, snapshot, signal: AbortSignal.timeout(timeoutMs) })
       } catch (error) {
         const failure = modelFailure(error)
@@ -88,9 +93,14 @@ export class TraderWorker {
       }
 
       try {
+        await this.windows.assertAllowed(run, this.currentTime())
         const decision = await this.inference.completeTrader(claim, snapshot, output.result, output.usage)
         return decision.status === 'stale' ? { status: 'stale' as const, decision } : { status: 'succeeded' as const, decision }
       } catch (error) {
+        if (error instanceof InferenceError && (error.code === 'trader_schedule_closed' || error.code === 'subscription_revision_conflict')) {
+          await this.inference.failTraderAttempt(claim, model, new ModelInvocationError(error.code, 'failed', false), maxAttempts)
+          return { status: 'failed' as const, code: error.code }
+        }
         if (error instanceof InferenceError && error.status === 409) return { status: 'ignored' as const, code: error.code }
         if (error instanceof InferenceError && error.status === 422) {
           await this.inference.failTraderAttempt(claim, model, new ModelInvocationError(error.code, 'contract_invalid', false), maxAttempts)
