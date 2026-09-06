@@ -1,0 +1,125 @@
+{
+  "kind": "dev_vue_source_evidence_upgrade",
+  "status": "verified",
+  "database": "dev_vue",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "backupSnapshotId": "sha256:9eebdd97aebf89b94c186bfbeda19dc7c028e672d3b27fae1ee4cf45e162bbee",
+  "completedAtUtc": "2026-09-06T14:57:23.401Z",
+  "result": {
+    "apply": true,
+    "steps": [
+      {
+        "id": "inplace_002_01_auth_sessions",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_02_auth_authorization_codes",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_03_terminal_profiles",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_04_bridge_connection_capacity_grants",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_05_data_migration_runs",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_06_data_migration_checkpoints",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_07_data_migration_batches",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_08_data_migration_id_maps",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_09_data_migration_row_receipts",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_003_01_trading_accounts_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_003_02_trading_account_ownership_intervals_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_003_03_trading_account_ownerships_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_003_04_user_trading_account_settings_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_004_01_data_migration_source_rows",
+        "status": "applied"
+      }
+    ]
+  },
+  "stepChecksums": [
+    {
+      "id": "inplace_004_01_data_migration_source_rows",
+      "checksum": "b8855e891a7cf3e7830a8b4311844764f42078c2a5f72fbed6d0954e101026fe",
+      "expectedHash": "64ce7085714f890ec74d261703c857851341f57ca7459ca0a4a7574570160ccb"
+    }
+  ],
+  "sourceFiles": [
+    {
+      "path": "scripts/upgrade-dev-vue-source-evidence.mjs",
+      "sha256": "cb2fbbfa9aff0153659c52d4d99815cc2b9bd733ec57cea03f01e016e5c04072"
+    },
+    {
+      "path": "scripts/lib/inplace-source-evidence-upgrade.mjs",
+      "sha256": "29caa1458af104e06c4f2795b257fc3432fd14e89a958338f567f86e8a7c9d8e"
+    },
+    {
+      "path": "scripts/lib/inplace-account-build.mjs",
+      "sha256": "2b9ef4dbab27edce134266d82092042d857ef9ae3d099c791969709423d6d453"
+    },
+    {
+      "path": "scripts/lib/inplace-foundation-upgrade.mjs",
+      "sha256": "9b024fc4ca674cc8ac5cec70754aeeb4c873cf6878d27b312e0876bf74a46f6d"
+    },
+    {
+      "path": "scripts/lib/dev-vue-column-upgrade.mjs",
+      "sha256": "b20ab4ba86a9b9b40ef9ea5ea559c812f3db8166db6b117c3bd94d49b40a41ac"
+    },
+    {
+      "path": "scripts/lib/mysql-inplace-column-store.mjs",
+      "sha256": "c42cfe0811296007b6a9f7fb46270b44b4f22614e0948af499293d95ce1cdafc"
+    },
+    {
+      "path": "scripts/lib/inplace-column-evidence.mjs",
+      "sha256": "7f62a4fae29a8e3ce12c84b6f704aa04f32c4ab324b53a2bf9bc706e66b67349"
+    },
+    {
+      "path": "scripts/lib/v4-migration-plan.mjs",
+      "sha256": "087d097447de41bda0781aca7cfd6bab82bf6bedaa5c22fde9e8b80e443c2c37"
+    },
+    {
+      "path": "server/db/migrations/inplace/004_account_build_tables.sql",
+      "sha256": "9b66231313014b799153bc592615ec5ea40710b3f4a538fc03da9dfd0e71951b"
+    },
+    {
+      "path": "server/db/migrations/inplace/005_source_row_evidence.sql",
+      "sha256": "4d7b0151f8ab3bc68228b1cd644435d6d7d4810c58e24678439e45432ba60183"
+    }
+  ],
+  "ddlExecutions": 1,
+  "repeatNoop": true,
+  "originalTablesVerified": 165,
+  "originalRowsVerified": "271007",
+  "sourceRenamed": false,
+  "noBusinessRowsSeeded": true,
+  "fullNormalizationComplete": false
+}

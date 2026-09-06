@@ -52,7 +52,7 @@ export function validateSpec(spec) {
   requireBackfill(/^[A-Za-z0-9_.:-]{1,128}$/.test(b.logicalSourceId), 'backfill_source_invalid')
   requireBackfill([b.sourceDatabase, b.mirrorDatabase, b.targetDatabase].every(v => typeof v === 'string' && identifier.test(v)), 'backfill_database_invalid')
   if (inplace) {
-    requireBackfill(b.storageMode === 'inplace-account-v1' && b.targetDatabase === b.sourceDatabase
+    requireBackfill(['inplace-account-v1', 'inplace-account-v2'].includes(b.storageMode) && b.targetDatabase === b.sourceDatabase
       && b.mirrorDatabase !== b.targetDatabase, 'backfill_inplace_scope_invalid')
   } else requireBackfill(b.targetDatabase !== b.sourceDatabase && b.targetDatabase !== b.mirrorDatabase, 'backfill_target_is_source')
   requireBackfill(typeof b.targetServerUuid === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(b.targetServerUuid), 'backfill_target_invalid')
@@ -88,7 +88,7 @@ export function prepareBatch(spec, batch) {
     requireBackfill([row.sourceHash, row.transformedHash].every(v => typeof v === 'string' && hashPattern.test(v)), 'backfill_row_hash_invalid')
     requireBackfill(Array.isArray(row.targets) && row.targets.length > 0 && row.targets.length <= 32, 'backfill_targets_invalid')
     row.targets.forEach(targetRef)
-    if (spec.bindings.storageMode === 'inplace-account-v1') requireBackfill(row.targets.every(target => Object.hasOwn(inplaceAccountTargets, target.table)), 'backfill_inplace_target_invalid')
+    if (spec.bindings.storageMode) requireBackfill(row.targets.every(target => Object.hasOwn(inplaceAccountTargets, target.table)), 'backfill_inplace_target_invalid')
     requireBackfill(row.transformedHash === hash({ payload: row.payload, targets: row.targets }), 'backfill_transform_hash_mismatch')
     requireBackfill(Array.isArray(row.idMaps) && row.idMaps.length <= 32, 'backfill_maps_invalid')
     for (const mapping of row.idMaps) {

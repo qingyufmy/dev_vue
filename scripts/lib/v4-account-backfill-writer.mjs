@@ -5,7 +5,8 @@ import { writeExact, accountWriterSchemas as schemas } from './v4-inplace-accoun
 const pk = value => [{ type: 'integer', value }]
 // One conversion over the entire frozen set, then pagination. A shared entity has
 // identical values in every source row; no batch computes its own min/max or IDs.
-export function createAccountBackfill(rows, plan, options, { batchSize = 100 } = {}) {
+export function createAccountBackfill(rows, plan, options, { batchSize = 100, preserveSource = false } = {}) {
+  check(typeof preserveSource === 'boolean', 'account_writer_source_mode_invalid')
   check(Number.isInteger(batchSize) && batchSize > 0 && batchSize <= 500, 'account_writer_batch_size_invalid')
   const converted = convertAccountRows(rows, plan, options)
   const entityById = new Map(converted.entities.map(entity => [entity.target.id, entity.target]))
@@ -19,7 +20,7 @@ export function createAccountBackfill(rows, plan, options, { batchSize = 100 } =
       idMaps: [mappings.get(setting.sourceId)] }
   })
   const stream = { sourceTable: 'trading_accounts', role: 'account-entity-settings-v1' }
-  const transformHash = hash({ version: 'account-writer-v1', conversion: converted.transformHash, schemas })
+  const transformHash = hash({ version: 'account-writer-v1', conversion: converted.transformHash, schemas, ...(preserveSource ? { sourceEvidenceVersion: 1 } : {}) })
   const batches = []
   let cursor = null
   for (let offset = 0; offset < preparedRows.length; offset += batchSize) {
@@ -29,7 +30,7 @@ export function createAccountBackfill(rows, plan, options, { batchSize = 100 } =
   }
   // Closed-over authoritative rows cannot be changed through returned batches.
   const expected = new Map(preparedRows.map(row => [canonical(row.pk), canonical(row)]))
-  const writer = { storageMode: 'inplace-account-v1', transformHash,
+  const writer = { storageMode: preserveSource ? 'inplace-account-v2' : 'inplace-account-v1', transformHash,
     async write(connection, row) {
       check(expected.get(canonical(row.pk)) === canonical(row), 'account_writer_row_mismatch')
       await writeExact(connection, 'trading_accounts', row.payload.entity)

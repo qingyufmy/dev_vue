@@ -8,7 +8,8 @@ const intervalPk = value => [{ type: 'text', value }]
 // Project only the final grant for each user/account. Attach it to its selected
 // interval so the composite FK always references a row written in this transaction
 // or an earlier committed batch; old intervals never grant temporary authority.
-export function createOwnershipBackfill(rows, options, { batchSize = 100, expectedSourceIds } = {}) {
+export function createOwnershipBackfill(rows, options, { batchSize = 100, expectedSourceIds, preserveSource = false } = {}) {
+  check(typeof preserveSource === 'boolean', 'ownership_writer_source_mode_invalid')
   check(Number.isInteger(batchSize) && batchSize > 0 && batchSize <= 500, 'ownership_writer_batch_size_invalid')
   check(Array.isArray(rows) && Array.isArray(expectedSourceIds), 'ownership_writer_source_incomplete')
   const sourceIds = new Set(expectedSourceIds)
@@ -26,7 +27,7 @@ export function createOwnershipBackfill(rows, options, { batchSize = 100, expect
       idMaps: [{ entityKind: 'ownership_interval', sourceTable: 'mt5_account_ownership_history', sourcePk: pk(entry.sourceId), target: targets[0] }] }
   })
   const stream = { sourceTable: 'mt5_account_ownership_history', role: 'ownership-interval-grants-v1' }
-  const transformHash = hash({ version: 'ownership-writer-v1', conversion: converted.transformationHash })
+  const transformHash = hash({ version: 'ownership-writer-v1', conversion: converted.transformationHash, ...(preserveSource ? { sourceEvidenceVersion: 1 } : {}) })
   const batches = []
   let cursor = null
   for (let offset = 0; offset < preparedRows.length; offset += batchSize) {
@@ -35,7 +36,7 @@ export function createOwnershipBackfill(rows, options, { batchSize = 100, expect
     batches.push({ batchId: hash({ transformHash, content }), ...content }); cursor = content.endCursor
   }
   const expected = new Map(preparedRows.map(row => [canonical(row.pk), canonical(row)]))
-  const writer = { storageMode: 'inplace-account-v1', transformHash, async write(connection, row) {
+  const writer = { storageMode: preserveSource ? 'inplace-account-v2' : 'inplace-account-v1', transformHash, async write(connection, row) {
     check(expected.get(canonical(row.pk)) === canonical(row), 'ownership_writer_row_mismatch')
     await writeExact(connection, 'trading_account_ownership_intervals', row.payload.interval)
     if (row.payload.grant) await writeExact(connection, 'trading_account_ownerships', row.payload.grant)
