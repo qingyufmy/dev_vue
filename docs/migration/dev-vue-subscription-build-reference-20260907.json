@@ -1,0 +1,169 @@
+{
+  "kind": "subscription-build-reference/v1",
+  "observedAt": "2026-09-06T17:25:45.533Z",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "tables": [
+    {
+      "name": "strategy_subscriptions",
+      "ddl": "CREATE TABLE `strategy_subscriptions` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `standard_symbol` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `analysis_strategy_id` bigint unsigned NOT NULL,\n  `analysis_strategy_version_id` bigint unsigned NOT NULL,\n  `trader_strategy_id` bigint unsigned DEFAULT NULL,\n  `trader_strategy_version_id` bigint unsigned DEFAULT NULL,\n  `analysis_enabled` tinyint(1) NOT NULL DEFAULT '1',\n  `trader_enabled` tinyint(1) NOT NULL DEFAULT '0',\n  `trade_send_enabled` tinyint(1) NOT NULL DEFAULT '0',\n  `status` enum('active','paused','ended') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `active_execution_key` varchar(255) CHARACTER SET ascii COLLATE ascii_bin GENERATED ALWAYS AS ((case when ((`status` = _utf8mb4'active') and (`trader_enabled` = 1)) then concat(cast(`trading_account_id` as char charset utf8mb4),_utf8mb4':',convert(`standard_symbol` using utf8mb4)) else NULL end)) STORED,\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_strategy_subscription_identity` (`user_id`,`trading_account_id`,`analysis_strategy_id`,`standard_symbol`),\n  UNIQUE KEY `uk_strategy_subscription_execution_slot` (`active_execution_key`),\n  UNIQUE KEY `uk_strategy_subscription_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `idx_strategy_subscriptions_analysis` (`user_id`,`analysis_strategy_version_id`,`standard_symbol`,`status`,`id`),\n  KEY `idx_strategy_subscriptions_account` (`trading_account_id`,`status`,`id`),\n  KEY `fk_strategy_subscriptions_analysis` (`analysis_strategy_id`),\n  KEY `fk_strategy_subscriptions_analysis_version` (`analysis_strategy_version_id`,`analysis_strategy_id`),\n  KEY `fk_strategy_subscriptions_trader` (`trader_strategy_id`),\n  KEY `fk_strategy_subscriptions_trader_version` (`trader_strategy_version_id`,`trader_strategy_id`),\n  CONSTRAINT `fk_strategy_subscriptions_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_strategy_subscriptions_analysis` FOREIGN KEY (`analysis_strategy_id`) REFERENCES `strategies` (`id`),\n  CONSTRAINT `fk_strategy_subscriptions_analysis_version` FOREIGN KEY (`analysis_strategy_version_id`, `analysis_strategy_id`) REFERENCES `strategy_versions` (`id`, `strategy_id`),\n  CONSTRAINT `fk_strategy_subscriptions_trader` FOREIGN KEY (`trader_strategy_id`) REFERENCES `strategies` (`id`),\n  CONSTRAINT `fk_strategy_subscriptions_trader_version` FOREIGN KEY (`trader_strategy_version_id`, `trader_strategy_id`) REFERENCES `strategy_versions` (`id`, `strategy_id`),\n  CONSTRAINT `fk_strategy_subscriptions_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_strategy_subscriptions_send` CHECK (((`trade_send_enabled` = 0) or (`trader_enabled` = 1))),\n  CONSTRAINT `chk_strategy_subscriptions_trader` CHECK ((((`trader_enabled` = 0) and (`trade_send_enabled` = 0)) or ((`trader_enabled` = 1) and (`trader_strategy_id` is not null) and (`trader_strategy_version_id` is not null))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "name": "subscription_schedules",
+      "ddl": "CREATE TABLE `subscription_schedules` (\n  `subscription_id` bigint unsigned NOT NULL,\n  `cadence_seconds` int unsigned NOT NULL DEFAULT '300',\n  `receive_timezone` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `receive_window_json` json NOT NULL,\n  `next_due_at_utc` datetime(3) DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `updated_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`subscription_id`),\n  KEY `idx_subscription_schedules_due` (`next_due_at_utc`,`subscription_id`),\n  CONSTRAINT `fk_subscription_schedules_subscription` FOREIGN KEY (`subscription_id`) REFERENCES `strategy_subscriptions` (`id`),\n  CONSTRAINT `chk_subscription_schedule_cadence` CHECK ((`cadence_seconds` >= 60))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "name": "subscription_execution_preferences_v4",
+      "ddl": "CREATE TABLE `subscription_execution_preferences_v4` (\n  `subscription_id` bigint unsigned NOT NULL,\n  `contract_version` smallint unsigned NOT NULL,\n  `take_profit_mode` enum('ai_recommended','conservative','standard','trend') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `revision` bigint unsigned NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`subscription_id`),\n  CONSTRAINT `fk_subscription_execution_preferences_subscription` FOREIGN KEY (`subscription_id`) REFERENCES `strategy_subscriptions` (`id`),\n  CONSTRAINT `chk_subscription_execution_preferences_revision` CHECK ((`revision` > 0)),\n  CONSTRAINT `chk_subscription_execution_preferences_version` CHECK ((`contract_version` = 1))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    }
+  ],
+  "migrations": [
+    {
+      "id": "20260903_001_bridge_v4_device_sessions",
+      "checksum_sha256": "2e98051350645fc30b6ccbc2843da08516bd906a6bdf000bfec5080cf0374adf",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_002_auth_sso_sessions",
+      "checksum_sha256": "6d99b0c61769b66fdf934a7fd0f96500b864bb55264c469bd020fe0c4820f728",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_003_trading_context_and_market_projection",
+      "checksum_sha256": "08dbece7f84f47d2d45ce751635e58d251e9252fcff0d82c1405136b6dfee93e",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_004_ai_strategy_and_inference_core",
+      "checksum_sha256": "b5252c385357b9cccec2513a6d3f17634f8a73f194818420de88ed76b0790960",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_005_analysis_scheduler_and_account_fanout",
+      "checksum_sha256": "a256f46c3e6f5592f5b2c7563f471f3b425b405610e72b64586bc5f1e00c5b16",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_006_account_trader_worker",
+      "checksum_sha256": "eac86099de26cef5948bc71464269579b0a466f07ea37fa21dc64538baa9dda8",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_007_deterministic_risk_review",
+      "checksum_sha256": "ed697bb67c7c87d389575f00462a961011cd45d115287cc018bf6e40fbef7d3e",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_008_manual_risk_release",
+      "checksum_sha256": "c27c28fa6aaa1f63aadeb9b43e0858679d927f88f932050a943d2f4b07fe34c1",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_009_execution_intents_and_reservations",
+      "checksum_sha256": "441e93adbe9e7a61976adfaeb6477336a7d2fb76c6acab927503501fde960a5e",
+      "status": "completed"
+    },
+    {
+      "id": "20260903_010_bridge_v4_command_ledger",
+      "checksum_sha256": "6de803b91617807c57cf545a326c3877b2a2c1e4242652c1f11dc24deceb07d1",
+      "status": "completed"
+    },
+    {
+      "id": "20260904_011_user_execution_commands_and_distributions",
+      "checksum_sha256": "59f39b04871bee1a470785f03d3a7de1719c39a4abe22e87c16a2a8d3dc0ca3f",
+      "status": "completed"
+    },
+    {
+      "id": "20260904_012_review_memory_core",
+      "checksum_sha256": "2586fb4a5b9a36a0bd0e4a2e213ff60d6026888eaebe9c83b75840ea99db5b53",
+      "status": "completed"
+    },
+    {
+      "id": "20260904_013_authoritative_trade_history",
+      "checksum_sha256": "6ae01130da3efacc58a9b1aa6a95c98f1bccdf6f24c81b50decb61b19402e258",
+      "status": "completed"
+    },
+    {
+      "id": "20260904_014_audit_read_indexes",
+      "checksum_sha256": "1621ab0b05f3d84c416220e84683b4a6de2ecc9c4b2e1aa6f7e56c364b62db23",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_015_macro_sources_and_observations",
+      "checksum_sha256": "bbc94e17b2b0f34895b09291126c30dc20c23277ea13b5315ca34d295b531444",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_016_macro_snapshot_research",
+      "checksum_sha256": "78d7365ae9feab93bcd8646dcbdeac4de64ccf1536462ee1f4abe19e8455510e",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_017_economic_calendar",
+      "checksum_sha256": "7a29716aefd45691b29d11d97874480e0d58ef1f9ab139bf4049be917e7a1946",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_018_user_state_and_referral_accounts",
+      "checksum_sha256": "64e8b88cd337fe45202d9bf277317cc6af37942ddf8ae3055f155c58d01c9a29",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_019_account_ownership_intervals",
+      "checksum_sha256": "3b17b685274b0eb1fe225305fea9de673fea60cc81c629dc8477a73913a48a1a",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_020_account_projection_and_history_provenance",
+      "checksum_sha256": "9f55df7803e2429e395f253d6396edf694b97d1059f1cc2daadb5eb73c62b2f8",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_021_observer_sources_and_audiences",
+      "checksum_sha256": "aed263e66171f336d7750bbdfa565c03ae8e82f6f69521483a022ec0a3e687d2",
+      "status": "completed"
+    },
+    {
+      "id": "20260905_022_observer_management_ledger",
+      "checksum_sha256": "0d33169447c5f77f158ae028662c55aadcc09a1eb256d9c5befee2abe8d2a863",
+      "status": "completed"
+    },
+    {
+      "id": "20260906_023_bridge_profile_epoch_scope",
+      "checksum_sha256": "ea314526bb0bbbf1f5fd427ecfc71ea5b97a1997b434348c37e283e9ae82ed4a",
+      "status": "completed"
+    },
+    {
+      "id": "20260906_024_bridge_pairing_requests",
+      "checksum_sha256": "acfbcd21fdaa99b6f5e6cd081e56dd4e1c21cae928049dc35a085e67571d624e",
+      "status": "completed"
+    },
+    {
+      "id": "20260906_025_data_migration_batch_ledger",
+      "checksum_sha256": "6523e515b62147be2157c3b8a6e1e6fd1dc96d131343cbfbd02c180cc8cdb107",
+      "status": "completed"
+    },
+    {
+      "id": "20260906_026_trade_history_currency_evidence",
+      "checksum_sha256": "9a8c19b12c6627332b6a3bab8a6ddee8c30a58328666e7697a1648353f23c5a0",
+      "status": "completed"
+    },
+    {
+      "id": "20260907_027_subscription_execution_preferences",
+      "checksum_sha256": "87c8d3e026442c73bf502c251828d719962b0dfbe3609a2b3150aabf8b651b99",
+      "status": "completed"
+    },
+    {
+      "id": "bootstrap_v4_foundation_v1",
+      "checksum_sha256": "3a5a1f4b1cd76d505884f3a4702da54f3d67ff379d1fcf832866b31a0f3ff215",
+      "status": "completed"
+    }
+  ],
+  "toolHashes": {
+    "capture-subscription-build-reference-host.mjs": "f17acdf8cc4ab8fc9335aff13cd921f0354caaa85e8242f35181db0639fdfeaa",
+    "run-subscription-build-reference-host.py": "d027edc6d10850f67486a62be1579781de2a8a04cd287d47eb60dc92e1788522"
+  }
+}

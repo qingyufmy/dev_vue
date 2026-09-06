@@ -1,0 +1,45 @@
+{
+  "observedAt": "2026-09-06T17:28:20.782Z",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "result": {
+    "apply": false,
+    "steps": [
+      {
+        "id": "inplace_006_01_strategy_subscriptions_v4_build",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_006_02_subscription_schedules_v4_build",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_006_03_subscription_execution_preferences_v4_build",
+        "status": "pending"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "id": "inplace_006_01_strategy_subscriptions_v4_build",
+      "checksum": "d8684953218327f93648a3dfe29ca37b8fdef43b987e53018c2db3034906fb85",
+      "beforeHash": null,
+      "afterHash": "f6cc4821d93be77fcd2f73ae2da6c3b13453cc41e4b00c2868afd8427e3af48c"
+    },
+    {
+      "id": "inplace_006_02_subscription_schedules_v4_build",
+      "checksum": "b9b7ae1e00e9516b89871419c270ce9774a8d5a2a684eca21455ee21cbe644a3",
+      "beforeHash": null,
+      "afterHash": "4ae25c9ca66ab22671d6061698ec6b532ac8984334be9771fbb480f1c77af87b"
+    },
+    {
+      "id": "inplace_006_03_subscription_execution_preferences_v4_build",
+      "checksum": "d92169c09ad04d95739764520628b77c84e29df573311cbce825ba8e19db06c6",
+      "beforeHash": null,
+      "afterHash": "ddadd81e3f0c70f5c503e546ed3792f7098ad83bf79acc9554b278a93219749a"
+    }
+  ],
+  "businessWritesPerformed": false
+}
