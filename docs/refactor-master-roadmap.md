@@ -619,3 +619,5 @@ U2历史时间与账户承接已进一步收敛：[39字段依据及承接合同
 阶段 114：返佣管理真实双连接重放/版本争用及提交响应丢失恢复通过，fixture已清理；管理员PUT接口与OpenAPI已注册，26项相关HTTP/合同测试通过，尚未启动联调，见 [阶段 114](migration/dev-vue-inplace-stage114-20260907.md)。
 
 阶段 115：管理员规则GET与OpenAPI补齐，当前 dev_vue 实际读取器两次只读核对四行与旧五字段一致，18项关联测试通过，尚未浏览器/旧入口退出验收，见 [阶段 115](migration/dev-vue-inplace-stage115-20260907.md)。
+
+阶段 116：钱包地址五字段与索引两次当前库只读一致，TRON四行索引0–3连续；来源检查器四项测试通过，旧时间和密钥控制关系仍待依据，见 [钱包地址合同](migration/wallet-address-normalization-contract-20260907.md)。

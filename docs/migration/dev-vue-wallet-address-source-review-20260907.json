@@ -1,0 +1,175 @@
+{
+  "kind": "wallet-address-source-review/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "schemaSteps": 53,
+  "columns": [
+    {
+      "name": "id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collationName": null
+    },
+    {
+      "name": "chain",
+      "type": "varchar(10)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collationName": "utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "address_index",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collationName": null
+    },
+    {
+      "name": "address",
+      "type": "varchar(100)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collationName": "utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": "now()",
+      "collationName": null
+    }
+  ],
+  "indexes": [
+    {
+      "name": "PRIMARY",
+      "nonUnique": 0,
+      "position": 1,
+      "columnName": "id"
+    },
+    {
+      "name": "uk_wallet_chain_address",
+      "nonUnique": 0,
+      "position": 1,
+      "columnName": "chain"
+    },
+    {
+      "name": "uk_wallet_chain_address",
+      "nonUnique": 0,
+      "position": 2,
+      "columnName": "address"
+    },
+    {
+      "name": "uk_wallet_chain_index",
+      "nonUnique": 0,
+      "position": 1,
+      "columnName": "chain"
+    },
+    {
+      "name": "uk_wallet_chain_index",
+      "nonUnique": 0,
+      "position": 2,
+      "columnName": "address_index"
+    }
+  ],
+  "result": {
+    "version": "wallet-address-source/v1",
+    "sourceFields": 5,
+    "sourceHash": "8fcb1191a9ce206534571b81db39dba55d49be12abe887ba3be960ee550b0557",
+    "entries": [
+      {
+        "sourceId": "1",
+        "sourceHash": "5961d5f953269e2bf00702e25bebf19b569ac60e4d7ab6b8bdc554f5e77527f5",
+        "chain": "TRON",
+        "addressIndex": "0",
+        "createdAtRaw": "2026-07-06 14:03:07"
+      },
+      {
+        "sourceId": "2",
+        "sourceHash": "d8dc579bf7d86cdcc937b1340eb2c6419ea2c8f5ea36478147cbc06875504fd4",
+        "chain": "TRON",
+        "addressIndex": "1",
+        "createdAtRaw": "2026-07-06 14:08:01"
+      },
+      {
+        "sourceId": "3",
+        "sourceHash": "b524cb747188e9ecaf34635a99ddd8950063109c3e8c44aa3cc69b0a139079e2",
+        "chain": "TRON",
+        "addressIndex": "2",
+        "createdAtRaw": "2026-07-06 14:31:10"
+      },
+      {
+        "sourceId": "4",
+        "sourceHash": "26bb294845dd61a9cf742d942a331ba15808238ba4bde2feb163984356efe3c1",
+        "chain": "TRON",
+        "addressIndex": "3",
+        "createdAtRaw": "2026-07-06 14:51:30"
+      }
+    ],
+    "chains": [
+      {
+        "chain": "TRON",
+        "rows": 4,
+        "minimumIndex": "0",
+        "maximumIndex": "3",
+        "legacyCountRangeCoversAllIndices": true
+      }
+    ],
+    "blockers": [
+      {
+        "sourceId": "1",
+        "code": "wallet_created_time_basis_required"
+      },
+      {
+        "sourceId": "1",
+        "code": "wallet_custody_binding_unverified"
+      },
+      {
+        "sourceId": "2",
+        "code": "wallet_created_time_basis_required"
+      },
+      {
+        "sourceId": "2",
+        "code": "wallet_custody_binding_unverified"
+      },
+      {
+        "sourceId": "3",
+        "code": "wallet_created_time_basis_required"
+      },
+      {
+        "sourceId": "3",
+        "code": "wallet_custody_binding_unverified"
+      },
+      {
+        "sourceId": "4",
+        "code": "wallet_created_time_basis_required"
+      },
+      {
+        "sourceId": "4",
+        "code": "wallet_custody_binding_unverified"
+      }
+    ],
+    "privateKeysRead": false,
+    "addressControlVerified": false,
+    "blockchainQueried": false,
+    "businessWritesEnabled": false
+  },
+  "referenceFiles": [
+    {
+      "path": "server/migrations.js",
+      "sha256": "8d8225e40fa39ba2fcc60267b5066ba240e6d114078756552d770b5e66d8d395"
+    },
+    {
+      "path": "server/crypto/wallet.js",
+      "sha256": "8e1e80eaa5c298a680bd9a2bcd485fc538a1a5490b451859b3594781bf22ce52"
+    },
+    {
+      "path": "server/crypto/sweep.js",
+      "sha256": "63f51a421a06c0059430ba5fd37fe9f4fa75c51a89ecc0b5fa2c1304fd9a79ef"
+    }
+  ],
+  "sourceDatabaseWritten": false,
+  "businessConsumersSwitched": false
+}
