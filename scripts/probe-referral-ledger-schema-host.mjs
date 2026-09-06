@@ -32,7 +32,7 @@ try {
     ['opening_revision', { 1: '2', 3: 'e'.repeat(64) }, 'ER_CHECK_CONSTRAINT_VIOLATED'],
     ['opening_delta', { 5: '1', 3: 'e'.repeat(64) }, 'ER_CHECK_CONSTRAINT_VIOLATED'],
     ['opening_without_run', { 7: null, 3: 'e'.repeat(64) }, 'ER_CHECK_CONSTRAINT_VIOLATED'],
-    
+
   ]
   const outcomes = []
   for (const [name, changes, expected] of cases) {
