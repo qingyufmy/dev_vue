@@ -541,3 +541,5 @@ U2历史时间与账户承接已进一步收敛：[39字段依据及承接合同
 阶段 75：期初账本事务 writer 和 verifyOnly 恢复核验已实现，20 项测试通过；只 INSERT opening、不 UPDATE 余额，真实期初回填待演练，见 [阶段 75](migration/dev-vue-inplace-stage75-20260907.md)。
 
 阶段 76：恢复副本真实写入 25 条 opening，提交后断连经 verifyOnly 确认；独立重跑 0 INSERT，余额和原 271007 行不变。当前库期初仍待写入，见 [阶段 76](migration/dev-vue-inplace-stage76-20260907.md)。
+
+阶段 77：当前 dev_vue 写入 25 条 opening，独立重跑 0 INSERT/0 余额更新；原 271007 行一致，21 项测试通过。推荐应用财务事务与全库迁移仍待完成，见 [阶段 77](migration/dev-vue-inplace-stage77-20260907.md)。

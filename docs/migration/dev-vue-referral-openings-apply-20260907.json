@@ -1,0 +1,54 @@
+{
+  "kind": "referral-opening-apply/v1",
+  "status": "verified",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "runManifestHash": "dfc5afc58809efe868f59d2a26e00ae8500573a2ff439a4be0b0230534496137",
+  "proof": {
+    "rehearsalSha256": "7fc572778952a5e9b7f8e4284fc75efd183afb18c1ce9b756e12d72b5fa6a4b5",
+    "repeatSha256": "3e746897bd702cfb8176b1f808739c7f3c80b36178b00a679b5d9b7e12d7c917",
+    "toolsVerified": 132
+  },
+  "result": {
+    "inserted": 0,
+    "existing": 25,
+    "rows": 25,
+    "migrationAudit": {
+      "runVerified": true,
+      "checkpointsVerified": 1,
+      "batchesVerified": 3,
+      "mappingsVerified": 25,
+      "processedRows": 25,
+      "databaseWrites": 0
+    },
+    "openingsHash": "d2161304604813fa66ed262d569578d9727976188233cae5b6b68c2ffc91af4a",
+    "sourceHash": "6cc709552b2c661c1205b2e3f59b61b3df58c2bfc90d52821839654cfe8ea7ac",
+    "balanceUpdates": 0
+  },
+  "repeated": {
+    "inserted": 0,
+    "existing": 25,
+    "rows": 25,
+    "migrationAudit": {
+      "runVerified": true,
+      "checkpointsVerified": 1,
+      "batchesVerified": 3,
+      "mappingsVerified": 25,
+      "processedRows": 25,
+      "databaseWrites": 0
+    },
+    "openingsHash": "d2161304604813fa66ed262d569578d9727976188233cae5b6b68c2ffc91af4a",
+    "sourceHash": "6cc709552b2c661c1205b2e3f59b61b3df58c2bfc90d52821839654cfe8ea7ac",
+    "balanceUpdates": 0
+  },
+  "insertions": 25,
+  "commitResponseLossInjected": false,
+  "repeatInsertions": 0,
+  "originalRows": "271007",
+  "originalParityHash": "1acdcef31318fdb532899bd8f5260b878cd357fbd597ec01d21a6640154fe872",
+  "balanceHash": "093e859fcb3b98aedf9908f30abc5973bcd8bbfaeff79369351757725b3b0212",
+  "sourceDatabaseWritten": true,
+  "fullNormalizationComplete": false
+}
