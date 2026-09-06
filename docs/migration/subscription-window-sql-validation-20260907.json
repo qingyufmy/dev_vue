@@ -1,0 +1,50 @@
+{
+  "kind": "subscription-window-sql-validation/v1",
+  "observedAt": "2026-09-06T16:36:51.374Z",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "inputSha256": "4edaea00d7f04ec3c38fadee1e0e3108038b5faa4a759c75f7771e175918fdf5",
+  "results": [
+    {
+      "name": "analysis_schedule",
+      "sqlSha256": "f33a09ade1fc68e63673f8d61fa03ae2cb121fa4272c9402e1b5a388a2971170",
+      "explainRows": 4,
+      "resultRows": 0
+    },
+    {
+      "name": "analysis_window",
+      "sqlSha256": "55bc5125858a5ed149ba29ec8160b2e4a8784ec097d88c18e1438f850bdccd1b",
+      "explainRows": 1,
+      "resultRows": 0
+    },
+    {
+      "name": "trader_window",
+      "sqlSha256": "668e5508d1fc3ae91d0e5d4e9cc24f0b301dd052a232bd866d20c46809d34e9b",
+      "explainRows": 1,
+      "resultRows": 0
+    },
+    {
+      "name": "clock_provenance",
+      "sqlSha256": "f41cc8528002df194ba3cf6f5dc6597e73c6e103d2098003161be833d993fd15",
+      "explainRows": 1,
+      "resultRows": 0
+    },
+    {
+      "name": "execution_window",
+      "sqlSha256": "768d4387fac09c4a48ad74094cb6b860cb58cac6c88a77cb9f92f985b5f31867",
+      "explainRows": 1,
+      "resultRows": 0
+    },
+    {
+      "name": "trader_fanout",
+      "sqlSha256": "9f2edeaac906f1b1f51896a58514e0f2eba706f96e57894db454eccaa32e95b5",
+      "explainRows": 3,
+      "resultRows": 0
+    }
+  ],
+  "businessWritesPerformed": false,
+  "fixtureBehaviorVerified": false
+}
