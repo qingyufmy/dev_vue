@@ -1,0 +1,54 @@
+{
+  "kind": "membership-reader-probe/v1",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "toolManifest": [
+    {
+      "path": "scripts/lib/v4-backup-artifact.mjs",
+      "sha256": "4e66ff5a47c862dd494ef3d9800f413b07de19ca1a81e1e61eece4da8ef22591"
+    },
+    {
+      "path": "scripts/lib/v4-backup-io.mjs",
+      "sha256": "0b6082e0b18e30a42ffad895e5f3cbd4a2645e87f623d02b5c1844d53f6f7171"
+    },
+    {
+      "path": "scripts/probe-membership-reader-host.mjs",
+      "sha256": "c896c5bac0a8c2d145cc8b8e6f36e6e262cdb52a11a14d0e9ffc62bb33cab32a"
+    },
+    {
+      "path": "scripts/run-membership-reader-host.py",
+      "sha256": "0fbc40e0168c60ae225aa8f6ab62a1bba3efc5fb83564e159f7c154cc43f2897"
+    },
+    {
+      "path": "server/dist-v4/modules/commerce/domain/membership.js",
+      "sha256": "32085e7e3b92bda9a2c9ffcdb5e2b2fe96ab17db8866fd1207d22d3db132816d"
+    },
+    {
+      "path": "server/dist-v4/modules/commerce/infrastructure/mysql-membership-reader.js",
+      "sha256": "6c6f633b05fc039513b31c90ee3bba32466161e521037bd9ea860c65aa952f4c"
+    },
+    {
+      "path": "server/src/modules/commerce/domain/membership.ts",
+      "sha256": "b64c2ad3c71aefbf9f116b13732f3cc440fd8b3f4414f2c75794f57a254d53be"
+    },
+    {
+      "path": "server/src/modules/commerce/infrastructure/mysql-membership-reader.ts",
+      "sha256": "4efe00cfe032313275e2e508307cac293a19175d54509e7f7c216f0555fd4971"
+    }
+  ],
+  "fixtureOnly": true,
+  "exactRevisionAndMilliseconds": true,
+  "nullAndEmptyPreserved": true,
+  "boundaryVerified": true,
+  "missingRowIsNull": true,
+  "rolledBack": true,
+  "finalCounts": {
+    "users_count": 0,
+    "memberships_count": 0
+  },
+  "currentDevVueWritten": false,
+  "consumersSwitched": false
+}
