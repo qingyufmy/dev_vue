@@ -53,7 +53,7 @@ export class BridgeCommandService {
     let dispatched
     try { dispatched = await this.repository.markDispatched(command.id, command.revision, now.toISOString()) }
     catch (error) {
-      if (error instanceof BridgeCommandError && ['execution_subscription_changed', 'execution_schedule_invalid', 'execution_schedule_closed'].includes(error.code)) {
+      if (error instanceof BridgeCommandError && ['execution_subscription_changed', 'execution_schedule_invalid', 'execution_schedule_closed', 'execution_schedule_unproven', 'execution_schedule_changed'].includes(error.code)) {
         return this.repository.markPreDispatchFailed(command.id, command.revision, error.code, new Date().toISOString())
       }
       throw error

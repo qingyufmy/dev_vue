@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { PoolConnection } from 'mysql2/promise'
 import { assertDistributionWindow, assertRiskDecisionWindow } from '../src/modules/execution/infrastructure/mysql-execution-window.js'
+import { subscriptionWindowFingerprint } from '../src/modules/strategies/index.js'
+import { sha256Canonical } from '../src/modules/execution/domain/execution.js'
+
+const evidence = (window: unknown, timezone: string) => {
+  const snapshot = { subscriptionWindowHash: subscriptionWindowFingerprint(window, timezone) }
+  return { snapshot_json: JSON.stringify(snapshot), snapshot_sha256: sha256Canonical(snapshot) }
+}
 
 describe('execution subscription window', () => {
   it('binds manual-order distribution to its frozen target and refuses a missing subscription', async () => {
@@ -21,20 +28,29 @@ describe('execution subscription window', () => {
     await expect(assertRiskDecisionWindow(connection, 'risk', 42, '7', new Date())).rejects.toThrow('execution_subscription_changed')
     rows = [{ receive_timezone: 'UTC', receive_window_json: {} }]
     await expect(assertRiskDecisionWindow(connection, 'risk', 42, '7', new Date())).rejects.toThrow('execution_schedule_invalid')
-    rows = [{ receive_timezone: 'UTC', receive_window_json: { enabled: false } }]
+    rows = [{ receive_timezone: 'UTC', receive_window_json: { enabled: false }, ...evidence({ enabled: false }, 'UTC') }]
     await expect(assertRiskDecisionWindow(connection, 'risk', 42, '7', new Date())).resolves.toBeUndefined()
   })
   it('rechecks terminal clock and exclusive boundary even for signals-only', async () => {
     let queries = 0
+    const window = { version: 1, timezone: 'terminal_server', enabled: true, weekdays: [1], windows: [{ start: '22:00', end: '02:00' }], outsideBehavior: 'signals_only' }
     const connection = { async execute(sql: string) {
       queries += 1
-      if (sql.includes('FROM risk_decisions_v4')) return [[{ receive_timezone: 'terminal_server', receive_window_json: {
-        version: 1, timezone: 'terminal_server', enabled: true, weekdays: [1], windows: [{ start: '22:00', end: '02:00' }], outsideBehavior: 'signals_only',
-      } }]]
+      if (sql.includes('FROM risk_decisions_v4')) return [[{ receive_timezone: 'terminal_server', receive_window_json: window, ...evidence(window, 'terminal_server') }]]
       return [[{ timezone_offset_minutes: 180, clock_status: 'calibrated' }]]
     } } as unknown as PoolConnection
     await expect(assertRiskDecisionWindow(connection, 'risk', 42, '7', new Date('2026-09-07T19:00:00Z'))).resolves.toBeUndefined()
     await expect(assertRiskDecisionWindow(connection, 'risk', 42, '7', new Date('2026-09-07T23:00:00Z'))).rejects.toThrow('execution_schedule_closed')
     expect(queries).toBe(4)
+  })
+  it('refuses missing, tampered, or superseded evidence even when the current window allows execution', async () => {
+    const base = { receive_timezone: 'UTC', receive_window_json: { enabled: false } }
+    let row: object = base
+    const connection = { async execute() { return [[row]] } } as unknown as PoolConnection
+    await expect(assertRiskDecisionWindow(connection, 'risk', 42, '7', new Date())).rejects.toThrow('execution_schedule_unproven')
+    row = { ...base, ...evidence({ enabled: false }, 'UTC'), snapshot_sha256: 'a'.repeat(64) }
+    await expect(assertRiskDecisionWindow(connection, 'risk', 42, '7', new Date())).rejects.toThrow('execution_schedule_unproven')
+    row = { ...base, ...evidence({ enabled: false }, 'terminal_server') }
+    await expect(assertRiskDecisionWindow(connection, 'risk', 42, '7', new Date())).rejects.toThrow('execution_schedule_changed')
   })
 })

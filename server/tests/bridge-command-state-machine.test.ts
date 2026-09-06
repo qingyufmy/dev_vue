@@ -10,7 +10,7 @@ const NOW = new Date('2026-09-03T09:00:00.000Z')
 const route = { terminalInstanceId: 'terminal_12345678', brokerServer: 'DPrime-Demo', login: '596520', connectionEpoch: 7 }
 
 describe('Bridge V4 server command lifecycle', () => {
-  it.each(['execution_subscription_changed', 'execution_schedule_invalid', 'execution_schedule_closed'])('fails before socket write and releases reservation for %s', async code => {
+  it.each(['execution_subscription_changed', 'execution_schedule_invalid', 'execution_schedule_closed', 'execution_schedule_unproven', 'execution_schedule_changed'])('fails before socket write and releases reservation for %s', async code => {
     const repo = new MemoryBridgeRepository(), transport = new MemoryTransport(repo.trace)
     repo.markDispatched = async () => { throw new BridgeCommandError(code, 409) }
     const service = new BridgeCommandService(repo), command = await service.create(input(), NOW)

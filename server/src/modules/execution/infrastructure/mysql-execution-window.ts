@@ -1,10 +1,10 @@
 import type { PoolConnection, RowDataPacket } from 'mysql2/promise'
-import { evaluateSubscriptionWindow } from '../../strategies/index.js'
+import { evaluateSubscriptionWindow, subscriptionWindowFingerprint } from '../../strategies/index.js'
 import { readTransactionAccountClock } from '../../trading/index.js'
-import { ExecutionError } from '../domain/execution.js'
+import { ExecutionError, sha256Canonical } from '../domain/execution.js'
 
 export async function assertRiskDecisionWindow(connection: PoolConnection, riskDecisionId: string, userId: number, accountId: string, now: Date) {
-  const [rows] = await connection.execute<(RowDataPacket & { receive_timezone: string; receive_window_json: unknown })[]>(`SELECT sc.receive_timezone,sc.receive_window_json
+  const [rows] = await connection.execute<(RowDataPacket & { receive_timezone: string; receive_window_json: unknown; snapshot_json: unknown; snapshot_sha256: string | null })[]>(`SELECT sc.receive_timezone,sc.receive_window_json,payload.payload_json snapshot_json,snapshot.payload_sha256 snapshot_sha256
     FROM risk_decisions_v4 rd INNER JOIN trade_decisions d ON d.id=rd.trade_decision_id
     INNER JOIN ai_trader_runs r ON r.id=d.trader_run_id AND r.user_id=d.user_id AND r.trading_account_id=d.trading_account_id
     INNER JOIN strategy_subscriptions s ON s.id=r.subscription_id AND s.user_id=r.user_id AND s.trading_account_id=r.trading_account_id
@@ -16,10 +16,21 @@ export async function assertRiskDecisionWindow(connection: PoolConnection, riskD
     INNER JOIN strategies strategy ON strategy.id=s.trader_strategy_id AND strategy.kind='trader'
       AND strategy.status='active' AND strategy.deleted_at_utc IS NULL AND strategy.active_version_id=s.trader_strategy_version_id
     INNER JOIN subscription_schedules sc ON sc.subscription_id=s.id
+    LEFT JOIN inference_snapshots snapshot ON snapshot.id=d.input_snapshot_id AND snapshot.id=r.input_snapshot_id
+      AND snapshot.purpose='trader' AND snapshot.user_id=d.user_id AND snapshot.trading_account_id=d.trading_account_id
+    LEFT JOIN inference_snapshot_payloads payload ON payload.snapshot_id=snapshot.id AND payload.encoding='json'
     WHERE rd.id=? AND rd.user_id=? AND rd.trading_account_id=? AND d.user_id=rd.user_id AND d.trading_account_id=rd.trading_account_id
     FOR SHARE`, [riskDecisionId, userId, accountId])
   if (rows.length !== 1) throw new ExecutionError('execution_subscription_changed', 409)
   await assertWindow(connection, rows[0]!, userId, accountId, now)
+  const row = rows[0]!
+  let snapshot: unknown
+  try { snapshot = typeof row.snapshot_json === 'string' ? JSON.parse(row.snapshot_json) : row.snapshot_json }
+  catch { throw new ExecutionError('execution_schedule_unproven', 409) }
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot) || sha256Canonical(snapshot) !== row.snapshot_sha256) throw new ExecutionError('execution_schedule_unproven', 409)
+  const frozen = (snapshot as Record<string, unknown>).subscriptionWindowHash
+  if (typeof frozen !== 'string' || !/^[a-f0-9]{64}$/.test(frozen)) throw new ExecutionError('execution_schedule_unproven', 409)
+  if (frozen !== subscriptionWindowFingerprint(row.receive_window_json, row.receive_timezone)) throw new ExecutionError('execution_schedule_changed', 409)
 }
 
 export async function assertDistributionWindow(connection: PoolConnection, targetId: string, userId: number, accountId: string, now: Date) {
