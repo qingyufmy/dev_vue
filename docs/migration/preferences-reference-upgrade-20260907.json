@@ -1,0 +1,171 @@
+{
+  "kind": "preferences-reference-upgrade/v1",
+  "observedAt": "2026-09-06T17:21:07.366Z",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "counts": {
+    "strategy_subscriptions": "0",
+    "terminal_history_deals_v4": "0",
+    "account_trade_records_v4": "0"
+  },
+  "result": {
+    "status": "completed",
+    "applied": [
+      "20260906_026_trade_history_currency_evidence",
+      "20260907_027_subscription_execution_preferences"
+    ],
+    "skipped": 26
+  },
+  "repeat": {
+    "status": "completed",
+    "applied": [],
+    "skipped": 28
+  },
+  "ddl": "CREATE TABLE `subscription_execution_preferences_v4` (\n  `subscription_id` bigint unsigned NOT NULL,\n  `contract_version` smallint unsigned NOT NULL,\n  `take_profit_mode` enum('ai_recommended','conservative','standard','trend') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `revision` bigint unsigned NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`subscription_id`),\n  CONSTRAINT `fk_subscription_execution_preferences_subscription` FOREIGN KEY (`subscription_id`) REFERENCES `strategy_subscriptions` (`id`),\n  CONSTRAINT `chk_subscription_execution_preferences_revision` CHECK ((`revision` > 0)),\n  CONSTRAINT `chk_subscription_execution_preferences_version` CHECK ((`contract_version` = 1))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+  "history": [
+    {
+      "id": "20260903_001_bridge_v4_device_sessions",
+      "status": "completed",
+      "completed_statements": 1
+    },
+    {
+      "id": "20260903_002_auth_sso_sessions",
+      "status": "completed",
+      "completed_statements": 2
+    },
+    {
+      "id": "20260903_003_trading_context_and_market_projection",
+      "status": "completed",
+      "completed_statements": 15
+    },
+    {
+      "id": "20260903_004_ai_strategy_and_inference_core",
+      "status": "completed",
+      "completed_statements": 17
+    },
+    {
+      "id": "20260903_005_analysis_scheduler_and_account_fanout",
+      "status": "completed",
+      "completed_statements": 7
+    },
+    {
+      "id": "20260903_006_account_trader_worker",
+      "status": "completed",
+      "completed_statements": 5
+    },
+    {
+      "id": "20260903_007_deterministic_risk_review",
+      "status": "completed",
+      "completed_statements": 16
+    },
+    {
+      "id": "20260903_008_manual_risk_release",
+      "status": "completed",
+      "completed_statements": 8
+    },
+    {
+      "id": "20260903_009_execution_intents_and_reservations",
+      "status": "completed",
+      "completed_statements": 8
+    },
+    {
+      "id": "20260903_010_bridge_v4_command_ledger",
+      "status": "completed",
+      "completed_statements": 7
+    },
+    {
+      "id": "20260904_011_user_execution_commands_and_distributions",
+      "status": "completed",
+      "completed_statements": 7
+    },
+    {
+      "id": "20260904_012_review_memory_core",
+      "status": "completed",
+      "completed_statements": 16
+    },
+    {
+      "id": "20260904_013_authoritative_trade_history",
+      "status": "completed",
+      "completed_statements": 8
+    },
+    {
+      "id": "20260904_014_audit_read_indexes",
+      "status": "completed",
+      "completed_statements": 8
+    },
+    {
+      "id": "20260905_015_macro_sources_and_observations",
+      "status": "completed",
+      "completed_statements": 4
+    },
+    {
+      "id": "20260905_016_macro_snapshot_research",
+      "status": "completed",
+      "completed_statements": 5
+    },
+    {
+      "id": "20260905_017_economic_calendar",
+      "status": "completed",
+      "completed_statements": 2
+    },
+    {
+      "id": "20260905_018_user_state_and_referral_accounts",
+      "status": "completed",
+      "completed_statements": 2
+    },
+    {
+      "id": "20260905_019_account_ownership_intervals",
+      "status": "completed",
+      "completed_statements": 4
+    },
+    {
+      "id": "20260905_020_account_projection_and_history_provenance",
+      "status": "completed",
+      "completed_statements": 2
+    },
+    {
+      "id": "20260905_021_observer_sources_and_audiences",
+      "status": "completed",
+      "completed_statements": 3
+    },
+    {
+      "id": "20260905_022_observer_management_ledger",
+      "status": "completed",
+      "completed_statements": 3
+    },
+    {
+      "id": "20260906_023_bridge_profile_epoch_scope",
+      "status": "completed",
+      "completed_statements": 1
+    },
+    {
+      "id": "20260906_024_bridge_pairing_requests",
+      "status": "completed",
+      "completed_statements": 1
+    },
+    {
+      "id": "20260906_025_data_migration_batch_ledger",
+      "status": "completed",
+      "completed_statements": 5
+    },
+    {
+      "id": "20260906_026_trade_history_currency_evidence",
+      "status": "completed",
+      "completed_statements": 2
+    },
+    {
+      "id": "20260907_027_subscription_execution_preferences",
+      "status": "completed",
+      "completed_statements": 1
+    },
+    {
+      "id": "bootstrap_v4_foundation_v1",
+      "status": "completed",
+      "completed_statements": 7
+    }
+  ],
+  "sourceWritesPerformed": false
+}

@@ -7,6 +7,8 @@ import { readTransactionAccountClock } from '../server/dist-v4/modules/trading/i
 import { assertDistributionWindow, assertRiskDecisionWindow } from '../server/dist-v4/modules/execution/infrastructure/mysql-execution-window.js'
 import { traderWindowStaleReason } from '../server/dist-v4/modules/inference/infrastructure/mysql-trader-window-evidence.js'
 
+import { readSubscriptionExecutionPreferences } from '../server/dist-v4/modules/strategies/infrastructure/mysql-subscription-execution-preferences.js'
+
 const queries = []
 let name
 const db = { async execute(sql, parameters) { queries.push({ name, sql, parameters }); return [[]] },
@@ -26,6 +28,7 @@ await capture('clock_provenance', () => readTransactionAccountClock(db, -1, '-1'
 await capture('execution_window', () => assertRiskDecisionWindow(db, 'sql-probe-nonexistent', -1, '-1', now), 'execution_subscription_changed')
 await capture('distribution_window', () => assertDistributionWindow(db, 'sql-probe-nonexistent', -1, '-1', now), 'execution_subscription_changed')
 await capture('trader_window_evidence', () => traderWindowStaleReason(db, { ...run, inputSnapshotId: 'sql-probe-nonexistent' }))
+await capture('subscription_preferences', () => readSubscriptionExecutionPreferences(db, { subscriptionId: '-1', userId: -1, accountId: '-1' }))
 const source = await readFile(new URL('../server/src/modules/inference/infrastructure/mysql-inference-repository.ts', import.meta.url), 'utf8')
 const matches = [...source.matchAll(/execute<WindowSubscriptionRow\[\]>\(`([^`]+)`/g)]
 if (matches.length !== 1 || matches[0][1].includes('${')) throw new Error('fanout_query_changed')
@@ -36,8 +39,8 @@ if (candidateQueries.length !== 1 || !candidateQueries[0][1].endsWith('${lockCla
 const candidateSql = candidateQueries[0][1].replace('${lockClause}', ' FOR SHARE')
 if (candidateSql.includes('${')) throw new Error('distribution_candidate_query_dynamic')
 queries.push({ name: 'distribution_candidates', sql: candidateSql, parameters: ['-1', '-1', 'SQL_PROBE'] })
-if (queries.length !== 9 || queries.some(query => !query.sql.startsWith('SELECT ') || query.sql.includes(';'))) throw new Error('query_capture_invalid')
+if (queries.length !== 10 || queries.some(query => !query.sql.startsWith('SELECT ') || query.sql.includes(';'))) throw new Error('query_capture_invalid')
 const sha = text => createHash('sha256').update(text).digest('hex')
-const report = { kind: 'subscription-window-selects/v4', queries: queries.map(query => ({ ...query, sqlSha256: sha(query.sql) })) }
-await writeFile(new URL('../docs/migration/subscription-window-sql-input-v4-20260907.json', import.meta.url), JSON.stringify(report, null, 2) + '\n', { flag: 'wx' })
+const report = { kind: 'subscription-window-selects/v5', queries: queries.map(query => ({ ...query, sqlSha256: sha(query.sql) })) }
+await writeFile(new URL('../docs/migration/subscription-window-sql-input-v5-20260907.json', import.meta.url), JSON.stringify(report, null, 2) + '\n', { flag: 'wx' })
 console.log(JSON.stringify({ captured: queries.length }))

@@ -1,0 +1,69 @@
+{
+  "observedAt": "2026-09-06T17:22:54.930Z",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "sqlSha256": "8419957c8a469bd58255a9d23fea040d0d8711c5212e46ba2467be9c65d6f602",
+  "results": [
+    {
+      "name": "matching",
+      "fixtureSha256": "be296630300aac627ae785e5f57029da168253bc14c5de364e88e8a8b9f919c8",
+      "errorCode": null,
+      "present": true,
+      "matches": true
+    },
+    {
+      "name": "wrong_user",
+      "fixtureSha256": "389aeecc3ab3f35c07632e33a0bd5b55ee8d2a091df94e6c85beb5e4a4053438",
+      "errorCode": null,
+      "present": false,
+      "matches": false
+    },
+    {
+      "name": "wrong_account",
+      "fixtureSha256": "033543d7b343fe68cb9493782a1ffbd162d6dd0c9b4071958dda4544cb62f449",
+      "errorCode": null,
+      "present": false,
+      "matches": false
+    },
+    {
+      "name": "wrong_subscription",
+      "fixtureSha256": "16fa0c45646ae25b77c6aa5047d1221f9a4ef272eb36b64a0500a29b75ab734a",
+      "errorCode": null,
+      "present": false,
+      "matches": false
+    },
+    {
+      "name": "changed_mode",
+      "fixtureSha256": "9b5cb31d44169d5a25522f6012278eeab319ed78b8a576130b8b364a3bdbc671",
+      "errorCode": null,
+      "present": true,
+      "matches": false
+    },
+    {
+      "name": "changed_revision",
+      "fixtureSha256": "3ba300c7fe8c4905a50a6f5d82e2e57c8bf6f04234a19eab83528e1d72d13765",
+      "errorCode": null,
+      "present": true,
+      "matches": false
+    },
+    {
+      "name": "invalid_version",
+      "fixtureSha256": "3926bc172a3a3e0c45c521ab54561c4850d89aec53539a2fec734eed22a6d8c7",
+      "errorCode": "subscription_execution_preferences_invalid",
+      "present": false,
+      "matches": false
+    },
+    {
+      "name": "invalid_mode",
+      "fixtureSha256": "b88df259376a87bbcf12aa20ee7a6d7bb3f2019cab9550cb1cbc67d71ea9e006",
+      "errorCode": "subscription_execution_preferences_invalid",
+      "present": false,
+      "matches": false
+    }
+  ],
+  "businessWritesPerformed": false,
+  "concurrencyVerified": false
+}

@@ -1,0 +1,157 @@
+{
+  "runs": [
+    {
+      "kind": "subscription-window-sql-validation/v5",
+      "observedAt": "2026-09-06T17:21:58.190Z",
+      "identity": {
+        "db": "dev_vue_m1_a",
+        "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+        "version": "8.4.8"
+      },
+      "inputSha256": "611ed4a2b268c36790e12586e7ea9ffd43bb9b4aa0221981033513fd61db101a",
+      "results": [
+        {
+          "name": "analysis_schedule",
+          "sqlSha256": "f33a09ade1fc68e63673f8d61fa03ae2cb121fa4272c9402e1b5a388a2971170",
+          "explainRows": 4,
+          "resultRows": 0
+        },
+        {
+          "name": "analysis_window",
+          "sqlSha256": "55bc5125858a5ed149ba29ec8160b2e4a8784ec097d88c18e1438f850bdccd1b",
+          "explainRows": 1,
+          "resultRows": 0
+        },
+        {
+          "name": "trader_window",
+          "sqlSha256": "668e5508d1fc3ae91d0e5d4e9cc24f0b301dd052a232bd866d20c46809d34e9b",
+          "explainRows": 1,
+          "resultRows": 0
+        },
+        {
+          "name": "clock_provenance",
+          "sqlSha256": "f41cc8528002df194ba3cf6f5dc6597e73c6e103d2098003161be833d993fd15",
+          "explainRows": 1,
+          "resultRows": 0
+        },
+        {
+          "name": "execution_window",
+          "sqlSha256": "0f19be626c6b8529858a40be1da2dbf962833713b0316568a6761c6015b8710c",
+          "explainRows": 1,
+          "resultRows": 0
+        },
+        {
+          "name": "distribution_window",
+          "sqlSha256": "41c902d1db513c8a821a573757c8a74935fded3af99c76becd83a084ff0ff11c",
+          "explainRows": 1,
+          "resultRows": 0
+        },
+        {
+          "name": "trader_window_evidence",
+          "sqlSha256": "22c51be3eac3fd18a5cc5913a29bf9a1b5614c32109870371e38ff811f1c2cdd",
+          "explainRows": 1,
+          "resultRows": 0
+        },
+        {
+          "name": "subscription_preferences",
+          "sqlSha256": "8419957c8a469bd58255a9d23fea040d0d8711c5212e46ba2467be9c65d6f602",
+          "explainRows": 1,
+          "resultRows": 0
+        },
+        {
+          "name": "trader_fanout",
+          "sqlSha256": "9f2edeaac906f1b1f51896a58514e0f2eba706f96e57894db454eccaa32e95b5",
+          "explainRows": 3,
+          "resultRows": 0
+        },
+        {
+          "name": "distribution_candidates",
+          "sqlSha256": "aac25786df91702eac9651c795829e56951850c21fa6cf581ad063573a02e95f",
+          "explainRows": 1,
+          "resultRows": 0
+        }
+      ],
+      "businessWritesPerformed": false,
+      "fixtureBehaviorVerified": false
+    },
+    {
+      "kind": "subscription-window-sql-validation/v5",
+      "observedAt": "2026-09-06T17:21:58.450Z",
+      "identity": {
+        "db": "dev_vue_m1_a",
+        "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+        "version": "8.4.8"
+      },
+      "inputSha256": "611ed4a2b268c36790e12586e7ea9ffd43bb9b4aa0221981033513fd61db101a",
+      "results": [
+        {
+          "name": "analysis_schedule",
+          "sqlSha256": "f33a09ade1fc68e63673f8d61fa03ae2cb121fa4272c9402e1b5a388a2971170",
+          "explainRows": 4,
+          "resultRows": 0
+        },
+        {
+          "name": "analysis_window",
+          "sqlSha256": "55bc5125858a5ed149ba29ec8160b2e4a8784ec097d88c18e1438f850bdccd1b",
+          "explainRows": 1,
+          "resultRows": 0
+        },
+        {
+          "name": "trader_window",
+          "sqlSha256": "668e5508d1fc3ae91d0e5d4e9cc24f0b301dd052a232bd866d20c46809d34e9b",
+          "explainRows": 1,
+          "resultRows": 0
+        },
+        {
+          "name": "clock_provenance",
+          "sqlSha256": "f41cc8528002df194ba3cf6f5dc6597e73c6e103d2098003161be833d993fd15",
+          "explainRows": 1,
+          "resultRows": 0
+        },
+        {
+          "name": "execution_window",
+          "sqlSha256": "0f19be626c6b8529858a40be1da2dbf962833713b0316568a6761c6015b8710c",
+          "explainRows": 1,
+          "resultRows": 0
+        },
+        {
+          "name": "distribution_window",
+          "sqlSha256": "41c902d1db513c8a821a573757c8a74935fded3af99c76becd83a084ff0ff11c",
+          "explainRows": 1,
+          "resultRows": 0
+        },
+        {
+          "name": "trader_window_evidence",
+          "sqlSha256": "22c51be3eac3fd18a5cc5913a29bf9a1b5614c32109870371e38ff811f1c2cdd",
+          "explainRows": 1,
+          "resultRows": 0
+        },
+        {
+          "name": "subscription_preferences",
+          "sqlSha256": "8419957c8a469bd58255a9d23fea040d0d8711c5212e46ba2467be9c65d6f602",
+          "explainRows": 1,
+          "resultRows": 0
+        },
+        {
+          "name": "trader_fanout",
+          "sqlSha256": "9f2edeaac906f1b1f51896a58514e0f2eba706f96e57894db454eccaa32e95b5",
+          "explainRows": 3,
+          "resultRows": 0
+        },
+        {
+          "name": "distribution_candidates",
+          "sqlSha256": "aac25786df91702eac9651c795829e56951850c21fa6cf581ad063573a02e95f",
+          "explainRows": 1,
+          "resultRows": 0
+        }
+      ],
+      "businessWritesPerformed": false,
+      "fixtureBehaviorVerified": false
+    }
+  ],
+  "toolHashes": {
+    "verify-subscription-window-sql-host.mjs": "5376d3f74e4e6176115813ffc80f01e1f7e4d4d4bedb30257d95f0ff99093ce9",
+    "run-subscription-window-sql-host.py": "cd7687c7c9b86121e28f5635e4fd42bf5ed2465210a5a428aa12cf309802285d",
+    "subscription-window-sql-input-v5-20260907.json": "611ed4a2b268c36790e12586e7ea9ffd43bb9b4aa0221981033513fd61db101a"
+  }
+}
