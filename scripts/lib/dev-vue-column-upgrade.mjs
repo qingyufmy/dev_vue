@@ -24,13 +24,33 @@ export function columnMatches(actual, expected) {
   return actual !== null && Object.keys(expected).every(key => actual[key] === expected[key])
 }
 
+export function validateColumnHistory(rows, steps = inplaceColumnSteps) {
+  const byId = new Map(rows.map(row => [row.id, row]))
+  if (byId.size !== rows.length || rows.some(row => !steps.some(step => step.id === row.id))) throw new Error('inplace_unknown_history')
+  let ended = false
+  for (const step of steps) {
+    const row = byId.get(step.id)
+    if (!row) { ended = true; continue }
+    if (ended) throw new Error('inplace_history_gap')
+    if (row.checksum !== step.checksum) throw new Error('inplace_step_checksum_mismatch')
+    if (!['started', 'completed'].includes(row.status)) throw new Error('inplace_step_status_invalid')
+    const started = Date.parse(row.startedAt)
+    const completed = row.completedAt === null ? null : Date.parse(row.completedAt)
+    if (!Number.isFinite(started) || (row.status === 'started' ? completed !== null :
+      completed === null || !Number.isFinite(completed) || completed < started)) throw new Error('inplace_history_time_invalid')
+    if (row.status === 'started') ended = true
+  }
+  return byId
+}
+
 // Adapter must hold an exclusive upgrade lock for this entire call.
 // Journal begin must be durable BEFORE DDL. Failed/uncertain DDL is never blindly replayed.
 export async function executeColumnSteps(store, steps = inplaceColumnSteps, { apply = false } = {}) {
+  const history = validateColumnHistory(await store.history(), steps)
   const report = []
   const states = []
   for (const step of steps) {
-    const journal = await store.journal(step.id)
+    const journal = history.get(step.id) ?? null
     const actual = await store.column(step.table, step.column)
     if (journal && journal.checksum !== step.checksum) throw new Error('inplace_step_checksum_mismatch')
     if (journal && !['started', 'completed'].includes(journal.status)) throw new Error('inplace_step_status_invalid')

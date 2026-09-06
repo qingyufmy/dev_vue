@@ -1,19 +1,23 @@
 import { describe, expect, it } from 'vitest'
-import { executeColumnSteps, inplaceColumnSteps } from '../scripts/lib/dev-vue-column-upgrade.mjs'
+import { executeColumnSteps, inplaceColumnSteps, validateColumnHistory } from '../scripts/lib/dev-vue-column-upgrade.mjs'
+
+const startedAt = '2026-09-06T00:00:00.000Z'
+const receipt = (step, status = 'started') => ({ id: step.id, checksum: step.checksum, status, startedAt,
+  completedAt: status === 'completed' ? startedAt : null })
 
 function fixture() {
   const journal = new Map(), columns = new Map(), executed = []
-  return { journal, columns, executed, failAfterDdl: false,
+  return { journal, columns, executed,
     store: {
-      journal: async id => journal.get(id) ?? null,
+      history: async () => [...journal.values()],
       column: async (table, name) => columns.get(`${table}.${name}`) ?? null,
-      begin: async step => { journal.set(step.id, { checksum: step.checksum, status: 'started' }) },
+      begin: async step => { journal.set(step.id, receipt(step)) },
       execute: async sql => {
         executed.push(sql)
         const step = inplaceColumnSteps.find(step => step.sql === sql)
         columns.set(`${step.table}.${step.column}`, { ...step.expected })
       },
-      complete: async step => { journal.set(step.id, { checksum: step.checksum, status: 'completed' }) },
+      complete: async step => { journal.set(step.id, receipt(step, 'completed')) },
     },
   }
 }
@@ -46,10 +50,19 @@ describe('same database additive upgrade steps', () => {
   })
   it('rejects altered definitions and checksums instead of overwriting', async () => {
     const f = fixture(), first = inplaceColumnSteps[0]
-    f.journal.set(first.id, { checksum: 'changed', status: 'started' })
+    f.journal.set(first.id, { ...receipt(first), checksum: 'changed' })
     await expect(executeColumnSteps(f.store)).rejects.toThrow('inplace_step_checksum_mismatch')
-    f.journal.set(first.id, { checksum: first.checksum, status: 'started' })
+    f.journal.set(first.id, receipt(first))
     f.columns.set(`${first.table}.${first.column}`, { ...first.expected, nullable: 'NO' })
     await expect(executeColumnSteps(f.store)).rejects.toThrow('inplace_column_definition_conflict')
+  })
+  it('rejects unknown steps, gaps and progress beyond an unfinished step', () => {
+    expect(() => validateColumnHistory([{ ...receipt(inplaceColumnSteps[0]), id: 'unknown' }])).toThrow('inplace_unknown_history')
+    expect(() => validateColumnHistory([receipt(inplaceColumnSteps[1])])).toThrow('inplace_history_gap')
+    expect(() => validateColumnHistory(inplaceColumnSteps.slice(0, 2).map(step => receipt(step)))).toThrow('inplace_history_gap')
+  })
+  it('rejects contradictory timestamps', () => {
+    expect(() => validateColumnHistory([{ ...receipt(inplaceColumnSteps[0]), completedAt: startedAt }])).toThrow('inplace_history_time_invalid')
+    expect(() => validateColumnHistory([{ ...receipt(inplaceColumnSteps[0], 'completed'), completedAt: null }])).toThrow('inplace_history_time_invalid')
   })
 })
