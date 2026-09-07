@@ -1,4 +1,5 @@
-import { canonical, requireBackfill as check } from './v4-backfill-contract.mjs'
+import { prepareLearningCore } from './v4-learning-core-migration.mjs'
+import { requireBackfill as check } from './v4-backfill-contract.mjs'
 import { decodeLearningManifest } from './v4-learning-manifest.mjs'
 import { executeLearningManifests } from './v4-learning-manifest-executor.mjs'
 import { readLearningCourseTargetIdentity } from './mysql-learning-course-backfill.mjs'
@@ -35,18 +36,10 @@ export async function runLearningCommand({ pool, database, expectedServerUuid, c
       const parent = decodeLearningManifest(courseManifest, { sources: sourceRows.courses, evidenceCatalog })
       const child = decodeLearningManifest(progressManifest, { sources: sourceRows.progress, evidenceCatalog, userIds: progress.userIds })
       check(parent.kind === 'courses' && child.kind === 'progress', 'learning_entry_domains')
-      // The check command must enforce the same cross-domain identity and mapping
-      // requirements as apply, while never entering a migration transaction.
-      for (const key of ['logicalSourceId', 'sourceDatabase', 'targetDatabase', 'targetServerUuid', 'mirrorDatabase']) {
-        check(parent.spec.bindings[key] === child.spec.bindings[key], 'learning_core_scope_mismatch')
-      }
-      check(parent.spec.runId !== child.spec.runId, 'learning_core_run_collision')
-      check(parent.options.run.sourceSnapshotId === child.options.run.sourceSnapshotId, 'learning_core_snapshot_mismatch')
-      const mappings = courses.sources.map(source => ({ episodeId: source.episode_id, lessonId: source.id,
-        lessonSourceHash: parent.options.basis.resolutions.find(row => row.sourceId === source.id).sourceHash }))
-        .sort((a, b) => BigInt(a.episodeId) < BigInt(b.episodeId) ? -1 : 1)
-      const actualMappings = [...child.options.lessonMappings].sort((a, b) => BigInt(a.episodeId) < BigInt(b.episodeId) ? -1 : 1)
-      check(canonical(mappings) === canonical(actualMappings), 'learning_core_lesson_mapping_mismatch')
+      prepareLearningCore({
+        courses: { repository: null, spec: parent.spec, sources: parent.sources, options: parent.options },
+        progress: { repository: null, spec: child.spec, sources: child.sources, options: child.options },
+      }, { courseBatchSize: parent.batchSize, progressBatchSize: child.batchSize })
       if (mode === 'check') return { status: 'checked', sourceRows: { courses: sourceRows.courses.length, progress: sourceRows.progress.length }, databaseWrites: 0 }
       return executeLearningManifests({ pool, courseManifest, progressManifest, sources: sourceRows, userIds: progress.userIds, evidenceCatalog, mode })
     })

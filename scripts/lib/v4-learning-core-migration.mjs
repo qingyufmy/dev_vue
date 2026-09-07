@@ -6,8 +6,7 @@ import { validateSpec as validateProgress } from './v4-learning-progress-backfil
 import { migrateLearningCourse } from './v4-learning-course-migration.mjs'
 import { migrateLearningProgress } from './v4-learning-progress-migration.mjs'
 
-export async function migrateLearningCore(input, { mode = 'verify', courseBatchSize = 100, progressBatchSize = 100 } = {}) {
-  check(['apply', 'recover', 'verify'].includes(mode), 'learning_core_migration_mode')
+export function prepareLearningCore(input, { courseBatchSize = 100, progressBatchSize = 100 } = {}) {
   exactKeys(input, ['courses', 'progress'])
   const freeze = part => {
     exactKeys(part, ['repository', 'spec', 'sources', 'options'])
@@ -30,6 +29,12 @@ export async function migrateLearningCore(input, { mode = 'verify', courseBatchS
   check(courses.options.run.sourceSnapshotId === progress.options.run.sourceSnapshotId, 'learning_core_snapshot_mismatch')
   const mappings = [...progress.options.lessonMappings].sort((a, b) => BigInt(a.episodeId) < BigInt(b.episodeId) ? -1 : 1)
   check(canonical(parents.lessonMappings) === canonical(mappings), 'learning_core_lesson_mapping_mismatch')
+  return { courses, progress }
+}
+
+export async function migrateLearningCore(input, { mode = 'verify', courseBatchSize = 100, progressBatchSize = 100 } = {}) {
+  check(['apply', 'recover', 'verify'].includes(mode), 'learning_core_migration_mode')
+  const { courses, progress } = prepareLearningCore(input, { courseBatchSize, progressBatchSize })
   const courseResult = await migrateLearningCourse(courses.repository, courses.spec, courses.sources, courses.options, { mode, batchSize: courseBatchSize })
   if (courseResult.status !== 'verified') return { version: 'learning-core-migration/v1', mode, status: courseResult.status,
     courses: courseResult, progress: null, consumersSwitched: false }

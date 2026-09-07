@@ -731,3 +731,5 @@ U2历史时间与账户承接已进一步收敛：[39字段依据及承接合同
 阶段 170：学习域冻结清单及实际 repository 执行适配完成，13 项相关测试通过；MySQL 恢复、显式命令和真实演练待完成，见 [阶段170](migration/dev-vue-inplace-stage170-20260907.md)。
 
 阶段 171：学习域显式 check/verify/recover/apply 命令接通，5 项测试和实际 --help 通过；apply 暂限恢复副本，真实演练及当前库提升待完成，见 [阶段171](migration/dev-vue-inplace-stage171-20260907.md)。
+
+阶段 172：学习域双清单生成 CLI 完成，生成/check/执行共用跨域预检，15 项测试及实际 --help 通过；未连接真实数据库，见 [阶段172](migration/dev-vue-inplace-stage172-20260907.md)。
