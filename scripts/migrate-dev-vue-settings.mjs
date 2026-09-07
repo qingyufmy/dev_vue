@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { resolve, dirname } from 'node:path'
-import { parse } from 'dotenv'
+import { loadSettingsMigrationEnvironment, settingsMigrationConnectionOptions } from './lib/settings-migration-environment.mjs'
 import mysql from 'mysql2/promise'
 import { createHash } from 'node:crypto'
 import { exactKeys, requireBackfill as check } from './lib/v4-backfill-contract.mjs'
@@ -36,8 +36,8 @@ try {
       check(/^[a-zA-Z0-9_./-]+$/.test(file.path) && !file.path.split('/').includes('..')
         && sha(await readFile(new URL(file.path, root))) === file.sha256, 'settings_entry_proof_tools')
     }
-    const env = parse(await readFile(new URL('server/.env', root)))
-    check(env.MYSQL_DATABASE === 'dev_vue' && manifest.spec.bindings.targetDatabase === 'dev_vue', 'settings_entry_database')
+    const env = await loadSettingsMigrationEnvironment(root)
+    check(manifest.spec.bindings.targetDatabase === env.MYSQL_DATABASE, 'settings_entry_database')
     const options = manifest.options
     check(Array.isArray(options.evidenceCatalog), 'settings_entry_evidence')
     options.evidenceCatalog = new Map(options.evidenceCatalog)
@@ -53,11 +53,10 @@ try {
         keyring.set(version, key)
       }
     } else check(manifest.credentialPlanPath === null, 'settings_entry_plan_scope')
-    pool = mysql.createPool({ host: env.MYSQL_HOST, port: Number(env.MYSQL_PORT || 3306), user: env.MYSQL_USER,
-      password: env.MYSQL_PASSWORD, database: 'dev_vue', dateStrings: true, timezone: 'Z', supportBigNumbers: true, bigNumberStrings: true, connectionLimit: 3 })
+    pool = mysql.createPool({ ...settingsMigrationConnectionOptions(env), connectionLimit: 3 })
     connection = await pool.getConnection()
     await connection.query("SET SESSION time_zone='+00:00'")
-    const result = await withInplaceUpgradeLock(connection, 'dev_vue', async () => {
+    const result = await withInplaceUpgradeLock(connection, env.MYSQL_DATABASE, async () => {
       const identity = await readSettingsTargetIdentityV2(connection)
       const backup = await json(new URL('docs/migration/dev-vue-inplace-backup-20260906.json', root))
       check(identity.serverUuid === backup.serverUuid && identity.serverUuid === manifest.spec.bindings.targetServerUuid

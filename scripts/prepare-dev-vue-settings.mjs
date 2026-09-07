@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { resolve, dirname, relative } from 'node:path'
-import { parse } from 'dotenv'
+import { loadSettingsMigrationEnvironment, settingsMigrationConnectionOptions } from './lib/settings-migration-environment.mjs'
 import mysql from 'mysql2/promise'
 import { exactKeys, requireBackfill as check } from './lib/v4-backfill-contract.mjs'
 import { readSettingsTargetIdentityV2 } from './lib/mysql-settings-backfill-v2.mjs'
@@ -21,8 +21,7 @@ try {
       && review.sourceIds.every(id => typeof id === 'string' && /^[1-9][0-9]{0,9}$/.test(id))
       && new Set(review.sourceIds).size === review.sourceIds.length, 'settings_prepare_source_ids')
     check(['ordinary', 'credential'].includes(review.kind) && Array.isArray(review.options.evidenceCatalog), 'settings_prepare_kind')
-    const env = parse(await readFile(new URL('server/.env', root)))
-    check(env.MYSQL_DATABASE === 'dev_vue', 'settings_prepare_database')
+    const env = await loadSettingsMigrationEnvironment(root)
     const options = review.options
     options.evidenceCatalog = new Map(options.evidenceCatalog)
     let credentialPlanPath = null
@@ -41,8 +40,7 @@ try {
       }
       options.credentialKeyring = keyring
     } else check(review.credentialPlanPath === null, 'settings_prepare_plan_scope')
-    connection = await mysql.createConnection({ host: env.MYSQL_HOST, port: Number(env.MYSQL_PORT || 3306), user: env.MYSQL_USER,
-      password: env.MYSQL_PASSWORD, database: 'dev_vue', dateStrings: true, timezone: 'Z', supportBigNumbers: true, bigNumberStrings: true })
+    connection = await mysql.createConnection(settingsMigrationConnectionOptions(env))
     await connection.query("SET SESSION time_zone='+00:00'")
     await connection.query('START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY')
     const targetIdentity = await readSettingsTargetIdentityV2(connection)
