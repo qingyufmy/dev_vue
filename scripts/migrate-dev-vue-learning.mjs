@@ -10,12 +10,15 @@ const root = new URL('../', import.meta.url)
 const json = async path => JSON.parse(await readFile(path, 'utf8'))
 let pool
 try {
-  const [flag, coursePath, progressPath, evidencePath] = process.argv.slice(2)
-  if (flag === '--help' && process.argv.length === 3) {
-    console.log('node scripts/migrate-dev-vue-learning.mjs --check|--verify|--recover|--apply <course-manifest.json> <progress-manifest.json> <reviewed-evidence.json>')
+  const args = process.argv.slice(2)
+  const rehearsal = args[0] === '--rehearsal'
+  if (rehearsal) args.shift()
+  const [flag, coursePath, progressPath, evidencePath] = args
+  if (flag === '--help' && args.length === 1) {
+    console.log('node scripts/migrate-dev-vue-learning.mjs [--rehearsal] --check|--verify|--recover|--apply <course-manifest.json> <progress-manifest.json> <reviewed-evidence.json>')
     console.log('--apply currently permits only the existing restored development copy; dev_vue promotion requires a successful real rehearsal.')
   } else {
-    check(process.argv.length === 6 && ['--check', '--verify', '--recover', '--apply'].includes(flag), 'learning_entry_arguments')
+    check(args.length === 4 && ['--check', '--verify', '--recover', '--apply'].includes(flag), 'learning_entry_arguments')
     const courseManifest = await json(resolve(coursePath)), progressManifest = await json(resolve(progressPath))
     for (const manifest of [courseManifest, progressManifest]) check(manifest.spec?.bindings?.manifestHash === learningManifestHash(manifest), 'learning_manifest_hash')
     const evidence = await json(resolve(evidencePath))
@@ -23,6 +26,7 @@ try {
     const evidenceCatalog = new Map(evidence)
     check(evidenceCatalog.size === evidence.length, 'learning_entry_evidence_duplicate')
     const env = await loadEnvironment(root)
+    if (rehearsal) env.MYSQL_DATABASE = 'dev_vue_m1_source_20260907_02'
     const backup = await json(new URL('docs/migration/dev-vue-inplace-backup-20260906.json', root))
     pool = mysql.createPool({ ...connectionOptions(env), connectionLimit: 3 })
     const result = await runLearningCommand({ pool, database: env.MYSQL_DATABASE, expectedServerUuid: backup.serverUuid,

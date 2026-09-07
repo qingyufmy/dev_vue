@@ -15,11 +15,14 @@ const root = new URL('../', import.meta.url)
 const json = async path => JSON.parse(await readFile(path, 'utf8'))
 let pool, connection
 try {
-  const [flag, reviewPath, evidencePath, coursePath, progressPath] = process.argv.slice(2)
-  if (flag === '--help' && process.argv.length === 3) {
-    console.log('node scripts/prepare-dev-vue-learning.mjs --write <reviewed-basis.json> <reviewed-evidence.json> <course-manifest.json> <progress-manifest.json>')
+  const args = process.argv.slice(2)
+  const rehearsal = args[0] === '--rehearsal'
+  if (rehearsal) args.shift()
+  const [flag, reviewPath, evidencePath, coursePath, progressPath] = args
+  if (flag === '--help' && args.length === 1) {
+    console.log('node scripts/prepare-dev-vue-learning.mjs [--rehearsal] --write <reviewed-basis.json> <reviewed-evidence.json> <course-manifest.json> <progress-manifest.json>')
   } else {
-    check(process.argv.length === 7 && flag === '--write', 'learning_prepare_arguments')
+    check(args.length === 5 && flag === '--write', 'learning_prepare_arguments')
     const paths = [reviewPath, evidencePath, coursePath, progressPath].map(path => resolve(path))
     const comparablePaths = process.platform === 'win32' ? paths.map(path => path.toLowerCase()) : paths
     check(new Set(comparablePaths).size === 4, 'learning_prepare_paths')
@@ -31,6 +34,7 @@ try {
     const evidenceCatalog = new Map(evidence)
     check(evidenceCatalog.size === evidence.length, 'learning_prepare_evidence_duplicate')
     const env = await loadEnvironment(root), backup = await json(new URL('docs/migration/dev-vue-inplace-backup-20260906.json', root))
+    if (rehearsal) env.MYSQL_DATABASE = 'dev_vue_m1_source_20260907_02'
     pool = mysql.createPool({ ...connectionOptions(env), connectionLimit: 1 })
     connection = await pool.getConnection()
     await connection.query("SET SESSION time_zone='+00:00'")
