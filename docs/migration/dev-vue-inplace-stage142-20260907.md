@@ -1,0 +1,19 @@
+# 阶段 142：管理员读取真实共享锁与权限撤销
+
+参考库dev_vue_m1_a完成MysqlAdminSettingReader真实事务演练。开始前验证库名、服务器UUID、三张配置表为空及夹具用户不存在；创建两个合成配置和一个合成管理员供多连接验证。
+
+普通值及9007199254740993版本精确保留；credential在SQL层遮蔽，返回对象不包含rawValue或夹具密文内容。
+
+在真实FOR SHARE读取管理员行后暂停，另一连接尝试将管理员改为普通用户。performance_schema.data_lock_waits观察到角色修改的真实锁等待；允许读取继续，读取事务rollback并释放连接后角色修改才完成。随后读取明确返回setting_admin_required。
+
+读取未修改配置值、版本、审计或请求收据：最终仍为两个夹具配置、零审计和零收据。所有合成配置和用户已清理，三张配置表及夹具用户计数归零。此轮不涉及当前dev_vue或公网。
+
+## 证据与限制
+
+脚本probe-admin-setting-reader-host.mjs及专用内存FD启动器；回执dev-vue-admin-setting-reader-probe-20260907.json绑定10文件，取回后逐项摘要一致。
+
+回执SHA256：c1bbf73635df9886b28251f3d8e675809c4ecee3ea7317216f0cb0de3cd96d3c。
+
+Node语法与服务端构建通过，真实脚本返回verified/roleLockWait/secretRedacted/fixturesCleaned。实际验证为repository+MySQL，不包含浏览器Cookie/CSRF或完整HTTP端到端流程。通过FOR SHARE保护的是事务内读取，角色撤销不追溯撤回已完成响应。
+
+后续接入管理员前端数据合同及请求恢复状态，再处理实际配置回填与旧消费者切换；全域规范化、完整部署自动升级和旧结构清理尚未完成。

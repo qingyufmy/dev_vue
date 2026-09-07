@@ -1,0 +1,60 @@
+{
+  "kind": "admin-setting-reader-probe/v1",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "toolManifest": [
+    {
+      "path": "package.json",
+      "sha256": "6a28d132e349a7d7958232e4b3ed156caa268486b5e90d183226b4454ce8d54b"
+    },
+    {
+      "path": "scripts/lib/v4-backup-artifact.mjs",
+      "sha256": "4e66ff5a47c862dd494ef3d9800f413b07de19ca1a81e1e61eece4da8ef22591"
+    },
+    {
+      "path": "scripts/lib/v4-backup-io.mjs",
+      "sha256": "0b6082e0b18e30a42ffad895e5f3cbd4a2645e87f623d02b5c1844d53f6f7171"
+    },
+    {
+      "path": "scripts/probe-admin-setting-reader-host.mjs",
+      "sha256": "cb40727a279cfa334c81fa7115f847bc65bd34acd083686fa315f632f4a85305"
+    },
+    {
+      "path": "scripts/run-admin-setting-reader-host.py",
+      "sha256": "75202de1b291e46b29419aeca7359ec4aa8027ec6c1d666fbf288515e54c1acc"
+    },
+    {
+      "path": "server/dist-v4/modules/settings/infrastructure/mysql-admin-setting-reader.js",
+      "sha256": "2e1232672bb87fd7365e158ee968ec18f62bc71d630b555a7162b295d913c127"
+    },
+    {
+      "path": "server/dist-v4/modules/settings/infrastructure/mysql-setting-reader.js",
+      "sha256": "6dae71bd537e27f9dc4a4bb43769a9cde5c69f732d260ce2ea8e68ae9ecb3924"
+    },
+    {
+      "path": "server/src/modules/settings/application/admin-setting-reader.ts",
+      "sha256": "849bb9a3b686f293ae65577713f2278668c5109c0da227edfda91707770836c5"
+    },
+    {
+      "path": "server/src/modules/settings/infrastructure/mysql-admin-setting-reader.ts",
+      "sha256": "03bc50011b1260b357c5e6473f73419a433ffc745218ddb0d1443f39cf5863dd"
+    },
+    {
+      "path": "server/src/modules/settings/infrastructure/mysql-setting-reader.ts",
+      "sha256": "64e8032c78e16a9e4fa70f9dff985a67d7054de36c74783ed7172291f596d2cc"
+    }
+  ],
+  "fixtureOnly": true,
+  "exactPlainValueAndRevision": true,
+  "sqlCredentialRedaction": true,
+  "observedRoleChangeLockWait": true,
+  "readTransactionReleased": true,
+  "revokedAdminRejected": true,
+  "noReadSideWrites": true,
+  "fixturesCleaned": true,
+  "currentDevVueWritten": false,
+  "consumersSwitched": false
+}
