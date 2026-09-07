@@ -17,3 +17,7 @@
 故障池 3 项、演练输入 3 项测试通过。覆盖实际 commit 先成功才注入、仅一次注入、真实 commit 失败不误报注入、rollback 清除批次状态，以及当前 dev_vue 拒绝。Node/Python 语法检查通过；本地加载 62 步计划，确认六张 data_migration 控制表均包含在受保护集合中。
 
 没有运行真实演练，没有连接 MySQL，没有写入或清理数据库。脚本本身不是演练通过证据，尚无本阶段真实回执。仍需先解决数据库启动故障并重新验收现状，再运行本脚本和实际 CLI 演练；当前库回填提升与全域自动升级仍未完成。
+
+## 2026-09-07 事务适配器联接验证补充
+
+补充故障池与实际 MysqlBackfillRepository.transaction 的组合测试，底层连接仍为 Mock。成功 COMMIT 后注入确认丢失，经适配器得到 backfill_commit_unknown，业务回调只调用一次，连接销毁且不 rollback/release；误指向 dev_vue 时，在 BEGIN 和业务回调前拒绝。故障池 5 项、课程 runner 15 项、进度 runner 15 项，共 35 项通过。该结果只补齐适配器之间的离线行为证据，不证明真实 MySQL 提交、持久化或恢复成功。
