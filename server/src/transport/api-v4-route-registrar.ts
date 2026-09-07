@@ -50,7 +50,7 @@ export async function registerApiV4Routes(
 ) {
   if (services.learning) {
     if (!input.wwwOrigin) throw new Error('learning_www_origin_required')
-    await fastify.register(learningRoutes, { prefix: '/api/v4', service: services.learning, auth: services.auth, wwwOrigin: input.wwwOrigin })
+    await fastify.register(learningRoutes, { prefix: '/api/v4', service: services.learning, auth: services.auth, wwwOrigin: input.wwwOrigin, secureCookies: input.secureCookies })
   }
   await registerSsoRoutes(fastify, services.auth, input.secureCookies)
   await fastify.register(async admin => {

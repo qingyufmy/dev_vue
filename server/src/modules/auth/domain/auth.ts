@@ -56,3 +56,8 @@ export function cookieNameForClient(clientId: string) {
   if (clientId === 'admin-web') return '__Host-Http-admin_session'
   throw new AuthError('auth_client_invalid', 400)
 }
+
+/** HTTP development cookies and secure cookies must use one naming policy. */
+export function transportSessionCookieName(clientId: string, secure: boolean, secureName = cookieNameForClient(clientId)) {
+  return secure ? secureName : `aurum_dev_${clientId.replace(/[^a-z0-9_-]/gi, '_')}_session`
+}

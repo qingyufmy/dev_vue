@@ -1,8 +1,8 @@
 import type { FastifyPluginAsync } from 'fastify'
-import { AuthError, type AuthService } from '../../../auth/index.js'
+import { AuthError, transportSessionCookieName, type AuthService } from '../../../auth/index.js'
 import { LearningError } from '../../domain/learning.js'
 import type { LearningService } from '../../application/learning-service.js'
-export interface LearningRoutesOptions { service: LearningService; auth: Pick<AuthService, 'cookieName' | 'resolveSession'>; wwwOrigin: string }
+export interface LearningRoutesOptions { service: LearningService; auth: Pick<AuthService, 'cookieName' | 'resolveSession'>; wwwOrigin: string; secureCookies?: boolean }
 export const learningRoutes: FastifyPluginAsync<LearningRoutesOptions> = async (app, options) => {
   app.addHook('onRequest', async (request, reply) => {
     reply.header('Cache-Control', 'private, no-store')
@@ -17,7 +17,7 @@ export const learningRoutes: FastifyPluginAsync<LearningRoutesOptions> = async (
   })
   app.get<{ Params: { id: string } }>('/learning/courses/:id', async (request, reply) => {
     try {
-      const name = options.auth.cookieName('www-web')
+      const name = transportSessionCookieName('www-web', options.secureCookies ?? true, options.auth.cookieName('www-web'))
       const cookies = (request.headers.cookie ?? '').split(';').map(item => item.trim())
       const raw = cookies.find(item => item.startsWith(`${name}=`))?.slice(name.length + 1)
       let userId: number | null = null

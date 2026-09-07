@@ -1,7 +1,7 @@
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type { AuthService, AuthorizationRequest } from '../../application/auth-service.js'
 import type { AppSurface } from '../../domain/auth.js'
-import { AuthError } from '../../domain/auth.js'
+import { AuthError, transportSessionCookieName } from '../../domain/auth.js'
 
 interface AuthCenterOptions {
   service: AuthService
@@ -30,8 +30,7 @@ function sessionCookie(name: string, value: string, secure: boolean, maxAge?: nu
 }
 
 function sessionCookieName(service: AuthService, clientId: string, secure: boolean) {
-  if (secure) return service.cookieName(clientId)
-  return `aurum_dev_${clientId.replace(/[^a-z0-9_-]/gi, '_')}_session`
+  return transportSessionCookieName(clientId, secure, service.cookieName(clientId))
 }
 
 function realtimeCookie(value: string, secure: boolean) {

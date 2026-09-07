@@ -1,4 +1,5 @@
 import Fastify from 'fastify'
+import { LearningService, learningRoutes } from '../src/modules/learning/index.js'
 import { generateKeyPairSync, verify } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
@@ -225,6 +226,49 @@ describe('SSO V4 service', () => {
 })
 
 describe('SSO V4 HTTP routes', () => {
+  it.each([true, false])('unlocks www courses with the matching cookie policy (secure=%s)', async secureCookies => {
+    const { service } = fixture()
+    const www = Fastify(), auth = Fastify()
+    const learning = new LearningService({
+      list: async () => [],
+      course: async () => ({ id: '12', title: '课程', description: null, category: null, access_level: 'logged_in', updated_at: null, sort_order: 0 }),
+      lessons: async (_id, userId) => {
+        expect(userId).toBe(7)
+        return [{ id: '99', title: '课时', duration_ms: null, resources: [], progress: { watched_ms: '10000', reported_duration_ms: null, completed: false, updated_at: null } }]
+      },
+    }, { activePlan: async () => 'free' })
+    try {
+      await www.register(appSessionRoutes, { service, surface: 'www', secureCookies })
+      await www.register(learningRoutes, { prefix: '/api/v4', service: learning, auth: service, wwwOrigin: 'https://www.example.test', secureCookies })
+      await auth.register(authCenterRoutes, { service, secureCookies })
+      const detail = (cookie?: string) => www.inject({ url: '/api/v4/learning/courses/12', headers: { host: 'www.example.test', ...(cookie ? { cookie } : {}) } })
+      expect((await detail()).json().data.access).toBe('login_required')
+      const start = await www.inject({ url: '/auth/start?next=%2Fcourses%2F12' })
+      const login = await auth.inject({ method: 'POST', url: '/api/v4/auth/login', headers: { host: 'auth.example.test', origin: 'https://auth.example.test' }, payload: {
+        ...oauthFields(start.headers.location!), login: 'user@example.test', password: 'correct-password',
+      } })
+      expect(login.statusCode).toBe(200)
+      const redirect = new URL(login.json().data.redirect_to)
+      const callback = await www.inject({ url: redirect.pathname + redirect.search })
+      expect(callback.statusCode).toBe(302)
+      expect(callback.headers.location).toBe('/courses/12')
+      const cookie = String(callback.headers['set-cookie']).split(';')[0]!
+      expect(cookie).toMatch(secureCookies ? /^__Host-Http-www_session=/ : /^aurum_dev_www-web_session=/)
+      expect(callback.headers['set-cookie']).not.toContain('Domain=')
+      const mismatchedCookie = cookie.replace(/^[^=]+=/, secureCookies ? 'aurum_dev_www-web_session=' : '__Host-Http-www_session=')
+      expect((await detail(mismatchedCookie)).json().data.access).toBe('login_required')
+      const session = await www.inject({ url: '/api/v4/session', headers: { cookie } })
+      expect(session.json().data.app).toBe('www')
+      const opened = await detail(cookie)
+      expect(opened.json().data.access).toBe('allowed')
+      expect(opened.json().data.lessons[0].progress.watched_ms).toBe('10000')
+      const csrf = session.json().data.csrf_token as string
+      expect((await www.inject({ method: 'POST', url: '/api/v4/session/logout', headers: { cookie, origin: 'https://evil.example.test', 'x-csrf-token': csrf } })).statusCode).toBe(403)
+      expect((await www.inject({ method: 'POST', url: '/api/v4/session/logout', headers: { cookie, origin: 'https://www.example.test', 'x-csrf-token': csrf } })).statusCode).toBe(204)
+      expect((await detail(cookie)).statusCode).toBe(401)
+    } finally { await www.close(); await auth.close() }
+  })
+
   it('runs login, callback, session, CSRF, realtime and logout through Host-only cookies', async () => {
     const { service } = fixture()
     const trade = Fastify({ logger: false })
