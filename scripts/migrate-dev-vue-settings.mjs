@@ -26,10 +26,10 @@ try {
     check(Array.isArray(manifest.sourceIds) && manifest.sourceIds.length > 0 && manifest.sourceIds.length <= 59
       && manifest.sourceIds.every(id => typeof id === 'string' && /^[1-9][0-9]{0,9}$/.test(id))
       && new Set(manifest.sourceIds).size === manifest.sourceIds.length, 'settings_entry_source_ids')
-    const proofRaw = await readFile(new URL('docs/migration/dev-vue-settings-credential-backfill-rehearsal-20260907.json', root))
-    check(sha(proofRaw) === '876ab4d02bdfe35719c7bdc64622fe5927424cf38bb8a0a3f857efe0b74843e9', 'settings_entry_proof_changed')
+    const proofRaw = await readFile(new URL('docs/migration/dev-vue-settings-unified-backfill-rehearsal-20260907.json', root))
+    check(sha(proofRaw) === 'f436e76d1363ef4157d6567cd85db5ed5f8020179a715e9b55f0396bc9ec312b', 'settings_entry_proof_changed')
     const proof = JSON.parse(proofRaw)
-    check(proof.kind === 'settings-credential-backfill-probe/v1' && proof.persistedPlanRecovered
+    check(proof.kind === 'settings-unified-backfill-probe/v1' && proof.partialRecoveryDidNotWrite && proof.fullRecoveryVerified && proof.unifiedAuditVerified && proof.persistedPlanRecovered
       && proof.commitUnknownObserved && proof.sourceEvidenceFailureRolledBack && proof.repeatNoop
       && proof.audit.importMatchesReviewedInputs && proof.audit.differences.length === 0, 'settings_entry_proof_invalid')
     for (const file of proof.toolManifest) {
