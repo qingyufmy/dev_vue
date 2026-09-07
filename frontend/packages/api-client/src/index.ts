@@ -1,3 +1,4 @@
+import { settingScopeSchema,settingRequestKeySchema,settingUpdateBodySchema,adminSettingResponseSchema,settingUpdateResponseSchema,type SettingUpdateBody } from '@aurum/contracts'
 import {
   bridgePairingRequestSchema, bridgePairingResponseSchema,
   analysisJobResponseSchema, apiProblemSchema, authLoginResponseSchema, connectionCapacityResponseSchema,
@@ -84,6 +85,14 @@ export function createApiClient(options: ApiClientOptions = {}) {
   }
 
   return {
+    getAdminSetting: (scope: {namespace:string;key:string}) => {
+      const value=settingScopeSchema.parse(scope)
+      return send(adminSettingResponseSchema,`/api/v4/admin/settings/value?${new URLSearchParams(value).toString()}`,{cache:'no-store'})
+    },
+    updateAdminSetting: (body:SettingUpdateBody,requestKey:string,csrfToken:string) => send(
+      settingUpdateResponseSchema,'/api/v4/admin/settings/value',
+      {method:'PUT',body:JSON.stringify(settingUpdateBodySchema.parse(body)),csrfToken,
+        headers:{'Idempotency-Key':settingRequestKeySchema.parse(requestKey)},cache:'no-store'}),
     getSession: () => send(sessionResponseSchema, '/api/v4/session'),
     login: (body: AuthLoginRequest) => send(
       authLoginResponseSchema,
