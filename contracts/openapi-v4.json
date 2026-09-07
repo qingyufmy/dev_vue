@@ -32,6 +32,98 @@
     { "name": "Observer Management", "description": "Administrator-only observer source, channel and explicit audience authorization configuration" }
   ],
   "paths": {
+    "/learning/courses": {
+      "get": {
+        "operationId": "listLearningCourses",
+        "summary": "Read migrated learning data on www host",
+        "description": "WWW host only. Private no-store. Detail uses only www-web session; locked results contain no lessons, media or progress. Progress is scoped to authenticated user.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^-?[0-9]{1,10}:[1-9][0-9]{0,9}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Learning data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearningListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor"
+          },
+          "401": {
+            "description": "Invalid www session"
+          },
+          "404": {
+            "description": "Course not published or absent"
+          },
+          "421": {
+            "description": "Wrong application host"
+          },
+          "503": {
+            "description": "Read unavailable"
+          }
+        }
+      }
+    },
+    "/learning/courses/{id}": {
+      "get": {
+        "operationId": "getLearningCourse",
+        "summary": "Read migrated learning data on www host",
+        "description": "WWW host only. Private no-store. Detail uses only www-web session; locked results contain no lessons, media or progress. Progress is scoped to authenticated user.",
+        "security": [],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,9}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Learning data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LearningDetailResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor"
+          },
+          "401": {
+            "description": "Invalid www session"
+          },
+          "404": {
+            "description": "Course not published or absent"
+          },
+          "421": {
+            "description": "Wrong application host"
+          },
+          "503": {
+            "description": "Read unavailable"
+          }
+        }
+      }
+    },
+
   "/admin/settings/value": {
   "get": {
     "operationId": "readAdminSystemSetting",
@@ -2227,6 +2319,273 @@
       }
     },
     "schemas": {
+    "LearningCourse": {
+      "type": "object",
+      "required": [
+        "id",
+        "title",
+        "description",
+        "category",
+        "access_level",
+        "updated_at",
+        "sort_order"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "category": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "access_level": {
+          "enum": [
+            "free",
+            "logged_in",
+            "plus_pro",
+            "pro_only",
+            null
+          ]
+        },
+        "updated_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "sort_order": {
+          "type": "integer"
+        }
+      },
+      "additionalProperties": false
+    },
+    "LearningListResponse": {
+      "type": "object",
+      "required": [
+        "data",
+        "meta"
+      ],
+      "properties": {
+        "data": {
+          "type": "object",
+          "required": [
+            "items",
+            "next_cursor"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "$ref": "#/components/schemas/LearningCourse"
+              }
+            },
+            "next_cursor": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "meta": {
+          "type": "object",
+          "required": [
+            "request_id",
+            "generated_at"
+          ],
+          "properties": {
+            "generated_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "LearningDetailResponse": {
+      "type": "object",
+      "required": [
+        "data",
+        "meta"
+      ],
+      "properties": {
+        "data": {
+          "type": "object",
+          "required": [
+            "course",
+            "access",
+            "lessons",
+            "lessons_truncated"
+          ],
+          "properties": {
+            "course": {
+              "$ref": "#/components/schemas/LearningCourse"
+            },
+            "access": {
+              "enum": [
+                "allowed",
+                "login_required",
+                "membership_required"
+              ]
+            },
+            "lessons": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "title",
+                  "duration_ms",
+                  "progress",
+                  "resources"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "duration_ms": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "progress": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "required": [
+                      "watched_ms",
+                      "reported_duration_ms",
+                      "completed",
+                      "updated_at"
+                    ],
+                    "properties": {
+                      "watched_ms": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "reported_duration_ms": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "completed": {
+                        "type": [
+                          "boolean",
+                          "null"
+                        ]
+                      },
+                      "updated_at": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "format": "date-time"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "resources": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "kind",
+                        "url"
+                      ],
+                      "properties": {
+                        "kind": {
+                          "type": "string"
+                        },
+                        "url": {
+                          "type": "string",
+                          "format": "uri",
+                          "pattern": "^https://"
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "lessons_truncated": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "access": {
+                    "enum": [
+                      "login_required",
+                      "membership_required"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "properties": {
+                  "lessons": {
+                    "maxItems": 0
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "meta": {
+          "type": "object",
+          "required": [
+            "request_id",
+            "generated_at"
+          ],
+          "properties": {
+            "generated_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "request_id": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+
       "OpaqueId": {
         "type": "string",
         "minLength": 1,

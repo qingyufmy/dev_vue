@@ -15,7 +15,7 @@ import { Button } from '@aurum/ui/button'
         </NuxtLink>
 
         <nav aria-label="主导航" class="hidden items-center gap-7 text-sm text-muted-foreground md:flex">
-          <NuxtLink to="/#courses" class="hover:text-foreground">课程</NuxtLink>
+          <NuxtLink to="/courses" class="hover:text-foreground">课程</NuxtLink>
           <NuxtLink to="/#solutions" class="hover:text-foreground">AI 交易实验室</NuxtLink>
           <NuxtLink to="/#about" class="hover:text-foreground">关于我们</NuxtLink>
         </nav>

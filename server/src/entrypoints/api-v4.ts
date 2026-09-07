@@ -1,3 +1,5 @@
+import { LearningService, MysqlLearningReader } from '../modules/learning/index.js'
+import { MysqlLearningMembershipReader } from '../modules/commerce/index.js'
 import { validateSettingMenu,AdminSettingReader,MysqlAdminSettingReader,SettingManagementService,MysqlSettingManagement } from '../modules/settings/management.js'
 import { ReferralRuleManagementService, MysqlReferralRuleManagement } from '../modules/commerce/index.js'
 import Fastify from 'fastify'
@@ -48,6 +50,7 @@ async function main() {
   const app = Fastify({ logger: true, bodyLimit: 1024 * 1024, trustProxy: true })
   await registerApiV4Routes(app, {
     auth,
+    learning: new LearningService(new MysqlLearningReader(pool), new MysqlLearningMembershipReader(pool)),
     bridgePairing: new BridgePairingService(new MysqlBridgePairingRepository(pool)),
     bridgeCredentials: new BridgeCredentialService(
       new MysqlBridgeCredentialRepository(pool),
@@ -70,7 +73,7 @@ async function main() {
     referralRules: new ReferralRuleManagementService(new MysqlReferralRuleManagement(pool)),
     observerManagement: new ObserverManagementService(new MysqlObserverManagementRepository(pool)),
     observerAdminAuth: new AuthObserverAdminAdapter(auth),
-  }, { tradeOrigin: web.auth.tradeOrigin, adminOrigin: web.auth.adminOrigin, secureCookies: web.secureCookies })
+  }, { wwwOrigin: web.auth.wwwOrigin, tradeOrigin: web.auth.tradeOrigin, adminOrigin: web.auth.adminOrigin, secureCookies: web.secureCookies })
 
   app.get('/health/live', async () => ({ status: 'ok', ...health.snapshot() }))
   app.get('/health/ready', async (_request, reply) => {

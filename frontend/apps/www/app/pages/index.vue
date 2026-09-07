@@ -37,7 +37,7 @@ const capabilities = [
             </NuxtLink>
           </Button>
           <Button as-child size="lg" variant="outline">
-            <NuxtLink to="/#courses">浏览课程</NuxtLink>
+            <NuxtLink to="/courses">浏览课程</NuxtLink>
           </Button>
         </div>
       </div>

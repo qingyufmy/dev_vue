@@ -10,6 +10,7 @@
     "typecheck": "nuxt typecheck"
   },
   "dependencies": {
+    "@aurum/contracts": "workspace:*",
     "@aurum/design-tokens": "workspace:*",
     "@aurum/ui": "workspace:*",
     "@lucide/vue": "^1.39.0",
