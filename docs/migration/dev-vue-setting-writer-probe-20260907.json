@@ -1,0 +1,48 @@
+{
+  "kind": "setting-writer-probe/v1",
+  "toolManifest": [
+    {
+      "path": "package.json",
+      "sha256": "6a28d132e349a7d7958232e4b3ed156caa268486b5e90d183226b4454ce8d54b"
+    },
+    {
+      "path": "scripts/lib/v4-backup-artifact.mjs",
+      "sha256": "4e66ff5a47c862dd494ef3d9800f413b07de19ca1a81e1e61eece4da8ef22591"
+    },
+    {
+      "path": "scripts/lib/v4-backup-io.mjs",
+      "sha256": "0b6082e0b18e30a42ffad895e5f3cbd4a2645e87f623d02b5c1844d53f6f7171"
+    },
+    {
+      "path": "scripts/probe-setting-writer-host.mjs",
+      "sha256": "66dd219e78b33a1d333fe1c5c0fb5381294e8e4f59c6229577940d89c3c02227"
+    },
+    {
+      "path": "scripts/run-setting-writer-host.py",
+      "sha256": "1028c51d4911b6f5db9167cbf38a7e6164b1d99b2bdfcafdc6fa0febdf7c7df1"
+    },
+    {
+      "path": "server/dist-v4/modules/settings/infrastructure/mysql-setting-writer.js",
+      "sha256": "6718604e9f8433fc1b5b3b8170066fee2fcd17347fc09cfc4f5a0a88ca1e0546"
+    },
+    {
+      "path": "server/src/modules/settings/infrastructure/mysql-setting-reader.ts",
+      "sha256": "64e8032c78e16a9e4fa70f9dff985a67d7054de36c74783ed7172291f596d2cc"
+    },
+    {
+      "path": "server/src/modules/settings/infrastructure/mysql-setting-writer.ts",
+      "sha256": "04bdbab8434b23043ea8c1ef2966c00733ea153274217e4e727ecf3c005593b0"
+    }
+  ],
+  "database": "dev_vue_m1_a",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "fixtureOnly": true,
+  "observedConcurrentLockWait": true,
+  "staleSnapshotRejected": true,
+  "exactBigRevision": true,
+  "auditCommitted": true,
+  "auditFailureRolledBack": true,
+  "fixturesCleaned": true,
+  "currentDevVueWritten": false,
+  "consumersSwitched": false
+}
