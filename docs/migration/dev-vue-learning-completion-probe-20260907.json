@@ -1,0 +1,79 @@
+{
+  "kind": "learning-completion-probe/v1",
+  "executionHost": "local",
+  "currentDevVueWritten": false,
+  "verified": true,
+  "toolManifest": [
+    {
+      "path": "scripts/probe-learning-completion-local.mjs",
+      "sha256": "c21020f9fe2c586f5e2657ef0d14f6c58736933237d487dc0016da52ca115bf4"
+    },
+    {
+      "path": "scripts/lib/learning-completion-probe-grant.mjs",
+      "sha256": "ff6d86b18e113deff8e3ad774a452078c2b327558dd5dc70c03e6a9695fdd410"
+    },
+    {
+      "path": "server/db/migrations/inplace/023_learning_progress_changes.sql",
+      "sha256": "871dc1bbdfe2aa5485e54a0eb050355391d9657e038a55f519a4a6147c385a56"
+    },
+    {
+      "path": "server/db/migrations/inplace/024_learning_request_key_preservation.sql",
+      "sha256": "4f31ccc9f01addcf19e036856852173af5a654e77cd62df200a915287e25b75d"
+    },
+    {
+      "path": "server/src/modules/learning/domain/learning-completion.ts",
+      "sha256": "d727584d4e2aac89c3cd3c9db1d0e89b5af41ae2a5ad88962fa7504a3644c900"
+    },
+    {
+      "path": "server/src/modules/learning/infrastructure/mysql-learning-completion.ts",
+      "sha256": "8870285f1334ad4d65858119e4594b5bcf686cb2380437ee5c6d397889b0fcb2"
+    },
+    {
+      "path": "server/src/modules/commerce/infrastructure/mysql-learning-membership-reader.ts",
+      "sha256": "9c284c09f328cbb2f662c65d4e354d9890acbc0a2b9770bef58687db0a054ce1"
+    }
+  ],
+  "priorGrantsSha256": "a958faddf801f139d579b3a56486b6d09a9d0a4d6f73036b0b1311e522af30d0",
+  "identity": {
+    "db": "dev_vue_m1_source_20260907_02",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "sourceSqlSha256": "871dc1bbdfe2aa5485e54a0eb050355391d9657e038a55f519a4a6147c385a56",
+  "correctionSqlSha256": "4f31ccc9f01addcf19e036856852173af5a654e77cd62df200a915287e25b75d",
+  "initialDefinition": "CREATE TABLE `learning_progress_changes` (\n  `user_id` int NOT NULL,\n  `request_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `request_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `course_id` int NOT NULL,\n  `lesson_id` int NOT NULL,\n  `prior_revision` bigint unsigned NOT NULL,\n  `revision` bigint unsigned NOT NULL,\n  `prior_completed` tinyint DEFAULT NULL,\n  `completed` tinyint NOT NULL,\n  `prior_updated_at_utc` datetime(3) DEFAULT NULL,\n  `recorded_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`user_id`,`request_id`),\n  UNIQUE KEY `uk_learning_progress_change_revision` (`user_id`,`lesson_id`,`revision`),\n  KEY `idx_learning_progress_change_lesson` (`lesson_id`,`recorded_at_utc`),\n  KEY `fk_learning_change_course` (`course_id`),\n  CONSTRAINT `fk_learning_change_course` FOREIGN KEY (`course_id`) REFERENCES `learning_courses` (`id`),\n  CONSTRAINT `fk_learning_change_lesson` FOREIGN KEY (`lesson_id`) REFERENCES `learning_lessons` (`id`),\n  CONSTRAINT `fk_learning_change_owner` FOREIGN KEY (`user_id`, `lesson_id`) REFERENCES `learning_progress` (`user_id`, `lesson_id`),\n  CONSTRAINT `fk_learning_change_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_learning_change_before` CHECK (((`prior_revision` > 0) or ((`prior_completed` is null) and (`prior_updated_at_utc` is null)))),\n  CONSTRAINT `chk_learning_change_completed` CHECK (((`completed` in (0,1)) and ((`prior_completed` is null) or (`prior_completed` in (0,1))))),\n  CONSTRAINT `chk_learning_change_hash` CHECK (((char_length(`request_sha256`) = 64) and (not(regexp_like(`request_sha256`,_utf8mb4'[^0-9a-f]',_utf8mb4'c'))))),\n  CONSTRAINT `chk_learning_change_request` CHECK ((regexp_like(`request_id`,_utf8mb4'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',_utf8mb4'c') and (not(regexp_like(`request_id`,_utf8mb4'[^0-9a-f-]',_utf8mb4'c'))))),\n  CONSTRAINT `chk_learning_change_revision` CHECK (((`revision` > 0) and (`prior_revision` = (`revision` - 1))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+  "definition": "CREATE TABLE `learning_progress_changes` (\n  `user_id` int NOT NULL,\n  `request_id` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `request_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `course_id` int NOT NULL,\n  `lesson_id` int NOT NULL,\n  `prior_revision` bigint unsigned NOT NULL,\n  `revision` bigint unsigned NOT NULL,\n  `prior_completed` tinyint DEFAULT NULL,\n  `completed` tinyint NOT NULL,\n  `prior_updated_at_utc` datetime(3) DEFAULT NULL,\n  `recorded_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`user_id`,`request_id`),\n  UNIQUE KEY `uk_learning_progress_change_revision` (`user_id`,`lesson_id`,`revision`),\n  KEY `idx_learning_progress_change_lesson` (`lesson_id`,`recorded_at_utc`),\n  KEY `fk_learning_change_course` (`course_id`),\n  CONSTRAINT `fk_learning_change_course` FOREIGN KEY (`course_id`) REFERENCES `learning_courses` (`id`),\n  CONSTRAINT `fk_learning_change_lesson` FOREIGN KEY (`lesson_id`) REFERENCES `learning_lessons` (`id`),\n  CONSTRAINT `fk_learning_change_owner` FOREIGN KEY (`user_id`, `lesson_id`) REFERENCES `learning_progress` (`user_id`, `lesson_id`),\n  CONSTRAINT `fk_learning_change_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_learning_change_before` CHECK (((`prior_revision` > 0) or ((`prior_completed` is null) and (`prior_updated_at_utc` is null)))),\n  CONSTRAINT `chk_learning_change_completed` CHECK (((`completed` in (0,1)) and ((`prior_completed` is null) or (`prior_completed` in (0,1))))),\n  CONSTRAINT `chk_learning_change_hash` CHECK (((char_length(`request_sha256`) = 64) and (not(regexp_like(`request_sha256`,_ascii'[^0-9a-f]',_utf8mb4'c'))))),\n  CONSTRAINT `chk_learning_change_request` CHECK ((regexp_like(`request_id`,_ascii'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',_utf8mb4'c') and (not(regexp_like(`request_id`,_ascii'[^0-9a-f-]',_utf8mb4'c'))))),\n  CONSTRAINT `chk_learning_change_revision` CHECK (((`revision` > 0) and (`prior_revision` = (`revision` - 1))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+  "concurrentSingleWinner": true,
+  "exactPrecisionAndOverDuration": true,
+  "commitUnknownRecovered": true,
+  "auditRollbackVerified": true,
+  "rejectedConstraints": [
+    {
+      "name": "bad_uuid",
+      "errno": 3819
+    },
+    {
+      "name": "uuid_newline",
+      "errno": 3819
+    },
+    {
+      "name": "hash_case",
+      "errno": 3819
+    },
+    {
+      "name": "revision_gap",
+      "errno": 3819
+    },
+    {
+      "name": "bad_completed",
+      "errno": 3819
+    },
+    {
+      "name": "missing_lesson",
+      "errno": 1452
+    }
+  ],
+  "acceptedConstraintRow": true,
+  "fixtureCleanupVerified": true,
+  "grantsRestored": true
+}

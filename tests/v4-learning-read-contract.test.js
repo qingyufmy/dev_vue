@@ -7,7 +7,7 @@ const schema = { ...doc.components.schemas.LearningDetailResponse, components: {
 const validate = ajv.compile(schema)
 const course = { id: '12', title: '课程', description: null, category: null, access_level: 'logged_in', updated_at: '2026-09-07T00:00:00Z', sort_order: 0 }
 it('accepts locked metadata but forbids protected lessons and internal columns', () => {
-  const response = { data: { course, access: 'login_required', lessons: [], lessons_truncated: false }, meta: { request_id: 'r', generated_at: '2026-09-07T00:00:00Z' } }
+  const response = { data: { course, viewer_user_id: null, access: 'login_required', lessons: [], lessons_truncated: false }, meta: { request_id: 'r', generated_at: '2026-09-07T00:00:00Z' } }
   expect(validate(response)).toBe(true)
   expect(validate({ ...response, data: { ...response.data, course: { ...course, source_sha256: 'private' } } })).toBe(false)
   const lesson = { id: '1', title: '内容', duration_ms: '9007199254740993', progress: null, resources: [] }

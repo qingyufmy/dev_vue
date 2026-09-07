@@ -5,7 +5,7 @@ export interface CourseSummary {
 }
 export interface Lesson {
   id: string; title: string; duration_ms: string | null
-  progress: { watched_ms: string | null; reported_duration_ms: string | null; completed: boolean | null; updated_at: string | null } | null
+  progress: { watched_ms: string | null; reported_duration_ms: string | null; completed: boolean | null; updated_at: string | null; revision: string } | null
   resources: Array<{ kind: string; url: string }>
 }
 export class LearningError extends Error {

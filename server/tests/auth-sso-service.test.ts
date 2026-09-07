@@ -1,5 +1,5 @@
 import Fastify from 'fastify'
-import { LearningService, learningRoutes } from '../src/modules/learning/index.js'
+import { LearningService, learningRoutes, LearningCompletionService, learningCompletionRoutes } from '../src/modules/learning/index.js'
 import { generateKeyPairSync, verify } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
@@ -234,12 +234,19 @@ describe('SSO V4 HTTP routes', () => {
       course: async () => ({ id: '12', title: '课程', description: null, category: null, access_level: 'logged_in', updated_at: null, sort_order: 0 }),
       lessons: async (_id, userId) => {
         expect(userId).toBe(7)
-        return [{ id: '99', title: '课时', duration_ms: null, resources: [], progress: { watched_ms: '10000', reported_duration_ms: null, completed: false, updated_at: null } }]
+        return [{ id: '99', title: '课时', duration_ms: null, resources: [], progress: { watched_ms: '10000', reported_duration_ms: null, completed: false, updated_at: null, revision: '1' } }]
       },
     }, { activePlan: async () => 'free' })
     try {
       await www.register(appSessionRoutes, { service, surface: 'www', secureCookies })
       await www.register(learningRoutes, { prefix: '/api/v4', service: learning, auth: service, wwwOrigin: 'https://www.example.test', secureCookies })
+      let savedCount = 0
+      await www.register(learningCompletionRoutes, { prefix: '/api/v4', auth: service, wwwOrigin: 'https://www.example.test', secureCookies,
+        service: new LearningCompletionService({ execute: async command => {
+          savedCount++
+          expect(command.userId).toBe(7)
+          return { lesson_id: command.lessonId, completed: command.completed, revision: '2', updated_at: '2026-09-07T01:00:00.123Z', replayed: false }
+        } }) })
       await auth.register(authCenterRoutes, { service, secureCookies })
       const detail = (cookie?: string) => www.inject({ url: '/api/v4/learning/courses/12', headers: { host: 'www.example.test', ...(cookie ? { cookie } : {}) } })
       expect((await detail()).json().data.access).toBe('login_required')
@@ -263,9 +270,21 @@ describe('SSO V4 HTTP routes', () => {
       expect(opened.json().data.access).toBe('allowed')
       expect(opened.json().data.lessons[0].progress.watched_ms).toBe('10000')
       const csrf = session.json().data.csrf_token as string
+      const write = (extra: Record<string, string> = {}, payload: unknown = { completed: true, expected_revision: '1' }) => www.inject({
+        method: 'PUT', url: '/api/v4/learning/courses/12/lessons/99/completion', headers: { host: 'www.example.test', cookie,
+          origin: 'https://www.example.test', 'x-csrf-token': csrf, 'idempotency-key': 'a56a2134-9105-4e93-a806-bb3793f7ad38', ...extra }, payload,
+      })
+      expect((await write({ 'x-csrf-token': '' })).statusCode).toBe(403)
+      expect((await write({ origin: 'https://evil.example.test' })).statusCode).toBe(403)
+      expect((await write({ host: 'trade.example.test' })).statusCode).toBe(421)
+      expect((await write({}, { completed: true, expected_revision: '1', user_id: 9 })).statusCode).toBe(400)
+      expect((await write()).json().data).toMatchObject({ completed: true, revision: '2' })
+      expect(savedCount).toBe(1)
       expect((await www.inject({ method: 'POST', url: '/api/v4/session/logout', headers: { cookie, origin: 'https://evil.example.test', 'x-csrf-token': csrf } })).statusCode).toBe(403)
       expect((await www.inject({ method: 'POST', url: '/api/v4/session/logout', headers: { cookie, origin: 'https://www.example.test', 'x-csrf-token': csrf } })).statusCode).toBe(204)
       expect((await detail(cookie)).statusCode).toBe(401)
+      expect((await write()).statusCode).toBe(401)
+      expect(savedCount).toBe(1)
     } finally { await www.close(); await auth.close() }
   })
 

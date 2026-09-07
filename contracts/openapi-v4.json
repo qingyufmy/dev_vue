@@ -32,6 +32,31 @@
     { "name": "Observer Management", "description": "Administrator-only observer source, channel and explicit audience authorization configuration" }
   ],
   "paths": {
+    "/learning/courses/{courseId}/lessons/{lessonId}/completion": {
+      "put": {
+        "operationId": "setLearningCompletion",
+        "summary": "Set current user's explicit lesson completion marker",
+        "description": "WWW session, exact Origin and CSRF required. Preserves watched time and quiz status. Same idempotency key and body replay the original receipt; stale revision returns 409. On 503 or network uncertainty retain the original key and body. Revision zero means no existing progress row; unsigned BIGINT overflow is rejected.",
+        "security": [{ "applicationSession": [] }],
+        "parameters": [
+          { "name": "courseId", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[1-9][0-9]{0,9}$" } },
+          { "name": "lessonId", "in": "path", "required": true, "schema": { "type": "string", "pattern": "^[1-9][0-9]{0,9}$" } },
+          { "name": "Idempotency-Key", "in": "header", "required": true, "schema": { "type": "string", "minLength": 36, "maxLength": 36, "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", "not": { "pattern": "[^0-9a-f-]" } } },
+          { "$ref": "#/components/parameters/CsrfToken" }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LearningCompletionRequest" } } } },
+        "responses": {
+          "200": { "description": "Saved or replayed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/LearningCompletionResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" },
+          "401": { "$ref": "#/components/responses/Problem" },
+          "403": { "$ref": "#/components/responses/Problem" },
+          "404": { "$ref": "#/components/responses/Problem" },
+          "409": { "$ref": "#/components/responses/Problem" },
+          "421": { "$ref": "#/components/responses/Problem" },
+          "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/learning/courses": {
       "get": {
         "operationId": "listLearningCourses",
@@ -2319,6 +2344,29 @@
       }
     },
     "schemas": {
+    "LearningCompletionRequest": {
+      "type": "object", "required": ["completed", "expected_revision"], "additionalProperties": false,
+      "properties": {
+        "completed": { "type": "boolean" },
+        "expected_revision": { "type": "string", "maxLength": 20, "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-3]|18446744073709551614)$", "not": { "pattern": "[^0-9]" }, "description": "Exact unsigned revision text, at most 18446744073709551614." }
+      }
+    },
+    "LearningCompletionResponse": {
+      "type": "object", "required": ["data", "meta"], "additionalProperties": false,
+      "properties": {
+        "data": {
+          "type": "object", "required": ["lesson_id", "completed", "revision", "updated_at", "replayed"], "additionalProperties": false,
+          "properties": {
+            "lesson_id": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+            "completed": { "type": "boolean" },
+            "revision": { "type": "string", "maxLength": 20, "pattern": "^[1-9][0-9]*$", "not": { "pattern": "[^0-9]" } },
+            "updated_at": { "type": "string", "format": "date-time", "pattern": "Z$" },
+            "replayed": { "type": "boolean" }
+          }
+        },
+        "meta": { "$ref": "#/components/schemas/Meta" }
+      }
+    },
     "LearningCourse": {
       "type": "object",
       "required": [
@@ -2435,9 +2483,11 @@
             "course",
             "access",
             "lessons",
-            "lessons_truncated"
+            "lessons_truncated",
+            "viewer_user_id"
           ],
           "properties": {
+            "viewer_user_id": { "type": ["string", "null"], "pattern": "^[1-9][0-9]*$" },
             "course": {
               "$ref": "#/components/schemas/LearningCourse"
             },
@@ -2482,9 +2532,11 @@
                       "watched_ms",
                       "reported_duration_ms",
                       "completed",
-                      "updated_at"
+                      "updated_at",
+                      "revision"
                     ],
                     "properties": {
+                      "revision": { "type": "string", "maxLength": 20, "pattern": "^[1-9][0-9]*$", "not": { "pattern": "[^0-9]" } },
                       "watched_ms": {
                         "type": [
                           "string",

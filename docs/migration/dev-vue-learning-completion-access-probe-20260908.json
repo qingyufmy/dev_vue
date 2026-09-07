@@ -1,0 +1,15 @@
+{
+  "kind": "learning-completion-access-probe/v1",
+  "verified": true,
+  "currentDevVueWritten": false,
+  "identity": {
+    "db": "dev_vue_m1_source_20260907_02",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "concurrentFirstCreateSingleWinner": true,
+  "expiredMembershipReplayRejected": true,
+  "unpublishedCourseReplayRejected": true,
+  "singleNativeRowAndReceiptVerified": true,
+  "fixtureCleanupVerified": true,
+  "grantsRestored": true
+}

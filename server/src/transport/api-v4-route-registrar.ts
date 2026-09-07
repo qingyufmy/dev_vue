@@ -1,4 +1,4 @@
-import { learningRoutes, type LearningService } from '../modules/learning/index.js'
+import { learningRoutes, learningCompletionRoutes, type LearningService, type LearningCompletionService } from '../modules/learning/index.js'
 import { settingRoutes,adminSettingReadRoutes,type AdminSettingReader,type SettingManagementService } from '../modules/settings/management.js'
 import { referralRuleRoutes, type ReferralRuleManagementService } from '../modules/commerce/index.js'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
@@ -21,6 +21,7 @@ import {
 
 export interface ApiV4RouteServices {
   learning?: LearningService
+  learningCompletion?: LearningCompletionService
   auth: AuthService
   bridgeCredentials: BridgeCredentialService
   bridgePairing: BridgePairingService
@@ -48,6 +49,10 @@ export async function registerApiV4Routes(
   services: ApiV4RouteServices,
   input: { tradeOrigin: string; adminOrigin: string; wwwOrigin?: string; secureCookies: boolean },
 ) {
+  if (services.learningCompletion) {
+    if (!input.wwwOrigin) throw new Error('learning_www_origin_required')
+    await fastify.register(learningCompletionRoutes, { prefix: '/api/v4', service: services.learningCompletion, auth: services.auth, wwwOrigin: input.wwwOrigin, secureCookies: input.secureCookies })
+  }
   if (services.learning) {
     if (!input.wwwOrigin) throw new Error('learning_www_origin_required')
     await fastify.register(learningRoutes, { prefix: '/api/v4', service: services.learning, auth: services.auth, wwwOrigin: input.wwwOrigin, secureCookies: input.secureCookies })

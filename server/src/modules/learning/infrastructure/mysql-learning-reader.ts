@@ -16,7 +16,7 @@ export class MysqlLearningReader implements LearningReader {
   }
   async lessons(id: string, userId: number | null): Promise<Lesson[]> {
     const [rows] = await this.pool.execute<RowDataPacket[]>(`SELECT CAST(l.id AS CHAR) id,l.title,CAST(l.duration_ms AS CHAR) duration_ms,
-      p.id progress_id,CAST(p.watched_ms AS CHAR) watched_ms,CAST(p.reported_duration_ms AS CHAR) reported_duration_ms,p.completed,
+      p.id progress_id,CAST(p.revision AS CHAR) progress_revision,CAST(p.watched_ms AS CHAR) watched_ms,CAST(p.reported_duration_ms AS CHAR) reported_duration_ms,p.completed,
       CONCAT(LEFT(DATE_FORMAT(p.updated_at_utc,'%Y-%m-%dT%H:%i:%s.%f'),23),'Z') progress_updated_at
       FROM learning_lessons l JOIN learning_courses c ON c.id=l.course_id AND c.status='published'
       LEFT JOIN learning_progress p ON p.lesson_id=l.id AND p.user_id=?
@@ -27,7 +27,7 @@ export class MysqlLearningReader implements LearningReader {
       FROM learning_media_references WHERE lesson_id IN (${ids.map(() => '?').join(',')})`, ids)
     return rows.map(row => ({ id: String(row.id), title: String(row.title), duration_ms: row.duration_ms,
       progress: row.progress_id == null ? null : { watched_ms: row.watched_ms, reported_duration_ms: row.reported_duration_ms,
-        completed: row.completed == null ? null : Number(row.completed) !== 0, updated_at: row.progress_updated_at },
+        completed: row.completed == null ? null : Number(row.completed) !== 0, updated_at: row.progress_updated_at, revision: row.progress_revision },
       resources: media.filter(item => String(item.lesson_id) === String(row.id)).flatMap(item => {
         const url = learningResourceUrl(String(item.source_kind), String(item.locator))
         return url ? [{ kind: String(item.source_kind), url }] : []

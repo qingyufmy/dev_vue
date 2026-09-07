@@ -7,7 +7,7 @@ it('accepts UTC metadata and rejects ambiguous wall clocks', () => {
 })
 it('rejects locked responses that contain a lesson or unsafe resource URL', () => {
   const lesson = { id: '1', title: '内容', duration_ms: '9007199254740993', progress: null, resources: [] }
-  const detail = { course, access: 'allowed', lessons: [lesson], lessons_truncated: false }
+  const detail = { course, viewer_user_id: '7', access: 'allowed', lessons: [lesson], lessons_truncated: false }
   expect(learningDetailSchema.safeParse(detail).success).toBe(true)
   expect(learningDetailSchema.safeParse({ ...detail, access: 'login_required' }).success).toBe(false)
   expect(learningDetailSchema.safeParse({ ...detail, lessons: [{ ...lesson, resources: [{ kind: 'article_url', url: 'javascript:alert(1)' }] }] }).success).toBe(false)

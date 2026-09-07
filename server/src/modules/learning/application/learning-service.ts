@@ -14,14 +14,15 @@ export class LearningService {
     return { items, next_cursor: rows.length > 20 && last ? `${last.sort_order}:${last.id}` : null }
   }
   async detail(id: string, userId: number | null, now = new Date()) {
+    const viewer_user_id = userId === null ? null : String(userId)
     if (!/^[1-9]\d{0,9}$/.test(id) || Number(id) > 2147483647) throw new LearningError('learning_course_not_found', 404)
     const course = await this.reader.course(id)
     if (!course) throw new LearningError('learning_course_not_found', 404)
     const plan = userId === null ? 'free' : await this.memberships.activePlan(userId, now)
     const allowed = course.access_level === 'free' || userId !== null && (course.access_level === 'logged_in'
       || course.access_level === 'plus_pro' && (plan === 'plus' || plan === 'pro') || course.access_level === 'pro_only' && plan === 'pro')
-    if (!allowed) return { course, access: userId === null ? 'login_required' as const : 'membership_required' as const, lessons: [], lessons_truncated: false }
+    if (!allowed) return { course, viewer_user_id, access: userId === null ? 'login_required' as const : 'membership_required' as const, lessons: [], lessons_truncated: false }
     const lessons = await this.reader.lessons(id, userId)
-    return { course, access: 'allowed' as const, lessons: lessons.slice(0, 100), lessons_truncated: lessons.length > 100 }
+    return { course, viewer_user_id, access: 'allowed' as const, lessons: lessons.slice(0, 100), lessons_truncated: lessons.length > 100 }
   }
 }

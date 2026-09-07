@@ -1,4 +1,4 @@
-import { LearningService, MysqlLearningReader } from '../modules/learning/index.js'
+import { LearningService, MysqlLearningReader, LearningCompletionService, MysqlLearningCompletion } from '../modules/learning/index.js'
 import { MysqlLearningMembershipReader } from '../modules/commerce/index.js'
 import { validateSettingMenu,AdminSettingReader,MysqlAdminSettingReader,SettingManagementService,MysqlSettingManagement } from '../modules/settings/management.js'
 import { ReferralRuleManagementService, MysqlReferralRuleManagement } from '../modules/commerce/index.js'
@@ -51,6 +51,7 @@ async function main() {
   await registerApiV4Routes(app, {
     auth,
     learning: new LearningService(new MysqlLearningReader(pool), new MysqlLearningMembershipReader(pool)),
+    learningCompletion: new LearningCompletionService(new MysqlLearningCompletion(pool, MysqlLearningMembershipReader.forTransaction)),
     bridgePairing: new BridgePairingService(new MysqlBridgePairingRepository(pool)),
     bridgeCredentials: new BridgeCredentialService(
       new MysqlBridgeCredentialRepository(pool),

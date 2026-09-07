@@ -1,4 +1,4 @@
-export { learningCourseSchema, learningListSchema, learningDetailSchema, type LearningCourse, type LearningDetail } from './learning'
+export { learningCourseSchema, learningListSchema, learningDetailSchema, learningCompletionSchema, type LearningCourse, type LearningDetail } from './learning'
 import { z } from 'zod'
 export { bridgePairingRequestSchema, bridgePairingResponseSchema } from './bridge-pairing'
 
