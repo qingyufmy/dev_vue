@@ -1,4 +1,4 @@
-import { SettingManagementService,MysqlSettingManagement } from '../modules/settings/management.js'
+import { AdminSettingReader,MysqlAdminSettingReader,SettingManagementService,MysqlSettingManagement } from '../modules/settings/management.js'
 import { ReferralRuleManagementService, MysqlReferralRuleManagement } from '../modules/commerce/index.js'
 import Fastify from 'fastify'
 import { AuditService, MysqlAuditRepository } from '../modules/audit/index.js'
@@ -65,6 +65,7 @@ async function main() {
     tradeHistory: new TradeHistoryService(new MysqlTradeHistoryRepository(pool)),
     audit: new AuditService(new MysqlAuditRepository(pool)),
     tradeAuth,
+    settingReader: new AdminSettingReader(new MysqlAdminSettingReader(pool)),
     settings: new SettingManagementService(new MysqlSettingManagement(pool)),
     referralRules: new ReferralRuleManagementService(new MysqlReferralRuleManagement(pool)),
     observerManagement: new ObserverManagementService(new MysqlObserverManagementRepository(pool)),

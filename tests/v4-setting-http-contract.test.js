@@ -17,3 +17,13 @@ it('describes durable result and bounded UUID idempotency key',()=>{
  expect(header('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')).toBe(true)
  expect(header('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa\n')).toBe(false)
 })
+it('describes protected responses without allowing a leaked value field',()=>{
+ const get=doc.paths['/admin/settings/value'].get
+ const validate=ajv.compile(get.responses['200'].content['application/json'].schema)
+ const data={setting_id:'1',namespace:'smtp',key:'pass',value_type:'credential',sensitivity:'secret',revision:'1',value_state:'text',protected:true}
+ const meta={request_id:'r',generated_at:'2026-09-07T00:00:00.000Z'}
+ expect(validate({data,meta})).toBe(true)
+ expect(validate({data:{...data,value:'ciphertext'},meta})).toBe(false)
+ expect(validate({data:{...data,protected:false,value:null},meta})).toBe(false)
+ expect(validate({data:{...data,key:'host',value_type:'string',sensitivity:'restricted',protected:false,value:null,value_state:'null'},meta})).toBe(true)
+})

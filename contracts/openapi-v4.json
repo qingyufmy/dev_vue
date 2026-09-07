@@ -33,6 +33,222 @@
   ],
   "paths": {
   "/admin/settings/value": {
+  "get": {
+    "operationId": "readAdminSystemSetting",
+    "summary": "Read one stored setting with secret redaction",
+    "tags": [
+      "Settings"
+    ],
+    "description": "Admin host and admin-web session only. Only namespace and key query parameters are accepted; value type is resolved by the server registry. Missing rows return 404, NULL and empty remain distinct. Protected credentials omit value entirely. No legacy fallback.",
+    "parameters": [
+      {
+        "name": "namespace",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        }
+      },
+      {
+        "name": "key",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        }
+      }
+    ],
+    "responses": {
+      "400": {
+        "$ref": "#/components/responses/Problem"
+      },
+      "401": {
+        "$ref": "#/components/responses/Problem"
+      },
+      "403": {
+        "$ref": "#/components/responses/Problem"
+      },
+      "421": {
+        "$ref": "#/components/responses/Problem"
+      },
+      "503": {
+        "$ref": "#/components/responses/Problem"
+      },
+      "404": {
+        "$ref": "#/components/responses/Problem",
+        "description": "Known configuration key has no stored row"
+      },
+      "200": {
+        "description": "Stored value or protected credential metadata; no synthetic defaults",
+        "headers": {
+          "Cache-Control": {
+            "schema": {
+              "const": "no-store",
+              "type": "string"
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "data",
+                "meta"
+              ],
+              "properties": {
+                "data": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "setting_id",
+                        "namespace",
+                        "key",
+                        "value_type",
+                        "sensitivity",
+                        "revision",
+                        "value_state",
+                        "protected"
+                      ],
+                      "properties": {
+                        "setting_id": {
+                          "type": "string"
+                        },
+                        "namespace": {
+                          "type": "string"
+                        },
+                        "key": {
+                          "type": "string"
+                        },
+                        "value_type": {
+                          "type": "string",
+                          "enum": [
+                            "string",
+                            "boolean",
+                            "integer",
+                            "enum",
+                            "json_array",
+                            "credential"
+                          ]
+                        },
+                        "sensitivity": {
+                          "type": "string",
+                          "enum": [
+                            "public",
+                            "restricted",
+                            "secret"
+                          ]
+                        },
+                        "revision": {
+                          "type": "string"
+                        },
+                        "value_state": {
+                          "type": "string",
+                          "enum": [
+                            "null",
+                            "empty",
+                            "text"
+                          ]
+                        },
+                        "protected": {
+                          "const": true
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "setting_id",
+                        "namespace",
+                        "key",
+                        "value_type",
+                        "sensitivity",
+                        "revision",
+                        "value_state",
+                        "protected",
+                        "value"
+                      ],
+                      "properties": {
+                        "setting_id": {
+                          "type": "string"
+                        },
+                        "namespace": {
+                          "type": "string"
+                        },
+                        "key": {
+                          "type": "string"
+                        },
+                        "value_type": {
+                          "type": "string",
+                          "enum": [
+                            "string",
+                            "boolean",
+                            "integer",
+                            "enum",
+                            "json_array"
+                          ]
+                        },
+                        "sensitivity": {
+                          "type": "string",
+                          "enum": [
+                            "public",
+                            "restricted"
+                          ]
+                        },
+                        "revision": {
+                          "type": "string"
+                        },
+                        "value_state": {
+                          "type": "string",
+                          "enum": [
+                            "null",
+                            "empty",
+                            "text"
+                          ]
+                        },
+                        "protected": {
+                          "const": false
+                        },
+                        "value": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                },
+                "meta": {
+                  "type": "object",
+                  "required": [
+                    "request_id",
+                    "generated_at"
+                  ],
+                  "properties": {
+                    "request_id": {
+                      "type": "string"
+                    },
+                    "generated_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
     "put": {
       "operationId": "updateSystemSetting",
       "summary": "Update an existing non-secret configuration value with a durable request receipt",
