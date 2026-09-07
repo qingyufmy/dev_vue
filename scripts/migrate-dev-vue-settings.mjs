@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto'
 import { exactKeys, requireBackfill as check } from './lib/v4-backfill-contract.mjs'
 import { persistCredentialPlan } from './lib/v4-settings-credential-plan.mjs'
 import { createSettingsMigration, settingsMigrationManifestHash } from './lib/v4-settings-migration.mjs'
-import { MysqlSettingsBackfillRepositoryV2, readSettingsTargetIdentityV2 } from './lib/mysql-settings-backfill-v2.mjs'
+import { MysqlSettingsBackfillRepositoryV3, readSettingsTargetIdentityV3 } from './lib/mysql-settings-backfill-v3.mjs'
 import { withInplaceUpgradeLock } from './lib/mysql-inplace-column-store.mjs'
 
 const root = new URL('../', import.meta.url)
@@ -57,7 +57,7 @@ try {
     connection = await pool.getConnection()
     await connection.query("SET SESSION time_zone='+00:00'")
     const result = await withInplaceUpgradeLock(connection, env.MYSQL_DATABASE, async () => {
-      const identity = await readSettingsTargetIdentityV2(connection)
+      const identity = await readSettingsTargetIdentityV3(connection)
       const backup = await json(new URL('docs/migration/dev-vue-inplace-backup-20260906.json', root))
       check(identity.serverUuid === backup.serverUuid && identity.serverUuid === manifest.spec.bindings.targetServerUuid
         && identity.schemaHash === manifest.spec.bindings.schemaHash, 'settings_entry_identity')
@@ -73,7 +73,7 @@ try {
       }
       const migration = createSettingsMigration({ ...manifest, sources, options })
       if (flag === '--check') return { status: 'checked', ...migration.summary, databaseWrites: 0 }
-      const repository = new MysqlSettingsBackfillRepositoryV2(pool, migration.sourceEvidence)
+      const repository = new MysqlSettingsBackfillRepositoryV3(pool, migration.sourceEvidence)
       return migration.run(flag.slice(2), repository)
     })
     console.log(JSON.stringify(result))

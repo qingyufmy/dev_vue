@@ -3,7 +3,7 @@ import { resolve, dirname, relative } from 'node:path'
 import { loadSettingsMigrationEnvironment, settingsMigrationConnectionOptions } from './lib/settings-migration-environment.mjs'
 import mysql from 'mysql2/promise'
 import { exactKeys, requireBackfill as check } from './lib/v4-backfill-contract.mjs'
-import { readSettingsTargetIdentityV2 } from './lib/mysql-settings-backfill-v2.mjs'
+import { readSettingsTargetIdentityV3 } from './lib/mysql-settings-backfill-v3.mjs'
 import { buildSettingsManifest, persistSettingsManifest } from './lib/v4-settings-manifest.mjs'
 
 const root = new URL('../', import.meta.url)
@@ -43,7 +43,7 @@ try {
     connection = await mysql.createConnection(settingsMigrationConnectionOptions(env))
     await connection.query("SET SESSION time_zone='+00:00'")
     await connection.query('START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY')
-    const targetIdentity = await readSettingsTargetIdentityV2(connection)
+    const targetIdentity = await readSettingsTargetIdentityV3(connection)
     const backup = await json(new URL('docs/migration/dev-vue-inplace-backup-20260906.json', root))
     check(targetIdentity.serverUuid === backup.serverUuid, 'settings_prepare_identity')
     const [rows] = await connection.execute(`SELECT CAST(id AS CHAR) id,category,\`key\`,value,label,CAST(sort_order AS CHAR) sort_order,created_at,updated_at FROM system_config WHERE id IN (${review.sourceIds.map(() => '?').join(',')}) ORDER BY id`, review.sourceIds)
