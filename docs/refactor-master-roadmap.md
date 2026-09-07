@@ -729,3 +729,5 @@ U2历史时间与账户承接已进一步收敛：[39字段依据及承接合同
 阶段 169：查明 MySQL 启动遇到 InnoDB LSN/检查点不一致并断言退出；核实数据文件存在及历史 SQL 备份 SHA-256 未变，未执行恢复，见 [阶段169](migration/dev-vue-inplace-stage169-20260907.md)。故障前结构/行数须在恢复后重新验收。
 
 阶段 170：学习域冻结清单及实际 repository 执行适配完成，13 项相关测试通过；MySQL 恢复、显式命令和真实演练待完成，见 [阶段170](migration/dev-vue-inplace-stage170-20260907.md)。
+
+阶段 171：学习域显式 check/verify/recover/apply 命令接通，5 项测试和实际 --help 通过；apply 暂限恢复副本，真实演练及当前库提升待完成，见 [阶段171](migration/dev-vue-inplace-stage171-20260907.md)。
