@@ -1,3 +1,4 @@
+import { formatLaboratoryTime } from '~/lib/laboratory-display-time'
 import type { MarketAnalysisSummary } from '@aurum/contracts'
 
 const biasLabels = {
@@ -29,9 +30,7 @@ export function biasTextClass(value: MarketAnalysisSummary['marketBias']) {
 }
 
 export function analysisTime(value: string) {
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-  }).format(new Date(value))
+  return formatLaboratoryTime(value)
 }
 
 export function analysisValidity(summary: MarketAnalysisSummary, now = Date.now()) {

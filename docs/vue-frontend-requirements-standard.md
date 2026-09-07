@@ -433,3 +433,6 @@ Pinia 不保存：
 - [OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0-18.html)
 - [RFC 9700: OAuth 2.0 Security Best Current Practice](https://www.rfc-editor.org/rfc/rfc9700.html)
 - [RFC 10017: OAuth 2.0 for Browser-Based Applications](https://www.rfc-editor.org/rfc/rfc10017.html)
+
+
+2026-09-07 时间口径补充：遵循[时间存储与显示规则](time-storage-and-display-policy.md)，时刻存储/传输统一 UTC，实验室显示终端时间，其它应用显示北京时间。

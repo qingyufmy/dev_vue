@@ -1,3 +1,4 @@
+import { formatLaboratoryTime } from '~/lib/laboratory-display-time'
 import type {
   ManualReviewCandidate as ContractManualReviewCandidate,
   ReviewCaseDetail as ContractReviewCaseDetail,
@@ -27,6 +28,7 @@ export interface ReviewCaseSummary {
   subscriptionRevision: number | null
   analysisStrategyId: string | null
   traderStrategyId: string | null
+  terminalTimezoneOffsetMinutes: number
   terminalPeriod: string
   symbol: string
   strategyLabel: string
@@ -171,8 +173,8 @@ export interface StrategyMemoryDetail extends StrategyMemorySummary {
 
 const REVIEW_ROLE_KEYS = ['analyst', 'trader', 'risk', 'execution'] as const
 
-function terminalPeriodLabel(value: string, kind: ReviewCaseKind): string {
-  const date = value.slice(0, 10)
+function terminalPeriodLabel(value: string, kind: ReviewCaseKind, offset: number): string {
+  const date = formatLaboratoryTime(value, offset).slice(0, 10)
   return kind === 'monthly' ? date.slice(0, 7) : date
 }
 
@@ -191,7 +193,8 @@ export function mapReviewCaseSummary(value: ContractReviewCaseSummary): ReviewCa
     subscriptionRevision: value.subscriptionRevision,
     analysisStrategyId: value.analysisStrategyId,
     traderStrategyId: value.traderStrategyId,
-    terminalPeriod: terminalPeriodLabel(value.terminalPeriodStart, value.kind),
+    terminalTimezoneOffsetMinutes: value.terminalTimezoneOffsetMinutes,
+    terminalPeriod: terminalPeriodLabel(value.terminalPeriodStart, value.kind, value.terminalTimezoneOffsetMinutes),
     symbol: value.symbol ?? '多品种',
     strategyLabel: strategyLabel(value),
     status: value.status,
@@ -451,11 +454,8 @@ export function caseKindLabel(kind: ReviewCaseKind): string {
   return ({ daily: '日复盘', monthly: '月复盘', manual: '手动复盘' })[kind]
 }
 
-export function formatReviewTime(value: string | null): string {
-  if (!value) return '--'
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return value
-  return new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }).format(parsed)
+export function formatReviewTime(value: string | null, offset?: number | null): string {
+  return formatLaboratoryTime(value, offset)
 }
 
 export function formatTerminalTimezoneOffset(minutes: number | null): string {

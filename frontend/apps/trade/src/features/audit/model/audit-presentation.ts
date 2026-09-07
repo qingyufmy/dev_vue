@@ -1,3 +1,5 @@
+import { terminalDisplayTimezone } from '~/lib/terminal-display-time'
+import { formatLaboratoryTime, activeTerminalDisplayOffset } from '~/lib/laboratory-display-time'
 import type { AuditActor, AuditCategory, AuditEvent as AuditEventContract, AuditEventDetail, AuditEventPageResponse, AuditSourceKind, AuditStatus, TradingAccount } from '@aurum/contracts'
 
 export type AuditEvent = AuditEventContract
@@ -123,18 +125,10 @@ export function accountLabel(account: TradingAccount | null | undefined) {
   return `${account.platform.toUpperCase()} · ${account.login} · ${account.server}`
 }
 
-export function formatAuditTimestamp(value: string | null | undefined, offsetMinutes: number | null | undefined = null) {
-  if (!value) return '--'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '--'
-  const offset = offsetMinutes ?? 0
-  const shifted = new Date(date.getTime() + offset * 60_000)
-  const text = shifted.toISOString().slice(0, 19).replace('T', ' ')
-  if (offsetMinutes === null || offsetMinutes === undefined) return `${text} UTC`
-  const sign = offset >= 0 ? '+' : '-'
-  const hours = String(Math.floor(Math.abs(offset) / 60)).padStart(2, '0')
-  const minutes = String(Math.abs(offset) % 60).padStart(2, '0')
-  return `${text} UTC${sign}${hours}:${minutes}`
+export function formatAuditTimestamp(value: string | null | undefined, offsetMinutes?: number | null) {
+  const zone = terminalDisplayTimezone(offsetMinutes === undefined ? activeTerminalDisplayOffset() : offsetMinutes)
+  const text = formatLaboratoryTime(value, zone.offsetMinutes)
+  return text === '--' ? text : `${text} ${zone.label}${zone.isDefault ? '（默认）' : ''}`
 }
 
 export function formatCount(value: number | null | undefined) {

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatLaboratoryTime } from '~/lib/laboratory-display-time'
 import { ListOrdered } from '@lucide/vue'
 import type { OpenPosition, PendingOrder } from '@aurum/contracts'
 import { Badge } from '@aurum/ui/badge'
@@ -29,7 +30,7 @@ const value = (input: string | null) => input === null ? '--' : input
         </TabsContent>
         <TabsContent value="orders" class="m-0 overflow-x-auto">
           <Table><TableHeader><TableRow><TableHead>品种 / 订单</TableHead><TableHead>类型</TableHead><TableHead>手数</TableHead><TableHead>价格</TableHead><TableHead>止损</TableHead><TableHead>止盈</TableHead><TableHead>到期时间</TableHead></TableRow></TableHeader><TableBody>
-            <TableRow v-for="item in orders" :key="item.ticket"><TableCell><strong>{{ item.symbol }}</strong><p class="font-mono text-xs text-muted-foreground">#{{ item.ticket }}</p></TableCell><TableCell>{{ item.type }}</TableCell><TableCell class="font-mono">{{ item.volume }}</TableCell><TableCell class="font-mono">{{ item.price }}</TableCell><TableCell class="font-mono">{{ value(item.stopLoss) }}</TableCell><TableCell class="font-mono">{{ value(item.takeProfit) }}</TableCell><TableCell>{{ item.expiresAt ? new Date(item.expiresAt).toLocaleString('zh-CN') : '--' }}</TableCell></TableRow>
+            <TableRow v-for="item in orders" :key="item.ticket"><TableCell><strong>{{ item.symbol }}</strong><p class="font-mono text-xs text-muted-foreground">#{{ item.ticket }}</p></TableCell><TableCell>{{ item.type }}</TableCell><TableCell class="font-mono">{{ item.volume }}</TableCell><TableCell class="font-mono">{{ item.price }}</TableCell><TableCell class="font-mono">{{ value(item.stopLoss) }}</TableCell><TableCell class="font-mono">{{ value(item.takeProfit) }}</TableCell><TableCell>{{ formatLaboratoryTime(item.expiresAt) }}</TableCell></TableRow>
             <TableRow v-if="!orders.length"><TableCell colspan="7" class="h-28 text-center text-muted-foreground">当前没有挂单</TableCell></TableRow>
           </TableBody></Table>
         </TabsContent>

@@ -23,7 +23,7 @@ describe('reviewer presentation adapters', () => {
       analysisStrategyName: '趋势分析',
       traderStrategyId: null,
       traderStrategyName: null,
-      terminalPeriodStart: '2026-09-04T00:00:00.000+08:00',
+      terminalPeriodStart: '2026-09-03T16:00:00.000Z',
       terminalPeriodEnd: '2026-09-05T00:00:00.000+08:00',
       terminalTimezoneOffsetMinutes: 480,
       status: 'awaiting_confirmation',

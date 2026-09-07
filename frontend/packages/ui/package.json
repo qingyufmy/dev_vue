@@ -5,7 +5,8 @@
   "private": true,
   "exports": {
     "./*": "./src/components/ui/*/index.ts",
-    "./lib/utils": "./src/lib/utils.ts"
+    "./lib/utils": "./src/lib/utils.ts",
+    "./lib/time": "./src/lib/time.ts"
   },
   "scripts": {
     "typecheck": "vue-tsc --noEmit"

@@ -675,3 +675,6 @@ MT4 不支持的 stop-limit、字段或历史证据必须明确返回 `capabilit
 事务 outbox 的 `observer.authorization.changed` 由独立 dispatcher 发布到内部 Redis 频道 `aurum:v4:observer-authorization`，不进入浏览器通用事件频道。机器合同为 `contracts/observer-authorization-control-v4.schema.json`，只含 nullable `source_id/channel_id/user_id` 与安全整数 `registry_revision`，不含审计、个人数据或大正文。匹配维度采用 AND；默认频道切换使用全部空维度使全部观摩订阅重新鉴权，不影响 owner 订阅。
 
 网关清理匹配观摩订阅队列并发 resync/close；初次异步鉴权期间收到控制事件也不安装旧证明。重复控制事件允许保守失效；Redis Pub/Sub 不是持久确认通道，成功发布不能证明每个网关已接收。丢失消息仍依赖既有最长 30 秒授权 TTL 和后续鉴权兜底；不得宣称零延迟吊销或端到端已验收。
+
+
+2026-09-07 时间口径补充：遵循[时间存储与显示规则](time-storage-and-display-policy.md)，时刻存储/传输统一 UTC，实验室显示终端时间，其它应用显示北京时间。

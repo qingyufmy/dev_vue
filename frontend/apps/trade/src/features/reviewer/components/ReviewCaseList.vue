@@ -103,7 +103,7 @@ function choose(id: string) {
                 </TableCell>
                 <TableCell class="max-w-48 truncate">{{ item.strategyLabel }}</TableCell>
                 <TableCell><Badge :variant="statusVariant(item.status)">{{ statusLabel(item.status) }}</Badge></TableCell>
-                <TableCell class="text-right text-xs tabular-nums text-muted-foreground">{{ formatReviewTime(item.updatedAt) }}</TableCell>
+                <TableCell class="text-right text-xs tabular-nums text-muted-foreground">{{ formatReviewTime(item.updatedAt, item.terminalTimezoneOffsetMinutes) }}</TableCell>
               </TableRow>
             </TableBody>
           </Table>
@@ -126,7 +126,7 @@ function choose(id: string) {
               </span>
               <span class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
                 <span class="truncate">{{ item.strategyLabel }} · {{ item.accountLabel }}</span>
-                <span class="inline-flex shrink-0 items-center gap-1 tabular-nums"><Clock3 data-icon="inline-start" />{{ formatReviewTime(item.updatedAt) }}</span>
+                <span class="inline-flex shrink-0 items-center gap-1 tabular-nums"><Clock3 data-icon="inline-start" />{{ formatReviewTime(item.updatedAt, item.terminalTimezoneOffsetMinutes) }}</span>
               </span>
             </span>
           </Button>

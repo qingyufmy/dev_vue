@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { activeTerminalDisplayTimezone } from '~/lib/laboratory-display-time'
+import { tradingContext } from '~/lib/trading-runtime'
+import { terminalInputTime, terminalInputUtc } from '~/lib/terminal-input-time'
 import { computed, ref, watch } from 'vue'
 import type { AccountSnapshot, ExecutionCommandContext, ExecutionDistributionPreview, MarketQuote, StrategySummary, TradingAccount } from '@aurum/contracts'
 import { Alert, AlertDescription, AlertTitle } from '@aurum/ui/alert'
@@ -65,6 +68,13 @@ const pendingPrice = ref('')
 const stopLimitPrice = ref('')
 const expirationEnabled = ref(false)
 const expiration = ref('')
+const expirationZone = ref(activeTerminalDisplayTimezone())
+const expirationAccountId = ref(tradingContext.value?.accountId)
+function expirationUtc() {
+  const current = activeTerminalDisplayTimezone()
+  if (expirationZone.value.isDefault || current.isDefault || current.offsetMinutes !== expirationZone.value.offsetMinutes || expirationAccountId.value !== tradingContext.value?.accountId) return NaN
+  return terminalInputUtc(expiration.value, expirationZone.value.offsetMinutes)
+}
 const strategyId = ref('')
 const distributionConfirmed = ref(false)
 const errors = ref<Record<string, string>>({})
@@ -93,6 +103,8 @@ const previewMissingResources = computed(() => {
 })
 
 function resetForm() {
+  expirationZone.value = activeTerminalDisplayTimezone()
+  expirationAccountId.value = tradingContext.value?.accountId
   const initial = props.initial ?? {}
   commandType.value = initial.command_type ?? props.mode
   side.value = initial.side ?? 'buy'
@@ -111,10 +123,7 @@ function resetForm() {
 }
 
 function toLocalDateTime(timestamp: number) {
-  const value = new Date(timestamp)
-  if (Number.isNaN(value.getTime())) return ''
-  const pad = (item: number) => String(item).padStart(2, '0')
-  return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}T${pad(value.getHours())}:${pad(value.getMinutes())}`
+  return Number.isFinite(timestamp) ? terminalInputTime(new Date(timestamp).toISOString(), expirationZone.value.offsetMinutes) : ''
 }
 
 function setCommandType(value: unknown) {
@@ -165,7 +174,7 @@ function validate() {
   if (!positive(stopLoss.value)) next.stop_loss = '止损价为必填项，且必须大于 0'
   if (takeProfit.value && !positive(takeProfit.value)) next.take_profit = '止盈价必须大于 0'
   if (expirationEnabled.value && !expiration.value) next.expiration = '启用到期时间后，请选择具体时间'
-  if (expirationEnabled.value && expiration.value && !Number.isFinite(Date.parse(expiration.value))) next.expiration = '到期时间格式无效'
+  if (expirationEnabled.value && expiration.value && !Number.isFinite(expirationUtc())) next.expiration = '请填写有效的终端时间；账户或时区变化后请重新打开表单，未校准时暂不可设置有效期'
   if (props.distribution && !strategyId.value) next.strategy_id = '请选择要分发的交易策略'
   if (props.distribution && !distributionConfirmed.value) next.distribution = '请确认目标范围将在服务端受理时冻结'
   if (props.distribution && (!props.distributionPreview || props.distributionPreview.strategyId !== strategyId.value || props.distributionPreview.symbol !== symbol.value)) {
@@ -191,7 +200,7 @@ function submit() {
     if (stopLimitVisible.value) draft.stop_limit_price = stopLimitPrice.value
   }
   if (takeProfit.value) draft.take_profit = takeProfit.value
-  if (expirationEnabled.value && expiration.value) draft.expiration_utc_msc = Date.parse(expiration.value)
+  if (expirationEnabled.value && expiration.value) draft.expiration_utc_msc = expirationUtc()
   if (props.distribution) draft.strategy_id = strategyId.value
   emit('submit', draft)
 }
@@ -359,8 +368,8 @@ function pendingTypeLabel(value: PendingOrderType) {
               </FieldContent>
             </Field>
             <Field v-if="expirationEnabled" :data-invalid="Boolean(errors.expiration)">
-              <FieldLabel for="command-expiration-time">到期时间</FieldLabel>
-              <Input id="command-expiration-time" v-model="expiration" type="datetime-local" :disabled="readOnly" :aria-invalid="Boolean(errors.expiration)" />
+              <FieldLabel for="command-expiration-time">到期时间（终端 {{ expirationZone.label }}）</FieldLabel>
+              <Input id="command-expiration-time" v-model="expiration" type="datetime-local" step="1" :disabled="readOnly" :aria-invalid="Boolean(errors.expiration)" />
               <FieldDescription>按本机时间输入，提交时转换为 UTC 时间戳。</FieldDescription>
               <FieldError :errors="errors.expiration ? [errors.expiration] : []" />
             </Field>

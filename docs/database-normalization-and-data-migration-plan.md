@@ -548,3 +548,6 @@ dev_vue_m1_source_20260905_01 # 建议的恢复源镜像，尚未批准/创建
 - [MySQL 8.4 Online DDL](https://dev.mysql.com/doc/refman/8.4/en/innodb-online-ddl.html)
 - [MySQL 8.4 Invisible Indexes](https://dev.mysql.com/doc/refman/8.4/en/invisible-indexes.html)
 - [MySQL 8.4 Optimization and Indexes](https://dev.mysql.com/doc/refman/8.4/en/optimization-indexes.html)
+
+
+2026-09-07 时间口径补充：遵循[时间存储与显示规则](time-storage-and-display-policy.md)，时刻存储/传输统一 UTC，实验室显示终端时间，其它应用显示北京时间。

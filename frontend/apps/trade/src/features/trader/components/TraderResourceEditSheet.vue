@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { activeTerminalDisplayTimezone } from '~/lib/laboratory-display-time'
+import { tradingContext } from '~/lib/trading-runtime'
+import { terminalInputTime, terminalInputUtc } from '~/lib/terminal-input-time'
 import type { OpenPosition, PendingOrder } from '@aurum/contracts'
 import { Alert, AlertDescription, AlertTitle } from '@aurum/ui/alert'
 import { Button } from '@aurum/ui/button'
@@ -30,7 +33,15 @@ const price = ref('')
 const stopLimitPrice = ref('')
 const stopLoss = ref('')
 const takeProfit = ref('')
+const originalExpiration = ref('')
 const expiration = ref('')
+const expirationZone = ref(activeTerminalDisplayTimezone())
+const expirationAccountId = ref(tradingContext.value?.accountId)
+function expirationUtc() {
+  const current = activeTerminalDisplayTimezone()
+  if (expirationZone.value.isDefault || current.isDefault || current.offsetMinutes !== expirationZone.value.offsetMinutes || expirationAccountId.value !== tradingContext.value?.accountId) return NaN
+  return terminalInputUtc(expiration.value, expirationZone.value.offsetMinutes)
+}
 const removeStopLoss = ref(false)
 const removeTakeProfit = ref(false)
 const removeExpiration = ref(false)
@@ -41,12 +52,15 @@ const order = computed(() => props.resource && !isPosition(props.resource) ? pro
 const title = computed(() => position.value ? '修改持仓保护价' : '修改挂单参数')
 
 function reset() {
+  expirationZone.value = activeTerminalDisplayTimezone()
+  expirationAccountId.value = tradingContext.value?.accountId
   const resource = props.resource
   price.value = resource && !isPosition(resource) ? resource.price : ''
   stopLimitPrice.value = ''
   stopLoss.value = resource?.stopLoss ?? ''
   takeProfit.value = resource?.takeProfit ?? ''
   expiration.value = resource && !isPosition(resource) && resource.expiresAt ? toLocalDateTime(resource.expiresAt) : ''
+  originalExpiration.value = expiration.value
   removeStopLoss.value = false
   removeTakeProfit.value = false
   removeExpiration.value = false
@@ -54,10 +68,7 @@ function reset() {
 }
 
 function toLocalDateTime(value: string) {
-  const date = new Date(value)
-  if (!Number.isFinite(date.getTime())) return ''
-  const pad = (part: number) => String(part).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`
+  return terminalInputTime(value, expirationZone.value.offsetMinutes)
 }
 
 function positive(value: string) {
@@ -70,7 +81,7 @@ function submit() {
   if (!removeTakeProfit.value && takeProfit.value && !positive(takeProfit.value)) return fail('止盈价必须大于 0')
   if (order.value && !positive(price.value)) return fail('挂单价格必须大于 0')
   if (stopLimitPrice.value && !positive(stopLimitPrice.value)) return fail('止损限价必须大于 0')
-  if (expiration.value && !Number.isFinite(Date.parse(expiration.value))) return fail('到期时间格式无效')
+  if (!removeExpiration.value && expiration.value !== originalExpiration.value && expiration.value && !Number.isFinite(expirationUtc())) return fail('请填写有效的终端时间；账户或时区变化后请重新打开表单，未校准时暂不可设置有效期')
 
   const draft: ResourceEditDraft = {}
   if (order.value) draft.price = price.value
@@ -81,7 +92,7 @@ function submit() {
   else if (takeProfit.value) draft.take_profit = takeProfit.value
   if (order.value) {
     if (removeExpiration.value) draft.remove_expiration = true
-    else if (expiration.value) draft.expiration_utc_msc = Date.parse(expiration.value)
+    else if (expiration.value && expiration.value !== originalExpiration.value) draft.expiration_utc_msc = expirationUtc()
   }
   if (!Object.keys(draft).length) return fail('请至少填写一项需要修改的参数')
   error.value = ''
@@ -142,8 +153,8 @@ watch(() => props.open, (open) => { if (open) reset() }, { immediate: true })
             </Field>
 
             <Field v-if="order">
-              <FieldLabel for="resource-expiration">到期时间</FieldLabel>
-              <Input id="resource-expiration" v-model="expiration" type="datetime-local" :disabled="readOnly || removeExpiration" />
+              <FieldLabel for="resource-expiration">到期时间（终端 {{ expirationZone.label }}）</FieldLabel>
+              <Input id="resource-expiration" v-model="expiration" type="datetime-local" step="1" :disabled="readOnly || removeExpiration" />
               <Field orientation="horizontal" class="rounded-lg border p-3">
                 <Checkbox id="remove-expiration" v-model="removeExpiration" :disabled="readOnly" />
                 <FieldContent><FieldLabel for="remove-expiration">移除到期时间</FieldLabel><FieldDescription>不勾选且留空表示不修改有效期。</FieldDescription></FieldContent>

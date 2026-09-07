@@ -17,6 +17,7 @@ import {
   SlidersHorizontal,
 } from '@lucide/vue'
 import { computed } from 'vue'
+import { activeTerminalDisplayTimezone } from '~/lib/laboratory-display-time'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 import { Avatar, AvatarFallback } from '@aurum/ui/avatar'
 import { Badge } from '@aurum/ui/badge'
@@ -49,6 +50,7 @@ import { Toaster } from '@aurum/ui/sonner'
 import { useTradeSession } from '~/features/auth/session'
 import { currentAccount, realtimeState, tradingContext } from '~/features/home/home-runtime'
 
+const displayTimezone = computed(activeTerminalDisplayTimezone)
 const route = useRoute()
 const pageTitle = computed(() => String(route.meta.title ?? 'AI 交易实验室'))
 const { displayName, logout } = useTradeSession()
@@ -135,7 +137,7 @@ const navGroups = [
         <SidebarTrigger class="shrink-0" />
         <div class="min-w-0 flex-1">
           <p class="truncate text-sm font-semibold">{{ pageTitle }}</p>
-          <p class="hidden truncate text-xs text-muted-foreground sm:block">当前会话与实时状态将在认证和数据接入阶段加载</p>
+          <p class="truncate text-xs text-muted-foreground">终端时间 {{ displayTimezone.label }} · {{ displayTimezone.statusLabel }}</p>
         </div>
 
         <div class="hidden items-center gap-2 lg:flex" aria-label="运行状态">

@@ -1,9 +1,10 @@
-import mysql, { type Pool } from 'mysql2/promise'
+import mysql from 'mysql2'
+import type { Pool } from 'mysql2/promise'
 import { Redis } from 'ioredis'
 import type { RedisEndpoint, V4BaseRuntimeConfig } from './runtime-config.js'
 
 export function createMysqlPool(config: V4BaseRuntimeConfig['mysql']): Pool {
-  return mysql.createPool({
+  const pool = mysql.createPool({
     host: config.host,
     port: config.port,
     user: config.user,
@@ -21,6 +22,14 @@ export function createMysqlPool(config: V4BaseRuntimeConfig['mysql']): Pool {
     supportBigNumbers: true,
     bigNumberStrings: true,
   })
+  // Driver timezone controls serialization only; SQL NOW/defaults use the session timezone.
+  // The connection event runs before the first borrower, so initialization is queued first.
+  pool.on('connection', (connection) => {
+    connection.query("SET SESSION time_zone = '+00:00'", (error) => {
+      if (error) connection.destroy()
+    })
+  })
+  return pool.promise()
 }
 
 export function createCacheRedis(config: RedisEndpoint): Redis {

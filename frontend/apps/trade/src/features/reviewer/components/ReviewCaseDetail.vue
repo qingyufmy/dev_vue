@@ -132,7 +132,7 @@ function toneClass(value: string) {
             <TableBody>
               <TableRow v-for="episode in detail.episodes" :key="episode.id">
                 <TableCell><div class="grid gap-1"><span class="font-medium">{{ episode.symbol }}</span><span class="text-xs text-muted-foreground">{{ episode.direction }}</span></div></TableCell>
-                <TableCell><div class="grid gap-1 text-xs tabular-nums"><span>{{ formatReviewTime(episode.entryAt) }}</span><span class="text-muted-foreground">→ {{ formatReviewTime(episode.exitAt) }}</span></div></TableCell>
+                <TableCell><div class="grid gap-1 text-xs tabular-nums"><span>{{ formatReviewTime(episode.entryAt, detail.terminalTimezoneOffsetMinutes) }}</span><span class="text-muted-foreground">→ {{ formatReviewTime(episode.exitAt, detail.terminalTimezoneOffsetMinutes) }}</span></div></TableCell>
                 <TableCell><div class="grid gap-1 text-xs"><span>{{ episode.source }}</span><span v-if="episode.orderId" class="font-mono text-muted-foreground">#{{ episode.orderId }}</span></div></TableCell>
                 <TableCell>{{ episode.outcome }}</TableCell>
                 <TableCell class="text-right font-mono tabular-nums" :class="toneClass(episode.profit)">{{ episode.profit }}</TableCell>
@@ -172,7 +172,7 @@ function toneClass(value: string) {
     <Card class="shadow-none">
       <CardHeader><CardTitle class="flex items-center gap-2 text-base"><FileSearch aria-hidden="true" />证据链</CardTitle><CardDescription>来源 ID、时间与完整状态用于回到服务端事实，不以模型推测替代原始证据。</CardDescription></CardHeader>
       <CardContent class="grid gap-3 sm:grid-cols-2">
-        <div v-for="evidence in detail.evidence" :key="evidence.id" class="rounded-lg border p-4"><div class="flex items-start justify-between gap-3"><div class="min-w-0"><p class="font-medium">{{ evidence.label }}</p><p class="mt-1 break-all font-mono text-xs text-muted-foreground">{{ evidence.sourceId }}</p></div><Badge :variant="evidence.complete ? 'default' : 'destructive'">{{ evidence.complete ? '完整' : '缺失' }}</Badge></div><p class="mt-3 text-sm leading-6 text-muted-foreground">{{ evidence.summary }}</p><p class="mt-2 text-xs tabular-nums text-muted-foreground">{{ formatReviewTime(evidence.occurredAt) }}</p></div>
+        <div v-for="evidence in detail.evidence" :key="evidence.id" class="rounded-lg border p-4"><div class="flex items-start justify-between gap-3"><div class="min-w-0"><p class="font-medium">{{ evidence.label }}</p><p class="mt-1 break-all font-mono text-xs text-muted-foreground">{{ evidence.sourceId }}</p></div><Badge :variant="evidence.complete ? 'default' : 'destructive'">{{ evidence.complete ? '完整' : '缺失' }}</Badge></div><p class="mt-3 text-sm leading-6 text-muted-foreground">{{ evidence.summary }}</p><p class="mt-2 text-xs tabular-nums text-muted-foreground">{{ formatReviewTime(evidence.occurredAt, detail.terminalTimezoneOffsetMinutes) }}</p></div>
         <Empty v-if="!detail.evidence.length" class="col-span-full min-h-32 border-0"><EmptyHeader><EmptyMedia variant="icon"><FileSearch /></EmptyMedia><EmptyTitle>暂无证据链</EmptyTitle><EmptyDescription>系统不会在没有证据时生成看似完整的复盘。</EmptyDescription></EmptyHeader></Empty>
       </CardContent>
     </Card>
