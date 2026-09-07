@@ -1,0 +1,1352 @@
+{
+  "kind": "learning-inventory/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "schemaSteps": 58,
+  "entries": [
+    {
+      "table": "courses",
+      "rows": 12,
+      "baselineRows": 12,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "episode_id",
+          "type": "int",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "number",
+          "type": "int",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "title",
+          "type": "varchar(500)",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "category",
+          "type": "varchar(50)",
+          "nullable": "YES",
+          "defaultValue": "strategy",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "content_type",
+          "type": "varchar(20)",
+          "nullable": "YES",
+          "defaultValue": "video",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "duration",
+          "type": "varchar(20)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "youtube_id",
+          "type": "varchar(50)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "cover",
+          "type": "varchar(500)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "gradient",
+          "type": "varchar(500)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "article_url",
+          "type": "varchar(500)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "article_object_key",
+          "type": "varchar(500)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "access_level",
+          "type": "varchar(20)",
+          "nullable": "YES",
+          "defaultValue": "free",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "has_stream_video",
+          "type": "tinyint",
+          "nullable": "YES",
+          "defaultValue": "0",
+          "collationName": null
+        },
+        {
+          "name": "cf_stream_id",
+          "type": "varchar(100)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "bilibili_id",
+          "type": "varchar(50)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "local_video_path",
+          "type": "varchar(500)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "quiz_count",
+          "type": "int",
+          "nullable": "YES",
+          "defaultValue": "0",
+          "collationName": null
+        },
+        {
+          "name": "knowledge_count",
+          "type": "int",
+          "nullable": "YES",
+          "defaultValue": "0",
+          "collationName": null
+        },
+        {
+          "name": "mindmap_count",
+          "type": "int",
+          "nullable": "YES",
+          "defaultValue": "0",
+          "collationName": null
+        },
+        {
+          "name": "structure_count",
+          "type": "int",
+          "nullable": "YES",
+          "defaultValue": "0",
+          "collationName": null
+        },
+        {
+          "name": "status",
+          "type": "varchar(20)",
+          "nullable": "YES",
+          "defaultValue": "published",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "sort_order",
+          "type": "int",
+          "nullable": "YES",
+          "defaultValue": "0",
+          "collationName": null
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "defaultValue": "now()",
+          "collationName": null
+        },
+        {
+          "name": "updated_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "defaultValue": "now()",
+          "collationName": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "episode_id",
+          "nonUnique": 0,
+          "position": 1,
+          "columnName": "episode_id"
+        },
+        {
+          "name": "PRIMARY",
+          "nonUnique": 0,
+          "position": 1,
+          "columnName": "id"
+        }
+      ],
+      "sourceRowsHash": "e9d72db544a531eef4b989d40711137a0141ce2a2723ef388d42eeb1822149ca",
+      "rowHashes": [
+        {
+          "id": "11",
+          "rowSha256": "0b1d51c09fd2522dcdbc3f9d896b68ed1ef7ef09d6108c8ef3a23d4de6849ab8"
+        },
+        {
+          "id": "12",
+          "rowSha256": "b595c3c0676582bfe23f5af6c11ca53425378c7d376938e6cda0a851e5f8f77c"
+        },
+        {
+          "id": "13",
+          "rowSha256": "ba10ff67eeee106120febad3d8168b317f76919a8f7a7e34c9c7293c834e22fe"
+        },
+        {
+          "id": "14",
+          "rowSha256": "69b9feb7d0b523f4b3f55490a1845b66903949cd4895180db7040fe79e651b2a"
+        },
+        {
+          "id": "15",
+          "rowSha256": "a0d5d4eec1226c1f6f8bea78ed3f808ffab792ffe2a723ec554ce447c206552b"
+        },
+        {
+          "id": "17",
+          "rowSha256": "a37d6f1b5de228fcc11b8ce2a220909a111d1b926493c63bbf2e9bf2f5a6daac"
+        },
+        {
+          "id": "18",
+          "rowSha256": "88b430ba5ea037bf575836275eb63e5e51657bd131362c65d99447da5e107458"
+        },
+        {
+          "id": "19",
+          "rowSha256": "224e7c31b5cd664cd7e86a0c8edf286f21fe969078ea0e4557e116188170a434"
+        },
+        {
+          "id": "20",
+          "rowSha256": "909c18ed70a83c03ef05d6645bd4d3f99d4300bda7a86cc0222783cef3eee5c8"
+        },
+        {
+          "id": "21",
+          "rowSha256": "7ebb737a435f248f8270e3af91cafe8e61e56bc65b15febb95cf70e02cc64a73"
+        },
+        {
+          "id": "22",
+          "rowSha256": "a5cc56be2b4785710679b5f21d7e4090c6974970463281231ce9d314a36ba3a8"
+        },
+        {
+          "id": "23",
+          "rowSha256": "6b40673ebb74f5a8bb13fd5f035b7bdb80e97261b8ca1b0d33d88b78ab02e408"
+        }
+      ]
+    },
+    {
+      "table": "course_resources",
+      "rows": 1,
+      "baselineRows": 1,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "episode_id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "type",
+          "type": "varchar(50)",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "title",
+          "type": "varchar(500)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "content",
+          "type": "varchar(10000)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "url",
+          "type": "varchar(500)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "structure",
+          "type": "varchar(5000)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "sort_order",
+          "type": "int",
+          "nullable": "YES",
+          "defaultValue": "0",
+          "collationName": null
+        },
+        {
+          "name": "stored_file_id",
+          "type": "bigint unsigned",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collationName": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_course_resources_episode",
+          "nonUnique": 1,
+          "position": 1,
+          "columnName": "episode_id"
+        },
+        {
+          "name": "idx_course_resources_stored_file",
+          "nonUnique": 1,
+          "position": 1,
+          "columnName": "stored_file_id"
+        },
+        {
+          "name": "PRIMARY",
+          "nonUnique": 0,
+          "position": 1,
+          "columnName": "id"
+        }
+      ],
+      "sourceRowsHash": "8a17cd928ea0bb0a09b44aa622f8720cbf2162073fe3628ed2734cfe34aef006",
+      "rowHashes": [
+        {
+          "id": "1",
+          "rowSha256": "c1dc9ffdc9b170ad36319bed09444bbfc3d7f08ca29c8839f908239d0f1c00ad"
+        }
+      ]
+    },
+    {
+      "table": "quiz_questions",
+      "rows": 0,
+      "baselineRows": 0,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "episode_id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "question",
+          "type": "text",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "options",
+          "type": "text",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "correct_index",
+          "type": "int",
+          "nullable": "YES",
+          "defaultValue": "0",
+          "collationName": null
+        },
+        {
+          "name": "explanation",
+          "type": "varchar(5000)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "explanations",
+          "type": "varchar(5000)",
+          "nullable": "YES",
+          "defaultValue": "[]",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "hint",
+          "type": "varchar(500)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "status",
+          "type": "varchar(20)",
+          "nullable": "YES",
+          "defaultValue": "published",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "sort_order",
+          "type": "int",
+          "nullable": "YES",
+          "defaultValue": "0",
+          "collationName": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_quiz_questions_episode",
+          "nonUnique": 1,
+          "position": 1,
+          "columnName": "episode_id"
+        },
+        {
+          "name": "PRIMARY",
+          "nonUnique": 0,
+          "position": 1,
+          "columnName": "id"
+        }
+      ],
+      "sourceRowsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "rowHashes": []
+    },
+    {
+      "table": "progress",
+      "rows": 5,
+      "baselineRows": 5,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "user_id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "episode_id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "watched_seconds",
+          "type": "double",
+          "nullable": "YES",
+          "defaultValue": "0",
+          "collationName": null
+        },
+        {
+          "name": "total_duration",
+          "type": "double",
+          "nullable": "YES",
+          "defaultValue": "0",
+          "collationName": null
+        },
+        {
+          "name": "completed",
+          "type": "tinyint",
+          "nullable": "YES",
+          "defaultValue": "0",
+          "collationName": null
+        },
+        {
+          "name": "quiz_passed",
+          "type": "tinyint",
+          "nullable": "YES",
+          "defaultValue": "0",
+          "collationName": null
+        },
+        {
+          "name": "updated_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "defaultValue": "now()",
+          "collationName": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "PRIMARY",
+          "nonUnique": 0,
+          "position": 1,
+          "columnName": "id"
+        },
+        {
+          "name": "uq_user_episode",
+          "nonUnique": 0,
+          "position": 1,
+          "columnName": "user_id"
+        },
+        {
+          "name": "uq_user_episode",
+          "nonUnique": 0,
+          "position": 2,
+          "columnName": "episode_id"
+        }
+      ],
+      "sourceRowsHash": "e977431f8fe159f9de7fe13f3bcaef392899112ab3092955610006b5eabd32b0",
+      "rowHashes": [
+        {
+          "id": "1",
+          "rowSha256": "76e16ccf98215ad14f871d98222c54f67587736b2af9e4045f68812847926eb3"
+        },
+        {
+          "id": "10",
+          "rowSha256": "5be4bd6fbeb3f5f5dec535f61cd652261556d9d9ccdfa441e92018425e8dd564"
+        },
+        {
+          "id": "12",
+          "rowSha256": "786649a7156125929bb3390a06a049db4a6334b4d470a783ec1865b5ee016b07"
+        },
+        {
+          "id": "2",
+          "rowSha256": "91db13ea6851c6fc7c4e491a3d61587f4a458d582055d6083e7a59e1723a791d"
+        },
+        {
+          "id": "9",
+          "rowSha256": "08e7019ca5f3e9e68a5c3d5ee8aa1ab2f1bfaf3fe3cc94df89a190db5aea6c68"
+        }
+      ]
+    },
+    {
+      "table": "video_streams",
+      "rows": 0,
+      "baselineRows": 0,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "episode_id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "bilibili_id",
+          "type": "varchar(50)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "local_path",
+          "type": "varchar(500)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "qiniu_key",
+          "type": "varchar(500)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "quality",
+          "type": "varchar(20)",
+          "nullable": "YES",
+          "defaultValue": "720p",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "duration",
+          "type": "double",
+          "nullable": "YES",
+          "defaultValue": "0",
+          "collationName": null
+        },
+        {
+          "name": "file_size",
+          "type": "int",
+          "nullable": "YES",
+          "defaultValue": "0",
+          "collationName": null
+        },
+        {
+          "name": "access_level",
+          "type": "varchar(20)",
+          "nullable": "YES",
+          "defaultValue": "plus_pro",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "title",
+          "type": "varchar(500)",
+          "nullable": "YES",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "defaultValue": "now()",
+          "collationName": null
+        },
+        {
+          "name": "stored_file_id",
+          "type": "bigint unsigned",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "video_source",
+          "type": "varchar(24)",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collationName": "utf8mb4_0900_ai_ci"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_video_streams_source_episode",
+          "nonUnique": 1,
+          "position": 1,
+          "columnName": "video_source"
+        },
+        {
+          "name": "idx_video_streams_source_episode",
+          "nonUnique": 1,
+          "position": 2,
+          "columnName": "episode_id"
+        },
+        {
+          "name": "idx_video_streams_stored_file",
+          "nonUnique": 1,
+          "position": 1,
+          "columnName": "stored_file_id"
+        },
+        {
+          "name": "PRIMARY",
+          "nonUnique": 0,
+          "position": 1,
+          "columnName": "id"
+        }
+      ],
+      "sourceRowsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "rowHashes": []
+    },
+    {
+      "table": "stored_files",
+      "rows": 0,
+      "baselineRows": 0,
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "purpose",
+          "type": "varchar(24)",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "storage_provider",
+          "type": "varchar(16)",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "object_key",
+          "type": "varchar(512)",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "original_name",
+          "type": "varchar(255)",
+          "nullable": "NO",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "mime_type",
+          "type": "varchar(128)",
+          "nullable": "NO",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "extension",
+          "type": "varchar(32)",
+          "nullable": "NO",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "size_bytes",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": "0",
+          "collationName": null
+        },
+        {
+          "name": "sha256",
+          "type": "char(64)",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "visibility",
+          "type": "varchar(24)",
+          "nullable": "NO",
+          "defaultValue": "authenticated",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "owner_type",
+          "type": "varchar(48)",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "owner_id",
+          "type": "bigint unsigned",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "status",
+          "type": "varchar(16)",
+          "nullable": "NO",
+          "defaultValue": "uploading",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "created_by",
+          "type": "int",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "defaultValue": "CURRENT_TIMESTAMP",
+          "collationName": null
+        },
+        {
+          "name": "updated_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "defaultValue": "CURRENT_TIMESTAMP",
+          "collationName": null
+        },
+        {
+          "name": "deleted_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collationName": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_stored_files_owner",
+          "nonUnique": 1,
+          "position": 1,
+          "columnName": "owner_type"
+        },
+        {
+          "name": "idx_stored_files_owner",
+          "nonUnique": 1,
+          "position": 2,
+          "columnName": "owner_id"
+        },
+        {
+          "name": "idx_stored_files_owner",
+          "nonUnique": 1,
+          "position": 3,
+          "columnName": "status"
+        },
+        {
+          "name": "idx_stored_files_provider_status",
+          "nonUnique": 1,
+          "position": 1,
+          "columnName": "storage_provider"
+        },
+        {
+          "name": "idx_stored_files_provider_status",
+          "nonUnique": 1,
+          "position": 2,
+          "columnName": "status"
+        },
+        {
+          "name": "idx_stored_files_provider_status",
+          "nonUnique": 1,
+          "position": 3,
+          "columnName": "updated_at"
+        },
+        {
+          "name": "idx_stored_files_purpose_status",
+          "nonUnique": 1,
+          "position": 1,
+          "columnName": "purpose"
+        },
+        {
+          "name": "idx_stored_files_purpose_status",
+          "nonUnique": 1,
+          "position": 2,
+          "columnName": "status"
+        },
+        {
+          "name": "idx_stored_files_purpose_status",
+          "nonUnique": 1,
+          "position": 3,
+          "columnName": "created_at"
+        },
+        {
+          "name": "PRIMARY",
+          "nonUnique": 0,
+          "position": 1,
+          "columnName": "id"
+        },
+        {
+          "name": "uk_stored_files_provider_object",
+          "nonUnique": 0,
+          "position": 1,
+          "columnName": "storage_provider"
+        },
+        {
+          "name": "uk_stored_files_provider_object",
+          "nonUnique": 0,
+          "position": 2,
+          "columnName": "object_key"
+        }
+      ],
+      "sourceRowsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "rowHashes": []
+    },
+    {
+      "table": "storage_upload_sessions",
+      "rows": 0,
+      "baselineRows": 0,
+      "columns": [
+        {
+          "name": "id",
+          "type": "char(36)",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "stored_file_id",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "provider",
+          "type": "varchar(16)",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "purpose",
+          "type": "varchar(24)",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "object_key",
+          "type": "varchar(512)",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "original_name",
+          "type": "varchar(255)",
+          "nullable": "NO",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "mime_type",
+          "type": "varchar(128)",
+          "nullable": "NO",
+          "defaultValue": "",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "size_bytes",
+          "type": "bigint unsigned",
+          "nullable": "NO",
+          "defaultValue": "0",
+          "collationName": null
+        },
+        {
+          "name": "owner_type",
+          "type": "varchar(48)",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "owner_id",
+          "type": "bigint unsigned",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "created_by",
+          "type": "int",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "config_version",
+          "type": "char(64)",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "status",
+          "type": "varchar(16)",
+          "nullable": "NO",
+          "defaultValue": "pending",
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "expires_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "nullable": "NO",
+          "defaultValue": "CURRENT_TIMESTAMP",
+          "collationName": null
+        },
+        {
+          "name": "confirmed_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collationName": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_storage_upload_sessions_status",
+          "nonUnique": 1,
+          "position": 1,
+          "columnName": "status"
+        },
+        {
+          "name": "idx_storage_upload_sessions_status",
+          "nonUnique": 1,
+          "position": 2,
+          "columnName": "expires_at"
+        },
+        {
+          "name": "idx_storage_upload_sessions_stored_file",
+          "nonUnique": 1,
+          "position": 1,
+          "columnName": "stored_file_id"
+        },
+        {
+          "name": "PRIMARY",
+          "nonUnique": 0,
+          "position": 1,
+          "columnName": "id"
+        }
+      ],
+      "sourceRowsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "rowHashes": []
+    },
+    {
+      "table": "comments",
+      "rows": 0,
+      "baselineRows": 0,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "episode_id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "user_id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "text",
+          "type": "text",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": "utf8mb4_0900_ai_ci"
+        },
+        {
+          "name": "parent_id",
+          "type": "int",
+          "nullable": "YES",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "likes",
+          "type": "int",
+          "nullable": "YES",
+          "defaultValue": "0",
+          "collationName": null
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "defaultValue": "now()",
+          "collationName": null
+        },
+        {
+          "name": "updated_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "defaultValue": "now()",
+          "collationName": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "idx_comments_episode",
+          "nonUnique": 1,
+          "position": 1,
+          "columnName": "episode_id"
+        },
+        {
+          "name": "PRIMARY",
+          "nonUnique": 0,
+          "position": 1,
+          "columnName": "id"
+        }
+      ],
+      "sourceRowsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "rowHashes": []
+    },
+    {
+      "table": "comment_likes",
+      "rows": 0,
+      "baselineRows": 0,
+      "columns": [
+        {
+          "name": "id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "user_id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "comment_id",
+          "type": "int",
+          "nullable": "NO",
+          "defaultValue": null,
+          "collationName": null
+        },
+        {
+          "name": "created_at",
+          "type": "datetime",
+          "nullable": "YES",
+          "defaultValue": "now()",
+          "collationName": null
+        }
+      ],
+      "indexes": [
+        {
+          "name": "PRIMARY",
+          "nonUnique": 0,
+          "position": 1,
+          "columnName": "id"
+        },
+        {
+          "name": "uq_user_comment",
+          "nonUnique": 0,
+          "position": 1,
+          "columnName": "user_id"
+        },
+        {
+          "name": "uq_user_comment",
+          "nonUnique": 0,
+          "position": 2,
+          "columnName": "comment_id"
+        }
+      ],
+      "sourceRowsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "rowHashes": []
+    }
+  ],
+  "checks": {
+    "courses": {
+      "total": "12",
+      "distinctEpisodes": "12",
+      "binaryDistinctEpisodes": "12",
+      "emptyEpisodes": "0",
+      "nullDuration": "0",
+      "emptyDuration": "0",
+      "nonNullCreated": "12",
+      "nonNullUpdated": "12"
+    },
+    "progress": {
+      "total": "5",
+      "negativeWatched": "0",
+      "negativeDuration": "0",
+      "watchedOverDuration": "2",
+      "nullWatched": "0",
+      "nullDuration": "0",
+      "missingUsers": "0",
+      "missingEpisodes": "0",
+      "nonNullUpdated": "5"
+    },
+    "progressDuplicates": {
+      "groupsWithDuplicates": "0"
+    },
+    "resources": {
+      "total": "1",
+      "missingEpisodes": "0",
+      "missingStoredFiles": "0",
+      "noStoredFile": "1",
+      "withUrl": "1"
+    },
+    "quiz": {
+      "total": "0",
+      "missingEpisodes": null,
+      "invalidOptionsJson": null
+    }
+  },
+  "distributions": {
+    "courseTypes": [
+      {
+        "value": "video",
+        "n": "12"
+      }
+    ],
+    "courseAccess": [
+      {
+        "value": "logged_in",
+        "n": "12"
+      }
+    ],
+    "courseStatus": [
+      {
+        "value": "published",
+        "n": "12"
+      }
+    ],
+    "resourceTypes": [
+      {
+        "value": "attachment",
+        "n": "1"
+      }
+    ],
+    "progressStates": [
+      {
+        "completed": 0,
+        "quiz_passed": 0,
+        "n": "2"
+      },
+      {
+        "completed": 1,
+        "quiz_passed": 0,
+        "n": "3"
+      }
+    ]
+  },
+  "durations": [
+    {
+      "id": "11",
+      "duration": "599"
+    },
+    {
+      "id": "12",
+      "duration": "599"
+    },
+    {
+      "id": "13",
+      "duration": "750"
+    },
+    {
+      "id": "14",
+      "duration": "853"
+    },
+    {
+      "id": "15",
+      "duration": "1063"
+    },
+    {
+      "id": "17",
+      "duration": "960"
+    },
+    {
+      "id": "18",
+      "duration": "875"
+    },
+    {
+      "id": "19",
+      "duration": "1011"
+    },
+    {
+      "id": "20",
+      "duration": "592"
+    },
+    {
+      "id": "21",
+      "duration": "960"
+    },
+    {
+      "id": "22",
+      "duration": "476"
+    },
+    {
+      "id": "23",
+      "duration": "875"
+    }
+  ],
+  "progressValues": [
+    {
+      "id": "1",
+      "watchedSeconds": "36",
+      "totalDuration": "750",
+      "completed": 0,
+      "quiz_passed": 0
+    },
+    {
+      "id": "10",
+      "watchedSeconds": "681",
+      "totalDuration": "853",
+      "completed": 1,
+      "quiz_passed": 0
+    },
+    {
+      "id": "12",
+      "watchedSeconds": "1112",
+      "totalDuration": "960",
+      "completed": 1,
+      "quiz_passed": 0
+    },
+    {
+      "id": "2",
+      "watchedSeconds": "2049",
+      "totalDuration": "599",
+      "completed": 1,
+      "quiz_passed": 0
+    },
+    {
+      "id": "9",
+      "watchedSeconds": "26",
+      "totalDuration": "1063",
+      "completed": 0,
+      "quiz_passed": 0
+    }
+  ],
+  "referenceFiles": [
+    {
+      "path": "server/routes/courses.js",
+      "sha256": "0ea14fb23f79111c22c27553d0ead66a7923d43c2eca601d89ea73fa43ae3c6c"
+    },
+    {
+      "path": "server/course-attachments.js",
+      "sha256": "dda9e8ee120a884f35603805d98ad8904f24f56e0126320352f8e140c6102f4f"
+    },
+    {
+      "path": "server/admin/content-system.js",
+      "sha256": "8e095c29b11e4bca254dfcbe5a88f61dc024df8f765b7d76550ec38c51c24da3"
+    }
+  ],
+  "databaseWrites": 0,
+  "mediaObjectsVerified": false,
+  "historicalTimeVerified": false,
+  "migrationComplete": false
+}
