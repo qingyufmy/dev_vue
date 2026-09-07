@@ -1,0 +1,113 @@
+{
+  "kind": "mysql-time-evidence-availability/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "observedAtUtc": "2026-09-07T00:54:57.323Z",
+  "variables": [
+    {
+      "Variable_name": "binlog_expire_logs_seconds",
+      "Value": "600000"
+    },
+    {
+      "Variable_name": "binlog_format",
+      "Value": "MIXED"
+    },
+    {
+      "Variable_name": "general_log",
+      "Value": "OFF"
+    },
+    {
+      "Variable_name": "log_bin",
+      "Value": "ON"
+    },
+    {
+      "Variable_name": "log_output",
+      "Value": "FILE"
+    },
+    {
+      "Variable_name": "system_time_zone",
+      "Value": "CST"
+    },
+    {
+      "Variable_name": "time_zone",
+      "Value": "SYSTEM"
+    }
+  ],
+  "uptime": [
+    {
+      "Variable_name": "Uptime",
+      "Value": "233604"
+    }
+  ],
+  "binaryLogs": [
+    {
+      "name": "mysql-bin.000041",
+      "size": "0",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000042",
+      "size": "0",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000043",
+      "size": "0",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000044",
+      "size": "0",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000045",
+      "size": "0",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000046",
+      "size": "0",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000047",
+      "size": "0",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000048",
+      "size": "361193679",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000049",
+      "size": "328109914",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000050",
+      "size": "1222900258",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000051",
+      "size": "1077890515",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000052",
+      "size": "128027106",
+      "encrypted": "No"
+    }
+  ],
+  "binaryLogsCode": null,
+  "completedUpgradeSteps": 58,
+  "eventBodiesRead": false,
+  "historicalTimezoneProven": false,
+  "databaseWritten": false,
+  "toolSha256": "e8dda23900471ff9f10d593586be1a73cbc6b38206dc6064142301c3acc972bf"
+}

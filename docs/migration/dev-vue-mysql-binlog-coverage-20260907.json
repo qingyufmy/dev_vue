@@ -1,0 +1,185 @@
+{
+  "kind": "mysql-binlog-header-coverage/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "observedAtUtc": "2026-09-07T00:55:43.180Z",
+  "variables": [
+    {
+      "Variable_name": "binlog_expire_logs_seconds",
+      "Value": "600000"
+    },
+    {
+      "Variable_name": "binlog_format",
+      "Value": "MIXED"
+    },
+    {
+      "Variable_name": "general_log",
+      "Value": "OFF"
+    },
+    {
+      "Variable_name": "log_bin",
+      "Value": "ON"
+    },
+    {
+      "Variable_name": "log_output",
+      "Value": "FILE"
+    },
+    {
+      "Variable_name": "system_time_zone",
+      "Value": "CST"
+    },
+    {
+      "Variable_name": "time_zone",
+      "Value": "SYSTEM"
+    }
+  ],
+  "uptime": [
+    {
+      "Variable_name": "Uptime",
+      "Value": "233650"
+    }
+  ],
+  "binaryLogs": [
+    {
+      "name": "mysql-bin.000041",
+      "size": "0",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000042",
+      "size": "0",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000043",
+      "size": "0",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000044",
+      "size": "0",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000045",
+      "size": "0",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000046",
+      "size": "0",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000047",
+      "size": "0",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000048",
+      "size": "361193679",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000049",
+      "size": "328109914",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000050",
+      "size": "1222900258",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000051",
+      "size": "1077890515",
+      "encrypted": "No"
+    },
+    {
+      "name": "mysql-bin.000052",
+      "size": "128798993",
+      "encrypted": "No"
+    }
+  ],
+  "binaryLogsCode": null,
+  "completedUpgradeSteps": 58,
+  "eventBodiesRead": false,
+  "historicalTimezoneProven": false,
+  "databaseWritten": false,
+  "coverage": [
+    {
+      "name": "mysql-bin.000041",
+      "events": 0,
+      "status": "empty_listing"
+    },
+    {
+      "name": "mysql-bin.000042",
+      "events": 0,
+      "status": "empty_listing"
+    },
+    {
+      "name": "mysql-bin.000043",
+      "events": 0,
+      "status": "empty_listing"
+    },
+    {
+      "name": "mysql-bin.000044",
+      "events": 0,
+      "status": "empty_listing"
+    },
+    {
+      "name": "mysql-bin.000045",
+      "events": 0,
+      "status": "empty_listing"
+    },
+    {
+      "name": "mysql-bin.000046",
+      "events": 0,
+      "status": "empty_listing"
+    },
+    {
+      "name": "mysql-bin.000047",
+      "events": 0,
+      "status": "empty_listing"
+    },
+    {
+      "name": "mysql-bin.000048",
+      "events": 824792,
+      "snapshotBytes": 361193679,
+      "earliestHeaderUtc": "2026-09-03T03:42:24+00:00",
+      "latestHeaderUtc": "2026-09-03T10:51:03+00:00"
+    },
+    {
+      "name": "mysql-bin.000049",
+      "events": 613330,
+      "snapshotBytes": 328109914,
+      "earliestHeaderUtc": "2026-09-03T11:10:01+00:00",
+      "latestHeaderUtc": "2026-09-04T08:00:54+00:00"
+    },
+    {
+      "name": "mysql-bin.000050",
+      "events": 1232382,
+      "snapshotBytes": 1222900258,
+      "earliestHeaderUtc": "2026-09-04T08:01:34+00:00",
+      "latestHeaderUtc": "2026-09-06T13:18:50+00:00"
+    },
+    {
+      "name": "mysql-bin.000051",
+      "events": 433554,
+      "snapshotBytes": 1077890515,
+      "earliestHeaderUtc": "2026-09-06T13:18:50+00:00",
+      "latestHeaderUtc": "2026-09-06T18:12:44+00:00"
+    },
+    {
+      "name": "mysql-bin.000052",
+      "events": 103596,
+      "snapshotBytes": 128798993,
+      "earliestHeaderUtc": "2026-09-06T18:12:44+00:00",
+      "latestHeaderUtc": "2026-09-07T00:55:42+00:00"
+    }
+  ],
+  "toolSha256": "9497361b20df1b2436d77e90dcfd7f21cc27185513534312d48438fa3c78bca6"
+}
