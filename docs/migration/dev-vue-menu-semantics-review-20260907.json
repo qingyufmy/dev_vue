@@ -1,0 +1,186 @@
+{
+  "kind": "menu-semantics/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "schemaSteps": 58,
+  "columns": [
+    {
+      "name": "id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collationName": null
+    },
+    {
+      "name": "category",
+      "type": "varchar(100)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collationName": "utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "key",
+      "type": "varchar(100)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "collationName": "utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "value",
+      "type": "mediumtext",
+      "nullable": "YES",
+      "defaultValue": null,
+      "collationName": "utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "label",
+      "type": "varchar(255)",
+      "nullable": "YES",
+      "defaultValue": "",
+      "collationName": "utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "sort_order",
+      "type": "int",
+      "nullable": "YES",
+      "defaultValue": "0",
+      "collationName": null
+    },
+    {
+      "name": "created_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": "now()",
+      "collationName": null
+    },
+    {
+      "name": "updated_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": "now()",
+      "collationName": null
+    }
+  ],
+  "indexes": [
+    {
+      "name": "PRIMARY",
+      "nonUnique": 0,
+      "position": 1,
+      "columnName": "id"
+    },
+    {
+      "name": "uq_category_key",
+      "nonUnique": 0,
+      "position": 1,
+      "columnName": "category"
+    },
+    {
+      "name": "uq_category_key",
+      "nonUnique": 0,
+      "position": 2,
+      "columnName": "key"
+    }
+  ],
+  "result": {
+    "version": "menu-semantics-review/v1",
+    "entries": [
+      {
+        "sourceId": "13",
+        "namespace": "toolbox",
+        "key": "items",
+        "sourceRowSha256": "a6ce0c81b1535a62369cc203d4f08f47eef149468ddb4dcdb3a26fe190ee5405",
+        "type": "json_array",
+        "inspection": {
+          "namespace": "toolbox",
+          "key": "items",
+          "type": "json_array",
+          "exposure": "restricted",
+          "valueKind": "text",
+          "compatible": true,
+          "needs": [
+            "item_schema_review"
+          ],
+          "rawValuePreserved": true,
+          "semanticAcceptanceVerified": false
+        },
+        "menuSchemaVerified": false,
+        "createdAt": {
+          "raw": "2026-06-12 19:34:42.000000",
+          "status": "offset_evidence_required"
+        },
+        "updatedAt": {
+          "raw": "2026-06-29 13:57:05.000000",
+          "status": "offset_evidence_required"
+        },
+        "readyForBackfill": false
+      },
+      {
+        "sourceId": "14",
+        "namespace": "market_menu",
+        "key": "items",
+        "sourceRowSha256": "5e3b2f05c433bdd8bbc74e5f72f955199a03d964acbec8e8ea398fe32651ee67",
+        "type": "json_array",
+        "inspection": {
+          "namespace": "market_menu",
+          "key": "items",
+          "type": "json_array",
+          "exposure": "restricted",
+          "valueKind": "text",
+          "compatible": true,
+          "needs": [
+            "item_schema_review"
+          ],
+          "rawValuePreserved": true,
+          "semanticAcceptanceVerified": false
+        },
+        "menuSchemaVerified": true,
+        "createdAt": {
+          "raw": "2026-06-12 19:34:42.000000",
+          "status": "offset_evidence_required"
+        },
+        "updatedAt": {
+          "raw": "2026-06-12 19:34:42.000000",
+          "status": "offset_evidence_required"
+        },
+        "readyForBackfill": false
+      }
+    ],
+    "sourceHash": "092547f72eb58ce9d5c1a66cbd9579d2ced8b33bad9e897797ad47ff72beec1e",
+    "credentialKeysExcluded": [],
+    "compatibleRows": 2,
+    "nonNullTimeRows": 2,
+    "readyRows": 0,
+    "valuesDecrypted": false,
+    "semanticAcceptanceVerified": false
+  },
+  "referenceFiles": [
+    {
+      "path": "server/system-config-secrets.js",
+      "sha256": "e366f11f6d49ebe2caf98cc398adaa95aaa5c51c61bd97035996b9b3e925ba8a"
+    },
+    {
+      "path": "server/admin/content-system.js",
+      "sha256": "8e095c29b11e4bca254dfcbe5a88f61dc024df8f765b7d76550ec38c51c24da3"
+    },
+    {
+      "path": "server/routes/config.js",
+      "sha256": "f199527719cd1ddc7320ab10b0bdf7043c12fcebfede1eef28f5928c86af87c6"
+    },
+    {
+      "path": "server/storage/storage-config.js",
+      "sha256": "908d346ad664c4999e119ba6db343d263ebff3d76a30b0fc2d0836d03ab06277"
+    },
+    {
+      "path": "server/sms.js",
+      "sha256": "9b350a16ef1a7eee6a0d17d8517b3814c83714cf5874f70298b1a8827a28fcc4"
+    },
+    {
+      "path": "server/system-email.js",
+      "sha256": "790586b9722a8075ffb3bdfdb6c85b839e00db8a0ecdd334241c7a3dac3545cc"
+    }
+  ],
+  "sourceDatabaseWritten": false,
+  "businessConsumersSwitched": false
+}
