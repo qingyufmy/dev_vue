@@ -1,3 +1,4 @@
+import { verifyLearningMigrationControl } from './v4-learning-control-audit.mjs'
 import { canonical, hash, requireBackfill as check } from './v4-backfill-contract.mjs'
 import { validateSpec } from './v4-learning-course-backfill-contract.mjs'
 import { createLearningCourseBackfill } from './v4-learning-course-backfill.mjs'
@@ -30,8 +31,10 @@ export async function migrateLearningCourse(repository, spec, sources, options, 
       && identity.storageMode === spec.bindings.storageMode && identity.schemaHash === spec.bindings.schemaHash, 'learning_course_migration_target')
     const run = await tx.findRun(spec.runId)
     check(run && run.bindingsHash === hash(spec.bindings) && canonical(run.bindings) === canonical(spec.bindings), 'backfill_run_bindings_mismatch')
+    const control = await verifyLearningMigrationControl(tx.connection, spec, pipeline)
     const read = await readLearningCourseAudit(tx.connection, spec.runId)
-    return auditLearningCourseImport(read.sources, read.actual, read.archives, options)
+    const result = auditLearningCourseImport(read.sources, read.actual, read.archives, options)
+    return { ...result, control }
   })
   check(audit.importMatchesReviewedInputs, 'learning_course_migration_audit_failed')
   return { version: 'learning-course-migration/v1', mode, runId: spec.runId, status: 'verified', batches: results, audit, consumersSwitched: false }

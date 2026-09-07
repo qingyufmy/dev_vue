@@ -1,3 +1,4 @@
+import { learningControlFixture } from './fixtures/learning-control-fixture.mjs'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { canonical, hash, streamIdentity } from '../scripts/lib/v4-backfill-contract.mjs'
 import { createLearningProgressBackfill } from '../scripts/lib/v4-learning-progress-backfill.mjs'
@@ -24,6 +25,7 @@ function fixture() {
   const replies = [[source], [target], [{ run_id: pipeline.runId, source_pk_sha256: hash(row.pk), source_bytes_sha256: hash(source),
     source_payload_json: canonical(pipeline.sourceEvidence(streamIdentity(pipeline.stream), row)) }],
   [{ id: '12', public_episode_id: '100', source_sha256: 'b'.repeat(64) }], [{ id: '1' }]]
+  replies.unshift(...Object.values(learningControlFixture(spec, pipeline)))
   const tx = { targetIdentity: async () => ({ serverUuid: pipeline.runId, database: 'dev_vue', storageMode: pipeline.writer.storageMode, schemaHash: 'c'.repeat(64) }),
     findRun: async () => ({ bindings: spec.bindings, bindingsHash: hash(spec.bindings) }), connection: { execute: vi.fn(async () => [replies.shift()]) } }
   const repository = { transaction: vi.fn(work => work(tx)) }
@@ -35,7 +37,7 @@ it('applies batches and requires independent readback before reporting verified'
   expect(prepareBackfillRun).toHaveBeenCalledOnce()
   expect(executeBackfillBatch).toHaveBeenCalledOnce()
   expect(recoverBackfillBatch).not.toHaveBeenCalled()
-  expect(f.tx.connection.execute).toHaveBeenCalledTimes(5)
+  expect(f.tx.connection.execute).toHaveBeenCalledTimes(9)
 })
 it.each(['not_committed', 'unknown'])('recovery stops at %s without writes or false audit', async status => {
   const f = fixture()

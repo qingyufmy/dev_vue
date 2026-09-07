@@ -1,3 +1,4 @@
+import { learningControlFixture } from './fixtures/learning-control-fixture.mjs'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { canonical, hash } from '../scripts/lib/v4-backfill-contract.mjs'
 import { createLearningCourseBackfill } from '../scripts/lib/v4-learning-course-backfill.mjs'
@@ -28,6 +29,7 @@ function fixture() {
     resolution: options.basis.resolutions[0], mediaBindings: actualMedia.map(item => ({ sourceKind: item.source_kind, id: item.id })) }
   const archive = { run_id: pipeline.runId, source_pk_sha256: hash(row.pk), source_bytes_sha256: hash(source), source_payload_json: canonical(payload) }
   const replies = [[source], [course], [lesson], actualMedia, [archive]]
+  replies.unshift(...Object.values(learningControlFixture(spec, pipeline)))
   const tx = { targetIdentity: async () => ({ serverUuid: pipeline.runId, database: 'dev_vue', storageMode: pipeline.writer.storageMode, schemaHash: 'c'.repeat(64) }),
     findRun: async () => ({ bindings: spec.bindings, bindingsHash: hash(spec.bindings) }), connection: { execute: vi.fn(async () => [replies.shift()]) } }
   const repository = { transaction: vi.fn(work => work(tx)) }
@@ -39,7 +41,7 @@ it('accepts full parent ID mappings and requires all three target tables and arc
   expect((await f.run('apply')).status).toBe('verified')
   expect(prepareBackfillRun).toHaveBeenCalledOnce()
   expect(executeBackfillBatch).toHaveBeenCalledOnce()
-  expect(f.tx.connection.execute).toHaveBeenCalledTimes(5)
+  expect(f.tx.connection.execute).toHaveBeenCalledTimes(9)
   expect(f.tx.connection.execute.mock.calls.every(([sql]) => sql.startsWith('SELECT'))).toBe(true)
 })
 it.each(['not_committed', 'unknown'])('recovery observes %s without creating or replaying a batch', async status => {
