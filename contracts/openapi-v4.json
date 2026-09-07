@@ -13,6 +13,7 @@
     }
   ],
   "tags": [
+    { "name": "Settings", "description": "Administrator configuration updates and request recovery" },
     { "name": "Referral Management", "description": "Administrator referral configuration and audit" },
     { "name": "Session", "description": "Host-only application session and SSO lifecycle" },
     { "name": "Context", "description": "Authorized user and trading scope" },
@@ -31,6 +32,162 @@
     { "name": "Observer Management", "description": "Administrator-only observer source, channel and explicit audience authorization configuration" }
   ],
   "paths": {
+  "/admin/settings/value": {
+    "put": {
+      "operationId": "updateSystemSetting",
+      "summary": "Update an existing non-secret configuration value with a durable request receipt",
+      "tags": [
+        "Settings"
+      ],
+      "description": "Admin host and admin-web session only; CSRF and Origin checked. No query parameters. Exact string revisions and raw text values. Reuse the same UUID and complete body after an uncertain result. Credentials and service-owned fields are rejected. Domain-dependent settings remain unavailable until their semantic checks are provided. This endpoint does not create settings or migrate legacy values.",
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/CsrfToken"
+        },
+        {
+          "name": "Idempotency-Key",
+          "in": "header",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+            "minLength": 36,
+            "maxLength": 36
+          }
+        }
+      ],
+      "requestBody": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "namespace",
+                "key",
+                "value_type",
+                "expected_revision",
+                "value"
+              ],
+              "properties": {
+                "namespace": {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                "key": {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                "value_type": {
+                  "type": "string",
+                  "enum": [
+                    "string",
+                    "boolean",
+                    "integer",
+                    "enum",
+                    "json_array"
+                  ]
+                },
+                "expected_revision": {
+                  "type": "string",
+                  "pattern": "^[1-9][0-9]{0,19}$",
+                  "maxLength": 20
+                },
+                "value": {
+                  "type": "string",
+                  "description": "Original text; no implicit coercion, trimming or defaults."
+                }
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "description": "Original durable result or newly committed version",
+          "headers": {
+            "Cache-Control": {
+              "schema": {
+                "type": "string",
+                "const": "no-store"
+              }
+            }
+          },
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "data",
+                  "meta"
+                ],
+                "properties": {
+                  "data": {
+                    "type": "object",
+                    "required": [
+                      "setting_id",
+                      "revision",
+                      "replayed"
+                    ],
+                    "properties": {
+                      "setting_id": {
+                        "type": "string"
+                      },
+                      "revision": {
+                        "type": "string"
+                      },
+                      "replayed": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  "meta": {
+                    "type": "object",
+                    "required": [
+                      "request_id",
+                      "generated_at"
+                    ],
+                    "properties": {
+                      "request_id": {
+                        "type": "string"
+                      },
+                      "generated_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "$ref": "#/components/responses/Problem"
+        },
+        "401": {
+          "$ref": "#/components/responses/Problem"
+        },
+        "403": {
+          "$ref": "#/components/responses/Problem"
+        },
+        "409": {
+          "$ref": "#/components/responses/Problem"
+        },
+        "421": {
+          "$ref": "#/components/responses/Problem"
+        },
+        "503": {
+          "$ref": "#/components/responses/Problem"
+        },
+        "422": {
+          "$ref": "#/components/responses/Problem",
+          "description": "Configuration policy rejected"
+        }
+      }
+    }
+  },
     "/admin/referrals/rules": {
       "get": {
         "operationId": "listReferralRules",
