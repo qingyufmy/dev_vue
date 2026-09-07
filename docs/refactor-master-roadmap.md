@@ -733,3 +733,5 @@ U2历史时间与账户承接已进一步收敛：[39字段依据及承接合同
 阶段 171：学习域显式 check/verify/recover/apply 命令接通，5 项测试和实际 --help 通过；apply 暂限恢复副本，真实演练及当前库提升待完成，见 [阶段171](migration/dev-vue-inplace-stage171-20260907.md)。
 
 阶段 172：学习域双清单生成 CLI 完成，生成/check/执行共用跨域预检，15 项测试及实际 --help 通过；未连接真实数据库，见 [阶段172](migration/dev-vue-inplace-stage172-20260907.md)。
+
+阶段 173：恢复副本专用学习域演练输入工具完成，3 项测试通过；合成时间不作为历史依据，MySQL 仍未运行，真实演练未执行，见 [阶段173](migration/dev-vue-inplace-stage173-20260907.md)。
