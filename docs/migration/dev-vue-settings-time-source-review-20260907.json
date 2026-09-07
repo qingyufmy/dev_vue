@@ -1,0 +1,13 @@
+{
+  "kind": "settings-time-source-review/v1",
+  "referenceFile": "server/db.js",
+  "referenceSha256": "0a19666e458f0a1ccd2253b4432062fbdabfc4ab8e4d51a10304035ffcc5e22a",
+  "sessionTimezoneIntroductionCommit": "29599418269734f1f09d1fd5b200f1c0cc590b27",
+  "authorTime": "2026-07-08T13:49:50+08:00",
+  "sourceRows": 59,
+  "createdBeforeAuthorWallClock": 40,
+  "updatedBeforeAuthorWallClock": 16,
+  "historicalDeploymentProven": false,
+  "offsetApproved": false,
+  "sourceWritten": false
+}
