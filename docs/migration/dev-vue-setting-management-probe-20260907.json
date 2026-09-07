@@ -1,0 +1,89 @@
+{
+  "kind": "setting-management-probe/v1",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "toolManifest": [
+    {
+      "path": "package.json",
+      "sha256": "6a28d132e349a7d7958232e4b3ed156caa268486b5e90d183226b4454ce8d54b"
+    },
+    {
+      "path": "scripts/lib/v4-backup-artifact.mjs",
+      "sha256": "4e66ff5a47c862dd494ef3d9800f413b07de19ca1a81e1e61eece4da8ef22591"
+    },
+    {
+      "path": "scripts/lib/v4-backup-io.mjs",
+      "sha256": "0b6082e0b18e30a42ffad895e5f3cbd4a2645e87f623d02b5c1844d53f6f7171"
+    },
+    {
+      "path": "scripts/probe-setting-management-host.mjs",
+      "sha256": "e06fc9779612dcec8437d6fa0ed4962cac9e2ec355a4206b22fec1d201bbf17b"
+    },
+    {
+      "path": "scripts/run-setting-management-host.py",
+      "sha256": "7b64cf7ed4a751154eb48440d60280f844e8716849a16ac72422f0fba742576c"
+    },
+    {
+      "path": "server/db/migrations/inplace/021_system_setting_requests.sql",
+      "sha256": "e2151fd9c7c9f70a4fdf91730c08ad09efdf183e5e57d161889aceff0de40960"
+    },
+    {
+      "path": "server/dist-v4/modules/settings/application/setting-management.js",
+      "sha256": "04053443fa3a5bb503ad111ba4de0fb27d8cd45adc6ef62a2369f888281fae0a"
+    },
+    {
+      "path": "server/dist-v4/modules/settings/domain/setting-value-policy.js",
+      "sha256": "decb241ec723dee50aa8e5c2e8d5dd12d5c469b1904fbba3864c4ee5457b56a2"
+    },
+    {
+      "path": "server/dist-v4/modules/settings/infrastructure/mysql-setting-management.js",
+      "sha256": "b174bd98063e3c56ca9cb02f82df4b18c2fee8f01666fdfe0e174805e4e0045c"
+    },
+    {
+      "path": "server/dist-v4/modules/settings/infrastructure/mysql-setting-writer.js",
+      "sha256": "6718604e9f8433fc1b5b3b8170066fee2fcd17347fc09cfc4f5a0a88ca1e0546"
+    },
+    {
+      "path": "server/src/modules/settings/application/setting-management.ts",
+      "sha256": "cff80e4ea7f53ef11ebe02d6cebb085ff4c131881e03848cb7fcaa38b6b85774"
+    },
+    {
+      "path": "server/src/modules/settings/domain/setting-value-policy.ts",
+      "sha256": "103083029b5cae49ecc3bb050444861974ec3e5831fd2b52d12fd8b1def6876d"
+    },
+    {
+      "path": "server/src/modules/settings/index.ts",
+      "sha256": "5bb97ec53c5c40360c4b96edb60136ececaead7029741adf077c910c45bd1eb6"
+    },
+    {
+      "path": "server/src/modules/settings/infrastructure/mysql-setting-management.ts",
+      "sha256": "a0ac23579b268eb3d9f39aae34e1ed2579554f5635da7c581892cf1b74081b0b"
+    },
+    {
+      "path": "server/src/modules/settings/infrastructure/mysql-setting-reader.ts",
+      "sha256": "64e8032c78e16a9e4fa70f9dff985a67d7054de36c74783ed7172291f596d2cc"
+    },
+    {
+      "path": "server/src/modules/settings/infrastructure/mysql-setting-writer.ts",
+      "sha256": "04bdbab8434b23043ea8c1ef2966c00733ea153274217e4e727ecf3c005593b0"
+    }
+  ],
+  "schema": {
+    "sqlSha256": "e2151fd9c7c9f70a4fdf91730c08ad09efdf183e5e57d161889aceff0de40960",
+    "createTable": "CREATE TABLE `system_setting_requests` (\n  `actor_user_id` int NOT NULL,\n  `request_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `request_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `setting_id` int NOT NULL,\n  `revision` bigint unsigned NOT NULL,\n  `recorded_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`actor_user_id`,`request_id`),\n  UNIQUE KEY `uk_system_setting_receipt_change` (`setting_id`,`revision`),\n  CONSTRAINT `fk_system_setting_receipt_actor` FOREIGN KEY (`actor_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_system_setting_receipt_change` FOREIGN KEY (`setting_id`, `revision`) REFERENCES `system_setting_changes` (`setting_id`, `revision`),\n  CONSTRAINT `chk_system_setting_receipt_hash` CHECK ((regexp_like(`request_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c') and (not(regexp_like(`request_sha256`,_utf8mb4'[^0-9a-f]',_utf8mb4'c'))))),\n  CONSTRAINT `chk_system_setting_receipt_request` CHECK ((regexp_like(`request_id`,_utf8mb4'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',_utf8mb4'c') and (not(regexp_like(`request_id`,_utf8mb4'[^0-9a-f-]',_utf8mb4'c'))))),\n  CONSTRAINT `chk_system_setting_receipt_revision` CHECK ((`revision` > 1))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+  },
+  "fixtureOnly": true,
+  "realCommitThenInjectedFailure": true,
+  "recoveredWithoutRewrite": true,
+  "concurrentSameRequestOneWrite": true,
+  "historicalReceiptRecovered": true,
+  "payloadConflictRejected": true,
+  "revokedAdminRejected": true,
+  "invalidConstraintsRejected": 3,
+  "fixturesCleaned": true,
+  "currentDevVueWritten": false,
+  "consumersSwitched": false
+}
