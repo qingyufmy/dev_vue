@@ -23,3 +23,7 @@ it('rejects protected value leaks and inconsistent NULL state',async()=>{
 it('rejects invalid request keys before sending',()=>{
  const fetchImpl=vi.fn<typeof fetch>();expect(()=>createApiClient({fetchImpl}).updateAdminSetting(body,key+'\n','csrf')).toThrow();expect(fetchImpl).not.toHaveBeenCalled()
 })
+it('rejects a valid response belonging to another requested setting',async()=>{
+ const fetchImpl=vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({data:{setting_id:'1',namespace:'smtp',key:'host',value_type:'string',sensitivity:'restricted',protected:false,value_state:'text',value:'mail.test',revision:'1'},meta})))
+ await expect(createApiClient({fetchImpl}).getAdminSetting({namespace:'smtp',key:'port'})).rejects.toThrow('scope_mismatch')
+})

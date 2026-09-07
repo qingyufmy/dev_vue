@@ -1,12 +1,12 @@
 import { ApiClientError,type createApiClient } from '@aurum/api-client'
-import { settingUpdateBodySchema,type SettingUpdateBody } from '@aurum/contracts'
+import { settingRequestKeySchema,settingUpdateBodySchema,type SettingUpdateBody } from '@aurum/contracts'
 type Client=Pick<ReturnType<typeof createApiClient>,'updateAdminSetting'>
 const definiteRejections=new Set(['setting_admin_required','setting_command_invalid','setting_command_policy_rejected','setting_update_policy_rejected','setting_revision_conflict'])
 type Phase='idle'|'submitting'|'uncertain'|'complete'|'rejected'
 // One account-scoped in-memory operation. Never persist CSRF, session tokens or
 // configuration text to browser storage. Page integration must retain this
 // instance until resolution; navigation/reload recovery needs separate UX.
-export function createSettingWriteSession(client:Client,actorId:string,newKey=()=>crypto.randomUUID()) {
+export function createSettingWriteSession(client:Client,actorId:string,newKey:()=>string=()=>crypto.randomUUID()) {
  let phase:Phase='idle'
  let pending:{body:SettingUpdateBody;requestKey:string}|null=null
  const snapshot=()=>({phase,pending:pending?structuredClone(pending):null})
@@ -34,7 +34,7 @@ export function createSettingWriteSession(client:Client,actorId:string,newKey=()
    if(!csrfToken)throw Error('setting_csrf_required')
    if(pending)throw Error('setting_request_unresolved')
    const parsed=settingUpdateBodySchema.parse(body)
-   pending={body:Object.freeze({...parsed}),requestKey:newKey()}
+   pending={body:Object.freeze({...parsed}),requestKey:settingRequestKeySchema.parse(newKey())}
    return run(activeActorId,csrfToken,false)
   },
   async recover(activeActorId:string,csrfToken:string) {

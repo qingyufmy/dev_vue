@@ -87,7 +87,10 @@ export function createApiClient(options: ApiClientOptions = {}) {
   return {
     getAdminSetting: (scope: {namespace:string;key:string}) => {
       const value=settingScopeSchema.parse(scope)
-      return send(adminSettingResponseSchema,`/api/v4/admin/settings/value?${new URLSearchParams(value).toString()}`,{cache:'no-store'})
+      return send(adminSettingResponseSchema,`/api/v4/admin/settings/value?${new URLSearchParams(value).toString()}`,{cache:'no-store'}).then(response=>{
+        if(response.data.namespace!==value.namespace||response.data.key!==value.key)throw Error('setting_response_scope_mismatch')
+        return response
+      })
     },
     updateAdminSetting: (body:SettingUpdateBody,requestKey:string,csrfToken:string) => send(
       settingUpdateResponseSchema,'/api/v4/admin/settings/value',
