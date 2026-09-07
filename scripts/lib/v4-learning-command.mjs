@@ -1,3 +1,4 @@
+import { assertLearningPromotion } from './learning-dev-vue-promotion.mjs'
 import { prepareLearningCore } from './v4-learning-core-migration.mjs'
 import { requireBackfill as check } from './v4-backfill-contract.mjs'
 import { decodeLearningManifest } from './v4-learning-manifest.mjs'
@@ -8,12 +9,12 @@ import { readLearningCourseAudit } from './mysql-learning-course-audit-reader.mj
 import { readLearningProgressAudit } from './mysql-learning-progress-audit-reader.mjs'
 import { withInplaceUpgradeLock } from './mysql-inplace-column-store.mjs'
 
-export async function runLearningCommand({ pool, database, expectedServerUuid, courseManifest, progressManifest, evidenceCatalog, mode }) {
+export async function runLearningCommand({ pool, database, expectedServerUuid, courseManifest, progressManifest, evidenceCatalog, mode, promotionPath }) {
   check(['check', 'apply', 'recover', 'verify'].includes(mode), 'learning_entry_mode')
   check(database === 'dev_vue' || /^dev_vue_m1_source_\d{8}_\d{2}$/.test(database), 'learning_entry_database')
-  // Current dev_vue is not promoted for business backfill until the new learning
-  // path has passed a real restored-copy rehearsal. Keep read-only commands usable.
-  check(mode !== 'apply' || database !== 'dev_vue', 'learning_entry_dev_vue_apply_requires_rehearsal')
+  if (mode === 'apply' && database === 'dev_vue') {
+    await assertLearningPromotion(promotionPath, { courses: courseManifest, progress: progressManifest }, expectedServerUuid)
+  }
   let connection
   try {
     connection = await pool.getConnection()

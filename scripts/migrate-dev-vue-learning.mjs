@@ -11,12 +11,13 @@ const json = async path => JSON.parse(await readFile(path, 'utf8'))
 let pool
 try {
   const args = process.argv.slice(2)
+  const promotionPath = args[0] === '--promotion' ? resolve(args.splice(0, 2)[1] || '') : undefined
   const rehearsal = args[0] === '--rehearsal'
   if (rehearsal) args.shift()
   const [flag, coursePath, progressPath, evidencePath] = args
   if (flag === '--help' && args.length === 1) {
-    console.log('node scripts/migrate-dev-vue-learning.mjs [--rehearsal] --check|--verify|--recover|--apply <course-manifest.json> <progress-manifest.json> <reviewed-evidence.json>')
-    console.log('--apply currently permits only the existing restored development copy; dev_vue promotion requires a successful real rehearsal.')
+    console.log('node scripts/migrate-dev-vue-learning.mjs [--promotion <absolute-proof.json>] [--rehearsal] --check|--verify|--recover|--apply <course-manifest.json> <progress-manifest.json> <reviewed-evidence.json>')
+    console.log('--apply on dev_vue requires --promotion bound to the exact manifests, successful rehearsal and accepted UTC-as-is policy.')
   } else {
     check(args.length === 4 && ['--check', '--verify', '--recover', '--apply'].includes(flag), 'learning_entry_arguments')
     const courseManifest = await json(resolve(coursePath)), progressManifest = await json(resolve(progressPath))
@@ -30,7 +31,7 @@ try {
     const backup = await json(new URL('docs/migration/dev-vue-inplace-backup-20260906.json', root))
     pool = mysql.createPool({ ...connectionOptions(env), connectionLimit: 3 })
     const result = await runLearningCommand({ pool, database: env.MYSQL_DATABASE, expectedServerUuid: backup.serverUuid,
-      courseManifest, progressManifest, evidenceCatalog, mode: flag.slice(2) })
+      courseManifest, progressManifest, evidenceCatalog, promotionPath, mode: flag.slice(2) })
     console.log(JSON.stringify(result))
     if (['unknown', 'not_committed'].includes(result.status)) process.exitCode = 2
   }
