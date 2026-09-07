@@ -32,7 +32,7 @@ export const router = createRouter({
     },
     ...moduleRoutes.map((route) => ({
       path: route.path,
-      component: () => import('~/features/shell/ModulePlaceholderView.vue'),
+      component: route.path === '/system' ? () => import('~/features/settings/SystemSettingsView.vue') : () => import('~/features/shell/ModulePlaceholderView.vue'),
       meta: { title: route.title, description: route.description },
     })),
   ],
