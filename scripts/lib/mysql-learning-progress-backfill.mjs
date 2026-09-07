@@ -22,7 +22,14 @@ export async function readLearningProgressTargetIdentity(connection) {
 
 export class MysqlLearningProgressBackfillRepository extends MysqlBackfillRepository {
   constructor(pool, sourceEvidence) {
-    super(pool)
+    // Pool sessions can be reused after callers changed isolation. Pin it before
+    // BEGIN so the final source/target/archive audit observes one stable snapshot.
+    super({ async getConnection() {
+      const connection = await pool.getConnection()
+      try { await connection.query('SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ') }
+      catch (error) { connection.destroy(); throw error }
+      return connection
+    } })
     check(typeof sourceEvidence === 'function', 'backfill_learning_evidence_required')
     this.sourceEvidence = sourceEvidence
   }

@@ -19,6 +19,15 @@ it('persists receipt and complete source archive on the transaction connection b
   expect(f.connection.execute.mock.calls.map(([sql]) => sql.split(' ')[0])).toEqual(['INSERT', 'INSERT', 'SELECT'])
   expect(f.connection.execute.mock.calls[1][1][4]).toBe(canonical(f.pipeline.sourceEvidence(f.stream, f.row)))
   expect(f.connection.commit).toHaveBeenCalledOnce()
+  expect(f.connection.query.mock.calls[0][0]).toBe('SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ')
+})
+it('destroys a connection when setting snapshot isolation fails before beginning work', async () => {
+  const f = fixture()
+  f.connection.query.mockRejectedValue(new Error('isolation unavailable'))
+  await expect(f.repository.transaction(f.write)).rejects.toThrow('backfill_storage_failed')
+  expect(f.connection.destroy).toHaveBeenCalledOnce()
+  expect(f.connection.beginTransaction).not.toHaveBeenCalled()
+  expect(f.connection.execute).not.toHaveBeenCalled()
 })
 it('rolls back receipts when archive readback fails and rejects another run before SQL', async () => {
   const f = fixture()
