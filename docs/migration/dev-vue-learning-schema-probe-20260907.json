@@ -1,0 +1,134 @@
+{
+  "kind": "learning-schema-probe/v1",
+  "identity": {
+    "db": "dev_vue_m1_a",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "sourceSqlSha256": "4e0079c0f7ee867f68a19a5c7cda16875dafee6566de3571fb40db92b519029d",
+  "definitions": [
+    {
+      "table": "learning_courses",
+      "ddl": "CREATE TABLE `learning_courses` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `title` varchar(500) NOT NULL,\n  `description` text,\n  `category_key` varchar(50) DEFAULT NULL,\n  `cover_locator` varchar(500) DEFAULT NULL,\n  `gradient_token` varchar(500) DEFAULT NULL,\n  `access_level` varchar(20) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `status` varchar(20) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `sort_order` int DEFAULT NULL,\n  `created_at_utc` datetime(3) DEFAULT NULL,\n  `updated_at_utc` datetime(3) DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `origin` varchar(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `migration_run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `source_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `imported_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `fk_learning_course_run` (`migration_run_id`),\n  KEY `idx_learning_course_list` (`status`,`sort_order`,`id`),\n  CONSTRAINT `fk_learning_course_run` FOREIGN KEY (`migration_run_id`) REFERENCES `data_migration_runs` (`id`),\n  CONSTRAINT `chk_learning_course_access` CHECK (((`access_level` is null) or (cast(`access_level` as char charset binary) in (cast(_utf8mb4'free' as char charset binary),cast(_utf8mb4'logged_in' as char charset binary),cast(_utf8mb4'plus_pro' as char charset binary),cast(_utf8mb4'pro_only' as char charset binary))))),\n  CONSTRAINT `chk_learning_course_hash` CHECK (((`source_sha256` is null) or ((char_length(`source_sha256`) = 64) and (not(regexp_like(`source_sha256`,_utf8mb4'[^0-9a-f]',_utf8mb4'c')))))),\n  CONSTRAINT `chk_learning_course_native` CHECK (((cast(`origin` as char charset binary) <> cast(_utf8mb4'native' as char charset binary)) or ((`created_at_utc` is not null) and (`access_level` is not null) and (`status` is not null)))),\n  CONSTRAINT `chk_learning_course_origin` CHECK ((((cast(`origin` as char charset binary) = cast(_utf8mb4'native' as char charset binary)) and (`updated_at_utc` is not null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null)) or ((cast(`origin` as char charset binary) = cast(_utf8mb4'legacy_import' as char charset binary)) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null)))),\n  CONSTRAINT `chk_learning_course_revision` CHECK ((`revision` > 0)),\n  CONSTRAINT `chk_learning_course_status` CHECK (((`status` is null) or (cast(`status` as char charset binary) in (cast(_utf8mb4'draft' as char charset binary),cast(_utf8mb4'published' as char charset binary),cast(_utf8mb4'archived' as char charset binary)))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+    },
+    {
+      "table": "learning_lessons",
+      "ddl": "CREATE TABLE `learning_lessons` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `course_id` int NOT NULL,\n  `public_episode_id` int DEFAULT NULL,\n  `display_number` int DEFAULT NULL,\n  `title` varchar(500) NOT NULL,\n  `content_type` varchar(20) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `duration_ms` bigint DEFAULT NULL,\n  `sort_order` int NOT NULL,\n  `created_at_utc` datetime(3) DEFAULT NULL,\n  `updated_at_utc` datetime(3) DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `origin` varchar(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `migration_run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `source_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `imported_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_learning_episode` (`public_episode_id`),\n  KEY `fk_learning_lesson_run` (`migration_run_id`),\n  KEY `idx_learning_lesson_course` (`course_id`,`sort_order`,`id`),\n  CONSTRAINT `fk_learning_lesson_course` FOREIGN KEY (`course_id`) REFERENCES `learning_courses` (`id`),\n  CONSTRAINT `fk_learning_lesson_run` FOREIGN KEY (`migration_run_id`) REFERENCES `data_migration_runs` (`id`),\n  CONSTRAINT `chk_learning_lesson_duration` CHECK (((`duration_ms` is null) or (`duration_ms` >= 0))),\n  CONSTRAINT `chk_learning_lesson_hash` CHECK (((`source_sha256` is null) or ((char_length(`source_sha256`) = 64) and (not(regexp_like(`source_sha256`,_utf8mb4'[^0-9a-f]',_utf8mb4'c')))))),\n  CONSTRAINT `chk_learning_lesson_id` CHECK (((`public_episode_id` is null) or (`public_episode_id` > 0))),\n  CONSTRAINT `chk_learning_lesson_native` CHECK (((cast(`origin` as char charset binary) <> cast(_utf8mb4'native' as char charset binary)) or ((`created_at_utc` is not null) and (`content_type` is not null)))),\n  CONSTRAINT `chk_learning_lesson_origin` CHECK ((((cast(`origin` as char charset binary) = cast(_utf8mb4'native' as char charset binary)) and (`updated_at_utc` is not null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null)) or ((cast(`origin` as char charset binary) = cast(_utf8mb4'legacy_import' as char charset binary)) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null)))),\n  CONSTRAINT `chk_learning_lesson_revision` CHECK ((`revision` > 0)),\n  CONSTRAINT `chk_learning_lesson_type` CHECK (((`content_type` is null) or (cast(`content_type` as char charset binary) in (cast(_utf8mb4'video' as char charset binary),cast(_utf8mb4'article' as char charset binary)))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+    },
+    {
+      "table": "learning_media_references",
+      "ddl": "CREATE TABLE `learning_media_references` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `lesson_id` int NOT NULL,\n  `source_kind` varchar(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `locator` varchar(500) NOT NULL,\n  `created_at_utc` datetime(3) DEFAULT NULL,\n  `updated_at_utc` datetime(3) DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `origin` varchar(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `migration_run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `source_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `imported_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_learning_media_kind` (`lesson_id`,`source_kind`),\n  KEY `fk_learning_media_run` (`migration_run_id`),\n  CONSTRAINT `fk_learning_media_lesson` FOREIGN KEY (`lesson_id`) REFERENCES `learning_lessons` (`id`),\n  CONSTRAINT `fk_learning_media_run` FOREIGN KEY (`migration_run_id`) REFERENCES `data_migration_runs` (`id`),\n  CONSTRAINT `chk_learning_media_hash` CHECK (((`source_sha256` is null) or ((char_length(`source_sha256`) = 64) and (not(regexp_like(`source_sha256`,_utf8mb4'[^0-9a-f]',_utf8mb4'c')))))),\n  CONSTRAINT `chk_learning_media_kind` CHECK ((cast(`source_kind` as char charset binary) in (cast(_utf8mb4'youtube_id' as char charset binary),cast(_utf8mb4'bilibili_id' as char charset binary),cast(_utf8mb4'cf_stream_id' as char charset binary),cast(_utf8mb4'local_video_path' as char charset binary),cast(_utf8mb4'article_url' as char charset binary),cast(_utf8mb4'article_object_key' as char charset binary)))),\n  CONSTRAINT `chk_learning_media_locator` CHECK ((length(`locator`) > 0)),\n  CONSTRAINT `chk_learning_media_native` CHECK (((cast(`origin` as char charset binary) <> cast(_utf8mb4'native' as char charset binary)) or (`created_at_utc` is not null))),\n  CONSTRAINT `chk_learning_media_origin` CHECK ((((cast(`origin` as char charset binary) = cast(_utf8mb4'native' as char charset binary)) and (`updated_at_utc` is not null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null)) or ((cast(`origin` as char charset binary) = cast(_utf8mb4'legacy_import' as char charset binary)) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null)))),\n  CONSTRAINT `chk_learning_media_revision` CHECK ((`revision` > 0))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+    },
+    {
+      "table": "learning_progress",
+      "ddl": "CREATE TABLE `learning_progress` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `lesson_id` int NOT NULL,\n  `watched_ms` bigint DEFAULT NULL,\n  `reported_duration_ms` bigint DEFAULT NULL,\n  `completed` tinyint DEFAULT NULL,\n  `quiz_passed` tinyint DEFAULT NULL,\n  `updated_at_utc` datetime(3) DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `origin` varchar(20) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `migration_run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `source_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `imported_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_learning_progress_user_lesson` (`user_id`,`lesson_id`),\n  KEY `fk_learning_progress_run` (`migration_run_id`),\n  KEY `idx_learning_progress_lesson` (`lesson_id`,`id`),\n  CONSTRAINT `fk_learning_progress_lesson` FOREIGN KEY (`lesson_id`) REFERENCES `learning_lessons` (`id`),\n  CONSTRAINT `fk_learning_progress_run` FOREIGN KEY (`migration_run_id`) REFERENCES `data_migration_runs` (`id`),\n  CONSTRAINT `fk_learning_progress_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_learning_progress_completed` CHECK (((`completed` is null) or (`completed` in (0,1)))),\n  CONSTRAINT `chk_learning_progress_duration` CHECK (((`reported_duration_ms` is null) or (`reported_duration_ms` >= 0))),\n  CONSTRAINT `chk_learning_progress_hash` CHECK (((`source_sha256` is null) or ((char_length(`source_sha256`) = 64) and (not(regexp_like(`source_sha256`,_utf8mb4'[^0-9a-f]',_utf8mb4'c')))))),\n  CONSTRAINT `chk_learning_progress_origin` CHECK ((((cast(`origin` as char charset binary) = cast(_utf8mb4'native' as char charset binary)) and (`updated_at_utc` is not null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null)) or ((cast(`origin` as char charset binary) = cast(_utf8mb4'legacy_import' as char charset binary)) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null)))),\n  CONSTRAINT `chk_learning_progress_quiz` CHECK (((`quiz_passed` is null) or (`quiz_passed` in (0,1)))),\n  CONSTRAINT `chk_learning_progress_revision` CHECK ((`revision` > 0)),\n  CONSTRAINT `chk_learning_progress_watched` CHECK (((`watched_ms` is null) or (`watched_ms` >= 0)))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+    }
+  ],
+  "rejected": [
+    {
+      "name": "access_case",
+      "errno": 3819
+    },
+    {
+      "name": "access_space",
+      "errno": 3819
+    },
+    {
+      "name": "status_lf",
+      "errno": 3819
+    },
+    {
+      "name": "native_time",
+      "errno": 3819
+    },
+    {
+      "name": "revision",
+      "errno": 3819
+    },
+    {
+      "name": "import_evidence",
+      "errno": 3819
+    },
+    {
+      "name": "lesson_parent",
+      "errno": 1452
+    },
+    {
+      "name": "episode_duplicate",
+      "errno": 1062
+    },
+    {
+      "name": "lesson_duration",
+      "errno": 3819
+    },
+    {
+      "name": "lesson_type",
+      "errno": 3819
+    },
+    {
+      "name": "progress_duplicate",
+      "errno": 1062
+    },
+    {
+      "name": "progress_user",
+      "errno": 1452
+    },
+    {
+      "name": "progress_lesson",
+      "errno": 1452
+    },
+    {
+      "name": "progress_flag",
+      "errno": 3819
+    },
+    {
+      "name": "progress_negative",
+      "errno": 3819
+    },
+    {
+      "name": "media_duplicate",
+      "errno": 1062
+    },
+    {
+      "name": "media_empty",
+      "errno": 3819
+    },
+    {
+      "name": "media_kind",
+      "errno": 3819
+    }
+  ],
+  "acceptedRows": 4,
+  "exactPrecision": true,
+  "overDurationPreserved": true,
+  "rolledBack": true,
+  "counts": {
+    "learning_courses": 0,
+    "learning_lessons": 0,
+    "learning_media_references": 0,
+    "learning_progress": 0
+  },
+  "toolManifest": [
+    {
+      "path": "package.json",
+      "sha256": "6a28d132e349a7d7958232e4b3ed156caa268486b5e90d183226b4454ce8d54b"
+    },
+    {
+      "path": "scripts/lib/v4-migration-plan.mjs",
+      "sha256": "087d097447de41bda0781aca7cfd6bab82bf6bedaa5c22fde9e8b80e443c2c37"
+    },
+    {
+      "path": "scripts/probe-learning-schema-host.mjs",
+      "sha256": "9cdde16acfad0085ee3d35f1c9f1c36c0f41e985588ca0ec5a6833e1ab9e4541"
+    },
+    {
+      "path": "scripts/run-learning-schema-host.py",
+      "sha256": "2730832002ce12720a40745d53de3da7b3890c0ef3a1cc50404be1e043e86f12"
+    },
+    {
+      "path": "server/db/migrations/inplace/022_learning_core.sql",
+      "sha256": "4e0079c0f7ee867f68a19a5c7cda16875dafee6566de3571fb40db92b519029d"
+    }
+  ],
+  "currentDevVueWritten": false
+}
