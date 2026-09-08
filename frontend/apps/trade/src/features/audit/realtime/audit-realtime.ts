@@ -1,6 +1,7 @@
+import type { TradeSessionSnapshot } from '~/features/auth'
 import { createApiClient } from '@aurum/api-client'
 import { browserRealtimeEventSchema } from '@aurum/contracts'
-import type { SessionSummary } from '@aurum/contracts'
+
 import { connectRealtime } from '@aurum/realtime'
 
 export type AuditRealtimeState = 'idle' | 'connecting' | 'live' | 'recovering' | 'offline'
@@ -8,7 +9,7 @@ export type AuditRealtimeState = 'idle' | 'connecting' | 'live' | 'recovering' |
 const reconnectDelays = [1_000, 2_000, 5_000, 10_000, 20_000, 30_000] as const
 
 type AuditRealtimeInput = {
-  session: SessionSummary
+  session: TradeSessionSnapshot
   onState: (state: AuditRealtimeState) => void
   onChanged: () => void
   resync: () => Promise<unknown>

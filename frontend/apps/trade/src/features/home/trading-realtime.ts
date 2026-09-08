@@ -1,7 +1,8 @@
+import type { TradeSessionSnapshot } from '~/features/auth'
 import { applyAccountMetrics } from '~/lib/apply-account-metrics'
 import { createApiClient } from '@aurum/api-client'
 import { browserRealtimeEventSchema, marketCandleSchema, marketQuoteSchema, openPositionSchema, pendingOrderSchema } from '@aurum/contracts'
-import type { SessionSummary, Timeframe } from '@aurum/contracts'
+import type { Timeframe } from '@aurum/contracts'
 import { connectRealtime } from '@aurum/realtime'
 import { accountSnapshot, marketCandles, marketQuote, openPositions, pendingOrders, realtimeState, resourceRevisions } from './home-runtime'
 
@@ -22,13 +23,13 @@ export function stopTradingRealtime() {
   realtimeState.value = 'idle'
 }
 
-export async function startTradingRealtime(session: SessionSummary, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>, onAnalysisChanged?: () => void) {
+export async function startTradingRealtime(session: TradeSessionSnapshot, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>, onAnalysisChanged?: () => void) {
   stopTradingRealtime()
   const currentGeneration = generation
   await connect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged)
 }
 
-async function connect(session: SessionSummary, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>, currentGeneration: number, onAnalysisChanged?: () => void) {
+async function connect(session: TradeSessionSnapshot, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>, currentGeneration: number, onAnalysisChanged?: () => void) {
   let lastSequence = 0
   let connectionAlive = true
   let resyncInFlight = false
@@ -135,7 +136,7 @@ async function connect(session: SessionSummary, accountId: string, symbol: strin
   }) } catch { scheduleReconnect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged) }
 }
 
-function scheduleReconnect(session: SessionSummary, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>, currentGeneration: number, onAnalysisChanged?: () => void) {
+function scheduleReconnect(session: TradeSessionSnapshot, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>, currentGeneration: number, onAnalysisChanged?: () => void) {
   if (currentGeneration !== generation || reconnectTimer !== null) return
   realtimeState.value = 'offline'
   const baseDelay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)] ?? 30_000

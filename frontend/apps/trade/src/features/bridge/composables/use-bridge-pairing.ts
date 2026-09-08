@@ -1,10 +1,11 @@
+import type { TradeSessionSnapshot } from '~/features/auth'
 import { computed, onScopeDispose, ref, watch, type Ref } from 'vue'
 import { ApiClientError } from '@aurum/api-client'
-import type { SessionSummary } from '@aurum/contracts'
+
 import { bridgeApi } from '../api/bridge-api'
 import { createPairingCode } from '../model/pairing-code'
 
-export function useBridgePairing(session: Ref<SessionSummary | null>, api = bridgeApi) {
+export function useBridgePairing(session: Readonly<Ref<TradeSessionSnapshot | null>>, api = bridgeApi) {
   const code = ref('')
   const error = ref('')
   const busy = ref(false)

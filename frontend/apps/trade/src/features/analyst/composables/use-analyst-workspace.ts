@@ -2,7 +2,7 @@ import { ApiClientError } from '@aurum/api-client'
 import type { AnalysisJob, InferenceRealtimeEvent } from '@aurum/contracts'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/vue-query'
 import { computed, onBeforeUnmount, onMounted, ref, type Ref, watch } from 'vue'
-import { useTradeSession } from '~/features/auth/session'
+import { useTradeSession } from '~/features/auth'
 import { analystApi } from '../api/analyst-api'
 import { createAnalystRealtime, type AnalystRealtimeState } from '../realtime/analyst-realtime'
 

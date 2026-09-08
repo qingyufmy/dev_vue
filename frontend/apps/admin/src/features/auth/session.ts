@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue'
+import { computed, readonly, ref } from 'vue'
 import { createApiClient } from '@aurum/api-client'
 import type { SessionSummary } from '@aurum/contracts'
 
@@ -12,7 +12,7 @@ export function useAdminSession() {
     try {
       const response = await client.getSession()
       session.value = response.data.permissions.includes('admin') ? response.data : null
-      return session.value
+      return readonly(session).value
     } catch {
       session.value = null
       return null
@@ -28,7 +28,7 @@ export function useAdminSession() {
   }
 
   return {
-    session,
+    session: readonly(session),
     loading: computed(() => loading.value),
     displayName: computed(() => session.value?.user.display_name ?? '待登录'),
     load,

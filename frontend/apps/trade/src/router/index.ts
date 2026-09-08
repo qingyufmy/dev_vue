@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { useTradeSession } from '~/features/auth/session'
+import { useTradeSession, loadLoginView } from '~/features/auth'
 
 const moduleRoutes = [
   { path: '/market', title: '市场行情', description: '宏观环境、关键因子与黄金市场状态将在对应阶段接入。' },
@@ -17,7 +17,7 @@ export const router = createRouter({
     {
       path: '/login',
       name: 'login',
-      component: () => import('~/features/auth/LoginView.vue'),
+      component: loadLoginView,
       meta: { title: '登录', public: true },
     },
     {

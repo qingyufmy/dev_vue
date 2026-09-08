@@ -46,7 +46,7 @@ import {
   SidebarTrigger,
 } from '@aurum/ui/sidebar'
 import { Toaster } from '@aurum/ui/sonner'
-import { useAdminSession } from '~/features/auth/session'
+import { useAdminSession } from '~/features/auth'
 
 const route = useRoute()
 const pageTitle = computed(() => String(route.meta.title ?? '管理后台'))

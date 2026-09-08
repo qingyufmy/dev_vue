@@ -7,7 +7,7 @@ import type {
   TradingAccount,
 } from '@aurum/contracts'
 import { computed, onBeforeUnmount, onMounted, ref, type Ref, watch } from 'vue'
-import { useTradeSession } from '~/features/auth/session'
+import { useTradeSession } from '~/features/auth'
 import {
   accountSnapshot,
   openPositions,

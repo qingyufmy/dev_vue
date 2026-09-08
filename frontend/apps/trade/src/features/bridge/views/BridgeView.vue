@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { useTradeSession } from '~/features/auth/session'
+import { useTradeSession } from '~/features/auth'
 import BridgePairingPanel from '../components/BridgePairingPanel.vue'
 import { useBridgePairing } from '../composables/use-bridge-pairing'
 

@@ -1,7 +1,7 @@
 import { ApiClientError, createApiClient } from '@aurum/api-client'
 import { computed, ref } from 'vue'
 import type { MarketAnalysisSummary, StrategySummary, Timeframe } from '@aurum/contracts'
-import { useTradeSession } from '~/features/auth/session'
+import { useTradeSession } from '~/features/auth'
 import { accountSnapshot, clearAccountRuntime, marketCandles, marketQuote, observerChannels, openPositions, pendingOrders, resourceRevisions, tradingAccounts, tradingContext } from './home-runtime'
 import { startTradingRealtime, stopTradingRealtime } from './trading-realtime'
 

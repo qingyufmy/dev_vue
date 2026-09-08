@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { useAdminSession } from '~/features/auth/session'
+import { useAdminSession, loadLoginView } from '~/features/auth'
 
 const moduleRoutes = [
   { path: '/users', title: '用户与会员', description: '用户档案、会员、权限与会话管理将在对应阶段接入。' },
@@ -21,7 +21,7 @@ export const router = createRouter({
     {
       path: '/login',
       name: 'login',
-      component: () => import('~/features/auth/LoginView.vue'),
+      component: loadLoginView,
       meta: { title: '登录', public: true },
     },
     {

@@ -1,6 +1,6 @@
 import { computed, onMounted, onBeforeUnmount, ref, watch, type Ref } from 'vue'
 import type { ReviewRealtimeEvent } from '@aurum/contracts'
-import { useTradeSession } from '~/features/auth/session'
+import { useTradeSession } from '~/features/auth'
 import { reviewerApi } from '../api/reviewer-api'
 import { createReviewerRealtime, type ReviewerRealtimeState } from '../realtime/reviewer-realtime'
 import {

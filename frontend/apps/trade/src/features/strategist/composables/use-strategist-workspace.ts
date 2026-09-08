@@ -3,7 +3,7 @@ import type {
   StrategySummary, TradingAccount,
 } from '@aurum/contracts'
 import { computed, onMounted, ref } from 'vue'
-import { useTradeSession } from '~/features/auth/session'
+import { useTradeSession } from '~/features/auth'
 import { strategistApi } from '../api/strategist-api'
 import type {
   CompileResultView, StrategyDetailView, StrategyDraft, StrategySubscriptionView, SubscriptionDraft,

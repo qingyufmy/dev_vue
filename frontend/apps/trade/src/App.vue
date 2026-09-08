@@ -47,7 +47,7 @@ import {
   SidebarTrigger,
 } from '@aurum/ui/sidebar'
 import { Toaster } from '@aurum/ui/sonner'
-import { useTradeSession } from '~/features/auth/session'
+import { useTradeSession } from '~/features/auth'
 import { currentAccount, realtimeState, tradingContext } from '~/features/home/home-runtime'
 
 const displayTimezone = computed(activeTerminalDisplayTimezone)

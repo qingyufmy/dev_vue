@@ -1,0 +1,111 @@
+{
+  "files": 324,
+  "edges": 1547,
+  "configErrors": [],
+  "findings": [
+    {
+      "rule": "feature-internal",
+      "source": "frontend/apps/admin/src/router/index.ts",
+      "target": "frontend/apps/admin/src/features/overview/OverviewView.vue",
+      "line": 30
+    },
+    {
+      "rule": "feature-internal",
+      "source": "frontend/apps/admin/src/router/index.ts",
+      "target": "frontend/apps/admin/src/features/settings/SystemSettingsView.vue",
+      "line": 35
+    },
+    {
+      "rule": "feature-internal",
+      "source": "frontend/apps/admin/src/router/index.ts",
+      "target": "frontend/apps/admin/src/features/shell/ModulePlaceholderView.vue",
+      "line": 35
+    },
+    {
+      "rule": "feature-internal",
+      "source": "frontend/apps/trade/src/App.vue",
+      "target": "frontend/apps/trade/src/features/home/home-runtime.ts",
+      "line": 51
+    },
+    {
+      "rule": "feature-internal",
+      "source": "frontend/apps/trade/src/features/risk/composables/use-risk-workspace.ts",
+      "target": "frontend/apps/trade/src/features/home/home-runtime.ts",
+      "line": 5
+    },
+    {
+      "rule": "feature-internal",
+      "source": "frontend/apps/trade/src/features/trader/composables/use-trader-workspace.ts",
+      "target": "frontend/apps/trade/src/features/home/home-runtime.ts",
+      "line": 11
+    },
+    {
+      "rule": "feature-internal",
+      "source": "frontend/apps/trade/src/router/index.ts",
+      "target": "frontend/apps/trade/src/features/home/HomeView.vue",
+      "line": 26
+    },
+    {
+      "rule": "feature-internal",
+      "source": "frontend/apps/trade/src/router/index.ts",
+      "target": "frontend/apps/trade/src/features/shell/ModulePlaceholderView.vue",
+      "line": 73
+    },
+    {
+      "rule": "source-cycle",
+      "source": "frontend/packages/ui/src/components/ui/alert/Alert.vue",
+      "target": "frontend/packages/ui/src/components/ui/alert/Alert.vue -> frontend/packages/ui/src/components/ui/alert/index.ts",
+      "runtime": true
+    },
+    {
+      "rule": "source-cycle",
+      "source": "frontend/packages/ui/src/components/ui/avatar/Avatar.vue",
+      "target": "frontend/packages/ui/src/components/ui/avatar/Avatar.vue -> frontend/packages/ui/src/components/ui/avatar/index.ts",
+      "runtime": true
+    },
+    {
+      "rule": "source-cycle",
+      "source": "frontend/packages/ui/src/components/ui/badge/Badge.vue",
+      "target": "frontend/packages/ui/src/components/ui/badge/Badge.vue -> frontend/packages/ui/src/components/ui/badge/index.ts",
+      "runtime": true
+    },
+    {
+      "rule": "source-cycle",
+      "source": "frontend/packages/ui/src/components/ui/button/Button.vue",
+      "target": "frontend/packages/ui/src/components/ui/button/Button.vue -> frontend/packages/ui/src/components/ui/button/index.ts",
+      "runtime": true
+    },
+    {
+      "rule": "source-cycle",
+      "source": "frontend/packages/ui/src/components/ui/empty/EmptyMedia.vue",
+      "target": "frontend/packages/ui/src/components/ui/empty/EmptyMedia.vue -> frontend/packages/ui/src/components/ui/empty/index.ts",
+      "runtime": true
+    },
+    {
+      "rule": "source-cycle",
+      "source": "frontend/packages/ui/src/components/ui/field/Field.vue",
+      "target": "frontend/packages/ui/src/components/ui/field/Field.vue -> frontend/packages/ui/src/components/ui/field/index.ts",
+      "runtime": true
+    },
+    {
+      "rule": "source-cycle",
+      "source": "frontend/packages/ui/src/components/ui/select/SelectContent.vue",
+      "target": "frontend/packages/ui/src/components/ui/select/SelectContent.vue -> frontend/packages/ui/src/components/ui/select/index.ts",
+      "runtime": true
+    },
+    {
+      "rule": "source-cycle",
+      "source": "frontend/packages/ui/src/components/ui/sidebar/Sidebar.vue",
+      "target": "frontend/packages/ui/src/components/ui/sidebar/Sidebar.vue -> frontend/packages/ui/src/components/ui/sidebar/SidebarMenuButton.vue -> frontend/packages/ui/src/components/ui/sidebar/SidebarMenuButtonChild.vue -> frontend/packages/ui/src/components/ui/sidebar/index.ts",
+      "runtime": true
+    },
+    {
+      "rule": "source-cycle",
+      "source": "frontend/packages/ui/src/components/ui/tabs/TabsList.vue",
+      "target": "frontend/packages/ui/src/components/ui/tabs/TabsList.vue -> frontend/packages/ui/src/components/ui/tabs/index.ts",
+      "runtime": true
+    }
+  ],
+  "implicitEdges": [],
+  "limitation": "Nuxt app auto-imports require freshly prepared declarations; server auto-imports and dynamic component expressions still require review."
+}

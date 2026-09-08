@@ -1,7 +1,7 @@
 import type { ManualReleaseState, RiskDecisionDetail, RiskDecisionSummary, RiskPolicy, RiskPolicyPatchBody, RiskSummary, TradingAccount } from '@aurum/contracts'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { Ref } from 'vue'
-import { useTradeSession } from '~/features/auth/session'
+import { useTradeSession } from '~/features/auth'
 import { tradingAccounts, tradingContext } from '~/features/home/home-runtime'
 import { riskApi } from '../api/risk-api'
 import { createRiskRealtime, type RiskChangeKind, type RiskRealtimeState } from '../realtime/risk-realtime'

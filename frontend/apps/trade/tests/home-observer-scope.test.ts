@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@aurum/api-client', async importOriginal => ({
   ...await importOriginal<typeof import('@aurum/api-client')>(), createApiClient: () => mocks.api,
 }))
-vi.mock('~/features/auth/session', () => ({
+vi.mock('~/features/auth', () => ({
   useTradeSession: () => ({ session: { value: { csrf_token: 'test-csrf', user: { id: '9' } } } }),
 }))
 vi.mock('../src/features/home/trading-realtime', () => ({

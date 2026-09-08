@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import type { TradingAccount } from '@aurum/contracts'
-import { useTradeSession } from '~/features/auth/session'
+import { useTradeSession } from '~/features/auth'
 import { auditApi } from '../api/audit-api'
 import { createAuditRealtime, type AuditRealtimeState } from '../realtime/audit-realtime'
 import { emptyAuditSummary, isAuditSourceKind, type AuditDetail, type AuditEvent, type AuditFilters, type AuditSummary } from '../model/audit-presentation'

@@ -1,6 +1,6 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch, type Ref } from 'vue'
 import type { TradeHistoryRecord, TradeHistorySummary, TradeRecordDetail, TradingAccount } from '@aurum/contracts'
-import { useTradeSession } from '~/features/auth/session'
+import { useTradeSession } from '~/features/auth'
 import { tradeHistoryApi } from '../api/trade-history-api'
 import { createTradeHistoryRealtime, type TradeHistoryRealtimeState } from '../realtime/trade-history-realtime'
 import type { TradeHistoryFilters } from '../model/trade-history-presentation'

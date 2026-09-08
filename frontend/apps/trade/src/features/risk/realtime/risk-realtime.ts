@@ -1,6 +1,7 @@
+import type { TradeSessionSnapshot } from '~/features/auth'
 import { createApiClient } from '@aurum/api-client'
 import { browserRealtimeEventSchema } from '@aurum/contracts'
-import type { SessionSummary } from '@aurum/contracts'
+
 import { connectRealtime } from '@aurum/realtime'
 
 const client = createApiClient()
@@ -10,7 +11,7 @@ export type RiskRealtimeState = 'idle' | 'connecting' | 'live' | 'recovering' | 
 export type RiskChangeKind = 'policy' | 'summary' | 'decision' | 'manual_release'
 
 export function createRiskRealtime(input: {
-  session: SessionSummary
+  session: TradeSessionSnapshot
   accountId: string
   onState: (state: RiskRealtimeState) => void
   onChanged: (kind: RiskChangeKind, resourceId: string) => void

@@ -1,6 +1,7 @@
+import type { TradeSessionSnapshot } from '~/features/auth'
 import { createApiClient } from '@aurum/api-client'
 import { inferenceRealtimeEventSchema } from '@aurum/contracts'
-import type { InferenceRealtimeEvent, SessionSummary } from '@aurum/contracts'
+import type { InferenceRealtimeEvent } from '@aurum/contracts'
 import { connectRealtime } from '@aurum/realtime'
 
 const client = createApiClient()
@@ -9,7 +10,7 @@ const delays = [1_000, 2_000, 5_000, 10_000, 20_000, 30_000] as const
 export type AnalystRealtimeState = 'idle' | 'connecting' | 'live' | 'recovering' | 'offline'
 
 export function createAnalystRealtime(input: {
-  session: SessionSummary
+  session: TradeSessionSnapshot
   onState: (state: AnalystRealtimeState) => void
   onEvent: (event: InferenceRealtimeEvent) => void
   resync: () => Promise<unknown>

@@ -1,6 +1,7 @@
+import type { TradeSessionSnapshot } from '~/features/auth'
 import { createApiClient } from '@aurum/api-client'
 import { reviewRealtimeEventSchema } from '@aurum/contracts'
-import type { ReviewRealtimeEvent, SessionSummary } from '@aurum/contracts'
+import type { ReviewRealtimeEvent } from '@aurum/contracts'
 import { connectRealtime } from '@aurum/realtime'
 
 const client = createApiClient()
@@ -14,7 +15,7 @@ export type ReviewerRealtimeState = 'idle' | 'connecting' | 'live' | 'recovering
  * affected list/detail, while reconnects resync before subscribing again.
  */
 export function createReviewerRealtime(input: {
-  session: SessionSummary
+  session: TradeSessionSnapshot
   onState: (state: ReviewerRealtimeState) => void
   onEvent: (event: ReviewRealtimeEvent) => void
   resync: () => Promise<unknown>

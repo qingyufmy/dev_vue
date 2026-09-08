@@ -1,6 +1,7 @@
+import type { TradeSessionSnapshot } from '~/features/auth'
 import { createApiClient } from '@aurum/api-client'
 import { accountMetricsUpdateSchema, browserRealtimeEventSchema, openPositionSchema, pendingOrderSchema } from '@aurum/contracts'
-import type { AccountMetricsUpdate, OpenPosition, PendingOrder, SessionSummary } from '@aurum/contracts'
+import type { AccountMetricsUpdate, OpenPosition, PendingOrder } from '@aurum/contracts'
 import { connectRealtime } from '@aurum/realtime'
 
 const client = createApiClient()
@@ -9,7 +10,7 @@ const reconnectDelays = [1_000, 2_000, 5_000, 10_000, 20_000, 30_000] as const
 export type TraderRealtimeState = 'idle' | 'connecting' | 'live' | 'recovering' | 'offline'
 
 export function createTraderRealtime(input: {
-  session: SessionSummary
+  session: TradeSessionSnapshot
   accountId: string
   observerChannelId: string | null
   positionsRevision: number

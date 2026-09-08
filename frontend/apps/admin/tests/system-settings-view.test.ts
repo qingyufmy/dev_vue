@@ -5,7 +5,7 @@ import SystemSettingsView from '../src/features/settings/SystemSettingsView.vue'
 import { settingChoices } from '../src/features/settings/setting-catalog'
 const mocks=vi.hoisted(()=>({get:vi.fn(),update:vi.fn()}))
 vi.mock('@aurum/api-client',async original=>({...await original<typeof import('@aurum/api-client')>(),createApiClient:()=>({getAdminSetting:mocks.get,updateAdminSetting:mocks.update})}))
-vi.mock('../src/features/auth/session',async()=>{const {ref}=await import('vue');return {useAdminSession:()=>({session:ref({user:{id:'1'},csrf_token:'csrf'})})}})
+vi.mock('../src/features/auth',async()=>{const {ref}=await import('vue');return {useAdminSession:()=>({session:ref({user:{id:'1'},csrf_token:'csrf'})})}})
 const meta={request_id:'r',generated_at:'2026-09-07T00:00:00.000Z'}
 const response={data:{setting_id:'1',namespace:'smtp',key:'port',value_type:'integer',sensitivity:'restricted',protected:false,value_state:'text',value:'465',revision:'1'},meta}
 async function fixture(){const router=createRouter({history:createMemoryHistory(),routes:[{path:'/',component:SystemSettingsView},{path:'/other',component:{template:'<p>other</p>'}}]});await router.push('/');await router.isReady();const wrapper=mount(RouterView,{global:{plugins:[router]}});await flushPromises();return {wrapper,router}}

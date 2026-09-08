@@ -8,7 +8,7 @@ import { Alert,AlertTitle,AlertDescription } from '@aurum/ui/alert'
 import { Label } from '@aurum/ui/label'
 import { Input } from '@aurum/ui/input'
 import { Select,SelectContent,SelectItem,SelectTrigger,SelectValue } from '@aurum/ui/select'
-import { useAdminSession } from '../auth/session'
+import { useAdminSession } from '../auth'
 import { createSettingEditorController } from './setting-editor-controller'
 import { settingChoices } from './setting-catalog'
 const {session}=useAdminSession()

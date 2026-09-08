@@ -1,11 +1,12 @@
+import type { TradeSessionSnapshot } from '~/features/auth'
 import { createApiClient } from '@aurum/api-client'
 import { browserRealtimeEventSchema } from '@aurum/contracts'
-import type { SessionSummary } from '@aurum/contracts'
+
 import { connectRealtime } from '@aurum/realtime'
 
 export type TradeHistoryRealtimeState = 'idle' | 'connecting' | 'live' | 'recovering' | 'offline'
 
-export function createTradeHistoryRealtime(input: { session: SessionSummary; accountId: string; onState: (state: TradeHistoryRealtimeState) => void; onChanged: () => void; resync: () => Promise<unknown> }) {
+export function createTradeHistoryRealtime(input: { session: TradeSessionSnapshot; accountId: string; onState: (state: TradeHistoryRealtimeState) => void; onChanged: () => void; resync: () => Promise<unknown> }) {
   const client = createApiClient(); let stopped = false; let socket: ReturnType<typeof connectRealtime> | null = null; let timer: number | null = null; let attempts = 0
   const stop = () => { stopped = true; if (timer !== null) clearTimeout(timer); socket?.close(1000, 'trade_history_page_left'); input.onState('idle') }
   const retry = () => { if (stopped || timer !== null) return; input.onState('offline'); timer = window.setTimeout(() => { timer = null; if (!stopped) void input.resync().finally(connect) }, Math.min(30_000, 1_000 * 2 ** Math.min(attempts++, 5))) }

@@ -8,7 +8,7 @@ import type {
   Operation,
 } from '@aurum/contracts'
 import { computed, ref } from 'vue'
-import { useTradeSession } from '~/features/auth/session'
+import { useTradeSession } from '~/features/auth'
 import { traderApi } from '../api/trader-api'
 
 export function useTraderCommands() {
