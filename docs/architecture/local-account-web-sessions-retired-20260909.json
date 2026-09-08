@@ -1,0 +1,380 @@
+{
+  "kind": "local-account-web-session-retirement/v1",
+  "mode": "--retire",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "userId": 31,
+  "scope": "Only the exact synthetic user web sessions and user-indexed realtime tickets; retain rows, account ownership, observer grants and all business history.",
+  "before": [
+    {
+      "id": "1",
+      "clientId": "auth",
+      "revokedAt": null,
+      "reason": null
+    },
+    {
+      "id": "10",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T18:22:33.525Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "11",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T18:26:58.500Z",
+      "reason": "local_browser_verification_cleanup"
+    },
+    {
+      "id": "12",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T18:25:40.312Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "13",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T18:38:02.291Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "14",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T18:38:02.284Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "15",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T18:54:49.597Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "16",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T18:54:49.590Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "17",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T18:56:28.402Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "18",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T18:56:28.396Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "19",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T19:03:34.722Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "2",
+      "clientId": "trade-web",
+      "revokedAt": null,
+      "reason": null
+    },
+    {
+      "id": "20",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T19:03:34.705Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "21",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T19:11:35.255Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "22",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T19:11:35.247Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "23",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T19:13:48.875Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "24",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T19:13:48.868Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "25",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T19:16:52.413Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "26",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T19:16:52.402Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "27",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T19:17:30.795Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "28",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T19:17:30.774Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "29",
+      "clientId": "auth",
+      "revokedAt": null,
+      "reason": null
+    },
+    {
+      "id": "3",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T16:13:56.493Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "30",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T20:02:36.935Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "4",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T16:13:56.484Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "5",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T17:52:59.490Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "6",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T17:52:59.481Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "7",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T17:58:12.123Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "8",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T17:58:12.115Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "9",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T18:22:33.537Z",
+      "reason": "logout_current_app"
+    }
+  ],
+  "ticketCountBefore": 0,
+  "observedAt": "2026-09-08T20:09:27.906Z",
+  "status": "verified",
+  "after": [
+    {
+      "id": "1",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T20:09:27.912Z",
+      "reason": "logout_all_web"
+    },
+    {
+      "id": "10",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T18:22:33.525Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "11",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T18:26:58.500Z",
+      "reason": "local_browser_verification_cleanup"
+    },
+    {
+      "id": "12",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T18:25:40.312Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "13",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T18:38:02.291Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "14",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T18:38:02.284Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "15",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T18:54:49.597Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "16",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T18:54:49.590Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "17",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T18:56:28.402Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "18",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T18:56:28.396Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "19",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T19:03:34.722Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "2",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T20:09:27.912Z",
+      "reason": "logout_all_web"
+    },
+    {
+      "id": "20",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T19:03:34.705Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "21",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T19:11:35.255Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "22",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T19:11:35.247Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "23",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T19:13:48.875Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "24",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T19:13:48.868Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "25",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T19:16:52.413Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "26",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T19:16:52.402Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "27",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T19:17:30.795Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "28",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T19:17:30.774Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "29",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T20:09:27.912Z",
+      "reason": "logout_all_web"
+    },
+    {
+      "id": "3",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T16:13:56.493Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "30",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T20:02:36.935Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "4",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T16:13:56.484Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "5",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T17:52:59.490Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "6",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T17:52:59.481Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "7",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T17:58:12.123Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "8",
+      "clientId": "trade-web",
+      "revokedAt": "2026-09-08T17:58:12.115Z",
+      "reason": "logout_current_app"
+    },
+    {
+      "id": "9",
+      "clientId": "auth",
+      "revokedAt": "2026-09-08T18:22:33.537Z",
+      "reason": "logout_current_app"
+    }
+  ],
+  "remainingUnrevoked": 0,
+  "ticketIndexRemoved": true
+}
