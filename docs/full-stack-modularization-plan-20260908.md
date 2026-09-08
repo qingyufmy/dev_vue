@@ -717,3 +717,12 @@ createMysqlInferenceRepository 从受限 composition 返回 InferenceRepository 
 22 项推理流程、窗口、偏好回归最终通过；HTTP 测试改用实际组装工厂后8项重跑通过。server 类型/构建、API 生成运行检查通过，321 个冻结输入不变。精确移除两项实现导出与三项内部依赖，债务 74→69，无新增或陈旧记录。SQL、任务事务、账户作用域和线上 HTTP 合同不变；未启动服务或连接数据库/模型。
 
 其余模型网关、用量、调度与恢复适配器出口，跨域数据归属及完整用户流程继续保留，整体 P0–P7 未完成。
+
+
+## 54. 分析调度与模型恢复组装（第一百二十四批）
+
+inference composition 新增 createMysqlAnalysisScheduler/createMysqlModelTaskRecovery，分别返回 tick/expireOverdue 能力，内部组装已有 MySQL 适配器。scheduler-analysis 入口保留轮询、用量恢复、健康记录与进程生命周期，业务 index 移除对应两个具体持久化实现导出。
+
+11 项分析调度查询/Worker 回归，server 类型/构建及 API 生成运行检查通过，321 个冻结输入一致。精确删除两项实现导出，债务 69→67，无新增或陈旧记录。调度时间窗、CAS 推进、任务租约与恢复 SQL 未修改，未启动调度器或连接数据库；本批不是实际过期任务恢复证明。
+
+模型调用与用量相关具体导出、其余域依赖、数据归属及完整流程仍待继续，整体 P0–P7 未完成。

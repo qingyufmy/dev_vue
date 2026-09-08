@@ -1,12 +1,11 @@
-import { createMysqlInferenceRepository } from '../modules/inference/composition.js'
+import { createMysqlInferenceRepository, createMysqlAnalysisScheduler, createMysqlModelTaskRecovery } from '../modules/inference/composition.js'
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import {
   assertV4RuntimeEnabled, AsyncPollLoop, closeHttpServer, createMysqlPool,
   installProcessLifecycle, loadServerEnvironment, loadV4RuntimeConfig, RoleHealth, startRoleHealthServer,
 } from '../bootstrap/index.js'
 import {
-  AnalysisScheduler, InferenceService, ModelTaskRecovery, MysqlAnalysisScheduleRepository,
-  MysqlModelTaskRecoveryRepository,
+  InferenceService,
   MysqlModelUsageLedger,
 } from '../modules/inference/index.js'
 import { createSubscriptionPreferencesReader, createMysqlStrategyService } from '../modules/strategies/composition.js'
@@ -22,12 +21,12 @@ async function main() {
   await pool.query('SELECT 1')
   const strategies = createMysqlStrategyService(pool)
   const trading = createTradingReader(pool)
-  const scheduler = new AnalysisScheduler(
-    new MysqlAnalysisScheduleRepository(pool),
+  const scheduler = createMysqlAnalysisScheduler(
+    pool,
     new InferenceService(createMysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader), strategies),
     (accountId, userId) => trading.getAccountSnapshot(accountId, userId),
   )
-  const recovery = new ModelTaskRecovery(new MysqlModelTaskRecoveryRepository(pool))
+  const recovery = createMysqlModelTaskRecovery(pool)
   const usage = new MysqlModelUsageLedger(pool)
   const loop = new AsyncPollLoop(async () => {
     try {

@@ -15,3 +15,6 @@ TradingAnalysisMarketSource 留在本域基础设施，不从业务 index 导出
 
 
 运行入口经 createMysqlInferenceRepository 获得应用持久化端口，必须注入账户时钟与偏好连接工厂。createInferenceHttp 组装路由及策略服务，模块持有 /api/v4 前缀，总注册器保留 trade Host 隔离。业务 index 不导出 MySQL repository 与路由；模型、调度、恢复及用量相关具体出口仍待清理。
+
+
+createMysqlAnalysisScheduler/createMysqlModelTaskRecovery 组装调度和恢复持久化，实现只留在基础设施层。调用方仅获得 tick/expireOverdue，仍拥有轮询和生命周期；工厂本身不发起查询、调度或恢复。相关定向回归为 analysis-schedule-query、analysis-scheduler-worker。

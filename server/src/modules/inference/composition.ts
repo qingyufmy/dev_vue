@@ -20,6 +20,19 @@ import type { StrategyService } from '../strategies/index.js'
 import { InferenceService } from './application/inference-service.js'
 import { MysqlInferenceRepository } from './infrastructure/mysql-inference-repository.js'
 import { inferenceRoutes, type InferenceRequestAuthenticator } from './transport/http/inference-routes.js'
+import { AnalysisScheduler } from './application/analysis-scheduler.js'
+import { ModelTaskRecovery } from './application/model-task-recovery.js'
+import { MysqlAnalysisScheduleRepository } from './infrastructure/mysql-analysis-schedule-repository.js'
+import { MysqlModelTaskRecoveryRepository } from './infrastructure/mysql-model-task-recovery-repository.js'
+
+export function createMysqlAnalysisScheduler(pool: Pool, service: InferenceService,
+  readClock: (accountId: string, userId: number) => Promise<SubscriptionWindowClock | null>): Pick<AnalysisScheduler, 'tick'> {
+  return new AnalysisScheduler(new MysqlAnalysisScheduleRepository(pool), service, readClock)
+}
+
+export function createMysqlModelTaskRecovery(pool: Pool): Pick<ModelTaskRecovery, 'expireOverdue'> {
+  return new ModelTaskRecovery(new MysqlModelTaskRecoveryRepository(pool))
+}
 
 export function createMysqlInferenceRepository(pool: Pool, clock: (connection: PoolConnection) => AccountClockReader,
   preferences: (connection: PoolConnection) => SubscriptionPreferencesReader): InferenceRepository {
