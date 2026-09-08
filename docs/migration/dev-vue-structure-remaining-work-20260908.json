@@ -1,0 +1,5877 @@
+{
+  "kind": "database-structure-remaining-work/v1",
+  "observedAt": "2026-09-08T01:03:01.852Z",
+  "identity": {
+    "database_name": "dev_vue",
+    "server_uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "mysql_version": "8.4.8",
+    "session_timezone": "+00:00",
+    "sql_mode": "IGNORE_SPACE,STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION"
+  },
+  "summary": {
+    "tables": 222,
+    "columns": 3275,
+    "indexes": 781,
+    "checks": 115,
+    "foreignKeys": 99,
+    "rows": "271412",
+    "originalTables": 165,
+    "addedTables": 57,
+    "missingOriginalTables": 0,
+    "missingOriginalColumns": 0,
+    "missingPlannedTables": 69,
+    "dependencyCandidates": 0,
+    "dependencyBlocked": 69,
+    "existingTargetColumnGaps": 6,
+    "targetTypeDifferences": 43
+  },
+  "inventorySha256": "6360f85cc10603a7c2d8c37c790b47c3ece0b4c2f19fa4bce3a9e62a9ff7fc40",
+  "catalogSha256": "30cde6b863eb982789d2b8c7636466e26125072944aae75cae7f3354daa7a430",
+  "verificationScope": "Application-account metadata only; empty routines/events/triggers do not prove privileged object absence.",
+  "databaseWrites": 0,
+  "schemaSteps": [
+    {
+      "id": "inplace_001_01_users_last_seen_at_utc",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_001_02_users_profile_revision",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_001_03_bridge_refresh_sessions_credential_version",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_001_04_bridge_refresh_sessions_installation_id",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_001_05_bridge_refresh_sessions_profile_id",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_001_06_bridge_refresh_sessions_generation",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_001_07_bridge_refresh_sessions_migration_key",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_001_08_bridge_refresh_sessions_source_fingerprint",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_001_09_bridge_refresh_sessions_source_refresh_session_id",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_002_01_auth_sessions",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_002_02_auth_authorization_codes",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_002_03_terminal_profiles",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_002_04_bridge_connection_capacity_grants",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_002_05_data_migration_runs",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_002_06_data_migration_checkpoints",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_002_07_data_migration_batches",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_002_08_data_migration_id_maps",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_002_09_data_migration_row_receipts",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_003_01_trading_accounts_v4_build",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_003_02_trading_account_ownership_intervals_v4_build",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_003_03_trading_account_ownerships_v4_build",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_003_04_user_trading_account_settings_v4_build",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_004_01_data_migration_source_rows",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_005_01_strategies",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_005_02_strategy_versions",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_005_03_strategy_active_version_fk",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_006_01_strategy_subscriptions_v4_build",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_006_02_subscription_schedules_v4_build",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_006_03_subscription_execution_preferences_v4_build",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_007_01_macro_data_sources",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_007_02_macro_feature_sets",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_007_03_economic_calendar_events",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_007_04_macro_model_versions",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_007_05_macro_series",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_007_06_macro_ingestion_runs",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_007_07_macro_pipeline_jobs",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_007_08_macro_research_snapshots",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_007_09_economic_calendar_event_revisions",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_007_10_macro_observations",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_007_11_macro_snapshot_observations",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_008_01_email_verified",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_008_02_phone_verified",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_008_03_auth_method",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_008_04_plan_period",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_008_05_changelog_seen_version",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_009_01_user_referral_accounts",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_010_01_referral_credit_ledger",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_011_01_payment_orders",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_012_01_payment_transactions",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_012_02_payment_matches",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_013_01_memberships",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_014_01_referral_rule_constraints",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_015_01_referral_rule_changes",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_016_01_payment_wallet_addresses",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_017_01_system_settings",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_017_02_system_setting_changes",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_017_03_system_settings_exact_tokens",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_018_01_system_setting_requests",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_019_01_learning_courses",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_019_02_learning_lessons",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_019_03_learning_media_references",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_019_04_learning_progress",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_020_01_learning_progress_changes",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_020_02_learning_request_key_preservation",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_021_01_ai_manual_analysis_cooldowns",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_021_02_outbox_events",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_021_03_global_risk_controls",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_021_04_strategy_memory_libraries_v4",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_021_05_strategy_memory_library_revisions_v4",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_021_06_strategy_memory_libraries_v4",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_021_07_strategy_memory_injection_logs_v4",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_021_08_trade_history_migration_checkpoints_v4",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_021_09_observer_management_registry",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_021_10_observer_management_operations",
+      "status": "completed"
+    },
+    {
+      "id": "inplace_021_11_bridge_v4_pairing_requests",
+      "status": "completed"
+    }
+  ],
+  "sourceCoverage": [
+    {
+      "name": "admin_position_close_jobs",
+      "present": true,
+      "domain": "10. 统一交易执行、分发和终端结果（15 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "admin_position_close_targets",
+      "present": true,
+      "domain": "10. 统一交易执行、分发和终端结果（15 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "admin_position_protection_jobs",
+      "present": true,
+      "domain": "10. 统一交易执行、分发和终端结果（15 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "admin_position_protection_targets",
+      "present": true,
+      "domain": "10. 统一交易执行、分发和终端结果（15 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "admin_strategy_pending_cancel_jobs",
+      "present": true,
+      "domain": "10. 统一交易执行、分发和终端结果（15 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "admin_strategy_pending_cancel_targets",
+      "present": true,
+      "domain": "10. 统一交易执行、分发和终端结果（15 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "admin_strategy_trade_dispatches",
+      "present": true,
+      "domain": "10. 统一交易执行、分发和终端结果（15 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "admin_strategy_trade_targets",
+      "present": true,
+      "domain": "10. 统一交易执行、分发和终端结果（15 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_configs",
+      "present": true,
+      "domain": "7. 策略、订阅、用户运行偏好与市场数据（12 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_feature_flags",
+      "present": true,
+      "domain": "3. 身份、认证、用户与系统配置（10 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_inference_preferences",
+      "present": true,
+      "domain": "7. 策略、订阅、用户运行偏好与市场数据（12 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_manual_analysis_jobs",
+      "present": true,
+      "domain": "9. AI 分析、信号和推理证据（7 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_market_benchmark_cases",
+      "present": true,
+      "domain": "9. AI 分析、信号和推理证据（7 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_market_benchmark_sets",
+      "present": true,
+      "domain": "9. AI 分析、信号和推理证据（7 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_model_capacity_leases",
+      "present": true,
+      "domain": "8. 模型配置、任务、配额与质量验证（15 张）",
+      "action": "归档",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_model_capacity_policies",
+      "present": true,
+      "domain": "8. 模型配置、任务、配额与质量验证（15 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_model_capacity_waiters",
+      "present": true,
+      "domain": "8. 模型配置、任务、配额与质量验证（15 张）",
+      "action": "归档",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_model_compare_checkpoints",
+      "present": true,
+      "domain": "8. 模型配置、任务、配额与质量验证（15 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_model_compare_jobs",
+      "present": true,
+      "domain": "8. 模型配置、任务、配额与质量验证（15 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_model_profiles",
+      "present": true,
+      "domain": "8. 模型配置、任务、配额与质量验证（15 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_model_provider_capabilities",
+      "present": true,
+      "domain": "8. 模型配置、任务、配额与质量验证（15 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_model_provider_incidents",
+      "present": true,
+      "domain": "8. 模型配置、任务、配额与质量验证（15 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_model_purpose_defaults",
+      "present": true,
+      "domain": "8. 模型配置、任务、配额与质量验证（15 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_model_task_attempts",
+      "present": true,
+      "domain": "8. 模型配置、任务、配额与质量验证（15 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_model_task_events",
+      "present": true,
+      "domain": "8. 模型配置、任务、配额与质量验证（15 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_model_tasks",
+      "present": true,
+      "domain": "8. 模型配置、任务、配额与质量验证（15 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_model_usage_logs",
+      "present": true,
+      "domain": "8. 模型配置、任务、配额与质量验证（15 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_observer_channel_assignments",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_observer_channels",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_observer_sources",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_position_management_commands",
+      "present": true,
+      "domain": "12. AI 持仓管理、保护规则与运行控制（12 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_position_management_evaluations",
+      "present": true,
+      "domain": "12. AI 持仓管理、保护规则与运行控制（12 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_position_management_events",
+      "present": true,
+      "domain": "12. AI 持仓管理、保护规则与运行控制（12 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_position_management_tasks",
+      "present": true,
+      "domain": "12. AI 持仓管理、保护规则与运行控制（12 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_signals",
+      "present": true,
+      "domain": "9. AI 分析、信号和推理证据（7 张）",
+      "action": "拆分",
+      "missingColumns": []
+    },
+    {
+      "name": "ai_trade_theses",
+      "present": true,
+      "domain": "9. AI 分析、信号和推理证据（7 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "audit_logs",
+      "present": true,
+      "domain": "3. 身份、认证、用户与系统配置（10 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "auto_prompt_types",
+      "present": true,
+      "domain": "7. 策略、订阅、用户运行偏好与市场数据（12 张）",
+      "action": "拆分",
+      "missingColumns": []
+    },
+    {
+      "name": "auto_scheduler",
+      "present": true,
+      "domain": "7. 策略、订阅、用户运行偏好与市场数据（12 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "auto_signal_deliveries",
+      "present": true,
+      "domain": "9. AI 分析、信号和推理证据（7 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "bridge_device_pairings",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "bridge_refresh_sessions",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "bridge_update_events",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "bridge_v3_account_latest",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "bridge_v3_command_events",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "bridge_v3_command_ledger",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "bridge_v3_deals",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "bridge_v3_orders_latest",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "bridge_v3_positions_latest",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "bridge_v3_stream_revisions",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "bridge_v3_terminal_sessions",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "拆分",
+      "missingColumns": []
+    },
+    {
+      "name": "broadcast_messages",
+      "present": true,
+      "domain": "3. 身份、认证、用户与系统配置（10 张）",
+      "action": "候选删除",
+      "missingColumns": []
+    },
+    {
+      "name": "chan_structure_anchors",
+      "present": true,
+      "domain": "7. 策略、订阅、用户运行偏好与市场数据（12 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "close_config",
+      "present": true,
+      "domain": "7. 策略、订阅、用户运行偏好与市场数据（12 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "close_signal_tickets",
+      "present": true,
+      "domain": "10. 统一交易执行、分发和终端结果（15 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "comment_likes",
+      "present": true,
+      "domain": "4. 内容、课程、社区、文件与反馈（15 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "comments",
+      "present": true,
+      "domain": "4. 内容、课程、社区、文件与反馈（15 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "course_resources",
+      "present": true,
+      "domain": "4. 内容、课程、社区、文件与反馈（15 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "courses",
+      "present": true,
+      "domain": "4. 内容、课程、社区、文件与反馈（15 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "credential_migration_runs",
+      "present": true,
+      "domain": "3. 身份、认证、用户与系统配置（10 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "crypto_watch_list",
+      "present": true,
+      "domain": "5. 商业、支付、会员、返佣与通知（11 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "experience_long_term_memories",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "experience_memory_items",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "experience_memory_summaries",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "feedback",
+      "present": true,
+      "domain": "4. 内容、课程、社区、文件与反馈（15 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "global_auto_config",
+      "present": true,
+      "domain": "7. 策略、订阅、用户运行偏好与市场数据（12 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "global_position_guard_control",
+      "present": true,
+      "domain": "12. AI 持仓管理、保护规则与运行控制（12 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "global_position_management_control",
+      "present": true,
+      "domain": "12. AI 持仓管理、保护规则与运行控制（12 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "global_risk_control",
+      "present": true,
+      "domain": "11. 风控政策、决策和账户状态（8 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "history_range_preferences",
+      "present": true,
+      "domain": "7. 策略、订阅、用户运行偏好与市场数据（12 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "inference_snapshots",
+      "present": true,
+      "domain": "9. AI 分析、信号和推理证据（7 张）",
+      "action": "拆分",
+      "missingColumns": []
+    },
+    {
+      "name": "manual_trade_review_aggregate_cases",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "manual_trade_review_aggregate_sources",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "manual_trade_review_aggregate_versions",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "manual_trade_review_cases",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "manual_trade_review_counterfactual_points",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "manual_trade_review_jobs",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "manual_trade_review_sources",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "manual_trade_review_stage_runs",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "manual_trade_review_versions",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "market_candles",
+      "present": true,
+      "domain": "7. 策略、订阅、用户运行偏好与市场数据（12 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "market_clock_samples",
+      "present": true,
+      "domain": "7. 策略、订阅、用户运行偏好与市场数据（12 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "market_data_sources",
+      "present": true,
+      "domain": "7. 策略、订阅、用户运行偏好与市场数据（12 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "membership_expiry_notifications",
+      "present": true,
+      "domain": "5. 商业、支付、会员、返佣与通知（11 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "memory_compression_jobs",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "memory_injection_logs",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "mt5_account_bindings",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "mt5_account_ownership_history",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "mt5_account_performance_daily",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "mt5_account_performance_sync_state",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "mt5_account_performance_totals",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "notification_campaigns",
+      "present": true,
+      "domain": "5. 商业、支付、会员、返佣与通知（11 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "notification_deliveries",
+      "present": true,
+      "domain": "5. 商业、支付、会员、返佣与通知（11 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "notification_idempotency_keys",
+      "present": true,
+      "domain": "5. 商业、支付、会员、返佣与通知（11 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "notifications",
+      "present": true,
+      "domain": "5. 商业、支付、会员、返佣与通知（11 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "order_intents",
+      "present": true,
+      "domain": "10. 统一交易执行、分发和终端结果（15 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "orders",
+      "present": true,
+      "domain": "5. 商业、支付、会员、返佣与通知（11 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "payment_side_effects",
+      "present": true,
+      "domain": "5. 商业、支付、会员、返佣与通知（11 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "pending_orders",
+      "present": true,
+      "domain": "10. 统一交易执行、分发和终端结果（15 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "period_review_cases",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "period_review_derivation_jobs",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "period_review_job_events",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "period_review_jobs",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "拆分",
+      "missingColumns": []
+    },
+    {
+      "name": "period_review_monthly_checkpoints",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "拆分",
+      "missingColumns": []
+    },
+    {
+      "name": "period_review_sources",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "period_review_user_states",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "period_review_versions",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "platform_model_usage_policy",
+      "present": true,
+      "domain": "8. 模型配置、任务、配额与质量验证（15 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "platform_strategy_experience_items",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "platform_strategy_experience_logs",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "platform_strategy_experience_policies",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "position_guard_position_states",
+      "present": true,
+      "domain": "12. AI 持仓管理、保护规则与运行控制（12 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "position_guard_profile_versions",
+      "present": true,
+      "domain": "12. AI 持仓管理、保护规则与运行控制（12 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "position_guard_profiles",
+      "present": true,
+      "domain": "12. AI 持仓管理、保护规则与运行控制（12 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "position_management_account_rollouts",
+      "present": true,
+      "domain": "12. AI 持仓管理、保护规则与运行控制（12 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "post_assets",
+      "present": true,
+      "domain": "4. 内容、课程、社区、文件与反馈（15 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "post_replies",
+      "present": true,
+      "domain": "4. 内容、课程、社区、文件与反馈（15 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "post_reports",
+      "present": true,
+      "domain": "4. 内容、课程、社区、文件与反馈（15 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "post_tags",
+      "present": true,
+      "domain": "4. 内容、课程、社区、文件与反馈（15 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "posts",
+      "present": true,
+      "domain": "4. 内容、课程、社区、文件与反馈（15 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "progress",
+      "present": true,
+      "domain": "4. 内容、课程、社区、文件与反馈（15 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "quiz_questions",
+      "present": true,
+      "domain": "4. 内容、课程、社区、文件与反馈（15 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "referral_rules",
+      "present": true,
+      "domain": "5. 商业、支付、会员、返佣与通知（11 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "referrals",
+      "present": true,
+      "domain": "5. 商业、支付、会员、返佣与通知（11 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "risk_account_state",
+      "present": true,
+      "domain": "11. 风控政策、决策和账户状态（8 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "risk_decisions",
+      "present": true,
+      "domain": "11. 风控政策、决策和账户状态（8 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "risk_policy_change_items",
+      "present": true,
+      "domain": "11. 风控政策、决策和账户状态（8 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "risk_policy_sets",
+      "present": true,
+      "domain": "11. 风控政策、决策和账户状态（8 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "risk_policy_versions",
+      "present": true,
+      "domain": "11. 风控政策、决策和账户状态（8 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "risk_profiles",
+      "present": true,
+      "domain": "11. 风控政策、决策和账户状态（8 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "risk_reservations",
+      "present": true,
+      "domain": "10. 统一交易执行、分发和终端结果（15 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "risk_rule_rollouts",
+      "present": true,
+      "domain": "11. 风控政策、决策和账户状态（8 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "schema_migrations",
+      "present": true,
+      "domain": "3. 身份、认证、用户与系统配置（10 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "signal_outcome_deals",
+      "present": true,
+      "domain": "10. 统一交易执行、分发和终端结果（15 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "signal_outcomes",
+      "present": true,
+      "domain": "10. 统一交易执行、分发和终端结果（15 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "storage_upload_sessions",
+      "present": true,
+      "domain": "4. 内容、课程、社区、文件与反馈（15 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "stored_files",
+      "present": true,
+      "domain": "4. 内容、课程、社区、文件与反馈（15 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "strategy_memory_compression_jobs",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "strategy_memory_conflict_bindings",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "strategy_memory_conflict_occurrences",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "strategy_memory_conflicts",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "strategy_memory_consistency_jobs",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "拆分",
+      "missingColumns": []
+    },
+    {
+      "name": "strategy_memory_injection_logs",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "strategy_memory_libraries",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "拆分",
+      "missingColumns": []
+    },
+    {
+      "name": "strategy_memory_library_revisions",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "strategy_memory_pending_updates",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "strategy_subscriptions",
+      "present": true,
+      "domain": "7. 策略、订阅、用户运行偏好与市场数据（12 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "system_config",
+      "present": true,
+      "domain": "3. 身份、认证、用户与系统配置（10 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "system_prompts",
+      "present": true,
+      "domain": "3. 身份、认证、用户与系统配置（10 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "trade_audit_logs",
+      "present": true,
+      "domain": "10. 统一交易执行、分发和终端结果（15 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "trade_review_cases",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "trade_review_jobs",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "trade_review_versions",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "保留",
+      "missingColumns": []
+    },
+    {
+      "name": "trades",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "trading_accounts",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "user_bridge_settings",
+      "present": true,
+      "domain": "6. Bridge、终端、交易账户与行情读模型（21 张）",
+      "action": "拆分",
+      "missingColumns": []
+    },
+    {
+      "name": "user_memory_settings",
+      "present": true,
+      "domain": "13. 交易记录、复盘、经验与策略记忆（39 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "user_model_defaults",
+      "present": true,
+      "domain": "8. 模型配置、任务、配额与质量验证（15 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "user_notices",
+      "present": true,
+      "domain": "3. 身份、认证、用户与系统配置（10 张）",
+      "action": "候选删除",
+      "missingColumns": []
+    },
+    {
+      "name": "user_position_guard_settings",
+      "present": true,
+      "domain": "12. AI 持仓管理、保护规则与运行控制（12 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "user_position_management_settings",
+      "present": true,
+      "domain": "12. AI 持仓管理、保护规则与运行控制（12 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "users",
+      "present": true,
+      "domain": "3. 身份、认证、用户与系统配置（10 张）",
+      "action": "拆分",
+      "missingColumns": []
+    },
+    {
+      "name": "verification_codes",
+      "present": true,
+      "domain": "3. 身份、认证、用户与系统配置（10 张）",
+      "action": "重塑",
+      "missingColumns": []
+    },
+    {
+      "name": "video_streams",
+      "present": true,
+      "domain": "4. 内容、课程、社区、文件与反馈（15 张）",
+      "action": "合并",
+      "missingColumns": []
+    },
+    {
+      "name": "wallet_keys",
+      "present": true,
+      "domain": "5. 商业、支付、会员、返佣与通知（11 张）",
+      "action": "重塑",
+      "missingColumns": []
+    }
+  ],
+  "missingTables": [
+    {
+      "name": "trading_account_ownerships",
+      "statements": [
+        {
+          "migration": "20260903_003_trading_context_and_market_projection",
+          "checksum": "08dbece7f84f47d2d45ce751635e58d251e9252fcff0d82c1405136b6dfee93e",
+          "statementIndex": 1,
+          "sqlSha256": "aa1fa0ace5e79e448cab5c49015a0b589d2cee3c83a16b4625452b853cb262c1"
+        },
+        {
+          "migration": "20260905_019_account_ownership_intervals",
+          "checksum": "3b17b685274b0eb1fe225305fea9de673fea60cc81c629dc8477a73913a48a1a",
+          "statementIndex": 2,
+          "sqlSha256": "086500801f263b6a9b9b01e1ea75caa2962ee65cdc7af92772941f12845749c1"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_account_owners_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_account_owners_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_account_owners_interval",
+          "columns": [
+            "interval_id",
+            "user_id",
+            "trading_account_id",
+            "role"
+          ],
+          "parent": "trading_account_ownership_intervals",
+          "parentColumns": [
+            "id",
+            "user_id",
+            "trading_account_id",
+            "role"
+          ],
+          "phase": "alter"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_account_owners_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "terminal_account_bindings",
+      "statements": [
+        {
+          "migration": "20260903_003_trading_context_and_market_projection",
+          "checksum": "08dbece7f84f47d2d45ce751635e58d251e9252fcff0d82c1405136b6dfee93e",
+          "statementIndex": 3,
+          "sqlSha256": "b43c934d08eff151ce02adc8264b0fd7e8f1f77ead2852553bddef5e6a6867d6"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_terminal_bindings_profile",
+          "columns": [
+            "terminal_profile_id"
+          ],
+          "parent": "terminal_profiles",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_terminal_bindings_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_terminal_bindings_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "bridge_connection_sessions",
+      "statements": [
+        {
+          "migration": "20260903_003_trading_context_and_market_projection",
+          "checksum": "08dbece7f84f47d2d45ce751635e58d251e9252fcff0d82c1405136b6dfee93e",
+          "statementIndex": 5,
+          "sqlSha256": "160fd1b144ccb66f03f3b2bd19fde3533562bc853da2fef4e244465c2c3c00e3"
+        },
+        {
+          "migration": "20260903_010_bridge_v4_command_ledger",
+          "checksum": "6de803b91617807c57cf545a326c3877b2a2c1e4242652c1f11dc24deceb07d1",
+          "statementIndex": 0,
+          "sqlSha256": "bf20b982b6518474104e9eba0a878c7b760633ebbe5436a997c82bfe50788d9c"
+        },
+        {
+          "migration": "20260906_023_bridge_profile_epoch_scope",
+          "checksum": "ea314526bb0bbbf1f5fd427ecfc71ea5b97a1997b434348c37e283e9ae82ed4a",
+          "statementIndex": 0,
+          "sqlSha256": "663d99b2201c74344901a4825ab3a0465662fb0f40f7de3ccfc1e4707ec296e8"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_bridge_sessions_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_bridge_sessions_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_bridge_sessions_profile",
+          "columns": [
+            "terminal_profile_id"
+          ],
+          "parent": "terminal_profiles",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_bridge_sessions_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "observer_channels",
+      "statements": [
+        {
+          "migration": "20260903_003_trading_context_and_market_projection",
+          "checksum": "08dbece7f84f47d2d45ce751635e58d251e9252fcff0d82c1405136b6dfee93e",
+          "statementIndex": 6,
+          "sqlSha256": "ee1fc232da26d0645f890eb0205a866a8109dae77d73540e7d9ac2d60430b356"
+        },
+        {
+          "migration": "20260905_021_observer_sources_and_audiences",
+          "checksum": "aed263e66171f336d7750bbdfa565c03ae8e82f6f69521483a022ec0a3e687d2",
+          "statementIndex": 1,
+          "sqlSha256": "3e04402be57260fbcd88aca92da70b0e4bcd03e65cc1d15c426343e3e31a05f6"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_observer_channel_account",
+          "columns": [
+            "source_trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_observer_channel_creator",
+          "columns": [
+            "created_by_user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_observer_channel_source",
+          "columns": [
+            "source_id"
+          ],
+          "parent": "observer_sources",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "alter"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_observer_channel_account",
+          "column": "source_trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "observer_channel_accesses",
+      "statements": [
+        {
+          "migration": "20260903_003_trading_context_and_market_projection",
+          "checksum": "08dbece7f84f47d2d45ce751635e58d251e9252fcff0d82c1405136b6dfee93e",
+          "statementIndex": 7,
+          "sqlSha256": "630869b2fe5d148097805c9f9d213426e5b2ccf2052b9807652dc7395d3b7f75"
+        },
+        {
+          "migration": "20260905_021_observer_sources_and_audiences",
+          "checksum": "aed263e66171f336d7750bbdfa565c03ae8e82f6f69521483a022ec0a3e687d2",
+          "statementIndex": 2,
+          "sqlSha256": "319bc949e80ff3075ba98be8772149043f620d06fcc9d91230bfca2b9193f084"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_observer_access_channel",
+          "columns": [
+            "observer_channel_id"
+          ],
+          "parent": "observer_channels",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_observer_access_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_observer_access_granter",
+          "columns": [
+            "granted_by_user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "alter"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "observer_channels"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "trading_contexts",
+      "statements": [
+        {
+          "migration": "20260903_003_trading_context_and_market_projection",
+          "checksum": "08dbece7f84f47d2d45ce751635e58d251e9252fcff0d82c1405136b6dfee93e",
+          "statementIndex": 8,
+          "sqlSha256": "224e59ec063f9abe664d1416fff95c4411c8e78a1361c4650129a52dcdd61d17"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_trading_context_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_trading_context_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_trading_context_observer",
+          "columns": [
+            "observer_channel_id"
+          ],
+          "parent": "observer_channels",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_trading_context_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        },
+        {
+          "code": "blocked_parent",
+          "parent": "observer_channels"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "account_runtime_snapshots",
+      "statements": [
+        {
+          "migration": "20260903_003_trading_context_and_market_projection",
+          "checksum": "08dbece7f84f47d2d45ce751635e58d251e9252fcff0d82c1405136b6dfee93e",
+          "statementIndex": 9,
+          "sqlSha256": "9162047cd36b24a521792c36c286d74cc2853e31d3cd22df35b4c39de788a40e"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_account_snapshot_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_account_snapshot_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "market_quotes",
+      "statements": [
+        {
+          "migration": "20260903_003_trading_context_and_market_projection",
+          "checksum": "08dbece7f84f47d2d45ce751635e58d251e9252fcff0d82c1405136b6dfee93e",
+          "statementIndex": 10,
+          "sqlSha256": "502dbae0afc757af457a379c3e7acbed70a3b989a996706ee18136741634f1c5"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_market_quotes_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_market_quotes_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "open_position_snapshots",
+      "statements": [
+        {
+          "migration": "20260903_003_trading_context_and_market_projection",
+          "checksum": "08dbece7f84f47d2d45ce751635e58d251e9252fcff0d82c1405136b6dfee93e",
+          "statementIndex": 12,
+          "sqlSha256": "2c403529f1faa83aa81c145693d0ba7db5e19b93e6907ab8754981775aed6440"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_open_positions_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_open_positions_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "pending_order_snapshots",
+      "statements": [
+        {
+          "migration": "20260903_003_trading_context_and_market_projection",
+          "checksum": "08dbece7f84f47d2d45ce751635e58d251e9252fcff0d82c1405136b6dfee93e",
+          "statementIndex": 13,
+          "sqlSha256": "2f3e6396825a7500be9bbe766def72f72295ccb957df48f316cbd7d4d3ce1958"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_pending_orders_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_pending_orders_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "trading_projection_revisions",
+      "statements": [
+        {
+          "migration": "20260903_003_trading_context_and_market_projection",
+          "checksum": "08dbece7f84f47d2d45ce751635e58d251e9252fcff0d82c1405136b6dfee93e",
+          "statementIndex": 14,
+          "sqlSha256": "5d63c855525903338c43994dc1e39af364c9409aa6d7aa314c2ee5648f98604d"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_projection_revisions_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_projection_revisions_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "subscription_schedules",
+      "statements": [
+        {
+          "migration": "20260903_004_ai_strategy_and_inference_core",
+          "checksum": "b5252c385357b9cccec2513a6d3f17634f8a73f194818420de88ed76b0790960",
+          "statementIndex": 4,
+          "sqlSha256": "2e9d278d1f7215c8ba2eb0334611edeb464fb5d97b358b9685eba712d7a45b9e"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_subscription_schedules_subscription",
+          "columns": [
+            "subscription_id"
+          ],
+          "parent": "strategy_subscriptions",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_subscription_schedules_subscription",
+          "column": "subscription_id",
+          "parent": "strategy_subscriptions.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "inference_snapshot_payloads",
+      "statements": [
+        {
+          "migration": "20260903_004_ai_strategy_and_inference_core",
+          "checksum": "b5252c385357b9cccec2513a6d3f17634f8a73f194818420de88ed76b0790960",
+          "statementIndex": 6,
+          "sqlSha256": "12b6ecdf9fdc7268722c1aaf506f3421de4d411294ff84dbf1f7ede2b0057c10"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_inference_snapshot_payload",
+          "columns": [
+            "snapshot_id"
+          ],
+          "parent": "inference_snapshots",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_inference_snapshot_payload",
+          "column": "snapshot_id",
+          "parent": "inference_snapshots.id",
+          "expectedType": "char(36)",
+          "actualType": "bigint",
+          "expectedCollation": "ascii_bin",
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "ai_model_attempts",
+      "statements": [
+        {
+          "migration": "20260903_004_ai_strategy_and_inference_core",
+          "checksum": "b5252c385357b9cccec2513a6d3f17634f8a73f194818420de88ed76b0790960",
+          "statementIndex": 8,
+          "sqlSha256": "f501933e5cceef955f763aefe72946c14cf32ca014d291501b3505dea1404464"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_ai_model_attempts_task",
+          "columns": [
+            "task_id"
+          ],
+          "parent": "ai_model_tasks",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "referenced_column_missing_or_unsupported",
+          "constraint": "fk_ai_model_attempts_task",
+          "column": "task_id",
+          "parent": "ai_model_tasks.id",
+          "expectedType": "char(36)",
+          "actualType": null,
+          "expectedCollation": "ascii_bin",
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "ai_analysis_runs",
+      "statements": [
+        {
+          "migration": "20260903_004_ai_strategy_and_inference_core",
+          "checksum": "b5252c385357b9cccec2513a6d3f17634f8a73f194818420de88ed76b0790960",
+          "statementIndex": 9,
+          "sqlSha256": "811618a521b684c3c9d3db590f66f764c3e722c0c09b038f34b555c2d60fbcf9"
+        },
+        {
+          "migration": "20260903_005_analysis_scheduler_and_account_fanout",
+          "checksum": "a256f46c3e6f5592f5b2c7563f471f3b425b405610e72b64586bc5f1e00c5b16",
+          "statementIndex": 3,
+          "sqlSha256": "c9faebdc5fa516bb42d5d3720e2f4da14ac107fc8846f2e71da3db3151d67cbc"
+        },
+        {
+          "migration": "20260904_014_audit_read_indexes",
+          "checksum": "1621ab0b05f3d84c416220e84683b4a6de2ecc9c4b2e1aa6f7e56c364b62db23",
+          "statementIndex": 1,
+          "sqlSha256": "2176453f4df99a2cca322cd32d070f6204759e7c8b7a73cba7dac3e3883aa29a"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_ai_analysis_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_ai_analysis_strategy",
+          "columns": [
+            "strategy_id"
+          ],
+          "parent": "strategies",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_ai_analysis_strategy_version",
+          "columns": [
+            "strategy_version_id",
+            "strategy_id"
+          ],
+          "parent": "strategy_versions",
+          "parentColumns": [
+            "id",
+            "strategy_id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_ai_analysis_snapshot",
+          "columns": [
+            "input_snapshot_id"
+          ],
+          "parent": "inference_snapshots",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_ai_analysis_model_task",
+          "columns": [
+            "model_task_id"
+          ],
+          "parent": "ai_model_tasks",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_ai_analysis_source_account",
+          "columns": [
+            "market_source_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "alter"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_ai_analysis_snapshot",
+          "column": "input_snapshot_id",
+          "parent": "inference_snapshots.id",
+          "expectedType": "char(36)",
+          "actualType": "bigint",
+          "expectedCollation": "ascii_bin",
+          "parentCollation": null
+        },
+        {
+          "code": "referenced_column_missing_or_unsupported",
+          "constraint": "fk_ai_analysis_model_task",
+          "column": "model_task_id",
+          "parent": "ai_model_tasks.id",
+          "expectedType": "char(36)",
+          "actualType": null,
+          "expectedCollation": "ascii_bin",
+          "parentCollation": null
+        },
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_ai_analysis_source_account",
+          "column": "market_source_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "market_analyses",
+      "statements": [
+        {
+          "migration": "20260903_004_ai_strategy_and_inference_core",
+          "checksum": "b5252c385357b9cccec2513a6d3f17634f8a73f194818420de88ed76b0790960",
+          "statementIndex": 11,
+          "sqlSha256": "3ccb10a4aaf0b161760ee8c8749661c00572c4ba2da303c2da56b994eb1debfe"
+        },
+        {
+          "migration": "20260903_005_analysis_scheduler_and_account_fanout",
+          "checksum": "a256f46c3e6f5592f5b2c7563f471f3b425b405610e72b64586bc5f1e00c5b16",
+          "statementIndex": 0,
+          "sqlSha256": "bd3a0f43bc368fdc7c36c068bf21c548c76e6a7d6a9a82d938034f9abe05fa01"
+        },
+        {
+          "migration": "20260903_005_analysis_scheduler_and_account_fanout",
+          "checksum": "a256f46c3e6f5592f5b2c7563f471f3b425b405610e72b64586bc5f1e00c5b16",
+          "statementIndex": 2,
+          "sqlSha256": "b56592991b582a75e44a5876c114aa4bade281e522428ddda74387972fe3120a"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_market_analyses_run",
+          "columns": [
+            "analysis_run_id"
+          ],
+          "parent": "ai_analysis_runs",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_market_analyses_owner",
+          "columns": [
+            "owner_user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_market_analyses_strategy",
+          "columns": [
+            "strategy_id"
+          ],
+          "parent": "strategies",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_market_analyses_strategy_version",
+          "columns": [
+            "strategy_version_id",
+            "strategy_id"
+          ],
+          "parent": "strategy_versions",
+          "parentColumns": [
+            "id",
+            "strategy_id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_market_analyses_snapshot",
+          "columns": [
+            "input_snapshot_id"
+          ],
+          "parent": "inference_snapshots",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_market_analyses_snapshot",
+          "column": "input_snapshot_id",
+          "parent": "inference_snapshots.id",
+          "expectedType": "char(36)",
+          "actualType": "bigint",
+          "expectedCollation": "ascii_bin",
+          "parentCollation": null
+        },
+        {
+          "code": "blocked_parent",
+          "parent": "ai_analysis_runs"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "market_analysis_payloads",
+      "statements": [
+        {
+          "migration": "20260903_004_ai_strategy_and_inference_core",
+          "checksum": "b5252c385357b9cccec2513a6d3f17634f8a73f194818420de88ed76b0790960",
+          "statementIndex": 12,
+          "sqlSha256": "e03ac62b334ac7ba79db1140664a941321825555e576ee93ec35801674f46be8"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_market_analysis_payload",
+          "columns": [
+            "market_analysis_id"
+          ],
+          "parent": "market_analyses",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "market_analyses"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "ai_trader_runs",
+      "statements": [
+        {
+          "migration": "20260903_004_ai_strategy_and_inference_core",
+          "checksum": "b5252c385357b9cccec2513a6d3f17634f8a73f194818420de88ed76b0790960",
+          "statementIndex": 13,
+          "sqlSha256": "faea8a720235a79137c6476fcbc1f638364ce1656ad1b4416f3f19c3d9a4e180"
+        },
+        {
+          "migration": "20260903_005_analysis_scheduler_and_account_fanout",
+          "checksum": "a256f46c3e6f5592f5b2c7563f471f3b425b405610e72b64586bc5f1e00c5b16",
+          "statementIndex": 5,
+          "sqlSha256": "42643c8104b36289472c6879df4b27c456edd34136c2f3380efe82d5da9e46a6"
+        },
+        {
+          "migration": "20260903_006_account_trader_worker",
+          "checksum": "eac86099de26cef5948bc71464269579b0a466f07ea37fa21dc64538baa9dda8",
+          "statementIndex": 2,
+          "sqlSha256": "85fff1324841fef896b2093ac481b97846dd6f4e4eccd91d25020a14ab516642"
+        },
+        {
+          "migration": "20260904_014_audit_read_indexes",
+          "checksum": "1621ab0b05f3d84c416220e84683b4a6de2ecc9c4b2e1aa6f7e56c364b62db23",
+          "statementIndex": 0,
+          "sqlSha256": "d138f6912b06cbc7db731570702c1c79711b41065bc37b7572feb4158ef8ee1a"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_ai_trader_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_ai_trader_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_ai_trader_subscription",
+          "columns": [
+            "subscription_id"
+          ],
+          "parent": "strategy_subscriptions",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_ai_trader_analysis",
+          "columns": [
+            "market_analysis_id"
+          ],
+          "parent": "market_analyses",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_ai_trader_strategy",
+          "columns": [
+            "strategy_id"
+          ],
+          "parent": "strategies",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_ai_trader_strategy_version",
+          "columns": [
+            "strategy_version_id",
+            "strategy_id"
+          ],
+          "parent": "strategy_versions",
+          "parentColumns": [
+            "id",
+            "strategy_id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_ai_trader_snapshot",
+          "columns": [
+            "input_snapshot_id"
+          ],
+          "parent": "inference_snapshots",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_ai_trader_model_task",
+          "columns": [
+            "model_task_id"
+          ],
+          "parent": "ai_model_tasks",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_ai_trader_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        },
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_ai_trader_subscription",
+          "column": "subscription_id",
+          "parent": "strategy_subscriptions.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        },
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_ai_trader_snapshot",
+          "column": "input_snapshot_id",
+          "parent": "inference_snapshots.id",
+          "expectedType": "char(36)",
+          "actualType": "bigint",
+          "expectedCollation": "ascii_bin",
+          "parentCollation": null
+        },
+        {
+          "code": "referenced_column_missing_or_unsupported",
+          "constraint": "fk_ai_trader_model_task",
+          "column": "model_task_id",
+          "parent": "ai_model_tasks.id",
+          "expectedType": "char(36)",
+          "actualType": null,
+          "expectedCollation": "ascii_bin",
+          "parentCollation": null
+        },
+        {
+          "code": "blocked_parent",
+          "parent": "market_analyses"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "trade_decisions",
+      "statements": [
+        {
+          "migration": "20260903_004_ai_strategy_and_inference_core",
+          "checksum": "b5252c385357b9cccec2513a6d3f17634f8a73f194818420de88ed76b0790960",
+          "statementIndex": 14,
+          "sqlSha256": "30c6ef70c6a58b1d045be33a301b44714e30adda695aad120b05dc4253b0ea4d"
+        },
+        {
+          "migration": "20260903_006_account_trader_worker",
+          "checksum": "eac86099de26cef5948bc71464269579b0a466f07ea37fa21dc64538baa9dda8",
+          "statementIndex": 3,
+          "sqlSha256": "848a5c82e32e7b6ee90eb142c79d57040a8f3d80c4a00616b2abda95275bc3dc"
+        },
+        {
+          "migration": "20260903_007_deterministic_risk_review",
+          "checksum": "ed697bb67c7c87d389575f00462a961011cd45d115287cc018bf6e40fbef7d3e",
+          "statementIndex": 15,
+          "sqlSha256": "2e2a864bd79bcb2c5af3ed5167ecebffc32f0a78c6840edf5eed9a7d7988dbc3"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_trade_decisions_run",
+          "columns": [
+            "trader_run_id"
+          ],
+          "parent": "ai_trader_runs",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_trade_decisions_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_trade_decisions_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_trade_decisions_analysis",
+          "columns": [
+            "market_analysis_id"
+          ],
+          "parent": "market_analyses",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_trade_decisions_strategy",
+          "columns": [
+            "strategy_id"
+          ],
+          "parent": "strategies",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_trade_decisions_strategy_version",
+          "columns": [
+            "strategy_version_id",
+            "strategy_id"
+          ],
+          "parent": "strategy_versions",
+          "parentColumns": [
+            "id",
+            "strategy_id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_trade_decisions_snapshot",
+          "columns": [
+            "input_snapshot_id"
+          ],
+          "parent": "inference_snapshots",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_trade_decision_risk",
+          "columns": [
+            "risk_decision_id"
+          ],
+          "parent": "risk_decisions_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "alter"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_trade_decisions_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        },
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_trade_decisions_snapshot",
+          "column": "input_snapshot_id",
+          "parent": "inference_snapshots.id",
+          "expectedType": "char(36)",
+          "actualType": "bigint",
+          "expectedCollation": "ascii_bin",
+          "parentCollation": null
+        },
+        {
+          "code": "blocked_parent",
+          "parent": "ai_trader_runs"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "trade_decision_payloads",
+      "statements": [
+        {
+          "migration": "20260903_004_ai_strategy_and_inference_core",
+          "checksum": "b5252c385357b9cccec2513a6d3f17634f8a73f194818420de88ed76b0790960",
+          "statementIndex": 15,
+          "sqlSha256": "43a276d92d822dd2474f1643c2ecc5c75add339c27f744ced344f11c004a6e27"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_trade_decision_payload",
+          "columns": [
+            "trade_decision_id"
+          ],
+          "parent": "trade_decisions",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "trade_decisions"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "market_instrument_snapshots",
+      "statements": [
+        {
+          "migration": "20260903_006_account_trader_worker",
+          "checksum": "eac86099de26cef5948bc71464269579b0a466f07ea37fa21dc64538baa9dda8",
+          "statementIndex": 0,
+          "sqlSha256": "aa6c4921ffac4d403eebecf748f3823f271e1edc81b95227d54033109e168707"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_market_instrument_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_market_instrument_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "account_risk_summaries",
+      "statements": [
+        {
+          "migration": "20260903_006_account_trader_worker",
+          "checksum": "eac86099de26cef5948bc71464269579b0a466f07ea37fa21dc64538baa9dda8",
+          "statementIndex": 1,
+          "sqlSha256": "1eb145325e4763fca3be3600872dc73db606f4af486f4409eade01de6f1f6f9f"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_account_risk_summary_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_account_risk_summary_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "risk_policy_sets_v4",
+      "statements": [
+        {
+          "migration": "20260903_007_deterministic_risk_review",
+          "checksum": "ed697bb67c7c87d389575f00462a961011cd45d115287cc018bf6e40fbef7d3e",
+          "statementIndex": 0,
+          "sqlSha256": "3ab9d959c9072f3a9d0479f50e4f4ef0e3779c1be6a7e4f5b30d1a07e7c194b6"
+        },
+        {
+          "migration": "20260903_007_deterministic_risk_review",
+          "checksum": "ed697bb67c7c87d389575f00462a961011cd45d115287cc018bf6e40fbef7d3e",
+          "statementIndex": 2,
+          "sqlSha256": "b8e11edba6e8bddf28bc39584abf556c588479bdba78a1c1931da9d40b809862"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_risk_policy_owner",
+          "columns": [
+            "owner_user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_risk_policy_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_risk_policy_active_version",
+          "columns": [
+            "active_version_id",
+            "id"
+          ],
+          "parent": "risk_policy_versions_v4",
+          "parentColumns": [
+            "id",
+            "policy_set_id"
+          ],
+          "phase": "alter"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_risk_policy_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "risk_policy_versions_v4",
+      "statements": [
+        {
+          "migration": "20260903_007_deterministic_risk_review",
+          "checksum": "ed697bb67c7c87d389575f00462a961011cd45d115287cc018bf6e40fbef7d3e",
+          "statementIndex": 1,
+          "sqlSha256": "00b5c02b90226a635087afd3aa50d44531668ea6fc693e72a8efdeba7fb16092"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_risk_policy_version_set",
+          "columns": [
+            "policy_set_id"
+          ],
+          "parent": "risk_policy_sets_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_risk_policy_version_actor",
+          "columns": [
+            "created_by_user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "risk_policy_sets_v4"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "risk_policy_change_items_v4",
+      "statements": [
+        {
+          "migration": "20260903_007_deterministic_risk_review",
+          "checksum": "ed697bb67c7c87d389575f00462a961011cd45d115287cc018bf6e40fbef7d3e",
+          "statementIndex": 3,
+          "sqlSha256": "3730015d6f2c8d3fa2e05aeaa3cbe851886cee2ca5992e07a07c36492a6ce036"
+        },
+        {
+          "migration": "20260904_014_audit_read_indexes",
+          "checksum": "1621ab0b05f3d84c416220e84683b4a6de2ecc9c4b2e1aa6f7e56c364b62db23",
+          "statementIndex": 5,
+          "sqlSha256": "faf60e6e377f5e8d0bfb13d8ef9c1d0ad0cbd9379f93d26e0b92c35a9eb13fa6"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_risk_policy_change_set",
+          "columns": [
+            "policy_set_id"
+          ],
+          "parent": "risk_policy_sets_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_risk_policy_change_version",
+          "columns": [
+            "policy_version_id"
+          ],
+          "parent": "risk_policy_versions_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_risk_policy_change_actor",
+          "columns": [
+            "requested_by_user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "risk_policy_sets_v4"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "account_risk_states",
+      "statements": [
+        {
+          "migration": "20260903_007_deterministic_risk_review",
+          "checksum": "ed697bb67c7c87d389575f00462a961011cd45d115287cc018bf6e40fbef7d3e",
+          "statementIndex": 5,
+          "sqlSha256": "c75b7a03cfe3a7d15402ab5b3091d1bb54c7d16ff7a0d2203584745264f75ee4"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_account_risk_state_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_account_risk_state_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_account_risk_state_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "risk_state_events",
+      "statements": [
+        {
+          "migration": "20260903_007_deterministic_risk_review",
+          "checksum": "ed697bb67c7c87d389575f00462a961011cd45d115287cc018bf6e40fbef7d3e",
+          "statementIndex": 6,
+          "sqlSha256": "41721ea84a9566f14dcc5ecdfc42993d475335e125330e4e0509084c41f89d69"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_risk_state_event_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_risk_state_event_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_risk_state_event_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "risk_decisions_v4",
+      "statements": [
+        {
+          "migration": "20260903_007_deterministic_risk_review",
+          "checksum": "ed697bb67c7c87d389575f00462a961011cd45d115287cc018bf6e40fbef7d3e",
+          "statementIndex": 7,
+          "sqlSha256": "c605ebf79a144c6265d9c3c5b221850390df02ed6ac38c05f511392de2cec7a4"
+        },
+        {
+          "migration": "20260903_008_manual_risk_release",
+          "checksum": "c27c28fa6aaa1f63aadeb9b43e0858679d927f88f932050a943d2f4b07fe34c1",
+          "statementIndex": 1,
+          "sqlSha256": "2e54a36ad22068cf502d7935bff75453d8c3c05931eab6476da9971af002dde2"
+        },
+        {
+          "migration": "20260903_009_execution_intents_and_reservations",
+          "checksum": "441e93adbe9e7a61976adfaeb6477336a7d2fb76c6acab927503501fde960a5e",
+          "statementIndex": 7,
+          "sqlSha256": "fff2d75b262f3b838692fa7cb86934dda02a8eab00a1afd3ce41b6f9630e9efb"
+        },
+        {
+          "migration": "20260904_014_audit_read_indexes",
+          "checksum": "1621ab0b05f3d84c416220e84683b4a6de2ecc9c4b2e1aa6f7e56c364b62db23",
+          "statementIndex": 2,
+          "sqlSha256": "558b5243b7c2649eda476a79ab6a531a73ad2826f473d8fa450ff5e964f9a309"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_risk_decision_trade",
+          "columns": [
+            "trade_decision_id"
+          ],
+          "parent": "trade_decisions",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_risk_decision_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_risk_decision_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_risk_decision_platform_policy",
+          "columns": [
+            "platform_policy_version_id"
+          ],
+          "parent": "risk_policy_versions_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_risk_decision_account_policy",
+          "columns": [
+            "account_policy_version_id"
+          ],
+          "parent": "risk_policy_versions_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_risk_decision_manual_release",
+          "columns": [
+            "manual_release_id"
+          ],
+          "parent": "risk_manual_releases",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "alter"
+        },
+        {
+          "name": "fk_risk_decision_operation",
+          "columns": [
+            "operation_id"
+          ],
+          "parent": "operations",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "alter"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_risk_decision_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        },
+        {
+          "code": "blocked_parent",
+          "parent": "trade_decisions"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "risk_decision_payloads_v4",
+      "statements": [
+        {
+          "migration": "20260903_007_deterministic_risk_review",
+          "checksum": "ed697bb67c7c87d389575f00462a961011cd45d115287cc018bf6e40fbef7d3e",
+          "statementIndex": 8,
+          "sqlSha256": "52518beb9608ee65502783b07fb1178a5126d04ae9d8c4c6c70125c5182d2a6d"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_risk_decision_payload",
+          "columns": [
+            "risk_decision_id"
+          ],
+          "parent": "risk_decisions_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "risk_decisions_v4"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "risk_manual_releases",
+      "statements": [
+        {
+          "migration": "20260903_008_manual_risk_release",
+          "checksum": "c27c28fa6aaa1f63aadeb9b43e0858679d927f88f932050a943d2f4b07fe34c1",
+          "statementIndex": 0,
+          "sqlSha256": "340b859865017ae5ec7f80b851debe56e13c7023c82b21f37d147cb70c27cc92"
+        },
+        {
+          "migration": "20260904_014_audit_read_indexes",
+          "checksum": "1621ab0b05f3d84c416220e84683b4a6de2ecc9c4b2e1aa6f7e56c364b62db23",
+          "statementIndex": 6,
+          "sqlSha256": "1bde217e31ce6366b0ce9fc5bad2c027e413f2d8966a573909d0960317a99861"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_risk_manual_release_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_risk_manual_release_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_risk_manual_release_platform_policy",
+          "columns": [
+            "platform_policy_version_id"
+          ],
+          "parent": "risk_policy_versions_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_risk_manual_release_account_policy",
+          "columns": [
+            "account_policy_version_id"
+          ],
+          "parent": "risk_policy_versions_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_risk_manual_release_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        },
+        {
+          "code": "blocked_parent",
+          "parent": "risk_policy_versions_v4"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "operations",
+      "statements": [
+        {
+          "migration": "20260903_009_execution_intents_and_reservations",
+          "checksum": "441e93adbe9e7a61976adfaeb6477336a7d2fb76c6acab927503501fde960a5e",
+          "statementIndex": 0,
+          "sqlSha256": "0046581cd99de881a4a2493e7ec11ad6648f71f10e781b5b9c35bd71531613fd"
+        },
+        {
+          "migration": "20260904_011_user_execution_commands_and_distributions",
+          "checksum": "59f39b04871bee1a470785f03d3a7de1719c39a4abe22e87c16a2a8d3dc0ca3f",
+          "statementIndex": 0,
+          "sqlSha256": "ec5a14aad1fa60ed9ed3525c7e33c0971d411b0416f9836f4d954fc0d7f94358"
+        },
+        {
+          "migration": "20260904_011_user_execution_commands_and_distributions",
+          "checksum": "59f39b04871bee1a470785f03d3a7de1719c39a4abe22e87c16a2a8d3dc0ca3f",
+          "statementIndex": 4,
+          "sqlSha256": "d32946976fd73685933af5cd4cb4b92d16b6235299ff6883ada7fd57ebb116ba"
+        },
+        {
+          "migration": "20260904_014_audit_read_indexes",
+          "checksum": "1621ab0b05f3d84c416220e84683b4a6de2ecc9c4b2e1aa6f7e56c364b62db23",
+          "statementIndex": 3,
+          "sqlSha256": "1ded7d384324d9e8cd80cdc5f713696aedbfa1fa0e25da858e6daed95348a83b"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_operation_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_operation_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_operation_parent",
+          "columns": [
+            "parent_operation_id"
+          ],
+          "parent": "operations",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "alter"
+        },
+        {
+          "name": "fk_operation_distribution",
+          "columns": [
+            "distribution_id"
+          ],
+          "parent": "execution_distributions",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "alter"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_operation_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "operation_events",
+      "statements": [
+        {
+          "migration": "20260903_009_execution_intents_and_reservations",
+          "checksum": "441e93adbe9e7a61976adfaeb6477336a7d2fb76c6acab927503501fde960a5e",
+          "statementIndex": 1,
+          "sqlSha256": "2e9376e65f12d79ed1048a2cd0e9a28e0e06e5513a4135ca0cde8bd436380ba3"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_operation_event_operation",
+          "columns": [
+            "operation_id"
+          ],
+          "parent": "operations",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "operations"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "execution_intents",
+      "statements": [
+        {
+          "migration": "20260903_009_execution_intents_and_reservations",
+          "checksum": "441e93adbe9e7a61976adfaeb6477336a7d2fb76c6acab927503501fde960a5e",
+          "statementIndex": 2,
+          "sqlSha256": "a4c084efbaaa64a1e7ae8e61836a14fbc80122f226329fdbd67e339192a83853"
+        },
+        {
+          "migration": "20260904_011_user_execution_commands_and_distributions",
+          "checksum": "59f39b04871bee1a470785f03d3a7de1719c39a4abe22e87c16a2a8d3dc0ca3f",
+          "statementIndex": 2,
+          "sqlSha256": "e2d3d71be9dfd1db4703345e929eef8421e162179e8a4adabab72ee318c08250"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_execution_intent_operation",
+          "columns": [
+            "operation_id"
+          ],
+          "parent": "operations",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_execution_intent_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_execution_intent_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_execution_intent_risk",
+          "columns": [
+            "risk_decision_id"
+          ],
+          "parent": "risk_decisions_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "alter"
+        },
+        {
+          "name": "fk_execution_intent_trade",
+          "columns": [
+            "trade_decision_id"
+          ],
+          "parent": "trade_decisions",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "alter"
+        },
+        {
+          "name": "fk_execution_intent_user_command",
+          "columns": [
+            "user_command_id"
+          ],
+          "parent": "user_execution_commands",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "alter"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_execution_intent_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        },
+        {
+          "code": "blocked_parent",
+          "parent": "operations"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "execution_intent_payloads",
+      "statements": [
+        {
+          "migration": "20260903_009_execution_intents_and_reservations",
+          "checksum": "441e93adbe9e7a61976adfaeb6477336a7d2fb76c6acab927503501fde960a5e",
+          "statementIndex": 3,
+          "sqlSha256": "f8b1d202a083ff880fb064983cb27125e0cc77958e0b6a21c3cd063828131ae8"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_execution_intent_payload",
+          "columns": [
+            "execution_intent_id"
+          ],
+          "parent": "execution_intents",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "execution_intents"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "execution_intent_events",
+      "statements": [
+        {
+          "migration": "20260903_009_execution_intents_and_reservations",
+          "checksum": "441e93adbe9e7a61976adfaeb6477336a7d2fb76c6acab927503501fde960a5e",
+          "statementIndex": 4,
+          "sqlSha256": "40cc8c956b8283a513bac954d90b08aba2c337f0e7e4bad18b713bd72c603313"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_execution_intent_event_intent",
+          "columns": [
+            "execution_intent_id"
+          ],
+          "parent": "execution_intents",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "execution_intents"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "risk_reservations_v4",
+      "statements": [
+        {
+          "migration": "20260903_009_execution_intents_and_reservations",
+          "checksum": "441e93adbe9e7a61976adfaeb6477336a7d2fb76c6acab927503501fde960a5e",
+          "statementIndex": 5,
+          "sqlSha256": "a5990294a8db45448dc2cda3fae62d476a1b358ab250e480e835221713f2e09d"
+        },
+        {
+          "migration": "20260903_010_bridge_v4_command_ledger",
+          "checksum": "6de803b91617807c57cf545a326c3877b2a2c1e4242652c1f11dc24deceb07d1",
+          "statementIndex": 1,
+          "sqlSha256": "38edc021bd679691a27bbc6ad6f28f71f9888f87775c4b613d705cfdf613a4ff"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_risk_reservation_v4_intent",
+          "columns": [
+            "execution_intent_id"
+          ],
+          "parent": "execution_intents",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_risk_reservation_v4_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_risk_reservation_v4_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_risk_reservation_v4_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        },
+        {
+          "code": "blocked_parent",
+          "parent": "execution_intents"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "risk_reservation_events_v4",
+      "statements": [
+        {
+          "migration": "20260903_009_execution_intents_and_reservations",
+          "checksum": "441e93adbe9e7a61976adfaeb6477336a7d2fb76c6acab927503501fde960a5e",
+          "statementIndex": 6,
+          "sqlSha256": "61edcac002588934a8f0d4d575c3419e81ea9c5836591aa637c734deb27a0596"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_risk_reservation_event_reservation",
+          "columns": [
+            "risk_reservation_id"
+          ],
+          "parent": "risk_reservations_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "risk_reservations_v4"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "bridge_trade_state_snapshots_v4",
+      "statements": [
+        {
+          "migration": "20260903_010_bridge_v4_command_ledger",
+          "checksum": "6de803b91617807c57cf545a326c3877b2a2c1e4242652c1f11dc24deceb07d1",
+          "statementIndex": 2,
+          "sqlSha256": "5e69eb081355e967fb6571a07d135f8a8f6d4ea4db00dda9a4e595074f6338ac"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_bridge_trade_state_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_bridge_trade_state_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "bridge_commands_v4",
+      "statements": [
+        {
+          "migration": "20260903_010_bridge_v4_command_ledger",
+          "checksum": "6de803b91617807c57cf545a326c3877b2a2c1e4242652c1f11dc24deceb07d1",
+          "statementIndex": 3,
+          "sqlSha256": "8b731240aab3c350d8e4bebdcd86ecdd9520f54a07873d70a5688ddfa099540b"
+        },
+        {
+          "migration": "20260904_014_audit_read_indexes",
+          "checksum": "1621ab0b05f3d84c416220e84683b4a6de2ecc9c4b2e1aa6f7e56c364b62db23",
+          "statementIndex": 4,
+          "sqlSha256": "97d3f0c8ad442af74c6d9400e7bc43ad7e67649c80dbe843fb10d36d102b0485"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_bridge_command_intent",
+          "columns": [
+            "execution_intent_id"
+          ],
+          "parent": "execution_intents",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_bridge_command_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_bridge_command_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_bridge_command_profile",
+          "columns": [
+            "terminal_profile_id"
+          ],
+          "parent": "terminal_profiles",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_bridge_command_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        },
+        {
+          "code": "blocked_parent",
+          "parent": "execution_intents"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "bridge_command_payloads_v4",
+      "statements": [
+        {
+          "migration": "20260903_010_bridge_v4_command_ledger",
+          "checksum": "6de803b91617807c57cf545a326c3877b2a2c1e4242652c1f11dc24deceb07d1",
+          "statementIndex": 4,
+          "sqlSha256": "2c2f3ed4302d1a2e6603ea2a176416b69f9cd999f7b99d2451dd8ee682681400"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_bridge_command_payload_command",
+          "columns": [
+            "bridge_command_id"
+          ],
+          "parent": "bridge_commands_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "bridge_commands_v4"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "bridge_command_results_v4",
+      "statements": [
+        {
+          "migration": "20260903_010_bridge_v4_command_ledger",
+          "checksum": "6de803b91617807c57cf545a326c3877b2a2c1e4242652c1f11dc24deceb07d1",
+          "statementIndex": 5,
+          "sqlSha256": "0f5dc176a878ef150b6a936128e939843f53df97d15cd77425851dcfef075ea2"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_bridge_command_result_command",
+          "columns": [
+            "bridge_command_id"
+          ],
+          "parent": "bridge_commands_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "bridge_commands_v4"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "bridge_command_events_v4",
+      "statements": [
+        {
+          "migration": "20260903_010_bridge_v4_command_ledger",
+          "checksum": "6de803b91617807c57cf545a326c3877b2a2c1e4242652c1f11dc24deceb07d1",
+          "statementIndex": 6,
+          "sqlSha256": "c45c086f1a09056b883d1bf96c52d2b4a0816a74ba3cad26124ae0ad3c3de176"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_bridge_command_event_command",
+          "columns": [
+            "bridge_command_id"
+          ],
+          "parent": "bridge_commands_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "bridge_commands_v4"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "user_execution_commands",
+      "statements": [
+        {
+          "migration": "20260904_011_user_execution_commands_and_distributions",
+          "checksum": "59f39b04871bee1a470785f03d3a7de1719c39a4abe22e87c16a2a8d3dc0ca3f",
+          "statementIndex": 1,
+          "sqlSha256": "4d7fd2521c1bb2d3bf5af4807d9c395b7790f7c82df2e7de6445cc31b5176bac"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_user_execution_command_operation",
+          "columns": [
+            "operation_id"
+          ],
+          "parent": "operations",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_user_execution_command_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_user_execution_command_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_user_execution_command_platform_policy",
+          "columns": [
+            "platform_policy_version_id"
+          ],
+          "parent": "risk_policy_versions_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_user_execution_command_account_policy",
+          "columns": [
+            "account_policy_version_id"
+          ],
+          "parent": "risk_policy_versions_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_user_execution_command_release",
+          "columns": [
+            "manual_release_id"
+          ],
+          "parent": "risk_manual_releases",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_user_execution_command_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        },
+        {
+          "code": "blocked_parent",
+          "parent": "operations"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "execution_distributions",
+      "statements": [
+        {
+          "migration": "20260904_011_user_execution_commands_and_distributions",
+          "checksum": "59f39b04871bee1a470785f03d3a7de1719c39a4abe22e87c16a2a8d3dc0ca3f",
+          "statementIndex": 3,
+          "sqlSha256": "e7708043c0ba96ebe46018b0f1514c066d65d82e12812f766da66c7215ef63e2"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_execution_distribution_operation",
+          "columns": [
+            "parent_operation_id"
+          ],
+          "parent": "operations",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_execution_distribution_actor",
+          "columns": [
+            "actor_user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_execution_distribution_strategy",
+          "columns": [
+            "strategy_id"
+          ],
+          "parent": "strategies",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_execution_distribution_strategy_version",
+          "columns": [
+            "strategy_version_id",
+            "strategy_id"
+          ],
+          "parent": "strategy_versions",
+          "parentColumns": [
+            "id",
+            "strategy_id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_execution_distribution_source",
+          "columns": [
+            "source_distribution_id"
+          ],
+          "parent": "execution_distributions",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "operations"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "execution_distribution_targets",
+      "statements": [
+        {
+          "migration": "20260904_011_user_execution_commands_and_distributions",
+          "checksum": "59f39b04871bee1a470785f03d3a7de1719c39a4abe22e87c16a2a8d3dc0ca3f",
+          "statementIndex": 5,
+          "sqlSha256": "4f091bed9b9d27cf73bc68509adb6abf75f15c515cf0c4993817991c0e17d9e4"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_execution_distribution_target_distribution",
+          "columns": [
+            "distribution_id"
+          ],
+          "parent": "execution_distributions",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_execution_distribution_target_user",
+          "columns": [
+            "target_user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_execution_distribution_target_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_execution_distribution_target_subscription",
+          "columns": [
+            "subscription_id"
+          ],
+          "parent": "strategy_subscriptions",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_execution_distribution_target_operation",
+          "columns": [
+            "child_operation_id"
+          ],
+          "parent": "operations",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_execution_distribution_target_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        },
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_execution_distribution_target_subscription",
+          "column": "subscription_id",
+          "parent": "strategy_subscriptions.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        },
+        {
+          "code": "blocked_parent",
+          "parent": "execution_distributions"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "execution_outcomes",
+      "statements": [
+        {
+          "migration": "20260904_011_user_execution_commands_and_distributions",
+          "checksum": "59f39b04871bee1a470785f03d3a7de1719c39a4abe22e87c16a2a8d3dc0ca3f",
+          "statementIndex": 6,
+          "sqlSha256": "fb75982c528274156ae772c1ff24ad90bafd0fcf2188a2cdce67c04d579653f5"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_execution_outcome_intent",
+          "columns": [
+            "execution_intent_id"
+          ],
+          "parent": "execution_intents",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_execution_outcome_distribution_target",
+          "columns": [
+            "distribution_target_id"
+          ],
+          "parent": "execution_distribution_targets",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_execution_outcome_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_execution_outcome_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        },
+        {
+          "code": "blocked_parent",
+          "parent": "execution_intents"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "review_cases_v4",
+      "statements": [
+        {
+          "migration": "20260904_012_review_memory_core",
+          "checksum": "2586fb4a5b9a36a0bd0e4a2e213ff60d6026888eaebe9c83b75840ea99db5b53",
+          "statementIndex": 0,
+          "sqlSha256": "32ae1dce6e03e8e7268fb85128a16fe638c020162d5a4f9cc9ca85d3e0901f64"
+        },
+        {
+          "migration": "20260904_012_review_memory_core",
+          "checksum": "2586fb4a5b9a36a0bd0e4a2e213ff60d6026888eaebe9c83b75840ea99db5b53",
+          "statementIndex": 8,
+          "sqlSha256": "5edc40adb1bcc649286c09472c26b4b6e0d181982d970f3d400078fefb349f0d"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_review_case_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_review_case_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_review_case_subscription",
+          "columns": [
+            "subscription_id"
+          ],
+          "parent": "strategy_subscriptions",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_review_case_analysis_strategy",
+          "columns": [
+            "analysis_strategy_id"
+          ],
+          "parent": "strategies",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_review_case_analysis_version",
+          "columns": [
+            "analysis_strategy_version_id",
+            "analysis_strategy_id"
+          ],
+          "parent": "strategy_versions",
+          "parentColumns": [
+            "id",
+            "strategy_id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_review_case_trader_strategy",
+          "columns": [
+            "trader_strategy_id"
+          ],
+          "parent": "strategies",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_review_case_trader_version",
+          "columns": [
+            "trader_strategy_version_id",
+            "trader_strategy_id"
+          ],
+          "parent": "strategy_versions",
+          "parentColumns": [
+            "id",
+            "strategy_id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_review_case_confirmer",
+          "columns": [
+            "confirmed_by_user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_review_case_current_version",
+          "columns": [
+            "current_version_id",
+            "id"
+          ],
+          "parent": "review_versions_v4",
+          "parentColumns": [
+            "id",
+            "review_case_id"
+          ],
+          "phase": "alter"
+        },
+        {
+          "name": "fk_review_case_confirmed_version",
+          "columns": [
+            "confirmed_version_id",
+            "id"
+          ],
+          "parent": "review_versions_v4",
+          "parentColumns": [
+            "id",
+            "review_case_id"
+          ],
+          "phase": "alter"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_review_case_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        },
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_review_case_subscription",
+          "column": "subscription_id",
+          "parent": "strategy_subscriptions.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "review_case_sources_v4",
+      "statements": [
+        {
+          "migration": "20260904_012_review_memory_core",
+          "checksum": "2586fb4a5b9a36a0bd0e4a2e213ff60d6026888eaebe9c83b75840ea99db5b53",
+          "statementIndex": 1,
+          "sqlSha256": "089c756e040fe173abcecff407bf54fd2219768bec87aa2129fca49a3a47ecdc"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_review_source_case",
+          "columns": [
+            "review_case_id"
+          ],
+          "parent": "review_cases_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "review_cases_v4"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "review_evidence_payloads_v4",
+      "statements": [
+        {
+          "migration": "20260904_012_review_memory_core",
+          "checksum": "2586fb4a5b9a36a0bd0e4a2e213ff60d6026888eaebe9c83b75840ea99db5b53",
+          "statementIndex": 2,
+          "sqlSha256": "7098cbda49d308819c6f9827dbe1a0aaf662e0e09eb05c97cf18d1459ab60514"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_review_evidence_case",
+          "columns": [
+            "review_case_id"
+          ],
+          "parent": "review_cases_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "review_cases_v4"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "review_jobs_v4",
+      "statements": [
+        {
+          "migration": "20260904_012_review_memory_core",
+          "checksum": "2586fb4a5b9a36a0bd0e4a2e213ff60d6026888eaebe9c83b75840ea99db5b53",
+          "statementIndex": 3,
+          "sqlSha256": "ecfbdb22642c3a42f1f28054c42aab7e37362fa208f26902a4b9f47e7c0b1ef9"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_review_job_case",
+          "columns": [
+            "review_case_id"
+          ],
+          "parent": "review_cases_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_review_job_model_profile",
+          "columns": [
+            "model_profile_id"
+          ],
+          "parent": "ai_model_profiles",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "review_cases_v4"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "review_model_attempts_v4",
+      "statements": [
+        {
+          "migration": "20260904_012_review_memory_core",
+          "checksum": "2586fb4a5b9a36a0bd0e4a2e213ff60d6026888eaebe9c83b75840ea99db5b53",
+          "statementIndex": 4,
+          "sqlSha256": "ed9584b3c6c514368dedbb0b152a3f8b3bc370ce5d000c8e513c51d142019d99"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_review_model_attempt_job",
+          "columns": [
+            "review_job_id"
+          ],
+          "parent": "review_jobs_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_review_model_attempt_profile",
+          "columns": [
+            "model_profile_id"
+          ],
+          "parent": "ai_model_profiles",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "review_jobs_v4"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "review_job_events_v4",
+      "statements": [
+        {
+          "migration": "20260904_012_review_memory_core",
+          "checksum": "2586fb4a5b9a36a0bd0e4a2e213ff60d6026888eaebe9c83b75840ea99db5b53",
+          "statementIndex": 5,
+          "sqlSha256": "32265d4aead5c77daee94f1c76204f2550af98e70a14390c5792ee85eb7d4fc7"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_review_job_event_job",
+          "columns": [
+            "review_job_id"
+          ],
+          "parent": "review_jobs_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "review_jobs_v4"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "review_versions_v4",
+      "statements": [
+        {
+          "migration": "20260904_012_review_memory_core",
+          "checksum": "2586fb4a5b9a36a0bd0e4a2e213ff60d6026888eaebe9c83b75840ea99db5b53",
+          "statementIndex": 6,
+          "sqlSha256": "0807d47122067ca77b7a0ce99615d7f60e3f788904c387e910d3e12cb6cf9079"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_review_version_case",
+          "columns": [
+            "review_case_id"
+          ],
+          "parent": "review_cases_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_review_version_job",
+          "columns": [
+            "source_job_id"
+          ],
+          "parent": "review_jobs_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_review_version_actor",
+          "columns": [
+            "created_by_user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "review_cases_v4"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "review_version_payloads_v4",
+      "statements": [
+        {
+          "migration": "20260904_012_review_memory_core",
+          "checksum": "2586fb4a5b9a36a0bd0e4a2e213ff60d6026888eaebe9c83b75840ea99db5b53",
+          "statementIndex": 7,
+          "sqlSha256": "38b9c9af32cfa1df1fd95372b88b4fe4637455039d9591700a2e48f44f7c83b3"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_review_version_payload",
+          "columns": [
+            "review_version_id"
+          ],
+          "parent": "review_versions_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "review_versions_v4"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "review_user_states_v4",
+      "statements": [
+        {
+          "migration": "20260904_012_review_memory_core",
+          "checksum": "2586fb4a5b9a36a0bd0e4a2e213ff60d6026888eaebe9c83b75840ea99db5b53",
+          "statementIndex": 9,
+          "sqlSha256": "224220547966c0101410d25f3811f27686013f6a0d900e2eb5587fe38a1370a5"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_review_user_state_case",
+          "columns": [
+            "review_case_id"
+          ],
+          "parent": "review_cases_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_review_user_state_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_review_user_seen_version",
+          "columns": [
+            "seen_version_id",
+            "review_case_id"
+          ],
+          "parent": "review_versions_v4",
+          "parentColumns": [
+            "id",
+            "review_case_id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "review_cases_v4"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "manual_review_candidates_v4",
+      "statements": [
+        {
+          "migration": "20260904_012_review_memory_core",
+          "checksum": "2586fb4a5b9a36a0bd0e4a2e213ff60d6026888eaebe9c83b75840ea99db5b53",
+          "statementIndex": 10,
+          "sqlSha256": "c35c09fa84380816d815a1ff37b591b2923f89f43c48697c46de48ebc50a1ca3"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_manual_candidate_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_manual_candidate_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_manual_candidate_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "strategy_memory_pending_updates_v4",
+      "statements": [
+        {
+          "migration": "20260904_012_review_memory_core",
+          "checksum": "2586fb4a5b9a36a0bd0e4a2e213ff60d6026888eaebe9c83b75840ea99db5b53",
+          "statementIndex": 14,
+          "sqlSha256": "dd909e0ef4517e8e66b3c56732b5e359ecc4be75de39b9ccdd93edbdbe79dcb3"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_strategy_memory_update_library",
+          "columns": [
+            "library_id"
+          ],
+          "parent": "strategy_memory_libraries_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_strategy_memory_update_case",
+          "columns": [
+            "source_review_case_id"
+          ],
+          "parent": "review_cases_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_strategy_memory_update_version",
+          "columns": [
+            "source_review_version_id",
+            "source_review_case_id"
+          ],
+          "parent": "review_versions_v4",
+          "parentColumns": [
+            "id",
+            "review_case_id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_strategy_memory_update_actor",
+          "columns": [
+            "decided_by_user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_strategy_memory_update_merged_revision",
+          "columns": [
+            "merged_revision_id",
+            "library_id"
+          ],
+          "parent": "strategy_memory_library_revisions_v4",
+          "parentColumns": [
+            "id",
+            "library_id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "review_cases_v4"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "trade_history_sync_states_v4",
+      "statements": [
+        {
+          "migration": "20260904_013_authoritative_trade_history",
+          "checksum": "6ae01130da3efacc58a9b1aa6a95c98f1bccdf6f24c81b50decb61b19402e258",
+          "statementIndex": 0,
+          "sqlSha256": "6e1a6a5a8f7386075f828b0571de9fe7bdba225ce7c2c8e182c58f11bc958051"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_trade_history_sync_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_trade_history_sync_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "terminal_history_orders_v4",
+      "statements": [
+        {
+          "migration": "20260904_013_authoritative_trade_history",
+          "checksum": "6ae01130da3efacc58a9b1aa6a95c98f1bccdf6f24c81b50decb61b19402e258",
+          "statementIndex": 1,
+          "sqlSha256": "f36dccbca723421fac7acebc0d13f2cc24b3aa82de73e2c34143c985e31b4862"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_terminal_history_order_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_terminal_history_order_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "terminal_history_deals_v4",
+      "statements": [
+        {
+          "migration": "20260904_013_authoritative_trade_history",
+          "checksum": "6ae01130da3efacc58a9b1aa6a95c98f1bccdf6f24c81b50decb61b19402e258",
+          "statementIndex": 2,
+          "sqlSha256": "1511ec96d1bc529433d3f59f105135dcab7f1dae0509e127ca1d219492011783"
+        },
+        {
+          "migration": "20260906_026_trade_history_currency_evidence",
+          "checksum": "9a8c19b12c6627332b6a3bab8a6ddee8c30a58328666e7697a1648353f23c5a0",
+          "statementIndex": 0,
+          "sqlSha256": "4c8408157238780db86a733c94ca428f63ad0eeed3b569094f6b29a5378a0103"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_terminal_history_deal_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_terminal_history_deal_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "account_trade_records_v4",
+      "statements": [
+        {
+          "migration": "20260904_013_authoritative_trade_history",
+          "checksum": "6ae01130da3efacc58a9b1aa6a95c98f1bccdf6f24c81b50decb61b19402e258",
+          "statementIndex": 3,
+          "sqlSha256": "0dc78853b74a6329beb05c7546452232191a1fed28bc3e212b6f4a3c084d93cf"
+        },
+        {
+          "migration": "20260904_014_audit_read_indexes",
+          "checksum": "1621ab0b05f3d84c416220e84683b4a6de2ecc9c4b2e1aa6f7e56c364b62db23",
+          "statementIndex": 7,
+          "sqlSha256": "7b01d74f3c29701da2d4c8773a85e03add672d80d06c8b32f7f4a5e2cbf0a37a"
+        },
+        {
+          "migration": "20260905_020_account_projection_and_history_provenance",
+          "checksum": "9f55df7803e2429e395f253d6396edf694b97d1059f1cc2daadb5eb73c62b2f8",
+          "statementIndex": 1,
+          "sqlSha256": "28d545b8d0ea92d59468c090b82df49788738e6a4113f64a800db61a4c05c95b"
+        },
+        {
+          "migration": "20260906_026_trade_history_currency_evidence",
+          "checksum": "9a8c19b12c6627332b6a3bab8a6ddee8c30a58328666e7697a1648353f23c5a0",
+          "statementIndex": 1,
+          "sqlSha256": "446229b97d011ada009cc3e095282af597767a5e8a39b0a4150d53e1f66a16b5"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_account_trade_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_account_trade_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_trade_record_ownership_interval",
+          "columns": [
+            "ownership_interval_id"
+          ],
+          "parent": "trading_account_ownership_intervals",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "alter"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_account_trade_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "account_trade_record_deals_v4",
+      "statements": [
+        {
+          "migration": "20260904_013_authoritative_trade_history",
+          "checksum": "6ae01130da3efacc58a9b1aa6a95c98f1bccdf6f24c81b50decb61b19402e258",
+          "statementIndex": 4,
+          "sqlSha256": "61712c02a47bdbfdf8f7a8b9c0b05f6d7325e2af721ae868c9844b593199acae"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_account_trade_deal_record",
+          "columns": [
+            "trade_record_id"
+          ],
+          "parent": "account_trade_records_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_account_trade_deal_terminal",
+          "columns": [
+            "terminal_deal_id"
+          ],
+          "parent": "terminal_history_deals_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "account_trade_records_v4"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "account_trade_attributions_v4",
+      "statements": [
+        {
+          "migration": "20260904_013_authoritative_trade_history",
+          "checksum": "6ae01130da3efacc58a9b1aa6a95c98f1bccdf6f24c81b50decb61b19402e258",
+          "statementIndex": 5,
+          "sqlSha256": "7dd6dff0e465217f750687103faf0df38616f2d0162e7b81ac6b9ada00edc645"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_account_trade_attribution_record",
+          "columns": [
+            "trade_record_id"
+          ],
+          "parent": "account_trade_records_v4",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "account_trade_records_v4"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "account_trade_daily_summaries_v4",
+      "statements": [
+        {
+          "migration": "20260904_013_authoritative_trade_history",
+          "checksum": "6ae01130da3efacc58a9b1aa6a95c98f1bccdf6f24c81b50decb61b19402e258",
+          "statementIndex": 6,
+          "sqlSha256": "7cd409fc3be4241356049d12554690d3bd17adedaa08483ca82146c7a2997d3d"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_account_trade_daily_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_account_trade_daily_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_account_trade_daily_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "trading_account_ownership_intervals",
+      "statements": [
+        {
+          "migration": "20260905_019_account_ownership_intervals",
+          "checksum": "3b17b685274b0eb1fe225305fea9de673fea60cc81c629dc8477a73913a48a1a",
+          "statementIndex": 1,
+          "sqlSha256": "e7a8091378e2499b77f24199a3638a2c9ddd58cd946af53b42edb8fe3d841326"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_ownership_intervals_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_ownership_intervals_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_ownership_intervals_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "user_trading_account_settings",
+      "statements": [
+        {
+          "migration": "20260905_019_account_ownership_intervals",
+          "checksum": "3b17b685274b0eb1fe225305fea9de673fea60cc81c629dc8477a73913a48a1a",
+          "statementIndex": 3,
+          "sqlSha256": "f3b6f175ba41e11b51268a819e1d504fabc26d0434fc1e81b2000cca0c92adda"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_user_trading_account_settings_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_user_trading_account_settings_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_user_trading_account_settings_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "trading_projection_provenance_v4",
+      "statements": [
+        {
+          "migration": "20260905_020_account_projection_and_history_provenance",
+          "checksum": "9f55df7803e2429e395f253d6396edf694b97d1059f1cc2daadb5eb73c62b2f8",
+          "statementIndex": 0,
+          "sqlSha256": "0af485f90ece601c05207f50d5610b6b8c874f0e641361b157915f48b0a9bfb7"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_projection_provenance_revision",
+          "columns": [
+            "trading_account_id",
+            "resource_kind",
+            "resource_id"
+          ],
+          "parent": "trading_projection_revisions",
+          "parentColumns": [
+            "trading_account_id",
+            "resource_kind",
+            "resource_id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_projection_provenance_user",
+          "columns": [
+            "user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_projection_provenance_interval",
+          "columns": [
+            "ownership_interval_id"
+          ],
+          "parent": "trading_account_ownership_intervals",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_projection_provenance_profile",
+          "columns": [
+            "terminal_profile_id"
+          ],
+          "parent": "terminal_profiles",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "blocked_parent",
+          "parent": "trading_projection_revisions"
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "observer_sources",
+      "statements": [
+        {
+          "migration": "20260905_021_observer_sources_and_audiences",
+          "checksum": "aed263e66171f336d7750bbdfa565c03ae8e82f6f69521483a022ec0a3e687d2",
+          "statementIndex": 0,
+          "sqlSha256": "753c8764de8e1390cbc33ce169dee947b673e861efc10482622f458aac5ed2ff"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_observer_source_operator",
+          "columns": [
+            "operator_user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_observer_source_account",
+          "columns": [
+            "trading_account_id"
+          ],
+          "parent": "trading_accounts",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_observer_source_strategy",
+          "columns": [
+            "analysis_strategy_id"
+          ],
+          "parent": "strategies",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        },
+        {
+          "name": "fk_observer_source_creator",
+          "columns": [
+            "created_by_user_id"
+          ],
+          "parent": "users",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_observer_source_account",
+          "column": "trading_account_id",
+          "parent": "trading_accounts.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    },
+    {
+      "name": "subscription_execution_preferences_v4",
+      "statements": [
+        {
+          "migration": "20260907_027_subscription_execution_preferences",
+          "checksum": "87c8d3e026442c73bf502c251828d719962b0dfbe3609a2b3150aabf8b651b99",
+          "statementIndex": 0,
+          "sqlSha256": "b21186dbf5fdb088e236ae414b12e01f8fbdb8f6e960892afc5b35ca9f643249"
+        }
+      ],
+      "foreignKeys": [
+        {
+          "name": "fk_subscription_execution_preferences_subscription",
+          "columns": [
+            "subscription_id"
+          ],
+          "parent": "strategy_subscriptions",
+          "parentColumns": [
+            "id"
+          ],
+          "phase": "create"
+        }
+      ],
+      "blockers": [
+        {
+          "code": "foreign_key_type_mismatch",
+          "constraint": "fk_subscription_execution_preferences_subscription",
+          "column": "subscription_id",
+          "parent": "strategy_subscriptions.id",
+          "expectedType": "bigint unsigned",
+          "actualType": "int",
+          "expectedCollation": null,
+          "parentCollation": null
+        }
+      ],
+      "status": "blocked"
+    }
+  ],
+  "typeDifferences": [
+    {
+      "table": "users",
+      "column": "plan_expires_at",
+      "actualType": "datetime",
+      "actualNullable": "YES",
+      "targetDeclaration": "DATETIME(3) NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "users",
+      "column": "deleted_at",
+      "actualType": "datetime",
+      "actualNullable": "YES",
+      "targetDeclaration": "DATETIME(3) NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "users",
+      "column": "created_at",
+      "actualType": "datetime",
+      "actualNullable": "YES",
+      "targetDeclaration": "DATETIME(3) NOT NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "users",
+      "column": "updated_at",
+      "actualType": "datetime",
+      "actualNullable": "YES",
+      "targetDeclaration": "DATETIME(3) NOT NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "bridge_refresh_sessions",
+      "column": "expires_at",
+      "actualType": "datetime",
+      "actualNullable": "NO",
+      "targetDeclaration": "DATETIME(3) NOT NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "bridge_refresh_sessions",
+      "column": "revoked_at",
+      "actualType": "datetime",
+      "actualNullable": "YES",
+      "targetDeclaration": "DATETIME(3) NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "bridge_refresh_sessions",
+      "column": "last_used_at",
+      "actualType": "datetime",
+      "actualNullable": "YES",
+      "targetDeclaration": "DATETIME(3) NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "bridge_refresh_sessions",
+      "column": "created_at",
+      "actualType": "datetime",
+      "actualNullable": "NO",
+      "targetDeclaration": "DATETIME(3) NOT NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "bridge_refresh_sessions",
+      "column": "updated_at",
+      "actualType": "datetime",
+      "actualNullable": "NO",
+      "targetDeclaration": "DATETIME(3) NOT NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "ai_model_profiles",
+      "column": "provider",
+      "actualType": "varchar(32)",
+      "actualNullable": "NO",
+      "targetDeclaration": "VARCHAR(64) NOT NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "ai_model_profiles",
+      "column": "model_name",
+      "actualType": "varchar(128)",
+      "actualNullable": "NO",
+      "targetDeclaration": "VARCHAR(191) NOT NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "ai_model_profiles",
+      "column": "max_tokens",
+      "actualType": "int",
+      "actualNullable": "YES",
+      "targetDeclaration": "INT UNSIGNED NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "ai_model_profiles",
+      "column": "request_timeout_ms",
+      "actualType": "int",
+      "actualNullable": "YES",
+      "targetDeclaration": "INT UNSIGNED NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "ai_model_profiles",
+      "column": "created_at",
+      "actualType": "datetime",
+      "actualNullable": "NO",
+      "targetDeclaration": "DATETIME(3) NOT NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "ai_model_profiles",
+      "column": "updated_at",
+      "actualType": "datetime",
+      "actualNullable": "NO",
+      "targetDeclaration": "DATETIME(3) NOT NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "ai_model_profiles",
+      "column": "deleted_at",
+      "actualType": "datetime",
+      "actualNullable": "YES",
+      "targetDeclaration": "DATETIME(3) NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "user_model_defaults",
+      "column": "created_at",
+      "actualType": "datetime",
+      "actualNullable": "NO",
+      "targetDeclaration": "DATETIME(3) NOT NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "user_model_defaults",
+      "column": "updated_at",
+      "actualType": "datetime",
+      "actualNullable": "NO",
+      "targetDeclaration": "DATETIME(3) NOT NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "platform_model_usage_policy",
+      "column": "daily_requests_per_user",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "INT UNSIGNED NOT NULL DEFAULT 0",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "platform_model_usage_policy",
+      "column": "daily_tokens_per_user",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "platform_model_usage_policy",
+      "column": "updated_at",
+      "actualType": "datetime",
+      "actualNullable": "NO",
+      "targetDeclaration": "DATETIME(3) NOT NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "id",
+      "actualType": "bigint",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL AUTO_INCREMENT",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "strategy_id",
+      "actualType": "int",
+      "actualNullable": "YES",
+      "targetDeclaration": "BIGINT UNSIGNED NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "token_count",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "created_at",
+      "actualType": "datetime",
+      "actualNullable": "NO",
+      "targetDeclaration": "DATETIME(3) NOT NULL",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "request_bytes",
+      "actualType": "bigint",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "response_bytes",
+      "actualType": "bigint",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "duration_ms",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "input_tokens",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "output_tokens",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "reasoning_tokens",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "cached_tokens",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+      "source": "bootstrap/v4-foundation-v1.sql"
+    },
+    {
+      "table": "trading_accounts",
+      "column": "id",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL AUTO_INCREMENT",
+      "source": "20260903_003_trading_context_and_market_projection.sql"
+    },
+    {
+      "table": "trading_accounts",
+      "column": "broker_server",
+      "actualType": "varchar(100)",
+      "actualNullable": "NO",
+      "targetDeclaration": "VARCHAR(191) NOT NULL",
+      "source": "20260903_003_trading_context_and_market_projection.sql"
+    },
+    {
+      "table": "market_candles",
+      "column": "timeframe",
+      "actualType": "varchar(8)",
+      "actualNullable": "NO",
+      "targetDeclaration": "ENUM('M1','M5','M15','M30','H1','H4','D1') NOT NULL",
+      "source": "20260903_003_trading_context_and_market_projection.sql"
+    },
+    {
+      "table": "market_candles",
+      "column": "tick_volume",
+      "actualType": "bigint",
+      "actualNullable": "NO",
+      "targetDeclaration": "DECIMAL(24,8) NOT NULL",
+      "source": "20260903_003_trading_context_and_market_projection.sql"
+    },
+    {
+      "table": "strategy_subscriptions",
+      "column": "id",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL AUTO_INCREMENT",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql"
+    },
+    {
+      "table": "strategy_subscriptions",
+      "column": "trading_account_id",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql"
+    },
+    {
+      "table": "inference_snapshots",
+      "column": "id",
+      "actualType": "bigint",
+      "actualNullable": "NO",
+      "targetDeclaration": "CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql"
+    },
+    {
+      "table": "inference_snapshots",
+      "column": "strategy_id",
+      "actualType": "int",
+      "actualNullable": "YES",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql"
+    },
+    {
+      "table": "ai_model_tasks",
+      "column": "status",
+      "actualType": "varchar(32)",
+      "actualNullable": "NO",
+      "targetDeclaration": "ENUM('queued','running','succeeded','failed','cancelled','expired') NOT NULL",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql"
+    },
+    {
+      "table": "ai_model_tasks",
+      "column": "fencing_token",
+      "actualType": "bigint",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql"
+    },
+    {
+      "table": "ai_model_tasks",
+      "column": "lease_owner",
+      "actualType": "varchar(191)",
+      "actualNullable": "YES",
+      "targetDeclaration": "VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NULL AFTER fencing_token",
+      "source": "20260903_005_analysis_scheduler_and_account_fanout.sql"
+    }
+  ],
+  "missingColumns": [
+    {
+      "name": "ai_model_provider_capabilities",
+      "missingColumns": [
+        "verified_at_utc",
+        "updated_at_utc"
+      ]
+    },
+    {
+      "name": "trading_accounts",
+      "missingColumns": [
+        "platform",
+        "account_login",
+        "currency",
+        "created_at_utc",
+        "updated_at_utc",
+        "deleted_at_utc",
+        "ownership_revision"
+      ]
+    },
+    {
+      "name": "market_candles",
+      "missingColumns": [
+        "trading_account_id",
+        "symbol",
+        "open_time_utc",
+        "closed",
+        "revision"
+      ]
+    },
+    {
+      "name": "strategy_subscriptions",
+      "missingColumns": [
+        "standard_symbol",
+        "analysis_strategy_id",
+        "analysis_strategy_version_id",
+        "trader_strategy_id",
+        "trader_strategy_version_id",
+        "analysis_enabled",
+        "trader_enabled",
+        "trade_send_enabled",
+        "status",
+        "revision",
+        "active_execution_key",
+        "legacy_source_table",
+        "legacy_id",
+        "created_at_utc",
+        "updated_at_utc"
+      ]
+    },
+    {
+      "name": "inference_snapshots",
+      "missingColumns": [
+        "purpose",
+        "user_id",
+        "trading_account_id",
+        "strategy_version_id",
+        "payload_sha256",
+        "payload_bytes",
+        "captured_at_utc",
+        "created_at_utc"
+      ]
+    },
+    {
+      "name": "ai_model_tasks",
+      "missingColumns": [
+        "id",
+        "purpose",
+        "user_id",
+        "trading_account_id",
+        "input_snapshot_id",
+        "model_profile_id",
+        "deadline_at_utc",
+        "created_at_utc",
+        "updated_at_utc",
+        "lease_expires_at_utc",
+        "completed_at_utc"
+      ]
+    }
+  ],
+  "normalizationComplete": false
+}
