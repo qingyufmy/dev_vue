@@ -1,5 +1,7 @@
 # Auth 模块边界
 
+`AdminPrincipalAccess`仅判断当前活动管理员身份，SQL归auth所有；`createAdminPrincipalAccess`由运行组装绑定调用者executor。none为独立当前读取，share必须使用调用者已开启的事务，不负责提交或释放连接。身份缺失/停用/非管理员返回false，存储异常统一为auth_principal_unavailable。观摩管理仍负责业务拒绝码、事务、幂等和审计；此能力不提供会话认证或CSRF替代。验证入口为mysql-admin-principal-access.test.ts及verify-local-observer-admin-principal.mjs。
+
 负责第一方SSO、应用会话、授权码、CSRF、实时票据和明确范围的注销。网页各应用继续使用独立Host-only会话，不共享父域Cookie或浏览器长期凭据。
 
 ## 公开入口与组装

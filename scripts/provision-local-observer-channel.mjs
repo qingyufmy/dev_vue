@@ -1,3 +1,4 @@
+import { createAdminPrincipalAccess } from '../server/dist-v4/modules/auth/composition.js'
 import assert from 'node:assert/strict'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { open, readFile } from 'node:fs/promises'
@@ -74,7 +75,7 @@ try {
   assert.ok(Number.isSafeInteger(actorUserId) && actorUserId > 0 && actorUserId !== fixture.userId)
   connection.release(); connection = null
   checks.push('separate-synthetic-operator-and-owned-offline-account')
-  const management = new ObserverManagementService(new MysqlObserverManagementRepository(pool))
+  const management = new ObserverManagementService(new MysqlObserverManagementRepository(pool, createAdminPrincipalAccess))
   const command = async (label, value) => {
     phase = label
     const key = `${runId}:${label}`

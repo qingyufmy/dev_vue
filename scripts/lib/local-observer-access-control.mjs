@@ -1,3 +1,4 @@
+import { createAdminPrincipalAccess } from '../../server/dist-v4/modules/auth/composition.js'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { open, readFile } from 'node:fs/promises'
@@ -60,7 +61,7 @@ export async function createLocalObserverAccessControl(fixture, observer, source
     const record = async value => { await journal.writeFile(JSON.stringify(value) + '\n'); await journal.sync() }
     await record({ kind: 'local-observer-access-test/v1', runId, actorUserId: observer.actorUserId,
       viewerUserId: fixture.userId, channelId: observer.channelId, initialRevision, identity })
-    const service = new ObserverManagementService(new MysqlObserverManagementRepository(pool))
+    const service = new ObserverManagementService(new MysqlObserverManagementRepository(pool, createAdminPrincipalAccess))
     return {
       async transition(granted) {
         assert.ok(!inFlight && phase < 2 && granted === (phase === 1))

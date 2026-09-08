@@ -925,3 +925,15 @@ MysqlAccountRegistration.lockCurrentOwnership 不再连接 auth.users：先按�
 使用本批编译产物执行 owned-accounts --verify，真实开发库三项只读检查通过，报告 [local-owned-account-principal-verified-20260909.json](architecture/local-owned-account-principal-verified-20260909.json)：精确夹具身份、两个账户的当前归属/历史区间、公开列表离线且无交易权限。commitState=not_attempted，未新增数据或迁移，未重启角色；此证据不代表运行中的 Bridge 已使用新构建，也不是终端或浏览器验收。
 
 本批完成已批准账户数据所有权工作包中的一处明确耦合。下一步继续清点 Bridge 凭据、观摩管理等剩余跨域 SQL，并推进账户前端恢复与夹具退役；P1 和总体重构未完成。
+
+## 71. 观摩管理的管理员身份归属 auth（第一百四十一批）
+
+新增 auth 公开 AdminPrincipalAccess 与同 executor 组装工厂，封装活动管理员判定；只返回 boolean，不暴露角色表或存储实现。MysqlObserverManagementRepository 显式接收该工厂，列表通过 none 当前读取检查，写操作保持 registry → 管理员共享锁 → 幂等回执 → 业务操作的顺序。写事务内工厂绑定原 PoolConnection，撤权管理员不能通过旧回执重放，身份存储异常保留失败关闭语义。API 入口及当前合成夹具工具同步注入，未提供默认放行能力。
+
+本次定向复核覆盖职责、兼容与锁：列表原先的 autocommit FOR SHARE 不会在后续列表读取期间保留锁，改为 none 不宣称建立了一致快照或持续授权锁；写路径保留原同事务共享锁。auth 只判断身份，trading仍负责管理错误码、命令、幂等、审计及outbox。源账户归属、被授权用户及策略表的跨域读取没有算作本次完成。
+
+验证31项通过：auth管理员能力3、观摩管理24、trading组装4；覆盖无效ID/锁不查询、身份缺失/非管理员拒绝、存储异常脱敏、同连接及管理员检查先于回执、撤权后重放拒绝。首次组装测试发现测试/API调用参数及import遗漏，修正后全部通过，类型检查及构建通过。API运行合同14项一致，边界登记64条无新增/陈旧项，321个冻结输入不变。
+
+新增只读探针verify-local-observer-admin-principal.mjs，使用本批编译产物对既有合成管理员/观众验证三项：精确开发库及夹具运营者身份、同连接共享锁管理员通过/普通用户拒绝、真实管理列表管理员通过/普通用户403。回执为[local-observer-admin-principal-20260909.json](architecture/local-observer-admin-principal-20260909.json)，commitState=not_attempted，事务rollback，没有数据写入、角色重启或HTTP/浏览器证明。原始夹具和操作历史保留。
+
+下一步继续观摩源/受众身份和策略数据所有权，随后账户完整浏览器恢复及精确退役；P1及整体重构保持未完成。

@@ -1,5 +1,5 @@
 import { MysqlObserverAccessReader } from './infrastructure/mysql-observer-access-reader.js'
-import type { ActivePrincipalAccess, AccountPrincipalReader } from '../auth/index.js'
+import type { ActivePrincipalAccess, AccountPrincipalReader, AdminPrincipalAccess } from '../auth/index.js'
 import type { ContextWritePort } from './application/context-write-port.js'
 import { assertMysqlTradingSchemaReady } from './infrastructure/mysql-schema-readiness.js'
 import { createMysqlContextWritePort } from './infrastructure/mysql-context-write-port.js'
@@ -51,7 +51,7 @@ export function createTradingReader(pool: Pool, leases: GatewayLeases | undefine
   return new MysqlTradingRepository(pool, leases, new MysqlObserverSnapshotReader(pool, principals))
 }
 
-export function createTradingApiModule(pool: Pool, cache: Redis, auth: { trade: TradeSessionAuthenticator; admin: ObserverManagementRequestAuthenticator }, leases: GatewayLeases, principalAccess: (connection: PoolConnection) => ActivePrincipalAccess, principals: (connection: PoolConnection) => AccountPrincipalReader): {
+export function createTradingApiModule(pool: Pool, cache: Redis, auth: { trade: TradeSessionAuthenticator; admin: ObserverManagementRequestAuthenticator }, leases: GatewayLeases, principalAccess: (connection: PoolConnection) => ActivePrincipalAccess, principals: (connection: PoolConnection) => AccountPrincipalReader, administrators: (executor: Pick<PoolConnection, 'execute'>) => AdminPrincipalAccess): {
   trading: TradingService
   connectionCapacity: ConnectionCapacityService
   observerManagement: ObserverManagementService
@@ -64,7 +64,7 @@ export function createTradingApiModule(pool: Pool, cache: Redis, auth: { trade: 
   const repository = new MysqlTradingRepository(pool, leases, access)
   const trading = new TradingService(repository, new ObserverPublicationService(access, repository))
   const connectionCapacity = new ConnectionCapacityService(repository, new RedisConnectionLeaseStore(cache))
-  const observerManagement = new ObserverManagementService(new MysqlObserverManagementRepository(pool))
+  const observerManagement = new ObserverManagementService(new MysqlObserverManagementRepository(pool, administrators))
   const tradeAuth = auth.trade
   const observerAdminAuth = auth.admin
   return { trading, connectionCapacity, observerManagement, tradeAuth, observerAdminAuth,

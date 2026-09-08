@@ -1,0 +1,17 @@
+{
+  "kind": "local-observer-admin-principal/v1",
+  "passed": true,
+  "observedAt": "2026-09-08T19:43:11.293Z",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "checks": [
+    "exact-development-database-and-synthetic-administrator",
+    "same-connection-shared-lock-admin-accepted-viewer-rejected",
+    "real-management-list-admin-accepted-viewer-forbidden"
+  ],
+  "commitState": "not_attempted",
+  "scope": "Compiled auth capability and observer management list against existing synthetic identities. Shared-lock transaction rolled back; no data mutation, runtime restart, HTTP or browser proof."
+}

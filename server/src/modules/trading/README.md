@@ -6,7 +6,7 @@
 
 `index.ts`公开业务类型、应用服务与协议。MySQL账户/观摩repository、Redis发布订阅/连接租约和认证适配器已不通过业务入口导出。`composition.ts`仅供bootstrap/entrypoints使用：
 
-- `createTradingApiModule`组装账户/观摩服务、连接额度和HTTP插件，接收独立的trade/admin认证端口。会话Cookie解析和CSRF归auth实现，由API入口注入；trading不依赖AuthService或持久会话结构。
+- `createTradingApiModule`组装账户/观摩服务、连接额度和HTTP插件，接收独立的trade/admin认证端口。会话Cookie解析和CSRF归auth实现，由API入口注入；trading不依赖AuthService或持久会话结构。观摩管理另外注入auth `AdminPrincipalAccess`工厂：列表使用当前身份读取，写事务在registry之后、幂等回执之前通过同连接共享锁检查当前管理员，权限失效不能重放旧操作。此能力不代替HTTP认证或CSRF；源所有者和被授权用户的其他SQL仍待收口。
 - `createTradingReader`向分析/交易员/调度角色提供现有查询能力，不公开具体MySQL类。
 - `createBridgeTradingModule`提供连接额度能力与BridgeProjectionPort投影能力；Bridge仅通过公开输入合同调用，不依赖BridgeStreamProjector具体类。保留原投影事务，提交后再发布实时事件；具体类不再从业务index导出。
 

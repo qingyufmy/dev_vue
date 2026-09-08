@@ -1,3 +1,4 @@
+import { createAdminPrincipalAccess } from '../src/modules/auth/composition.js'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import type { Pool } from 'mysql2/promise'
@@ -309,7 +310,7 @@ class FakeManagementPool {
 function cloneMap(values: Map<string, Row>) { return new Map([...values].map(([key, value]) => [key, { ...value }])) }
 function replaceMap(target: Map<string, Row>, source: Map<string, Row>) { target.clear(); for (const [key, value] of source) target.set(key, { ...value }) }
 
-function repository(pool: FakeManagementPool) { return new MysqlObserverManagementRepository(pool.asPool()) }
+function repository(pool: FakeManagementPool) { return new MysqlObserverManagementRepository(pool.asPool(), createAdminPrincipalAccess) }
 
 function sourceCreate(): ObserverManagementCommand {
   return {
@@ -329,6 +330,10 @@ describe('MysqlObserverManagementRepository', () => {
   it('replays a matching receipt without side effects and rejects a hash conflict', async () => {
     const pool = new FakeManagementPool()
     const first = await write(pool, sourceCreate())
+    const adminRead = pool.calls.find(call => call.sql.includes("role='admin'"))!
+    expect(adminRead.client).toBe('connection')
+    expect(adminRead.sql).toContain('FOR SHARE')
+    expect(pool.calls.indexOf(adminRead)).toBeLessThan(pool.calls.findIndex(call => call.sql.includes('FROM observer_management_operations')))
     const registryAfterFirst = pool.registryRevision
     const insertsAfterFirst = pool.operations.length
 

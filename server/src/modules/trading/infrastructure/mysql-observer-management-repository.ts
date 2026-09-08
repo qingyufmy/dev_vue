@@ -1,3 +1,4 @@
+import type { AdminPrincipalAccess } from '../../auth/index.js'
 import { randomUUID } from 'node:crypto'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import {
@@ -126,13 +127,13 @@ const ACCESS_COLUMNS = `CAST(x.observer_channel_id AS CHAR) observer_channel_id,
  * (which is never touched here).
  */
 export class MysqlObserverManagementRepository implements ObserverManagementRepository {
-  constructor(private readonly pool: Pool) {}
+  constructor(private readonly pool: Pool, private readonly administrators: (executor: Pick<PoolConnection, 'execute'>) => AdminPrincipalAccess) {}
 
   async list(actorUserId: number, input: ObserverManagementList): Promise<ObserverManagementPage> {
     validateActor(actorUserId)
     const normalized = normalizeList(input)
     try {
-      await assertAdmin(this.pool, actorUserId)
+      await assertAdmin(this.administrators(this.pool), actorUserId, 'none')
       const registryRevision = await readRegistryRevision(this.pool)
       const rows = await this.listRows(this.pool, normalized)
       const hasMore = rows.length > normalized.limit
@@ -151,7 +152,7 @@ export class MysqlObserverManagementRepository implements ObserverManagementRepo
     validateWrite(input)
     return transaction(this.pool, async connection => {
       const registry = await lockRegistry(connection)
-      await assertAdmin(connection, input.actorUserId)
+      await assertAdmin(this.administrators(connection), input.actorUserId, 'share')
 
       const receipt = await findReceipt(connection, input.actorUserId, input.idempotencyKey)
       if (receipt) {
@@ -525,10 +526,8 @@ async function assertActiveUser(executor: Executor, userId: number, code: string
   if (rows.length !== 1) throw managementError(code, 404)
 }
 
-async function assertAdmin(executor: Executor, userId: number) {
-  const [rows] = await executor.execute<RowDataPacket[]>(`SELECT id FROM users
-    WHERE id=? AND role='admin' AND deletion_status='active' AND deleted_at IS NULL LIMIT 1 FOR SHARE`, [userId])
-  if (rows.length !== 1) throw managementError('observer_management_admin_required', 403)
+async function assertAdmin(access: AdminPrincipalAccess, userId: number, lock: 'none' | 'share') {
+  if (!await access.isAdmin(userId, lock)) throw managementError('observer_management_admin_required', 403)
 }
 
 async function findReceipt(executor: Executor, actorUserId: number, idempotencyKey: string): Promise<ReceiptRow | null> {
