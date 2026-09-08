@@ -178,7 +178,7 @@ export function frontendBoundaryFindings(graph) {
   for (const edge of graph.edges) {
     const sourceApp = appOf(edge.source), targetApp = appOf(edge.target)
     const sourceFeature = featureOf(edge.source), targetFeature = featureOf(edge.target)
-    const add = rule => findings.push({ rule, source: edge.source, target: edge.target, line: edge.line })
+    const add = rule => findings.push({ rule, source: edge.source, target: edge.target, line: edge.line, kind: edge.kind, typeOnly: Boolean(edge.typeOnly) })
     if (sourceApp && targetApp && sourceApp !== targetApp) add('cross-application')
     if (edge.source.startsWith('frontend/packages/') && targetApp) add('shared-package-to-application')
     if (targetFeature && sourceFeature?.[1] !== targetFeature[1] && targetFeature[2] !== 'index.ts') add('feature-internal')

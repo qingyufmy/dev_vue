@@ -5,6 +5,14 @@ const edge = { rule: 'cross-module-internal', source: 'server/src/modules/a/appl
 const baseline = findings => ({ version: 1, entries: findings.map(finding => ({ finding, count: 1, owner: 'a', phase: 'P1', reason: 'Move to public application port' })) })
 
 describe('exact server boundary debt', () => {
+  it('separates frontend debt from server debt and never permits cross-application exceptions', () => {
+    const finding = { ...edge, rule: 'feature-internal', source: 'frontend/apps/trade/src/App.vue', target: 'frontend/apps/trade/src/features/home/private.ts' }
+    expect(compareBoundaryDebt([finding], baseline([finding]), 'frontend').passed).toBe(true)
+    expect(() => compareBoundaryDebt([finding], baseline([finding]))).toThrow('invalid_boundary_debt_entry')
+    expect(() => compareBoundaryDebt([], baseline([{ ...finding, rule: 'cross-application' }]), 'frontend')).toThrow('invalid_boundary_debt_entry')
+    expect(compareBoundaryDebt([{ ...finding, typeOnly: false }], baseline([finding]), 'frontend').passed).toBe(false)
+  })
+
   it('ignores line shifts but catches new edges and stale exceptions independently', () => {
     expect(compareBoundaryDebt([{ ...edge, line: 200 }], baseline([{ ...edge, line: 1 }])).passed).toBe(true)
     const replacement = { ...edge, target: 'server/src/modules/c/domain/value.ts' }

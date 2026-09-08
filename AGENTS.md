@@ -60,6 +60,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\bridge\prototypes\net48-wi
 - 模块公开业务端口与运行组装接口必须区分；跨域业务代码不得通过 barrel 导出间接取得其它域的 repository、SDK 或具体基础设施。前端同一应用内的功能模块也必须遵守公开入口约束，不能只检查四个应用之间的隔离。
 - 新模块验收必须包含依赖边界检查和 API 生产者/消费者合同验证；现有未收口项见 `docs/backend-api-modularity-audit-20260908.md`。在自动检查补齐前逐项人工核对，不得把该规则已写入文档表述为自动门禁已实现。
 - `verify:server-boundary-delta` 已接入服务端类型检查及构建，拒绝新增或陈旧的已检测越界记录；存量债务位于 `docs/architecture/server-boundary-debt.json`。修复对应依赖后同时删除精确记录；禁止自动重建基线、用通配符或删除一条来抵消新越界。该增量门禁不代表存量清零或扫描范围完整。
+- `verify:frontend-boundary-delta` 每次先prepare主站Nuxt声明，再扫描前端精确依赖；已接入现有前端边界检查以及测试、构建、类型检查入口。存量位于 `docs/architecture/frontend-boundary-debt.json`，禁止新增、扩大或保留陈旧例外；跨应用/共享包反向依赖不得加入豁免。Nuxt server隐式依赖及动态组件覆盖仍需补齐，不把增量通过等同完整前端架构验收。
 - 禁止新增巨型 View、巨型路由、巨型 repository、通用万能 RPC 或混合多个领域含义的状态枚举。复杂页面和用例按稳定业务职责拆分。
 - 错误码使用稳定英文机器码；用户可见文案使用自然中文，不直接暴露堆栈、SQL、凭据或内部错误正文。
 - 仓库没有统一自动格式化器时，修改必须匹配相邻代码，并通过 `git diff --check`。

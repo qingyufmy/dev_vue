@@ -1,4 +1,7 @@
-const allowedRules = new Set(['cross-module-internal', 'public-implementation-export', 'domain-dependency', 'source-cycle', 'module-cycle'])
+const rulesByScope = {
+  server: new Set(['cross-module-internal', 'public-implementation-export', 'domain-dependency', 'source-cycle', 'module-cycle']),
+  frontend: new Set(['feature-internal', 'source-cycle', 'module-cycle']),
+}
 
 export function boundaryIdentity(finding) {
   const identity = { rule: finding.rule, source: finding.source, target: finding.target }
@@ -13,7 +16,9 @@ export function boundaryIdentity(finding) {
   return identity
 }
 
-export function compareBoundaryDebt(findings, baseline) {
+export function compareBoundaryDebt(findings, baseline, scope = 'server') {
+  const allowedRules = rulesByScope[scope]
+  if (!allowedRules) throw new Error('invalid_boundary_scope')
   if (baseline.version !== 1 || !Array.isArray(baseline.entries)) throw new Error('invalid_boundary_baseline')
   const expected = new Map(), actual = new Map()
   for (const entry of baseline.entries) {
@@ -42,5 +47,5 @@ export function compareBoundaryDebt(findings, baseline) {
   }
   return { passed: !added.length && !stale.length, findingCount: findings.length,
     debtEntryCount: baseline.entries.length, added, stale,
-    scope: 'Prevents changes to currently detected server boundary debt; does not establish full architecture compliance.' }
+    scope: `Prevents changes to currently detected ${scope} boundary debt; does not establish full architecture compliance.` }
 }

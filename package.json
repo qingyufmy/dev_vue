@@ -17,9 +17,9 @@
     "dev:admin": "pnpm --filter @aurum/admin dev",
     "dev:auth": "pnpm --filter @aurum/auth dev",
     "build:frontend": "pnpm run verify:frontend-boundaries && pnpm -r --filter ./frontend/** --if-present run build",
-    "typecheck:frontend": "pnpm run verify:api-types && pnpm -r --filter ./frontend/** --if-present run typecheck",
+    "typecheck:frontend": "pnpm run verify:frontend-boundaries && pnpm run verify:api-types && pnpm -r --filter ./frontend/** --if-present run typecheck",
     "test:frontend": "pnpm run verify:frontend-boundaries && pnpm -r --filter ./frontend/** --if-present run test",
-    "verify:frontend-boundaries": "node frontend/scripts/verify-boundaries.mjs",
+    "verify:frontend-boundaries": "node frontend/scripts/verify-boundaries.mjs && pnpm run verify:frontend-boundary-delta",
     "inspect:server-boundaries": "node scripts/inspect-server-boundaries.mjs",
     "inspect:frontend-boundaries": "node scripts/inspect-frontend-boundaries.mjs",
     "generate:api-contract": "node scripts/build-api-contract.mjs",
@@ -49,7 +49,8 @@
     "rehearse:trade-history": "node scripts/rehearse-trade-history-migration.mjs",
     "generate:api-runtime": "pnpm run verify:api-generated && node scripts/generate-api-runtime.mjs",
     "verify:api-runtime": "pnpm run verify:api-generated && node scripts/generate-api-runtime.mjs --check",
-    "verify:server-boundary-delta": "node scripts/verify-server-boundary-delta.mjs"
+    "verify:server-boundary-delta": "node scripts/verify-server-boundary-delta.mjs",
+    "verify:frontend-boundary-delta": "node scripts/verify-frontend-boundary-delta.mjs"
   },
   "dependencies": {
     "@alicloud/dysmsapi20170525": "^4.6.0",
