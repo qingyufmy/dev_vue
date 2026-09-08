@@ -1,7 +1,8 @@
+import { createTradeHistoryHttp } from '../src/modules/trade-history/composition.js'
 import Fastify from 'fastify'
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it, vi } from 'vitest'
-import { classifyTradeAttribution, TradeHistoryService, tradeHistoryRoutes, type TradeHistoryRepository, type TradeRecordDetail } from '../src/modules/trade-history/index.js'
+import { classifyTradeAttribution, TradeHistoryService, type TradeHistoryRepository, type TradeRecordDetail } from '../src/modules/trade-history/index.js'
 
 const now = '2026-09-04T08:00:00.000Z'
 const item = { accountCurrency: 'USD', currencyEvidence: 'explicit_record' as const,
@@ -64,7 +65,7 @@ describe('Stage 12S authoritative trade history', () => {
 
   it('returns normalized DTOs and exact evidence links without exposing raw terminal payloads', async () => {
     const app = Fastify({ logger: false })
-    await app.register(tradeHistoryRoutes, { prefix: '/api/v4', service: new TradeHistoryService(repository(), () => new Date(now)), auth: { async authenticate() { return { userId: 7 } } } })
+    await app.register(createTradeHistoryHttp(new TradeHistoryService(repository(), () => new Date(now)), { async authenticate() { return { userId: 7 } } }))
     const list = await app.inject({ method: 'GET', url: '/api/v4/trade-history?account_id=42' })
     expect(list.statusCode).toBe(200)
     expect(list.json().data).toMatchObject({ captured_end: now, freshness: { history_revision: '8' }, summary: { account_currency: 'USD', money_status: 'comparable' }, items: [{ account_currency: 'USD', currency_evidence: 'explicit_record', primary_ticket: '1001', source: 'system', net_profit: '97' }] })
@@ -82,7 +83,7 @@ describe('Stage 12S authoritative trade history', () => {
       daily: [{ businessDate: '2026-09-04', tradeCount: 1, netProfit: null, cumulativeNetProfit: null }],
     }) })
     const app = Fastify({ logger: false })
-    await app.register(tradeHistoryRoutes, { prefix: '/api/v4', service: new TradeHistoryService(repo, () => new Date(now)), auth: { async authenticate() { return { userId: 7 } } } })
+    await app.register(createTradeHistoryHttp(new TradeHistoryService(repo, () => new Date(now)), { async authenticate() { return { userId: 7 } } }))
     try {
       const result = await app.inject({ method: 'GET', url: '/api/v4/trade-history?account_id=42' })
       expect(result.statusCode).toBe(200)

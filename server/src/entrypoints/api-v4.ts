@@ -23,7 +23,7 @@ import { InferenceService, MysqlInferenceRepository } from '../modules/inference
 import { MysqlRiskRepository, RiskService } from '../modules/risk/index.js'
 import { MysqlReviewRepository, ReviewService } from '../modules/reviews/index.js'
 import { MysqlStrategyCatalog, StrategyService } from '../modules/strategies/index.js'
-import { MysqlTradeHistoryRepository, TradeHistoryService } from '../modules/trade-history/index.js'
+import { createMysqlTradeHistoryHttp } from '../modules/trade-history/composition.js'
 import { assertTradingSchemaReady, createTradingApiModule } from '../modules/trading/composition.js'
 import { registerApiV4Routes } from '../transport/api-v4-route-registrar.js'
 
@@ -65,7 +65,7 @@ async function main() {
     execution: new ExecutionService(new MysqlExecutionRepository(pool, createTransactionAccountClock)),
     userExecution,
     executionDistribution,
-    tradeHistory: new TradeHistoryService(new MysqlTradeHistoryRepository(pool)),
+    tradeHistoryHttp: createMysqlTradeHistoryHttp(pool, tradeAuth),
     auditHttp: createMysqlAuditModule(pool, tradeAuth).http,
     tradeAuth,
     settingsHttp: createMysqlSettingsModule(pool, observerAdminAuth).http,

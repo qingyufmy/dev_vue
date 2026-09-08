@@ -1176,19 +1176,6 @@
     {
       "finding": {
         "rule": "cross-module-internal",
-        "source": "server/src/modules/trade-history/application/trade-history-service.ts",
-        "target": "server/src/modules/trading/domain/trading.ts",
-        "kind": "import",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "trade-history",
-      "phase": "P5",
-      "reason": "现有跨域内部依赖；随所属域迁移到公开业务端口并由组装入口注入，禁止继续新增。"
-    },
-    {
-      "finding": {
-        "rule": "cross-module-internal",
         "source": "server/src/modules/trade-history/domain/terminal-history-projection.ts",
         "target": "server/src/modules/bridge/domain/bridge-query.ts",
         "kind": "import",
@@ -1229,33 +1216,7 @@
       "finding": {
         "rule": "public-implementation-export",
         "source": "server/src/modules/trade-history/index.ts",
-        "target": "server/src/modules/trade-history/infrastructure/mysql-trade-history-repository.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "trade-history",
-      "phase": "P5",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/trade-history/index.ts",
         "target": "server/src/modules/trade-history/infrastructure/mysql-trade-history-schedule-repository.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "trade-history",
-      "phase": "P5",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/trade-history/index.ts",
-        "target": "server/src/modules/trade-history/transport/http/trade-history-routes.ts",
         "kind": "export",
         "typeOnly": false
       },

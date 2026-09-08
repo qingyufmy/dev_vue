@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { assertOpaqueId, assertSymbol } from '../../trading/domain/trading.js'
+import { assertOpaqueId, assertSymbol } from '../../trading/index.js'
 import {
   decodeTradeHistoryCursor, encodeTradeHistoryCursor, TradeHistoryError,
   type TradeHistoryFilter, type TradeHistorySide, type TradeHistorySource, type TradeOutcomeFilter,

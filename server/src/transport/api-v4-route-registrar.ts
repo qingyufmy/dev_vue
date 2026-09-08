@@ -10,7 +10,6 @@ import { inferenceRoutes, type InferenceService } from '../modules/inference/ind
 import { riskRoutes, type RiskService } from '../modules/risk/index.js'
 import { reviewRoutes, type ReviewService } from '../modules/reviews/index.js'
 import { strategyRoutes, type StrategyService } from '../modules/strategies/index.js'
-import { tradeHistoryRoutes, type TradeHistoryService } from '../modules/trade-history/index.js'
 import {
   type TradeSessionAuthenticator, type ObserverManagementRequestAuthenticator,
 } from '../modules/trading/index.js'
@@ -29,7 +28,7 @@ export interface ApiV4RouteServices {
   execution: ExecutionService
   userExecution: UserExecutionCommandService
   executionDistribution: ExecutionDistributionService
-  tradeHistory: TradeHistoryService
+  tradeHistoryHttp: FastifyPluginAsync
   auditHttp: FastifyPluginAsync
   tradeAuth: TradeSessionAuthenticator
   settingsHttp: FastifyPluginAsync
@@ -65,7 +64,7 @@ export async function registerApiV4Routes(
     await trade.register(executionRoutes, { prefix: '/api/v4', service: services.execution, auth: services.tradeAuth })
     await trade.register(userExecutionCommandRoutes, { prefix: '/api/v4', service: services.userExecution, auth: services.tradeAuth })
     await trade.register(executionDistributionRoutes, { prefix: '/api/v4', service: services.executionDistribution, auth: services.tradeAuth })
-    await trade.register(tradeHistoryRoutes, { prefix: '/api/v4', service: services.tradeHistory, auth: services.tradeAuth })
+    await trade.register(services.tradeHistoryHttp)
     await trade.register(services.auditHttp, { prefix: '/api/v4' })
   })
 }

@@ -638,3 +638,12 @@ inference 通过 trading 公开合同定义 AnalysisTradingReader 四项读取�
 30 项定向测试通过；策略行情测试经实际工厂运行，适配公开 JsonObject 返回类型后保留字段与条数断言，14 项相关测试重跑通过。server 类型/构建及 API 生成运行校验通过，精确删除三个跨域内部依赖与一项具体实现公开导出，债务 102→98，无新增或陈旧记录。交易、行情采样、EMA 与账户来源选择逻辑未变；本批未运行 Worker、连接数据库或调用模型。
 
 本批只关闭对应读取和组装依赖，其余推理基础设施公开导出、跨域 SQL、账户完整流程及 P0–P7 继续推进。
+
+
+## 45. 交易历史 HTTP 组装边界（第一百一十五批）
+
+trade-history composition 新增 createTradeHistoryHttp/createMysqlTradeHistoryHttp，负责读取用例、MySQL 适配器及固定 /api/v4 前缀。业务 index 移除读取 repository 与 HTTP 路由导出，API 入口创建插件，总注册器只在 trade Host 范围内挂载。历史服务的账户 ID/品种校验改为 trading 公开入口，校验和错误语义不变。
+
+23 项核心 HTTP、金额和归属回归通过，HTTP 测试经真实组装工厂调用；server 类型/构建及 API 生成运行一致性通过，321 项冻结输入不变。精确删除两项具体实现公开导出和一项内部穿透，债务 98→95，无新增或陈旧记录。本批没有连接数据库、启动 API 或运行历史采集。
+
+历史采集/调度的具体实现公开导出、Bridge 类型依赖及其它账户 SQL 继续保留待办；本次不表示整个历史域或 P0–P7 完成。
