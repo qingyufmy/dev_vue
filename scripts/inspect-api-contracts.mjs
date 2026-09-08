@@ -1,3 +1,4 @@
+import { createRiskHttp } from '../server/dist-v4/modules/risk/composition.js'
 import { createMarketHttp } from '../server/dist-v4/modules/market/composition.js'
 import { createTradeHistoryHttp } from '../server/dist-v4/modules/trade-history/composition.js'
 import { createReviewHttp } from '../server/dist-v4/modules/reviews/composition.js'
@@ -34,6 +35,7 @@ services.inferenceHttp = createInferenceHttp(stub, stub, stub)
 services.strategiesHttp = createStrategyHttp(stub, stub)
 services.reviewsHttp = createReviewHttp(stub, stub)
 services.tradeHistoryHttp = createTradeHistoryHttp(stub, stub)
+services.riskHttp = createRiskHttp(stub, stub)
 services.marketHttp = createMarketHttp(stub, stub, stub, stub)
 services.bridgeHttp = createBridgeHttp(stub, stub, stub)
 services.tradingHttp = createTradingHttp(stub, stub, stub, stub)

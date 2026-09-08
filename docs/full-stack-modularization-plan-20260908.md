@@ -1254,3 +1254,9 @@ Chrome实际打开localhost:4174/market，现有服务可访问但会话未登�
 新增market-realtime模块，使用统一connectRealtime和短期ticket，只订阅market宏观/日历，排除admin来源健康目标。按用户scope校验严格事件，匹配request_id的ready后重读HTTP，变更刷新概览及打开的详情；连接ready超时10秒，失败指数退避到30秒，停止时清理timer/连接并拒绝迟到回调。页面显示连接/自动更新/快照模式并在身份变化及卸载停止订阅。
 
 新增两项实时生命周期测试配合既有六项共八项通过，trade类型及边界通过；测试覆盖目标范围、ready关联、跨用户事件拒绝、停止与失败重试，不代表真实Gateway/Redis正向链路。后续仍需登录浏览器及通知端到端验收。无数据库写入、重启或部署。
+
+## 105. Risk 运行组装边界（第一百七十五批）
+
+继续总体服务端收口：risk业务index移除MysqlRiskRepository与riskRoutes公开导出，新增composition提供createRiskService/createRiskReviewWorker/createRiskHttp。API和Worker入口使用工厂，中央路由仅注册riskHttp插件；路由检查器和组装测试同步注入。未改变风控规则、事务或执行权限。
+
+16项确定性风控与8项运行组装共24项通过，类型/构建、96/96实际路由对账及冻结321通过。精确删除risk两条public-implementation-export，债务50→48（risk剩4），无新增或陈旧记录。仍有risk域类型循环、inference内部类型依赖及其它域债务，不能称risk整体完成。无数据库连接、重启、部署或终端动作；下一批处理risk剩余类型边界并验证规则行为不变。

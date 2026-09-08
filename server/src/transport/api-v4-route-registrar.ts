@@ -5,7 +5,6 @@ import {
   executionDistributionRoutes, executionRoutes, userExecutionCommandRoutes, type ExecutionDistributionService,
   type ExecutionService, type UserExecutionCommandService,
 } from '../modules/execution/index.js'
-import { riskRoutes, type RiskService } from '../modules/risk/index.js'
 import {
   type TradeSessionAuthenticator, type ObserverManagementRequestAuthenticator,
 } from '../modules/trading/index.js'
@@ -19,7 +18,7 @@ export interface ApiV4RouteServices {
   marketHttp: FastifyPluginAsync
   inferenceHttp: FastifyPluginAsync
   strategiesHttp: FastifyPluginAsync
-  risk: RiskService
+  riskHttp: FastifyPluginAsync
   reviewsHttp: FastifyPluginAsync
   execution: ExecutionService
   userExecution: UserExecutionCommandService
@@ -55,7 +54,7 @@ export async function registerApiV4Routes(
     await trade.register(services.marketHttp)
     await trade.register(services.inferenceHttp)
     await trade.register(services.strategiesHttp)
-    await trade.register(riskRoutes, { prefix: '/api/v4', service: services.risk, auth: services.tradeAuth })
+    await trade.register(services.riskHttp)
     await trade.register(services.reviewsHttp)
     await trade.register(executionRoutes, { prefix: '/api/v4', service: services.execution, auth: services.tradeAuth })
     await trade.register(userExecutionCommandRoutes, { prefix: '/api/v4', service: services.userExecution, auth: services.tradeAuth })

@@ -1,10 +1,11 @@
+import { riskRoutes } from '../src/modules/risk/transport/http/risk-routes.js'
 import { readFile } from 'node:fs/promises'
 import Fastify from 'fastify'
 import { describe, expect, it } from 'vitest'
 import type { TraderAction, TraderDecisionResult } from '../src/modules/inference/index.js'
 import {
   buildAccountRiskSummary, DEFAULT_RISK_POLICY, evaluateRisk, resolveRiskPolicy, RiskError,
-  assessManualRelease, RiskReviewWorker, riskRoutes, RiskService,
+  assessManualRelease, RiskReviewWorker, RiskService,
   type AccountRiskSummary, type CompleteRiskReviewInput, type EffectiveRiskPolicy,
   type CreateManualRiskReleaseInput, type ManualRiskRelease, type ReplaceAccountRiskPolicyInput, type RiskDecisionDetail, type RiskDecisionSummary,
   type RiskEvaluationInput, type RiskRepository, type SaveRiskSummaryInput,

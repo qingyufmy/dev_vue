@@ -1450,3 +1450,7 @@ Bridge/持仓/market及合同组装累计diff审查，发布预检ready、fetch�
 ## 第一百七十四批：市场实时失效
 
 market/calendar订阅、ready后HTTP重读、用户scope和退避清理接线；八项测试及类型/边界通过。Chrome只验证未登录重定向，正向视觉及真实实时链路待验收；详见总体方案第104节。
+
+## 第一百七十五批：Risk 组装
+
+risk具体repository与HTTP退出业务index，运行入口使用composition工厂；24项回归、类型/构建、API96/96及冻结321通过。服务端债务48条，risk仍4条；详见总体方案第105节。

@@ -3,7 +3,7 @@ import {
   assertV4RuntimeEnabled, closeHttpServer, createMysqlPool, installProcessLifecycle,
   loadServerEnvironment, loadV4RuntimeConfig, RoleHealth, startRoleHealthServer,
 } from '../bootstrap/index.js'
-import { MysqlRiskRepository, RiskReviewWorker } from '../modules/risk/index.js'
+import { createRiskReviewWorker } from '../modules/risk/composition.js'
 import { RISK_QUEUE, type RiskReviewJob } from '../queue/task-queues.js'
 
 loadServerEnvironment()
@@ -14,7 +14,7 @@ async function main() {
   const health = new RoleHealth('worker-risk')
   const pool = createMysqlPool(config.mysql)
   await pool.query('SELECT 1')
-  const processor = new RiskReviewWorker(new MysqlRiskRepository(pool))
+  const processor = createRiskReviewWorker(pool)
   const worker = new Worker<RiskReviewJob>(RISK_QUEUE, async job => {
     if (job.name !== 'risk.review' || !job.data.decisionId) throw new Error('risk_job_invalid')
     const result = await processor.process(job.data.decisionId)
