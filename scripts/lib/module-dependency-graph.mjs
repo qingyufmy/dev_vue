@@ -125,13 +125,15 @@ export function moduleCycles(edges, ownerOf) {
 }
 
 function cycleFindings(edges, ownerOf) {
+  const evidence = edge => ({ source: edge.source, target: edge.target, line: edge.line, kind: edge.kind, typeOnly: Boolean(edge.typeOnly) })
   return [
     ...dependencyCycles(edges).map(cycle => ({ rule: 'source-cycle', source: cycle[0], target: cycle.join(' -> '),
       runtime: dependencyCycles(edges.filter(edge => !edge.typeOnly)).some(runtime => runtime.every(file => cycle.includes(file))),
+      evidence: edges.filter(edge => cycle.includes(edge.source) && cycle.includes(edge.target)).map(evidence),
     })),
     ...moduleCycles(edges, ownerOf).map(cycle => ({ rule: 'module-cycle', source: cycle.members[0],
       target: cycle.members.join(' -> '), runtime: cycle.runtime,
-      evidence: cycle.edges.map(edge => ({ source: edge.source, target: edge.target, line: edge.line, typeOnly: Boolean(edge.typeOnly) })),
+      evidence: cycle.edges.map(evidence),
     })),
   ]
 }
@@ -139,7 +141,7 @@ function cycleFindings(edges, ownerOf) {
 export function serverBoundaryFindings(graph) {
   const findings = []
   const add = (edge, rule) => findings.push({ rule, source: edge.source,
-    target: edge.target ?? edge.external ?? edge.specifier ?? '<computed>', line: edge.line })
+    target: edge.target ?? edge.external ?? edge.specifier ?? '<computed>', line: edge.line, kind: edge.kind, typeOnly: Boolean(edge.typeOnly) })
   for (const edge of graph.unresolved) add(edge, 'unresolved-dependency')
   for (const edge of graph.edges) {
     const source = moduleInfo(edge.source), target = moduleInfo(edge.target)

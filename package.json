@@ -28,8 +28,8 @@
     "verify:api-types": "pnpm run verify:api-generated && node scripts/generate-api-types.mjs --check",
     "inspect:api-contracts": "pnpm run verify:api-generated && pnpm run build:server:v4 && node scripts/inspect-api-contracts.mjs",
     "inspect:api-schemas": "pnpm run verify:api-generated && node scripts/inspect-api-schemas.mjs",
-    "typecheck:server": "pnpm run verify:api-runtime && tsc -p server/tsconfig.json --noEmit",
-    "build:server:v4": "pnpm run verify:api-runtime && tsc -p server/tsconfig.build.json",
+    "typecheck:server": "pnpm run verify:server-boundary-delta && pnpm run verify:api-runtime && tsc -p server/tsconfig.json --noEmit",
+    "build:server:v4": "pnpm run verify:server-boundary-delta && pnpm run verify:api-runtime && tsc -p server/tsconfig.build.json",
     "start:v4:api": "node server/dist-v4/entrypoints/api-v4.js",
     "start:v4:realtime": "node server/dist-v4/entrypoints/browser-realtime.js",
     "start:v4:bridge": "node server/dist-v4/entrypoints/bridge-gateway.js",
@@ -48,7 +48,8 @@
     "upgrade:dev-vue-schema": "node scripts/upgrade-dev-vue-schema.mjs",
     "rehearse:trade-history": "node scripts/rehearse-trade-history-migration.mjs",
     "generate:api-runtime": "pnpm run verify:api-generated && node scripts/generate-api-runtime.mjs",
-    "verify:api-runtime": "pnpm run verify:api-generated && node scripts/generate-api-runtime.mjs --check"
+    "verify:api-runtime": "pnpm run verify:api-generated && node scripts/generate-api-runtime.mjs --check",
+    "verify:server-boundary-delta": "node scripts/verify-server-boundary-delta.mjs"
   },
   "dependencies": {
     "@alicloud/dysmsapi20170525": "^4.6.0",
