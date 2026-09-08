@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import type { Pool } from 'mysql2/promise'
 import { describe, expect, it, vi } from 'vitest'
 import type { BridgeGatewayRoute } from '../src/modules/bridge/index.js'
-import { type TradingReadRepository } from '../src/modules/trading/index.js'
+import { type TradingReadRepository, type AccountLiveRouteReader } from '../src/modules/trading/index.js'
 import { MysqlTradingRepository } from '../src/modules/trading/infrastructure/mysql-trading-repository.js'
 import { createProjectionReservationAbsorber } from '../src/modules/execution/composition.js'
 
@@ -103,6 +103,22 @@ function leaseFor(value: BridgeGatewayRoute | null) {
 }
 
 describe('MysqlTradingRepository P3 offline account read model', () => {
+  it('accepts only the consumer route fields and rejects an epoch mismatch in private projections', async () => {
+    const pool = new FakePool()
+    pool.currentRows = [account()]
+    pool.heartbeatRows = [{ last_seen_at_utc: new Date() }]
+    pool.permissionRows = [source({ trade_permission: 1 })]
+    pool.sourceRows = [source({ source_connection_epoch: 3 })]
+    const reader: AccountLiveRouteReader = { current: async () => ({
+      userId: 7, accountId: '42', platform: 'mt5', brokerServer: 'Demo', login: '596520',
+      terminalProfileId: 'profile-a', terminalInstanceId: 'instance-a', connectionId: 'connection-a', connectionEpoch: 4,
+    }) }
+    const repository = new MysqlTradingRepository(pool.asPool(), reader)
+    expect((await repository.listAccounts(7))[0]?.bridgeState).toBe('online')
+    await expect(repository.listPositions('42', 7)).resolves.toEqual({ revision: 0, items: [] })
+    expect(pool.calls.some(call => call.sql.includes('FROM open_position_snapshots'))).toBe(false)
+  })
+
   it.each([false, true])('commits or rolls back absorption on the projection connection (event failure=%s)', async eventFailure => {
     const pool = new FakePool()
     const original = pool.execute.bind(pool)

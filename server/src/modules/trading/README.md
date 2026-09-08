@@ -25,6 +25,8 @@
 
 ## 验证与剩余边界
 
+运行在线证据通过AccountLiveRouteReader消费方端口读取，不导入BridgeGatewayLeaseStore。端口只提供账户、用户、平台/服务器/login、档案、终端实例及连接ID/epoch；连接声明不代表授权，仍与MySQL当前归属、绑定、新鲜心跳联合检查。租约不可用或不匹配保持离线；私有投影代次不匹配拒绝返回旧快照。Bridge实现以结构兼容方式注入，无需共享其完整路由类型或写租约能力。
+
 定向验证覆盖trading-composition、账户离线查询、账户/观摩HTTP、浏览器实时、Bridge投影以及认证边界；服务端完整类型检查、构建与精确越界检查同时执行。
 
 第三十九批移除8个基础设施及2个HTTP公开导出，第四十批另移除事务账户时钟SQL导出，第四十一批移除实时hub/session导出。业务index现在仅导出domain/application能力。createTradingHttp/createObserverManagementHttp负责固定路由前缀，总注册器继续拥有trade/admin的域名隔离。其它域内部依赖、跨域写入与类型依赖环尚未清零。此次组装变更不代表账户模块或全栈重构完成，也不改变数据库就绪状态。

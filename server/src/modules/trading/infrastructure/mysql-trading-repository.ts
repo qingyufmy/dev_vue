@@ -5,7 +5,7 @@ import type {
   TrustedBridgeProjectionRepository, TrustedBridgeProjectionWrite,
 } from '../application/trading-ports.js'
 import { MysqlObserverAccessReader } from './mysql-observer-access-reader.js'
-import type { BridgeGatewayLeaseStore } from '../../bridge/index.js'
+import type { AccountLiveRouteReader } from '../application/account-live-route-reader.js'
 import type {
   AccountSnapshot, MarketCandle, MarketQuote, OpenPosition, PendingOrder, RealtimeResource,
   TerminalProfileSummary, Timeframe, TradingAccountSummary, TradingContext,
@@ -143,7 +143,7 @@ function projectionResourceId(_resource: 'positions' | 'pending_orders') { retur
 export class MysqlTradingRepository implements TradingReadRepository, TradingProjectionRepository, TrustedBridgeProjectionRepository, ConnectionCapacityRepository {
   constructor(
     private readonly pool: Pool,
-    private readonly gatewayLeases: Pick<BridgeGatewayLeaseStore, 'current'> | null = null,
+    private readonly gatewayLeases: AccountLiveRouteReader | null = null,
     observerAccessReader?: MysqlObserverAccessReader,
     private readonly reservationAbsorber?: (connection: PoolConnection) => ProjectionReservationAbsorber,
   ) { this.observerAccessReader = observerAccessReader ?? new MysqlObserverAccessReader(pool) }
@@ -284,7 +284,7 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
 
   private async liveRoute(context: CurrentProjectionContext): Promise<LiveRouteState> {
     if (Number(context.row.connection_paused) === 1 || !this.gatewayLeases) return { online: false, epoch: null, lastSeenAtUtc: null }
-    let route: Awaited<ReturnType<BridgeGatewayLeaseStore['current']>>
+    let route: Awaited<ReturnType<AccountLiveRouteReader['current']>>
     try { route = await this.gatewayLeases.current(context.row.id) }
     catch { return { online: false, epoch: null, lastSeenAtUtc: null } }
     if (!route || route.userId !== context.userId || route.accountId !== context.row.id

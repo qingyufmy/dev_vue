@@ -4,6 +4,7 @@ import { createMysqlContextWritePort } from './infrastructure/mysql-context-writ
 import type { BrowserRealtimePublication, BrowserRealtimeSessions } from './application/browser-realtime-ports.js'
 import { BrowserRealtimeSession } from './transport/realtime/browser-realtime-session.js'
 import type { AccountClockReader } from './application/account-clock-reader.js'
+import type { AccountLiveRouteReader } from './application/account-live-route-reader.js'
 import { readTransactionAccountClock } from './infrastructure/mysql-transaction-account-clock.js'
 import type { Pool, PoolConnection } from 'mysql2/promise'
 import type { Redis } from 'ioredis'
@@ -28,7 +29,7 @@ import { RedisBrowserRealtimePublisher } from './infrastructure/redis-browser-re
 import { RedisBrowserRealtimeSubscriber } from './infrastructure/redis-browser-realtime-subscriber.js'
 import { BrowserRealtimeHub } from './transport/realtime/browser-realtime-hub.js'
 
-type GatewayLeases = NonNullable<ConstructorParameters<typeof MysqlTradingRepository>[1]>
+type GatewayLeases = AccountLiveRouteReader
 
 export const assertTradingSchemaReady = assertMysqlTradingSchemaReady
 
