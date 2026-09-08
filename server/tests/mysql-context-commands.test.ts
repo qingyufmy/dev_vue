@@ -1,3 +1,4 @@
+import { createActivePrincipalAccess } from '../src/modules/auth/composition.js'
 import { expect, it, vi } from 'vitest'
 import type { Pool, PoolConnection } from 'mysql2/promise'
 import { MysqlContextCommands } from '../src/modules/trading/infrastructure/mysql-context-commands.js'
@@ -36,7 +37,7 @@ function fixture() {
   } }
   const resolve = vi.fn(async (_connection: PoolConnection, c: ContextWriteCommand) => ({ userId: c.userId,
     mode: 'full' as const, accountId: c.targetId, observerChannelId: null, readOnly: false }))
-  return { writer: new MysqlContextCommands(pool as unknown as Pool, resolve), resolve, connections,
+  return { writer: new MysqlContextCommands(pool as unknown as Pool, resolve, createActivePrincipalAccess), resolve, connections,
     failRollback: () => { rollbackFailure = true }, state: () => state, failReceipt: () => { receiptFailure = true }, loseAck: () => { lostAck = true }, deactivate: () => { active = false } }
 }
 

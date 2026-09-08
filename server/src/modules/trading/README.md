@@ -59,3 +59,10 @@ API 入口在启动与 health/ready 中注入 auth composition 的 assertAccount
 未注入能力的历史工具保留原完整摘要检查，旧生成文件和冻结输入不变。该兼容能力仅针对读取，不证明 users 所有写入、新增非空字段对认证写入的兼容性，或其它模块完整就绪。账户对 users 的直接 SQL 仍待端口化；它不是全域解耦完成。用户表无关字段不进入六字段元数据查询，但本批没有真实执行增列 DDL。
 
 定向测试：server/tests/auth-account-principal-schema.test.ts、server/tests/trading-schema-readiness.test.ts。构建后运行 node scripts/verify-account-principal-schema-local.mjs <新绝对路径回执>，在当前开发库仅读元数据与账本，无业务数据读取或写入。
+
+
+### 上下文命令的有效用户能力
+
+MysqlContextCommands、createTradingContextWriter 和 createTradingApiModule 必须注入 auth ActivePrincipalAccess 的连接工厂，无本地 SQL 后备。API 组装通过 auth composition 注入；写入仍在 begin 后以 update 模式锁用户，再读取回执和锁上下文，普通回执预检使用 none 模式。两处独立 users 查询归 auth，主事务仍由 trading 持有。
+
+mysql-context-receipts 中原有 EXISTS users 条件仍保留，使回执与有效性判断处于同一条查询；其它账户/观摩 SQL 也未据此宣称完成端口化。定向回归同时使用实际 auth 适配器和交易状态替身，覆盖用户锁顺序、撤销、历史重放、回滚及提交未知；本批未重新运行真实并发 MySQL 演练。

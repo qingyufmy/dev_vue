@@ -1,3 +1,4 @@
+import { createActivePrincipalAccess } from '../src/modules/auth/composition.js'
 import { expect, it, vi } from 'vitest'
 import type { Pool } from 'mysql2/promise'
 import { createTradingContextWriter } from '../src/modules/trading/composition.js'
@@ -73,7 +74,7 @@ function fixture() {
     },
   }
   return {
-    port: createTradingContextWriter(pool as unknown as Pool, leases), calls, leases,
+    port: createTradingContextWriter(pool as unknown as Pool, leases, createActivePrincipalAccess), calls, leases,
     revision: () => revision, lostAck: () => { lostAck = true }, failPreparation: () => { prepareFails = true },
     failConnection: () => { connectionFails = true }, removeTarget: () => { removed = true },
     deactivate: () => { active = false }, beforeTransaction: (callback: () => void) => { betweenReads = callback },

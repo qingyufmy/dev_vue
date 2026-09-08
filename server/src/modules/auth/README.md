@@ -30,3 +30,8 @@ AuthService通过自身所需的BridgeDeviceRevoker端口触发设备撤销；�
 受限 composition 导出 assertAccountPrincipalReadSchema，供 API 组装注入账户就绪检查，同一升级锁连接内执行。auth/account-principal-read/v1 所需 users 字段为 id、role、plan、plan_expires_at、deleted_at、deletion_status，验证 MySQL 类型、空值和字符串排序语义及 id 主键；只读取信息架构元数据。
 
 该能力不经业务 index 导出，不向 domain/application 暴露连接；不涵盖完整 auth 写入就绪，不允许将通过结果当作迁移、权限或权益状态证明。字段消费来自 trading 的当前账户归属/观摩查询，后续 SQL 端口化仍需继续。
+
+
+## 事务内有效用户查询
+
+业务 index 仅导出 ActivePrincipalAccess 类型；createActivePrincipalAccess 仅从 composition 创建绑定调用方连接的实现。isActive(userId, lock) 使用明确 none/update 模式读取删除状态；update 保留 FOR UPDATE 用户行锁，适配器不提交、不回滚、不释放连接。无效 ID 或模式直接拒绝，驱动错误脱敏。该能力不表示交易账户或观摩授权通过。

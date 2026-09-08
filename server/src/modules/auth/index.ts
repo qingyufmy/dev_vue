@@ -5,3 +5,4 @@ export type { AuthServiceOptions, AuthorizationRequest } from './application/aut
 export type * from './application/auth-ports.js'
 export { AuthError, transportSessionCookieName, cookieNameForClient, createPkceChallenge, hashSecret } from './domain/auth.js'
 export type { AppSurface, MfaLevel } from './domain/auth.js'
+export type { ActivePrincipalAccess } from './application/active-principal-access.js'

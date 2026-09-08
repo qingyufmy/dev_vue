@@ -1,4 +1,5 @@
 import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise'
+import type { ActivePrincipalAccess } from '../../auth/index.js'
 import type { ContextWritePort } from '../application/context-write-port.js'
 import { normalizeContextWrite, type ContextWriteCommand, type ContextWriteReceipt } from '../domain/context-write.js'
 import { TradingAccessError, type TradingContext } from '../domain/trading.js'
@@ -8,7 +9,8 @@ import { assertContextResult, contextCommandHash, readContextReceipt } from './m
 export type ContextTargetResolver = (connection: PoolConnection, command: ContextWriteCommand) => Promise<Omit<TradingContext, 'revision'>>
 
 export class MysqlContextCommands implements ContextWritePort {
-  constructor(private readonly pool: Pick<Pool, 'getConnection'>, private readonly resolveTarget: ContextTargetResolver) {}
+  constructor(private readonly pool: Pick<Pool, 'getConnection'>, private readonly resolveTarget: ContextTargetResolver,
+    private readonly principalAccess: (connection: PoolConnection) => ActivePrincipalAccess) {}
 
   async execute(input: ContextWriteCommand): Promise<ContextWriteReceipt> {
     const command = Object.freeze(normalizeContextWrite(input)), digest = contextCommandHash(command)
@@ -17,8 +19,7 @@ export class MysqlContextCommands implements ContextWritePort {
     try {
       await connection.beginTransaction(); started = true
       // An existing user row serializes the first context insertion as well as later revisions.
-      const [users] = await connection.execute<RowDataPacket[]>("SELECT id FROM users WHERE id=? AND deletion_status='active' AND deleted_at IS NULL FOR UPDATE", [command.userId])
-      if (users.length !== 1) throw new TradingAccessError('trading_account_forbidden', 403)
+      if (!await this.principalAccess(connection).isActive(command.userId, 'update')) throw new TradingAccessError('trading_account_forbidden', 403)
       const previous = await readContextReceipt(connection, command.userId, command.requestId)
       let result: ContextWriteReceipt
       if (previous) {
@@ -62,8 +63,7 @@ export class MysqlContextCommands implements ContextWritePort {
     normalizeContextWrite({ userId, requestId, action: 'leave_observer', targetId: null, expectedRevision: 0 })
     const connection = await this.pool.getConnection()
     try {
-      const [users] = await connection.execute<RowDataPacket[]>("SELECT id FROM users WHERE id=? AND deletion_status='active' AND deleted_at IS NULL", [userId])
-      if (users.length !== 1) throw new TradingAccessError('trading_account_forbidden', 403)
+      if (!await this.principalAccess(connection).isActive(userId, 'none')) throw new TradingAccessError('trading_account_forbidden', 403)
       return (await readContextReceipt(connection, userId, requestId))?.receipt ?? null
     } finally { connection.release() }
   }

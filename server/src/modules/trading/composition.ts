@@ -1,3 +1,4 @@
+import type { ActivePrincipalAccess } from '../auth/index.js'
 import type { ContextWritePort } from './application/context-write-port.js'
 import { assertMysqlTradingSchemaReady } from './infrastructure/mysql-schema-readiness.js'
 import { createMysqlContextWritePort } from './infrastructure/mysql-context-write-port.js'
@@ -41,15 +42,15 @@ export function createObserverManagementHttp(service: ObserverManagementService,
   return async app => { await app.register(observerManagementRoutes, { prefix: '/api/v4/admin/observer', service, auth }) }
 }
 
-export function createTradingContextWriter(pool: Pool, leases: GatewayLeases): ContextWritePort {
-  return createMysqlContextWritePort(pool, leases)
+export function createTradingContextWriter(pool: Pool, leases: GatewayLeases, principalAccess: (connection: PoolConnection) => ActivePrincipalAccess): ContextWritePort {
+  return createMysqlContextWritePort(pool, leases, principalAccess)
 }
 
 export function createTradingReader(pool: Pool, leases?: GatewayLeases): TradingReadRepository {
   return new MysqlTradingRepository(pool, leases)
 }
 
-export function createTradingApiModule(pool: Pool, cache: Redis, auth: { trade: TradeSessionAuthenticator; admin: ObserverManagementRequestAuthenticator }, leases: GatewayLeases): {
+export function createTradingApiModule(pool: Pool, cache: Redis, auth: { trade: TradeSessionAuthenticator; admin: ObserverManagementRequestAuthenticator }, leases: GatewayLeases, principalAccess: (connection: PoolConnection) => ActivePrincipalAccess): {
   trading: TradingService
   connectionCapacity: ConnectionCapacityService
   observerManagement: ObserverManagementService
@@ -66,7 +67,7 @@ export function createTradingApiModule(pool: Pool, cache: Redis, auth: { trade: 
   const tradeAuth = auth.trade
   const observerAdminAuth = auth.admin
   return { trading, connectionCapacity, observerManagement, tradeAuth, observerAdminAuth,
-    tradeHttp: createTradingHttp(trading, connectionCapacity, tradeAuth, createTradingContextWriter(pool, leases)),
+    tradeHttp: createTradingHttp(trading, connectionCapacity, tradeAuth, createTradingContextWriter(pool, leases, principalAccess)),
     observerHttp: createObserverManagementHttp(observerManagement, observerAdminAuth),
   }
 }

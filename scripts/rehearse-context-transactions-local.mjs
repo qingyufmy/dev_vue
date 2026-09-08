@@ -1,3 +1,4 @@
+import { createActivePrincipalAccess } from '../server/dist-v4/modules/auth/composition.js'
 import assert from 'node:assert/strict'
 import { readFile, writeFile } from 'node:fs/promises'
 import { randomUUID, createHash } from 'node:crypto'
@@ -55,7 +56,7 @@ try {
     }
     return actual
   } }
-  const writer = new MysqlContextCommands(observedPool, resolver)
+  const writer = new MysqlContextCommands(observedPool, resolver, createActivePrincipalAccess)
   const command = (userId, expectedRevision = 0, targetId = '7') => ({ userId, requestId: randomUUID(), action: 'select_account', targetId, expectedRevision })
   const first = command(42)
   const same = await Promise.all([writer.execute(first), writer.execute(first)])
@@ -86,7 +87,7 @@ try {
       const value = Reflect.get(target, key); return typeof value === 'function' ? value.bind(target) : value
     } })
   } }
-  const faulty = new MysqlContextCommands(faultPool, resolver), uncertain = command(44)
+  const faulty = new MysqlContextCommands(faultPool, resolver, createActivePrincipalAccess), uncertain = command(44)
   await assert.rejects(faulty.execute(uncertain), error => error.code === 'trading_context_commit_unknown')
   assert.equal((await writer.receipt(44, uncertain.requestId)).result.revision, 1)
   assert.equal((await writer.execute(uncertain)).replayed, true)

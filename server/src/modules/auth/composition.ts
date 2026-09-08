@@ -59,3 +59,4 @@ export function createRealtimeTicketAuthenticator(pool: Pool, redis: Redis) {
     new RedisAuthTransientStore(redis),
   )
 }
+export { createMysqlActivePrincipalAccess as createActivePrincipalAccess } from './infrastructure/mysql-active-principal-access.js'
