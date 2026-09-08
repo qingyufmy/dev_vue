@@ -22,6 +22,7 @@
     "verify:frontend-boundaries": "node frontend/scripts/verify-boundaries.mjs",
     "inspect:server-boundaries": "node scripts/inspect-server-boundaries.mjs",
     "inspect:frontend-boundaries": "node scripts/inspect-frontend-boundaries.mjs",
+    "inspect:api-contracts": "pnpm run build:server:v4 && node scripts/inspect-api-contracts.mjs",
     "typecheck:server": "tsc -p server/tsconfig.json --noEmit",
     "build:server:v4": "tsc -p server/tsconfig.build.json",
     "start:v4:api": "node server/dist-v4/entrypoints/api-v4.js",

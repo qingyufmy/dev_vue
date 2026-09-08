@@ -1,0 +1,896 @@
+{
+  "documentedCount": 93,
+  "businessRouteCount": 87,
+  "matchedCount": 85,
+  "missing": [
+    {
+      "method": "GET",
+      "path": "/api/v4/market/overview",
+      "operationId": "getMacroMarketOverview"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/market/macro-snapshots/latest",
+      "operationId": "getLatestMacroSnapshot"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/market/macro-snapshots",
+      "operationId": "listMacroSnapshots"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/market/macro-snapshots/{snapshot_id}",
+      "operationId": "getMacroSnapshot"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/market/macro-series",
+      "operationId": "listMacroSeriesPoints"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/market/calendar-events",
+      "operationId": "listEconomicCalendarEvents"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/market/calendar-events/{event_id}",
+      "operationId": "getEconomicCalendarEvent"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/positions",
+      "operationId": "listPositions"
+    }
+  ],
+  "undocumented": [
+    {
+      "method": "POST",
+      "path": "/api/v4/auth/logout",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/auth/session",
+      "schemas": []
+    }
+  ],
+  "parameterNameDifferences": [
+    {
+      "contract": {
+        "method": "GET",
+        "path": "/api/v4/trading-accounts/{account_id}/execution-context",
+        "operationId": "getExecutionCommandContext"
+      },
+      "runtime": {
+        "method": "GET",
+        "path": "/api/v4/trading-accounts/:accountId/execution-context",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "POST",
+        "path": "/api/v4/trading-accounts/{account_id}/execution-commands",
+        "operationId": "createExecutionCommand"
+      },
+      "runtime": {
+        "method": "POST",
+        "path": "/api/v4/trading-accounts/:accountId/execution-commands",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "GET",
+        "path": "/api/v4/trading-accounts/{account_id}/snapshot",
+        "operationId": "getTradingAccountSnapshot"
+      },
+      "runtime": {
+        "method": "GET",
+        "path": "/api/v4/trading-accounts/:accountId/snapshot",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "GET",
+        "path": "/api/v4/strategies/{strategy_id}",
+        "operationId": "getStrategy"
+      },
+      "runtime": {
+        "method": "GET",
+        "path": "/api/v4/strategies/:strategyId",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "PATCH",
+        "path": "/api/v4/strategies/{strategy_id}",
+        "operationId": "updateStrategyMetadata"
+      },
+      "runtime": {
+        "method": "PATCH",
+        "path": "/api/v4/strategies/:strategyId",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "POST",
+        "path": "/api/v4/strategies/{strategy_id}/versions",
+        "operationId": "createStrategyVersion"
+      },
+      "runtime": {
+        "method": "POST",
+        "path": "/api/v4/strategies/:strategyId/versions",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "POST",
+        "path": "/api/v4/strategies/{strategy_id}/versions/{version_id}/publish",
+        "operationId": "publishStrategyVersion"
+      },
+      "runtime": {
+        "method": "POST",
+        "path": "/api/v4/strategies/:strategyId/versions/:versionId/publish",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "POST",
+        "path": "/api/v4/strategies/{strategy_id}/retire",
+        "operationId": "retireStrategy"
+      },
+      "runtime": {
+        "method": "POST",
+        "path": "/api/v4/strategies/:strategyId/retire",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "PATCH",
+        "path": "/api/v4/strategy-subscriptions/{subscription_id}",
+        "operationId": "updateStrategySubscription"
+      },
+      "runtime": {
+        "method": "PATCH",
+        "path": "/api/v4/strategy-subscriptions/:subscriptionId",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "GET",
+        "path": "/api/v4/operations/{operation_id}",
+        "operationId": "getOperation"
+      },
+      "runtime": {
+        "method": "GET",
+        "path": "/api/v4/operations/:operationId",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "GET",
+        "path": "/api/v4/market-analyses/{analysis_id}",
+        "operationId": "getMarketAnalysis"
+      },
+      "runtime": {
+        "method": "GET",
+        "path": "/api/v4/market-analyses/:analysisId",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "POST",
+        "path": "/api/v4/market-analyses/{analysis_id}/trader-evaluations",
+        "operationId": "createTraderEvaluation"
+      },
+      "runtime": {
+        "method": "POST",
+        "path": "/api/v4/market-analyses/:analysisId/trader-evaluations",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "GET",
+        "path": "/api/v4/trade-decisions/{decision_id}",
+        "operationId": "getTradeDecision"
+      },
+      "runtime": {
+        "method": "GET",
+        "path": "/api/v4/trade-decisions/:decisionId",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "GET",
+        "path": "/api/v4/risk-accounts/{account_id}/policy",
+        "operationId": "getRiskPolicy"
+      },
+      "runtime": {
+        "method": "GET",
+        "path": "/api/v4/risk-accounts/:accountId/policy",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "PUT",
+        "path": "/api/v4/risk-accounts/{account_id}/policy",
+        "operationId": "replaceRiskPolicy"
+      },
+      "runtime": {
+        "method": "PUT",
+        "path": "/api/v4/risk-accounts/:accountId/policy",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "GET",
+        "path": "/api/v4/risk-accounts/{account_id}/summary",
+        "operationId": "getAccountRiskSummary"
+      },
+      "runtime": {
+        "method": "GET",
+        "path": "/api/v4/risk-accounts/:accountId/summary",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "GET",
+        "path": "/api/v4/risk-accounts/{account_id}/manual-release",
+        "operationId": "getManualRiskRelease"
+      },
+      "runtime": {
+        "method": "GET",
+        "path": "/api/v4/risk-accounts/:accountId/manual-release",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "POST",
+        "path": "/api/v4/risk-accounts/{account_id}/manual-release",
+        "operationId": "createManualRiskRelease"
+      },
+      "runtime": {
+        "method": "POST",
+        "path": "/api/v4/risk-accounts/:accountId/manual-release",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "GET",
+        "path": "/api/v4/risk-decisions/{risk_decision_id}",
+        "operationId": "getRiskDecision"
+      },
+      "runtime": {
+        "method": "GET",
+        "path": "/api/v4/risk-decisions/:decisionId",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "GET",
+        "path": "/api/v4/trade-history/{trade_record_id}",
+        "operationId": "getTradeRecord"
+      },
+      "runtime": {
+        "method": "GET",
+        "path": "/api/v4/trade-history/:recordId",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "GET",
+        "path": "/api/v4/audit/events/{source_kind}/{source_id}",
+        "operationId": "getAuditEvent"
+      },
+      "runtime": {
+        "method": "GET",
+        "path": "/api/v4/audit/events/:sourceKind/:sourceId",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "GET",
+        "path": "/api/v4/review-cases/{review_case_id}",
+        "operationId": "getReviewCase"
+      },
+      "runtime": {
+        "method": "GET",
+        "path": "/api/v4/review-cases/:caseId",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "POST",
+        "path": "/api/v4/review-cases/{review_case_id}/generations",
+        "operationId": "requestReviewGeneration"
+      },
+      "runtime": {
+        "method": "POST",
+        "path": "/api/v4/review-cases/:caseId/generations",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "POST",
+        "path": "/api/v4/review-cases/{review_case_id}/versions",
+        "operationId": "createReviewVersion"
+      },
+      "runtime": {
+        "method": "POST",
+        "path": "/api/v4/review-cases/:caseId/versions",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "POST",
+        "path": "/api/v4/review-cases/{review_case_id}/confirm",
+        "operationId": "confirmReviewVersion"
+      },
+      "runtime": {
+        "method": "POST",
+        "path": "/api/v4/review-cases/:caseId/confirm",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "POST",
+        "path": "/api/v4/review-cases/{review_case_id}/return",
+        "operationId": "returnReviewCase"
+      },
+      "runtime": {
+        "method": "POST",
+        "path": "/api/v4/review-cases/:caseId/return",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "GET",
+        "path": "/api/v4/strategy-memories/{memory_id}",
+        "operationId": "getStrategyMemory"
+      },
+      "runtime": {
+        "method": "GET",
+        "path": "/api/v4/strategy-memories/:memoryId",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "GET",
+        "path": "/api/v4/strategy-memories/{memory_id}/updates",
+        "operationId": "listStrategyMemoryUpdates"
+      },
+      "runtime": {
+        "method": "GET",
+        "path": "/api/v4/strategy-memories/:memoryId/updates",
+        "schemas": []
+      }
+    },
+    {
+      "contract": {
+        "method": "POST",
+        "path": "/api/v4/strategy-memory-updates/{update_id}/decision",
+        "operationId": "decideStrategyMemoryUpdate"
+      },
+      "runtime": {
+        "method": "POST",
+        "path": "/api/v4/strategy-memory-updates/:updateId/decision",
+        "schemas": []
+      }
+    }
+  ],
+  "duplicateContractRoutes": [],
+  "duplicateRuntimeRoutes": [],
+  "missingOperationIds": [],
+  "duplicateOperationIds": [],
+  "outsideBusinessPrefix": [
+    {
+      "method": "GET",
+      "path": "/.well-known/openid-configuration",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/oauth/jwks",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/oauth/authorize",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/oauth/token",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/auth/start",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/auth/callback",
+      "schemas": []
+    }
+  ],
+  "schemaRegistration": [
+    {
+      "method": "PUT",
+      "path": "/api/v4/learning/courses/:courseId/lessons/:lessonId/completion",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/learning/courses",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/learning/courses/:id",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/auth/login",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/auth/logout",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/auth/session",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/session",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/session/logout",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/session/logout-web",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/session/revoke-all",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/realtime/tickets",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/admin/settings/value",
+      "schemas": []
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v4/admin/settings/value",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/admin/referrals/rules",
+      "schemas": []
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v4/admin/referrals/rules",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/admin/observer/sources",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/admin/observer/sources",
+      "schemas": []
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v4/admin/observer/sources/:source_id",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/admin/observer/channels",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/admin/observer/channels",
+      "schemas": []
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v4/admin/observer/channels/:channel_id",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/admin/observer/channels/:channel_id/accesses",
+      "schemas": []
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v4/admin/observer/channels/:channel_id/accesses/:user_id",
+      "schemas": []
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v4/admin/observer/default-channel",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/admin/observer/operations",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/bridge/credential-revocations",
+      "schemas": [
+        "body",
+        "response"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/bridge/legacy-credential-exchanges",
+      "schemas": [
+        "body",
+        "response"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/bridge/session-tokens",
+      "schemas": [
+        "body",
+        "response"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/bridge/pairing-requests",
+      "schemas": [
+        "body"
+      ]
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/bridge/pairing-redemptions",
+      "schemas": [
+        "body"
+      ]
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/trading-context",
+      "schemas": []
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v4/trading-context",
+      "schemas": []
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v4/trading-context/observer",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/trading-accounts",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/bridge/connection-capacity",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/bridge/terminal-profiles",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/observer-channels",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/trading-accounts/:accountId/snapshot",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/market/quotes/:symbol",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/market/candles",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/strategies",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/analysis-jobs",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/market-analyses",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/market-analyses/:analysisId",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/market-analyses/:analysisId/trader-evaluations",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/trade-decisions",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/trade-decisions/:decisionId",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/strategies/compile",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/strategies",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/strategies/:strategyId",
+      "schemas": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v4/strategies/:strategyId",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/strategies/:strategyId/versions",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/strategies/:strategyId/versions/:versionId/publish",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/strategies/:strategyId/retire",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/strategy-subscriptions",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/strategy-subscriptions",
+      "schemas": []
+    },
+    {
+      "method": "PATCH",
+      "path": "/api/v4/strategy-subscriptions/:subscriptionId",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/risk-accounts/:accountId/policy",
+      "schemas": []
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v4/risk-accounts/:accountId/policy",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/risk-accounts/:accountId/summary",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/risk-accounts/:accountId/manual-release",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/risk-accounts/:accountId/manual-release",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/risk-decisions",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/risk-decisions/:decisionId",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/review-cases",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/review-cases/:caseId",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/review-cases/:caseId/generations",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/review-cases/:caseId/versions",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/review-cases/:caseId/confirm",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/review-cases/:caseId/return",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/manual-review-candidates",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/manual-review-cases",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/strategy-memories",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/strategy-memories/:memoryId",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/strategy-memories/:memoryId/updates",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/strategy-memory-updates/:updateId/decision",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/operations/:operationId",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/trading-accounts/:accountId/execution-context",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/trading-accounts/:accountId/execution-commands",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/execution-distributions/preview",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/execution-distributions/:distribution_id",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/execution-distributions",
+      "schemas": []
+    },
+    {
+      "method": "POST",
+      "path": "/api/v4/execution-distributions/:distribution_id/close-commands",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/trade-history",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/trade-history/:recordId",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/audit/events",
+      "schemas": []
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/audit/events/:sourceKind/:sourceId",
+      "schemas": []
+    }
+  ],
+  "scope": "Actual Fastify registration with offline adapters; no request/response equivalence or business readiness claim."
+}
