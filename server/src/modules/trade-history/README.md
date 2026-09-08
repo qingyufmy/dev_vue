@@ -9,3 +9,6 @@
 
 
 采集和调度现由 composition 的 createMysqlTradeHistoryCollector/createMysqlTradeHistoryScheduler 创建，只返回 collect/schedule 能力。业务 index 不导出 MySQL 实现；运行入口负责连接池、队列、轮询和生命周期。采集用例/端口通过 Bridge 公开入口取得协议类型，领域投影的 Bridge 内部类型依赖仍待移除。定向回归增加 trade-history-collector 和 trade-history-currency，源码验证不代表执行过真实历史同步。
+
+
+历史投影现使用本域 TerminalHistoryPageKind；Bridge history.orders/history.trades/history.deals 仅在采集基础设施映射为 orders/mt4_closed_trades/deals。领域层不依赖 Bridge 类型，存储证据回读使用本域成交类型。当前静态债务清除不代替跨域 SQL、实际数据和流程验收。

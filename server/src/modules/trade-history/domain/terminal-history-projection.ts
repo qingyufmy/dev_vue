@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto'
-import type { BridgeHistoryResource } from '../../bridge/domain/bridge-query.js'
 import { combineMoneyCurrencies, recordMoneyCurrency, type TradeMoneyCurrency } from './trade-money-currency.js'
 
 export interface TerminalHistoryContext {
@@ -102,8 +101,10 @@ export interface AccountTradeProjection extends TradeMoneyCurrency {
   dealTickets: Array<{ ticket: string; role: 'entry' | 'exit' | 'fee' | 'adjustment' | 'unknown' }>
 }
 
-export function decodeTerminalHistoryPage(resource: BridgeHistoryResource, items: Record<string, unknown>[]): TerminalHistoryFact[] {
-  const facts = items.map(item => resource === 'history.orders' ? order(item) : resource === 'history.trades' ? mt4Trade(item) : deal(item))
+export type TerminalHistoryPageKind = 'orders' | 'mt4_closed_trades' | 'deals'
+
+export function decodeTerminalHistoryPage(kind: TerminalHistoryPageKind, items: Record<string, unknown>[]): TerminalHistoryFact[] {
+  const facts = items.map(item => kind === 'orders' ? order(item) : kind === 'mt4_closed_trades' ? mt4Trade(item) : deal(item))
   const hashes = new Map<string, string>()
   for (const fact of facts) {
     const key = `${fact.kind}:${fact.ticket}`

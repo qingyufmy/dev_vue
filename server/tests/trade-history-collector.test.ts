@@ -63,7 +63,7 @@ describe('Stage 12T Bridge history collection', () => {
   })
 
   it('projects closed MT5 position episodes and MT4 closed trades without treating cash movements as trades', () => {
-    const facts = decodeTerminalHistoryPage('history.deals', [
+    const facts = decodeTerminalHistoryPage('deals', [
       { deal_ticket: '1001', order: '501', position_id: '9001', symbol: 'XAUUSD', type: 0, entry: 0, volume: '0.10', price: '2500.10', profit: '0', commission: '-1', swap: '0', fee: '0', time_utc_msc: NOW.getTime() - 60_000 },
       { deal_ticket: '1002', order: '502', position_id: '9001', symbol: 'XAUUSD', type: 1, entry: 1, volume: '0.10', price: '2510.10', profit: '100', commission: '-1', swap: '-2', fee: '0', time_utc_msc: NOW.getTime() },
       { deal_ticket: '1003', type: 'balance', profit: '1000', commission: '0', swap: '0', fee: '0', time_utc_msc: NOW.getTime() },
@@ -72,14 +72,14 @@ describe('Stage 12T Bridge history collection', () => {
     expect(mt5).toMatchObject({ side: 'buy', volumeOpened: '0.1', entryPrice: '2500.1', exitPrice: '2510.1', netProfit: '96' })
     expect(projectMt5Position('missing', facts.filter(fact => fact.kind === 'deal'))).toBeNull()
 
-    const mt4Fact = decodeTerminalHistoryPage('history.trades', [{ ticket: '7001', symbol: 'EURUSD', type: 1, lots: '0.20',
+    const mt4Fact = decodeTerminalHistoryPage('mt4_closed_trades', [{ ticket: '7001', symbol: 'EURUSD', type: 1, lots: '0.20',
       open_price: '1.10000', close_price: '1.09000', profit: '200', commission: '-4', swap: '-1',
       open_time_utc_msc: NOW.getTime() - 120_000, close_time_utc_msc: NOW.getTime() }])[0]!
     expect(projectMt4Trade(mt4Fact.kind === 'deal' ? mt4Fact : never())).toMatchObject({ stableKey: 'mt4:ticket:7001', side: 'sell', netProfit: '195' })
   })
 
   it('fails closed when one terminal page contains conflicting facts for the same ticket', () => {
-    expect(() => decodeTerminalHistoryPage('history.deals', [
+    expect(() => decodeTerminalHistoryPage('deals', [
       { deal_ticket: '1001', type: 'balance', profit: '10', time_utc_msc: NOW.getTime() },
       { deal_ticket: '1001', type: 'balance', profit: '11', time_utc_msc: NOW.getTime() },
     ])).toThrowError('trade_history_fact_conflict')

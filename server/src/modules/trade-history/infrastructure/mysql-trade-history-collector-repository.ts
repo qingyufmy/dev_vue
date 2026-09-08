@@ -7,8 +7,12 @@ import type { OwnershipInterval } from '../../trading/index.js'
 import { provenHistoryRecordSql } from './trade-history-ownership-sql.js'
 import {
   decodeTerminalHistoryPage, projectMt4Trade, projectMt5Position,
-  type AccountTradeProjection, type TerminalDealFact, type TerminalHistoryFact, type TerminalOrderFact,
+  type AccountTradeProjection, type TerminalDealFact, type TerminalHistoryFact, type TerminalOrderFact, type TerminalHistoryPageKind,
 } from '../domain/terminal-history-projection.js'
+
+const historyPageKinds: Record<BridgeHistoryResource, TerminalHistoryPageKind> = {
+  'history.orders': 'orders', 'history.trades': 'mt4_closed_trades', 'history.deals': 'deals',
+}
 
 interface SyncRow extends RowDataPacket { fresh_through_utc: Date | null }
 interface FactHashRow extends RowDataPacket { id: string; ticket: string; evidence_sha256: string }
@@ -47,7 +51,7 @@ export class MysqlTradeHistoryCollectorRepository implements TradeHistoryCollect
 
   async persistPage(route: BridgeGatewayRoute, resource: BridgeHistoryResource, response: BridgeQueryResponseEnvelope, now: Date) {
     if (response.payload.resource !== resource) throw new Error('trade_history_resource_mismatch')
-    const facts = decodeTerminalHistoryPage(resource, response.payload.items).sort((left, right) => left.ticket.localeCompare(right.ticket))
+    const facts = decodeTerminalHistoryPage(historyPageKinds[resource], response.payload.items).sort((left, right) => left.ticket.localeCompare(right.ticket))
     await transaction(this.pool, async connection => {
       await lockAccount(connection, route)
       await lockSync(connection, route.accountId)
@@ -66,7 +70,7 @@ export class MysqlTradeHistoryCollectorRepository implements TradeHistoryCollect
         const positions = [...new Set((facts as TerminalDealFact[]).map(fact => fact.positionId).filter((value): value is string => Boolean(value)))].sort()
         for (const positionId of positions) {
           const stored = await loadPositionDeals(connection, route.accountId, positionId)
-          const decoded = stored.map(row => decodeTerminalHistoryPage('history.deals', [evidence(row.evidence_json)])[0] as TerminalDealFact)
+          const decoded = stored.map(row => decodeTerminalHistoryPage('deals', [evidence(row.evidence_json)])[0] as TerminalDealFact)
           const projection = projectMt5Position(positionId, decoded)
           if (projection) await upsertTradeRecord(connection, route, projection, response.payload.observed_at_utc_msc, now)
         }

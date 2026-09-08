@@ -14,7 +14,7 @@ const now = at(12)
 const terminalTrade = { ticket: '7001', symbol: 'EURUSD', type: 1, lots: '0.20',
   open_price: '1.10000', close_price: '1.09000', profit: '200', commission: '-4', swap: '-1',
   open_time_utc_msc: at(8).getTime(), close_time_utc_msc: at(9).getTime() }
-const fact = decodeTerminalHistoryPage('history.trades', [terminalTrade])[0]!
+const fact = decodeTerminalHistoryPage('mt4_closed_trades', [terminalTrade])[0]!
 if (fact.kind !== 'deal') throw new Error('test_fact_invalid')
 const projection = projectMt4Trade(fact)!
 const route: BridgeGatewayRoute = { userId: 2, accountId: '42', platform: 'mt4', timezoneOffsetMinutes: 180,

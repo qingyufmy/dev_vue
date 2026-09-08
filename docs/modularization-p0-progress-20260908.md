@@ -960,3 +960,10 @@ trade-history composition 提供 createMysqlTradeHistoryCollector/createMysqlTra
 28 项采集、币种和归属回归、服务端类型/构建、API 生成运行检查通过，321 个冻结输入一致。删除七项内部类型穿透和两项具体实现导出，债务 95→86，无新增或陈旧记录。构造参数、分页上限、时间窗口、归属重查与持久化事务未改；没有启动角色、访问终端、模型或数据库。
 
 terminal-history-projection 领域层仍有两项 Bridge 内部类型依赖记录；表所有权、其它跨域 SQL 与完整历史功能验收未据此完成，整体 P0–P7 继续。
+
+
+## 47. 历史投影输入与 Bridge 资源分离（第一百一十七批）
+
+terminal-history-projection 使用本域 TerminalHistoryPageKind（orders/mt4_closed_trades/deals），不再引用 BridgeHistoryResource 或 Bridge 内部类型。采集基础设施用穷尽 Record 映射三种 Bridge 资源；从存储证据重建成交时直接使用本域 deals。线上 Bridge 请求/响应名称、原始证据及哈希、金额与归属计算保持不变。
+
+28 项历史采集/币种/归属回归、server 类型/构建和 API 生成运行检查通过，321 个冻结输入不变。精确删除领域反向依赖及对应内部穿透两项，债务 86→84，无新增或陈旧记录。历史域目前没有登记的此类静态边界债务，但原始数据规范化、SQL 所有权与真实完整流程仍需单独验收；不得据此宣布整个历史域完成。本批无数据库操作、角色启动或终端访问。

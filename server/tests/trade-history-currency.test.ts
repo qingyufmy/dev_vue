@@ -5,7 +5,7 @@ const now = Date.UTC(2026, 8, 4, 8)
 const explicit = (currency: string) => ({ account_currency: currency, currency_evidence: 'explicit_record' })
 
 function position(first: Record<string, unknown>, second: Record<string, unknown>) {
-  const facts = decodeTerminalHistoryPage('history.deals', [
+  const facts = decodeTerminalHistoryPage('deals', [
     { deal_ticket: '1001', position_id: '9001', symbol: 'XAUUSD', type: 0, entry: 0, volume: '0.1', price: '2500', profit: '0', commission: '-1', time_utc_msc: now - 60_000, ...first },
     { deal_ticket: '1002', position_id: '9001', symbol: 'XAUUSD', type: 1, entry: 1, volume: '0.1', price: '2510', profit: '100', commission: '-1', time_utc_msc: now, ...second },
   ])
@@ -39,7 +39,7 @@ describe('historical money currency evidence', () => {
 
   it.each([{}, explicit('EUR')])('preserves MT4 evidence and raw source independently %j', evidence => {
     const raw = { ticket: '7001', symbol: 'EURUSD', type: 1, lots: '0.2', open_price: '1.1', close_price: '1.09', profit: '200', commission: '-4', swap: '-1', open_time_utc_msc: now - 120_000, close_time_utc_msc: now, ...evidence }
-    const fact = decodeTerminalHistoryPage('history.trades', [raw])[0]!
+    const fact = decodeTerminalHistoryPage('mt4_closed_trades', [raw])[0]!
     if (fact.kind !== 'deal') throw new Error('expected_deal')
     expect(JSON.parse(fact.evidenceJson)).toEqual(raw)
     expect(projectMt4Trade(fact)).toMatchObject({ accountCurrency: 'account_currency' in evidence ? 'EUR' : null, currencyEvidence: 'currency_evidence' in evidence ? 'explicit_record' : 'unknown', netProfit: '195' })
