@@ -1,0 +1,23 @@
+# Auth 模块边界
+
+负责第一方SSO、应用会话、授权码、CSRF、实时票据和明确范围的注销。网页各应用继续使用独立Host-only会话，不共享父域Cookie或浏览器长期凭据。
+
+## 公开入口与组装
+
+- `index.ts`：应用服务、端口与必要身份类型/错误/协议函数；其它模块只经此入口调用业务能力。
+- `composition.ts`：运行入口创建认证服务、实时票据认证器及HTTP插件。`createAuthHttp(service, secureCookies)`封装完整SSO路由；全局路由登记器只接收插件，不导入auth内部路由。
+- MySQL、Redis、密码校验、签名器、客户端注册表、清理SQL及HTTP实现保留私有。测试可以直接验证内部适配器，跨域生产代码不得以测试导入为例外。
+
+AuthService通过自身所需的BridgeDeviceRevoker端口触发设备撤销；实现由bridge提供并在运行入口注入。设备撤销失败向上传播，随后网页退出不会提前执行。不得把Bridge表SQL重新移回auth。
+
+## 数据与生命周期
+
+当前V4源码直接写入auth_sessions和auth_authorization_codes；其会话撤销、单次授权码消费与到期清理归auth管理。users为身份读取来源，其账户资料、权益及历史写入的完整所有权仍需结合全表矩阵完成，不能以当前未写入认定其无需归属。
+
+登录事务与实时票据使用Redis适配器，持久会话与授权码仍以MySQL为权威。mysql-auth-cleanup保留内部实现；本批没有为它新增定时器、Worker或启动调用。API与实时入口保持各自角色边界。
+
+## 验收入口与未完成项
+
+运行auth-sso-service、browser-realtime-runtime、bridge-pairing及受影响模块HTTP测试；服务端类型检查/构建包含边界和运行合同生成门。实际路由清单使用inspect:api-contracts，已知其它域缺失不能隐去。
+
+当前完成的是公开入口与组装封装，不表示认证全域、用户资料迁移、全部API同源校验、真实MySQL/Redis及浏览器集成均已完成。HTTP合同仍遵循contracts/http/domains/auth.json及总体P0–P7验收。

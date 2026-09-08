@@ -1,5 +1,5 @@
 import type { FastifyError, FastifyPluginAsync } from 'fastify'
-import { AuthError } from '../../../auth/domain/auth.js'
+import { AuthError } from '../../../auth/index.js'
 import { BridgePairingError, type BridgePairingService } from '../../application/bridge-pairing-service.js'
 
 export interface BridgePairingRoutesOptions {

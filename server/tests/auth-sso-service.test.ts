@@ -8,12 +8,11 @@ import { describe, expect, it } from 'vitest'
 import {
   AuthError,
   AuthService,
-  Es256IdTokenSigner,
-  appSessionRoutes,
-  authCenterRoutes,
   hashSecret,
-  registerSsoRoutes,
 } from '../src/modules/auth/index.js'
+import { Es256IdTokenSigner } from '../src/modules/auth/infrastructure/es256-id-token-signer.js'
+import { appSessionRoutes, authCenterRoutes } from '../src/modules/auth/transport/http/auth-routes.js'
+import { createAuthHttp } from '../src/modules/auth/composition.js'
 import type {
   AuthClient,
   AuthRepository,
@@ -420,7 +419,7 @@ describe('SSO V4 HTTP routes', () => {
   it('resolves the application boundary from the exact request host in one Fastify process', async () => {
     const { service } = fixture()
     const app = Fastify({ logger: false })
-    await registerSsoRoutes(app, service, false)
+    await app.register(createAuthHttp(service, false))
 
     const tradeStart = await app.inject({ method: 'GET', url: '/auth/start', headers: { host: 'trade.example.test' } })
     expect(tradeStart.statusCode).toBe(302)

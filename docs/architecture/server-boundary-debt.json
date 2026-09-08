@@ -259,136 +259,6 @@
     },
     {
       "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/auth/index.ts",
-        "target": "server/src/modules/auth/infrastructure/auth-client-registry.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "auth",
-      "phase": "P6",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/auth/index.ts",
-        "target": "server/src/modules/auth/infrastructure/auth-client-registry.ts",
-        "kind": "export",
-        "typeOnly": true
-      },
-      "count": 1,
-      "owner": "auth",
-      "phase": "P6",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/auth/index.ts",
-        "target": "server/src/modules/auth/infrastructure/bcrypt-password-verifier.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "auth",
-      "phase": "P6",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/auth/index.ts",
-        "target": "server/src/modules/auth/infrastructure/es256-id-token-signer.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "auth",
-      "phase": "P6",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/auth/index.ts",
-        "target": "server/src/modules/auth/infrastructure/mysql-auth-cleanup.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "auth",
-      "phase": "P6",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/auth/index.ts",
-        "target": "server/src/modules/auth/infrastructure/mysql-auth-cleanup.ts",
-        "kind": "export",
-        "typeOnly": true
-      },
-      "count": 1,
-      "owner": "auth",
-      "phase": "P6",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/auth/index.ts",
-        "target": "server/src/modules/auth/infrastructure/mysql-auth-repository.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "auth",
-      "phase": "P6",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/auth/index.ts",
-        "target": "server/src/modules/auth/infrastructure/redis-auth-transient-store.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "auth",
-      "phase": "P6",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/auth/index.ts",
-        "target": "server/src/modules/auth/transport/http/auth-routes.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "auth",
-      "phase": "P6",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/auth/index.ts",
-        "target": "server/src/modules/auth/transport/http/register-sso-routes.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "auth",
-      "phase": "P6",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
         "rule": "cross-module-internal",
         "source": "server/src/modules/bridge/application/bridge-gateway-session.ts",
         "target": "server/src/modules/execution/application/bridge-command-service.ts",
@@ -610,19 +480,6 @@
     },
     {
       "finding": {
-        "rule": "cross-module-internal",
-        "source": "server/src/modules/bridge/transport/http/bridge-pairing-routes.ts",
-        "target": "server/src/modules/auth/domain/auth.ts",
-        "kind": "import",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "bridge",
-      "phase": "P5",
-      "reason": "现有跨域内部依赖；随所属域迁移到公开业务端口并由组装入口注入，禁止继续新增。"
-    },
-    {
-      "finding": {
         "rule": "public-implementation-export",
         "source": "server/src/modules/commerce/index.ts",
         "target": "server/src/modules/commerce/infrastructure/mysql-learning-membership-reader.ts",
@@ -672,19 +529,6 @@
       "owner": "commerce",
       "phase": "P6",
       "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "cross-module-internal",
-        "source": "server/src/modules/commerce/transport/http/referral-rule-routes.ts",
-        "target": "server/src/modules/auth/domain/auth.ts",
-        "kind": "import",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "commerce",
-      "phase": "P6",
-      "reason": "现有跨域内部依赖；随所属域迁移到公开业务端口并由组装入口注入，禁止继续新增。"
     },
     {
       "finding": {
@@ -2054,32 +1898,6 @@
     {
       "finding": {
         "rule": "cross-module-internal",
-        "source": "server/src/modules/trading/infrastructure/auth-observer-admin-adapter.ts",
-        "target": "server/src/modules/auth/application/auth-service.ts",
-        "kind": "import",
-        "typeOnly": true
-      },
-      "count": 1,
-      "owner": "trading",
-      "phase": "P1",
-      "reason": "现有跨域内部依赖；随所属域迁移到公开业务端口并由组装入口注入，禁止继续新增。"
-    },
-    {
-      "finding": {
-        "rule": "cross-module-internal",
-        "source": "server/src/modules/trading/infrastructure/auth-trade-request-adapter.ts",
-        "target": "server/src/modules/auth/application/auth-service.ts",
-        "kind": "import",
-        "typeOnly": true
-      },
-      "count": 1,
-      "owner": "trading",
-      "phase": "P1",
-      "reason": "现有跨域内部依赖；随所属域迁移到公开业务端口并由组装入口注入，禁止继续新增。"
-    },
-    {
-      "finding": {
-        "rule": "cross-module-internal",
         "source": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
         "target": "server/src/modules/execution/domain/execution.ts",
         "kind": "import",
@@ -2095,19 +1913,6 @@
         "rule": "cross-module-internal",
         "source": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
         "target": "server/src/modules/execution/domain/projection-absorption.ts",
-        "kind": "import",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "trading",
-      "phase": "P1",
-      "reason": "现有跨域内部依赖；随所属域迁移到公开业务端口并由组装入口注入，禁止继续新增。"
-    },
-    {
-      "finding": {
-        "rule": "cross-module-internal",
-        "source": "server/src/modules/trading/transport/http/observer-management-routes.ts",
-        "target": "server/src/modules/auth/domain/auth.ts",
         "kind": "import",
         "typeOnly": false
       },

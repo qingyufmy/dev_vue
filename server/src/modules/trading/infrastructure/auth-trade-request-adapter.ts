@@ -1,4 +1,4 @@
-import type { AuthService } from '../../auth/application/auth-service.js'
+import type { AuthService } from '../../auth/index.js'
 import type { TradeRequestAuthenticator } from '../transport/http/trading-routes.js'
 
 function cookieValue(header: unknown, names: string[]) {

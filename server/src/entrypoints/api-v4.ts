@@ -8,7 +8,7 @@ import {
   assertV4RuntimeEnabled, connectCacheRedis, createCacheRedis, createMysqlPool, installProcessLifecycle,
   loadServerEnvironment, loadV4ApiRuntimeConfig, loadV4BaseRuntimeConfig, RoleHealth,
 } from '../bootstrap/index.js'
-import { createAuthModule } from '../modules/auth/composition.js'
+import { createAuthModule, createAuthHttp } from '../modules/auth/composition.js'
 import { createBridgeDeviceRevoker } from '../modules/bridge/composition.js'
 import {
   BridgeCredentialService, MysqlBridgeCredentialRepository, RedisBridgeGatewayLeaseStore, RedisBridgeSessionTicketStore,
@@ -51,6 +51,7 @@ async function main() {
   const app = Fastify({ logger: true, bodyLimit: 1024 * 1024, trustProxy: true })
   await registerApiV4Routes(app, {
     auth,
+    authHttp: createAuthHttp(auth, web.secureCookies),
     learning: new LearningService(new MysqlLearningReader(pool), new MysqlLearningMembershipReader(pool)),
     learningCompletion: new LearningCompletionService(new MysqlLearningCompletion(pool, MysqlLearningMembershipReader.forTransaction)),
     bridgePairing: new BridgePairingService(new MysqlBridgePairingRepository(pool)),

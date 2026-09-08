@@ -1,4 +1,4 @@
-import type { AuthService } from '../../auth/application/auth-service.js'
+import type { AuthService } from '../../auth/index.js'
 import type { ObserverManagementRequestAuthenticator } from '../transport/http/observer-management-routes.js'
 
 function cookieValue(header: unknown, names: readonly string[]) {

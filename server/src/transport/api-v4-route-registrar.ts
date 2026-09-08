@@ -2,7 +2,7 @@ import { learningRoutes, learningCompletionRoutes, type LearningService, type Le
 import { settingRoutes,adminSettingReadRoutes,type AdminSettingReader,type SettingManagementService } from '../modules/settings/management.js'
 import { referralRuleRoutes, type ReferralRuleManagementService } from '../modules/commerce/index.js'
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
-import { registerSsoRoutes, type AuthService } from '../modules/auth/index.js'
+import type { AuthService } from '../modules/auth/index.js'
 import { bridgeCredentialRoutes, bridgePairingRoutes, type BridgeCredentialService, type BridgePairingService } from '../modules/bridge/index.js'
 import {
   executionDistributionRoutes, executionRoutes, userExecutionCommandRoutes, type ExecutionDistributionService,
@@ -22,6 +22,7 @@ export interface ApiV4RouteServices {
   learning?: LearningService
   learningCompletion?: LearningCompletionService
   auth: AuthService
+  authHttp: FastifyPluginAsync
   bridgeCredentials: BridgeCredentialService
   bridgePairing: BridgePairingService
   trading: TradingService
@@ -56,7 +57,7 @@ export async function registerApiV4Routes(
     if (!input.wwwOrigin) throw new Error('learning_www_origin_required')
     await fastify.register(learningRoutes, { prefix: '/api/v4', service: services.learning, auth: services.auth, wwwOrigin: input.wwwOrigin, secureCookies: input.secureCookies })
   }
-  await registerSsoRoutes(fastify, services.auth, input.secureCookies)
+  await fastify.register(services.authHttp)
   await fastify.register(async admin => {
     admin.addHook('onRequest', exactAdminHostHook(input.adminOrigin))
     await admin.register(adminSettingReadRoutes, { prefix:'/api/v4/admin/settings', service:services.settingReader, auth:services.observerAdminAuth })

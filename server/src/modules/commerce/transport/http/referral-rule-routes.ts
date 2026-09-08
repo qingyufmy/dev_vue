@@ -1,5 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify'
-import { AuthError } from '../../../auth/domain/auth.js'
+import { AuthError } from '../../../auth/index.js'
 import type { ReferralRuleManagementService, RuleChange } from '../../application/referral-rule-management.js'
 
 export interface ReferralRuleRoutesOptions {

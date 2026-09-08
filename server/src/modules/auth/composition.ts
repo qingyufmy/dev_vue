@@ -1,5 +1,6 @@
 import type { Pool } from 'mysql2/promise'
 import type { Redis } from 'ioredis'
+import type { FastifyPluginAsync } from 'fastify'
 import { AuthService } from './application/auth-service.js'
 import type { BridgeDeviceRevoker } from './application/auth-ports.js'
 import { BcryptPasswordVerifier } from './infrastructure/bcrypt-password-verifier.js'
@@ -8,6 +9,11 @@ import { MysqlAuthRepository } from './infrastructure/mysql-auth-repository.js'
 import { RedisAuthTransientStore } from './infrastructure/redis-auth-transient-store.js'
 import { Es256IdTokenSigner } from './infrastructure/es256-id-token-signer.js'
 import { RealtimeTicketAuthenticator } from './application/realtime-ticket-authenticator.js'
+import { registerSsoRoutes } from './transport/http/register-sso-routes.js'
+
+export function createAuthHttp(service: AuthService, secureCookies = true): FastifyPluginAsync {
+  return async app => { await registerSsoRoutes(app, service, secureCookies) }
+}
 
 export interface AuthModuleConfig {
   authOrigin: string

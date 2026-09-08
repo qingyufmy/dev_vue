@@ -13,6 +13,7 @@ import {
 import { BrowserRealtimeWebSocketServer } from '../src/transport/browser-realtime-websocket-server.js'
 import { exactTradeHostHook, exactAdminHostHook, registerApiV4Routes, type ApiV4RouteServices } from '../src/transport/api-v4-route-registrar.js'
 import { createAuditModule } from '../src/modules/audit/composition.js'
+import { createAuthHttp } from '../src/modules/auth/composition.js'
 
 const closers: Array<() => Promise<void>> = []
 afterEach(async () => { for (const close of closers.splice(0).reverse()) await close() })
@@ -140,6 +141,7 @@ describe('V4 browser realtime runtime', () => {
     const services = {} as ApiV4RouteServices
     // This fixture checks registration only; handlers except audit are not called.
     services.auth = { cookieName: cookieNameForClient } as ApiV4RouteServices['auth']
+    services.authHttp = createAuthHttp(services.auth, false)
     services.auditHttp = createAuditModule({ ownsAccount: async () => false,
       list: async () => { throw new Error('forbidden audit must not query') }, find: async () => null,
     }, { authenticate: async () => ({ userId: 7 }) }).http
