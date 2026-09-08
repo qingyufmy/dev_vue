@@ -594,3 +594,11 @@ loadObserverContextMigration复用完整150步并追加四项checksum，总定�
 恢复副本已完成真实回填：首批commit成功后模拟确认丢失，独立只读确认500条已提交前缀；恢复剩余71批，最终35725条旧映射、30226个V4投影、检查点verified。独立重入batches=0。原234表快照与163条历史各阶段均一致。见[计划](architecture/legacy-candle-backfill-plan-20260908.json)及同前缀五阶段回执，proofHash=90f2c20dbc380883a1349cb82953f10353c60de7fa9cab60089f8f8d49f0f0d4。恢复实测约309秒，未据此声明并发/容量验收。
 
 两轮复核和详细hash见[合同](architecture/account-projection-incremental-contract-20260908.md)。旧行完整保留，构建数据和检查点保留，当前dev_vue未写入；连接与隧道已关闭。下一步正式双表改名、旧历史校验适配和账户查询复核，再推进当前库专属升级。
+
+## 第六十四批：K线提升状态机与只读历史元数据层
+
+追加040及164步注册，原163步不变；提供单条正向双表RENAME，旧表保留为market_candles_legacy_v3。新提升状态机绑定前后完整快照、回填proof及工具，响应未知按实际布局恢复；完成后允许V4新行，但旧K线/source/映射/检查点与所有结构仍保护。
+
+新增受限candle元数据适配，可与已有账户根适配组合，仅改表头/FK表引用及元数据表参数，拒绝业务SQL、写入和混合布局。13项状态机、6项新元数据与原8项历史测试共27项通过，其中使用已采集真实reference DDL验证FK精确还原。两轮复核和限制见[合同](architecture/account-projection-incremental-contract-20260908.md)。
+
+本批未连接数据库或执行040；实际163步历史store组合、持久化提升计划及恢复副本改名继续待接入，当前dev_vue不变。下一步完成这些适配后复核账户API查询。
