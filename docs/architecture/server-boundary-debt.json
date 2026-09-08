@@ -422,32 +422,6 @@
     {
       "finding": {
         "rule": "cross-module-internal",
-        "source": "server/src/modules/execution/domain/projection-absorption.ts",
-        "target": "server/src/modules/trading/application/trading-ports.ts",
-        "kind": "import",
-        "typeOnly": true
-      },
-      "count": 1,
-      "owner": "execution",
-      "phase": "P5",
-      "reason": "现有跨域内部依赖；随所属域迁移到公开业务端口并由组装入口注入，禁止继续新增。"
-    },
-    {
-      "finding": {
-        "rule": "domain-dependency",
-        "source": "server/src/modules/execution/domain/projection-absorption.ts",
-        "target": "server/src/modules/trading/application/trading-ports.ts",
-        "kind": "import",
-        "typeOnly": true
-      },
-      "count": 1,
-      "owner": "execution",
-      "phase": "P5",
-      "reason": "现有领域层反向或跨域内部依赖；迁为本域契约或公开类型，保持业务不变量。"
-    },
-    {
-      "finding": {
-        "rule": "cross-module-internal",
         "source": "server/src/modules/execution/domain/user-execution-command.ts",
         "target": "server/src/modules/inference/domain/inference.ts",
         "kind": "import",

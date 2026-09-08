@@ -13,3 +13,6 @@
 验证入口：`mysql-trading-offline-accounts.test.ts` 覆盖实际适配器与同连接编排、成功提交、事件失败回滚及能力缺失拒绝；`bridge-projection-absorption.test.ts` 覆盖精确结果判断。测试连接替身不代表真实 MySQL 锁竞争与恢复验收。
 
 `scripts/verify-projection-absorption-mysql.mjs <新的绝对路径回执>`在当前开发MySQL独立连接建立最小临时InnoDB表，运行构建后的execution适配器，验证真实驱动时间序列化、提交、重复及事件冲突回滚；销毁连接清理临时表。必须先构建server，输出文件不得存在。它不验证正式表/FK、完整投影写入、锁竞争或提交未知。真实验证确认DATETIME(3)拒绝ISO字符串直接绑定，因此写入时间先转换Date，由UTC连接池序列化；非法时间在SQL前拒绝。
+
+
+投影吸收领域判断使用本域 CommandResultProjection 六字段只读合同，不依赖 trading 应用层类型。交易投影适配由基础设施消费 trading 公开端口，再按结构传入领域判断；完整 Bridge 状态不作为领域依赖。精确票据、部分平仓数量及保护字段判断保持既有规则，定向入口为 server/tests/bridge-projection-absorption.test.ts。

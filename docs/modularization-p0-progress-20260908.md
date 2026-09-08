@@ -924,3 +924,12 @@ auth 公开 ActivePrincipalAccess 类型，并在受限 composition 创建绑定
 首次回执 architecture/context-principal-mysql-20260909.json 在准备重复 revision 夹具时遇到 ER_CANT_REOPEN_TABLE（临时表 INSERT SELECT 自引用）。改为直接插入合成占位回执后，architecture/context-principal-mysql-verified-20260909.json 四项通过：提交与同键重放；异体/旧 revision 拒绝；MySQL ER_DUP_ENTRY 在上下文写入后触发，回滚后原 revision/账户保持且失败请求无回执；撤销用户不能读取或重放。临时表随连接销毁。
 
 脚本语法和真实探针通过；本批未修改服务端逻辑或重启角色。该证据补充上一批替身回归，但不验证完整 schema/FK/CHECK、不同连接的锁竞争、确认丢失、观摩目标或浏览器行为。这些缺口及其余账户/结构解耦继续保留，整体 P0–P7 未完成。
+
+
+## 43. Execution 投影证明领域合同（第一百一十三批）
+
+projectionProvesCommandResult 不再导入 trading/application 的 BridgeExactTradeState；execution 本域定义 CommandResultProjection，只保留数量、价格、保护及到期时间六项只读事实，输入映射为 ReadonlyMap。MySQL 适配器在基础设施层继续消费 trading 公开投影端口，按结构满足本域输入；不把跨域应用类型转导出进领域层。
+
+算法、精确十进制比较、结果票据匹配、全量投影缺失与部分平仓判断均保持不变。21 项吸收及可信投影回归、服务端类型/构建、API 生成运行检查通过，321 个冻结输入一致。精确删除同一依赖的 cross-module-internal 和 domain-dependency 两项，债务 104→102，无新增或陈旧记录。本批无数据库操作或进程重启。
+
+该改动关闭的是领域层内部类型依赖；不扩大为吸收规则全审计、其它账户跨域 SQL 或全局模块化验收。后续继续账户全栈样板及对应依赖，P0–P7 未完成。

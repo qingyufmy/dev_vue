@@ -1,12 +1,20 @@
-import type { BridgeExactTradeState } from '../../trading/application/trading-ports.js'
+/** Facts used by execution to prove an acknowledged command is reflected in a projection. */
+export interface CommandResultProjection {
+  readonly volume: string
+  readonly open_price: string
+  readonly stop_limit_price: string | null
+  readonly stop_loss: string | null
+  readonly take_profit: string | null
+  readonly expiration_utc_msc: number | null
+}
 
 export function projectionProvesCommandResult(input: {
   action: string
   entityKind: 'position' | 'pending_order'
   params: Record<string, unknown>
-  expectedState?: Pick<BridgeExactTradeState, 'volume'> | null
+  expectedState?: Pick<CommandResultProjection, 'volume'> | null
   result: Record<string, unknown> | null
-  states: Map<string, BridgeExactTradeState>
+  states: ReadonlyMap<string, CommandResultProjection>
 }) {
   const { action, entityKind, params, expectedState, result, states } = input
   const target = typeof params.ticket === 'string' ? params.ticket : null
@@ -54,12 +62,12 @@ function decimalParts(value: unknown) {
   return { units: BigInt(`${whole}${fraction}`), scale: fraction.length }
 }
 
-function fieldsApplied(state: BridgeExactTradeState, params: Record<string, unknown>, keys: string[], aliases: Record<string, string> = {}) {
+function fieldsApplied(state: CommandResultProjection, params: Record<string, unknown>, keys: (keyof CommandResultProjection)[], aliases: Record<string, string> = {}) {
   for (const key of keys) {
     const sourceKey = Object.entries(aliases).find(([, target]) => target === key)?.[0] ?? key
     const removeKey = key === 'expiration_utc_msc' ? 'remove_expiration' : `remove_${key}`
-    if (params[removeKey] === true && state[key as keyof BridgeExactTradeState] !== null) return false
-    if (params[sourceKey] !== undefined && String(state[key as keyof BridgeExactTradeState]) !== String(params[sourceKey])) return false
+    if (params[removeKey] === true && state[key] !== null) return false
+    if (params[sourceKey] !== undefined && String(state[key]) !== String(params[sourceKey])) return false
   }
   return true
 }
