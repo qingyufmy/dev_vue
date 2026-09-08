@@ -8,9 +8,13 @@ import { useTradeSession } from '~/features/auth'
 import { createMarketWorkspace } from '../model/market-workspace'
 import MarketCalendar from '../components/MarketCalendar.vue'
 import MarketSnapshotDetail from '../components/MarketSnapshotDetail.vue'
+import { startMarketRealtime } from '../model/market-realtime'
 
 const { session } = useTradeSession()
-const workspace = createMarketWorkspace(createApiClient())
+const api = createApiClient()
+const workspace = createMarketWorkspace(api)
+const realtime = ref<'connecting' | 'live' | 'offline'>('offline')
+let subscription: ReturnType<typeof startMarketRealtime> | undefined
 const { overview, detail } = workspace
 const detailOpen = ref(false)
 const status = { fresh: '研究已更新', stale: '研究已过期', partial: '部分数据缺失', unavailable: '研究暂不可用' }
@@ -18,10 +22,17 @@ function refresh() { if (overview.value.status !== 'loading') void workspace.ref
 function inspect(id: string) { detailOpen.value = true; void workspace.selectSnapshot(id) }
 function setDetailOpen(open: boolean) { detailOpen.value = open; if (!open) workspace.closeDetail() }
 watch(() => session.value?.user.id, userId => {
+  subscription?.stop(); subscription = undefined; realtime.value = 'offline'
   detailOpen.value = false; workspace.reset()
-  if (userId) void workspace.refresh()
+  if (userId && session.value) {
+    void workspace.refresh()
+    const csrf = session.value.csrf_token
+    subscription = startMarketRealtime({ userId, url: `${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/realtime/v4`,
+      ticket: () => api.createRealtimeTicket(csrf), onState: state => { realtime.value = state },
+      invalidate: () => { void workspace.refresh(); if (detailOpen.value) void workspace.retryDetail() } })
+  }
 }, { immediate: true, flush: 'sync' })
-onBeforeUnmount(workspace.dispose)
+onBeforeUnmount(() => { subscription?.stop(); workspace.dispose() })
 </script>
 
 <template>
@@ -30,6 +41,7 @@ onBeforeUnmount(workspace.dispose)
       <div><h1 class="text-2xl font-semibold tracking-tight">市场行情</h1><p class="mt-2 text-sm text-muted-foreground">宏观研究背景与重要经济事件 · 北京时间</p></div>
       <Button variant="outline" :aria-busy="overview.status === 'loading'" :aria-disabled="overview.status === 'loading'" @click="refresh">{{ overview.status === 'loading' ? '正在刷新…' : '刷新市场数据' }}</Button>
     </header>
+    <p class="text-xs text-muted-foreground" role="status">{{ realtime === 'live' ? '变更自动更新' : realtime === 'connecting' ? '正在连接更新通知' : '快照模式，可手动刷新' }}</p>
     <p v-if="overview.status === 'loading'" role="status" class="rounded-lg border p-6 text-sm text-muted-foreground">正在获取市场数据…</p>
     <p v-else-if="overview.status === 'error'" role="alert" class="rounded-lg border p-6 text-sm">{{ overview.error }}</p>
     <div v-else-if="overview.data" class="grid min-w-0 items-start gap-5 lg:grid-cols-2">
