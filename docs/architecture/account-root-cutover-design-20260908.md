@@ -4,6 +4,8 @@
 
 第三十批更新：历史package证据已归档，当前兼容校验按[专门设计](migration-package-evidence-design-20260908.md)落实；[v2只读回执](account-root-cutover-review-20260908-v2.json)已验证当前147步实际结构，schemaVerification=true。账户源摘要、映射和转换结果与原回执一致。原失败回执保留为历史证据；正式回填/切换仍未执行，readyForCutover保持false。
 
+第三十一批更新：新增MysqlAccountBackfillV2Repository，沿用原事务/回执/源行保全实现，仅以新适配版本验证完整147步协调器。schemaHash包含coordinated-account/v2、源表结构、固定构建路由和全部步骤checksum；即使表结构相同，也不能沿用v1波次身份。[v3只读回执](account-root-cutover-review-20260908-v3.json)已通过真实库新身份读取，账户事实保持一致。旧适配器与波次未修改；新波次仍须冻结恢复副本和实际工具后再写入。
+
 ## 当前事实
 
 [只读回执](account-root-cutover-review-20260908-current.json)来自本机env所指开发库，使用同连接升级锁和只读一致性事务：4条旧账户映射为3个交易账户实体，保留4条用户设置；有1个旧ID映射到另一个代表ID。274条归属历史、3条当前绑定和3个开放区间通过既有身份/当前归属一致性核查。原始账户值不写入公开回执，仅记录摘要和数量。

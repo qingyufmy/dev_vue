@@ -1,0 +1,75 @@
+{
+  "kind": "account-root-cutover-review/v1",
+  "observedAt": "2026-09-08T06:53:44.007Z",
+  "database": "dev_vue",
+  "journalCompletedSteps": 147,
+  "schemaVerification": {
+    "verified": true
+  },
+  "targetIdentity": {
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "database": "dev_vue",
+    "storageMode": "inplace-account-v2",
+    "schemaHash": "233977958506374eebe4c7c5218b10e3b55f5871396dc927a2f8c58232222ee6"
+  },
+  "databaseWrites": 0,
+  "timeBasis": {
+    "sourceTable": "trading_accounts",
+    "offsetMinutes": 0,
+    "evidenceId": "user-confirmed-legacy-utc-20260908"
+  },
+  "counts": {
+    "sourceAccounts": 4,
+    "targetEntities": 3,
+    "targetSettings": 4,
+    "mergedSourceIds": 1
+  },
+  "sourceHash": "dae015aef77252a79d4730542e3325651ee9d6b59716678f9d61a14f1aef67e7",
+  "mappingHash": "e3446474af9da37b9935f8ffe3f7237d180d42b9f383069ad05f1217458de575",
+  "transformHash": "120dd607ff49b602ff7c48e6015126c28d7630c7aa26e621a0880843ad95e050",
+  "ownership": {
+    "version": "account-open-ownership-v1",
+    "counts": {
+      "sourceAccounts": 4,
+      "historicalIntervals": 274,
+      "currentBindings": 3,
+      "openIntervals": 3,
+      "historicalUserAccountPairs": 4,
+      "targetsWithCurrentFacts": 3
+    },
+    "issues": [],
+    "notes": [
+      {
+        "code": "legacy_single_account_switched",
+        "locatorHash": "4c14f0aa3e497f0c6896453a927f7841ad42e7054caf619d993f861a3e95a4a8"
+      }
+    ],
+    "evidenceHash": "f3553a27a2b41d30dea5f916512e58e1ef3055dd231f3ebf13b1ceb4e2793e75",
+    "currentOwnershipConsistent": true,
+    "historicalTimeBasisConfirmed": false,
+    "tradingPermissionsVerified": false
+  },
+  "foreignKeys": [
+    {
+      "table_name": "strategy_subscriptions",
+      "column_name": "trading_account_id",
+      "constraint_name": "fk_strategy_subscriptions_account",
+      "parent_table": "trading_accounts",
+      "parent_column": "id"
+    }
+  ],
+  "buildCounts": {
+    "trading_accounts_v4_build": "0",
+    "trading_account_ownership_intervals_v4_build": "0",
+    "trading_account_ownerships_v4_build": "0",
+    "user_trading_account_settings_v4_build": "0"
+  },
+  "readyForCutover": false,
+  "remaining": [
+    "persist_and_reconcile_mapping_and_source_receipts",
+    "preserve_legacy_root_and_child_references",
+    "populate_and_reconcile_ownership_and_settings",
+    "rehearse_root_switch_and_failure_recovery",
+    "verify_account_runtime_on_formal_tables"
+  ]
+}

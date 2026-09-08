@@ -6,9 +6,8 @@ import { hash } from './lib/v4-backfill-contract.mjs'
 import { accountSourceFields, convertAccountRows } from './lib/v4-account-conversion.mjs'
 import { planAccountIdMappings } from './lib/v4-account-id-mapping.mjs'
 import { reviewAccountOwnership } from './lib/v4-account-ownership-consistency.mjs'
-import { loadSubscriptionForeignKeyCoordinator } from './lib/inplace-subscription-foreign-key-schema.mjs'
-import { coordinateInplaceSchema } from './lib/inplace-schema-coordinator.mjs'
-import { mysqlColumnStore, verifyInplaceJournal, withInplaceUpgradeLock } from './lib/mysql-inplace-column-store.mjs'
+import { readAccountBackfillV2Identity } from './lib/mysql-account-backfill-v2.mjs'
+import { mysqlColumnStore, withInplaceUpgradeLock } from './lib/mysql-inplace-column-store.mjs'
 
 const root = new URL('../', import.meta.url)
 const check = (condition, code) => { if (!condition) throw Error(`account_root_review_${code}`) }
@@ -27,12 +26,9 @@ try {
   const report = await withInplaceUpgradeLock(connection, 'dev_vue', async () => {
     await connection.query('START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY')
     try {
-      check(await verifyInplaceJournal(connection), 'journal')
+      const targetIdentity = await readAccountBackfillV2Identity(connection)
       const history = await mysqlColumnStore(connection, true).history()
       check(history.length === 147 && history.every(row => row.status === 'completed'), 'journal_status')
-      const coordinator = await loadSubscriptionForeignKeyCoordinator(root)
-      const schema = await coordinateInplaceSchema(coordinator.store(connection), coordinator)
-      check(schema.structureComplete && schema.steps.length === 147, 'schema')
       const schemaVerification = { verified: true }
       const columns = accountSourceFields.map(name => ['id', 'user_id', 'is_deleted'].includes(name)
         ? `CAST(\`${name}\` AS CHAR) \`${name}\`` : `\`${name}\``).join(',')
@@ -57,7 +53,7 @@ try {
         buildCounts[table] = row.count
       }
       return { kind: 'account-root-cutover-review/v1', observedAt: new Date().toISOString(), database: identity.db,
-        journalCompletedSteps: history.length, schemaVerification, databaseWrites: 0, timeBasis,
+        journalCompletedSteps: history.length, schemaVerification, targetIdentity, databaseWrites: 0, timeBasis,
         counts: { sourceAccounts: rows.length, targetEntities: conversion.entities.length, targetSettings: conversion.settings.length,
           mergedSourceIds: plan.mappings.filter(row => row.sourcePk[0].value !== row.target.pk[0].value).length },
         sourceHash: conversion.sourceHash, mappingHash: plan.mappingHash, transformHash: conversion.transformHash,
