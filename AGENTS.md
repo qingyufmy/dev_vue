@@ -10,6 +10,7 @@
 - HTTP、浏览器实时和 Bridge 的机器合同位于 `contracts/`。合同变更必须同步校验生产者、消费者、正反例测试和版本兼容边界。
 - HTTP 合同源位于 `contracts/http/domains/`，域与文件由 `contracts/http/manifest.json` 显式登记；`contracts/openapi-v4.json` 是生成产物，禁止单独手改。修改域源后运行 `pnpm run generate:api-contract`、`pnpm run verify:api-generated` 和相关合同/消费者验证。生成一致不等于完整 API 验收。
 - 前端 HTTP 传输类型由 `pnpm run generate:api-types` 生成到 contracts 包的 `src/generated/http.ts`，不得手改产物；`pnpm run verify:api-types` 验证源与产物一致。生成类型不代替运行时校验，页面转换后的模型与线上传输类型必须区分。
+- 已接入服务端同源校验的操作在 `contracts/http/runtime.json` 逐项登记；使用 `generate:api-runtime` 生成运行Schema并以 `verify:api-runtime` 检查漂移。运行产物随server构建，不运行时读取仓库合同。当前适配范围见HTTP合同README，未接入操作不得宣称已自动校验。
 - 当前 Win7 Bridge V4 候选实现与离线验收源位于 `bridge/prototypes/net48-win7/`。在正式提升目录前，不得恢复 Rust/Electron/WebView/Python GUI 为主客户端，也不得把原型测试结果表述为正式发布证明。
 - 旧版功能需要参考时，只读查询 `D:\dev_codex\wall-street-skill-local`。禁止在参考仓库实施本轮重构，禁止把旧前端或旧后端整段复制回 V4。
 

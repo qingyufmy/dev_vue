@@ -10569,7 +10569,14 @@
             }
           },
           {
-            "$ref": "#/components/parameters/PageSize"
+            "in": "query",
+            "name": "page_size",
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
           },
           {
             "$ref": "#/components/parameters/Cursor"
@@ -10589,7 +10596,16 @@
           "400": {
             "$ref": "#/components/responses/Problem"
           },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         },
@@ -10631,7 +10647,19 @@
             },
             "description": "Audit event and exact trace"
           },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
           "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         },

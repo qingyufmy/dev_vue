@@ -5,6 +5,7 @@ import type { AuditEventDetail } from '../src/modules/audit/index.js'
 import { AuditService } from '../src/modules/audit/application/audit-service.js'
 import type { AuditRepository } from '../src/modules/audit/application/audit-ports.js'
 import { auditRoutes } from '../src/modules/audit/transport/http/audit-routes.js'
+import { AuthError } from '../src/modules/auth/index.js'
 import { BrowserRealtimeHub, BrowserRealtimeSession } from '../src/modules/trading/index.js'
 
 const now = '2026-09-04T08:00:00.000Z'
@@ -26,6 +27,58 @@ function repository(overrides: Partial<AuditRepository> = {}): AuditRepository {
 }
 
 describe('Stage 12U system audit and execution trace', () => {
+  it('rejects invalid HTTP query and path values before reading data', async () => {
+    const list = vi.fn(repository().list)
+    const find = vi.fn(repository().find)
+    const app = Fastify()
+    try {
+      await app.register(auditRoutes, { prefix: '/api/v4', service: new AuditService(repository({ list, find })), auth: { authenticate: async () => ({ userId: 7 }) } })
+      for (const url of [
+        '/api/v4/audit/events?page_size=101', '/api/v4/audit/events?page_size=1.5',
+        '/api/v4/audit/events?page_size=1&page_size=2', '/api/v4/audit/events?page_size=',
+        '/api/v4/audit/events?from=2026-02-30T00:00:00Z', '/api/v4/audit/events?category=unknown',
+        '/api/v4/audit/events?account_id=', '/api/v4/audit/events/unknown/record-1',
+      ]) {
+        const result = await app.inject({ url })
+        expect(result.statusCode, url).toBe(400)
+        expect(result.json().code).toBe('api_request_invalid')
+        expect(result.headers['content-type']).toContain('application/problem+json')
+      }
+      expect(list).not.toHaveBeenCalled()
+      expect(find).not.toHaveBeenCalled()
+      const valid = await app.inject({ url: '/api/v4/audit/events?page_size=2' })
+      expect(valid.statusCode).toBe(200)
+      expect(list.mock.calls[0]?.[1].limit).toBe(2)
+    } finally { await app.close() }
+  })
+
+  it('authenticates before contract validation and preserves authentication status', async () => {
+    const list = vi.fn(repository().list)
+    const app = Fastify()
+    try {
+      await app.register(auditRoutes, { prefix: '/api/v4', service: new AuditService(repository({ list })),
+        auth: { authenticate: async () => { throw new AuthError('auth_session_required', 401) } } })
+      const result = await app.inject({ url: '/api/v4/audit/events?page_size=invalid' })
+      expect(result.statusCode).toBe(401)
+      expect(result.json().code).toBe('auth_session_required')
+      expect(list).not.toHaveBeenCalled()
+    } finally { await app.close() }
+  })
+
+  it('fails closed on invalid response data without exposing the rejected value', async () => {
+    const app = Fastify()
+    try {
+      await app.register(auditRoutes, { prefix: '/api/v4', service: new AuditService(repository({
+        find: async () => ({ ...detail, event: { ...event, occurredAt: 'internal-secret-invalid-date' } }),
+      })), auth: { authenticate: async () => ({ userId: 7 }) } })
+      const result = await app.inject({ url: '/api/v4/audit/events/operation/operation-1' })
+      expect(result.statusCode).toBe(503)
+      expect(result.json().code).toBe('api_response_invalid')
+      expect(result.body).not.toContain('internal-secret')
+      expect(result.body).not.toMatch(/schemaPath|instancePath|stack/)
+    } finally { await app.close() }
+  })
+
   it('normalizes audit identifiers and rejects invalid identifiers before repository access', async () => {
     const find = vi.fn(repository().find)
     const service = new AuditService(repository({ find }))

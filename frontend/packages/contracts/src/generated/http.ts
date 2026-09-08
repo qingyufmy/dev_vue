@@ -4028,7 +4028,7 @@ export interface operations {
                 category?: components["schemas"]["AuditCategory"];
                 cursor?: components["parameters"]["Cursor"];
                 from?: components["schemas"]["UtcDateTime"];
-                page_size?: components["parameters"]["PageSize"];
+                page_size?: number;
                 q?: string;
                 status?: components["schemas"]["AuditStatus"];
                 to?: components["schemas"]["UtcDateTime"];
@@ -4049,7 +4049,10 @@ export interface operations {
                 };
             };
             400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     getAuditEvent: {
@@ -4073,7 +4076,11 @@ export interface operations {
                     "application/json": components["schemas"]["AuditEventDetailResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     loginAtIdentityCenter: {
