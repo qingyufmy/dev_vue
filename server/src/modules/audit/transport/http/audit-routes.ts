@@ -29,10 +29,10 @@ export const auditRoutes: FastifyPluginAsync<AuditRoutesOptions> = async (fastif
     } catch (error) { return problem(error, request, reply) }
   })
 
-  fastify.get<{ Params: { sourceKind: string; sourceId: string } }>('/audit/events/:sourceKind/:sourceId', async (request, reply) => {
+  fastify.get<{ Params: { source_kind: string; source_id: string } }>('/audit/events/:source_kind/:source_id', async (request, reply) => {
     try {
       const { userId } = await options.auth.authenticate(request)
-      return response(request.id, detailDto(await options.service.detail(userId, request.params.sourceKind, request.params.sourceId)))
+      return response(request.id, detailDto(await options.service.detail(userId, request.params.source_kind, request.params.source_id)))
     } catch (error) { return problem(error, request, reply) }
   })
 }

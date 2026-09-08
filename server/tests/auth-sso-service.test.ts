@@ -1,4 +1,6 @@
 import Fastify from 'fastify'
+import { Ajv2020 } from 'ajv/dist/2020.js'
+import { createRequire } from 'node:module'
 import { LearningService, learningRoutes, LearningCompletionService, learningCompletionRoutes } from '../src/modules/learning/index.js'
 import { generateKeyPairSync, verify } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
@@ -226,6 +228,58 @@ describe('SSO V4 service', () => {
 })
 
 describe('SSO V4 HTTP routes', () => {
+  it.each([true, false])('validates identity center session and logout contracts (secure=%s)', async secureCookies => {
+    const { service, bridge } = fixture()
+    const contract = JSON.parse(await readFile(new URL('../../contracts/openapi-v4.json', import.meta.url), 'utf8'))
+    const ajv = new Ajv2020({ strict: false })
+    const addFormats = createRequire(import.meta.url)('ajv-formats')
+    addFormats(ajv)
+    const validate = ajv.compile({ ...contract.components.schemas.AuthCenterSessionResponse, components: contract.components })
+    const validateProblem = ajv.compile({ ...contract.components.schemas.Problem, components: contract.components })
+    const { rawSession } = await service.authenticate('user@example.test', 'correct-password', false)
+    const other = await service.authenticate('user@example.test', 'correct-password', false)
+    const cookieName = secureCookies ? '__Host-Http-auth_session' : 'aurum_dev_auth_session'
+    const headers = { host: 'auth.example.test', cookie: `${cookieName}=${rawSession}` }
+    const auth = Fastify()
+    try {
+      await auth.register(authCenterRoutes, { service, secureCookies })
+      const session = await auth.inject({ url: '/api/v4/auth/session', headers })
+      expect(session.statusCode).toBe(200)
+      expect(session.headers['cache-control']).toBe('no-store')
+      const body = session.json()
+      expect(validate(body), JSON.stringify(validate.errors)).toBe(true)
+      expect(body.data.user.id).toBe('7')
+      expect(validate({ ...body, data: { ...body.data, app: 'trade', permissions: [] } })).toBe(false)
+      expect(validate({ ...body, data: { ...body.data, authenticated_at: 'not-a-date' } })).toBe(false)
+      const failures = [
+        await auth.inject({ url: '/api/v4/auth/session', headers: { host: headers.host } }),
+        await auth.inject({ url: '/api/v4/auth/session', headers: { ...headers, cookie: `__Host-Http-trade_session=${rawSession}` } }),
+        await auth.inject({ url: '/api/v4/auth/session', headers: { ...headers, host: 'trade.example.test' } }),
+        await auth.inject({ method: 'POST', url: '/api/v4/auth/logout', headers }),
+        await auth.inject({ method: 'POST', url: '/api/v4/auth/logout', headers: { ...headers, origin: 'https://evil.example.test', 'x-csrf-token': body.data.csrf_token } }),
+      ]
+      expect(failures.map(response => response.statusCode)).toEqual([401, 401, 404, 403, 403])
+      for (const response of failures) {
+        expect(response.headers['content-type']).toContain('application/json')
+        expect(validateProblem(response.json()), JSON.stringify(validateProblem.errors)).toBe(true)
+      }
+      await expect(service.resolveSession(rawSession, 'auth')).resolves.toBeDefined()
+      const logoutHeaders = { ...headers, origin: 'https://auth.example.test', 'x-csrf-token': body.data.csrf_token }
+      const logout = await auth.inject({ method: 'POST', url: '/api/v4/auth/logout', headers: logoutHeaders })
+      expect(logout.statusCode).toBe(204)
+      expect(logout.body).toBe('')
+      expect(logout.headers['set-cookie']).toContain(`${cookieName}=`)
+      expect(logout.headers['set-cookie']).toContain('Max-Age=0')
+      expect(logout.headers['set-cookie']).not.toContain('Domain=')
+      expect((await auth.inject({ url: '/api/v4/auth/session', headers })).statusCode).toBe(401)
+      expect((await auth.inject({ method: 'POST', url: '/api/v4/auth/logout', headers: logoutHeaders })).statusCode).toBe(401)
+      await expect(service.resolveSession(other.rawSession, 'auth')).resolves.toBeDefined()
+      expect(bridge.revokedUsers).toEqual([])
+    } finally {
+      await auth.close()
+    }
+  })
+
   it.each([true, false])('unlocks www courses with the matching cookie policy (secure=%s)', async secureCookies => {
     const { service } = fixture()
     const www = Fastify(), auth = Fastify()

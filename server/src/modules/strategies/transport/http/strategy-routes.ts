@@ -40,56 +40,56 @@ export const strategyRoutes: FastifyPluginAsync<StrategyRoutesOptions> = async (
     } catch (error) { return problem(error, request, reply) }
   })
 
-  fastify.get<{ Params: { strategyId: string } }>('/strategies/:strategyId', async (request, reply) => {
+  fastify.get<{ Params: { strategy_id: string } }>('/strategies/:strategy_id', async (request, reply) => {
     try {
       const { userId } = await options.auth.authenticate(request)
-      const detail = await options.service.detail(userId, opaque(request.params.strategyId, 'strategy_id'))
+      const detail = await options.service.detail(userId, opaque(request.params.strategy_id, 'strategy_id'))
       if (!detail) throw new StrategyAccessError('strategy_not_found', 404)
       return reply.header('ETag', etag(detail.summary.revision)).send(response(request.id, detailDto(detail)))
     } catch (error) { return problem(error, request, reply) }
   })
 
-  fastify.patch<{ Params: { strategyId: string }; Body: Record<string, unknown> }>('/strategies/:strategyId', async (request, reply) => {
+  fastify.patch<{ Params: { strategy_id: string }; Body: Record<string, unknown> }>('/strategies/:strategy_id', async (request, reply) => {
     try {
       const { userId } = await writeUser(options, request)
       const body = objectBody(request.body)
       assertKeys(body, ['name', 'description'])
       const detail = await options.service.updateMetadata({
-        userId, strategyId: opaque(request.params.strategyId, 'strategy_id'), expectedRevision: ifMatch(request.headers['if-match']),
+        userId, strategyId: opaque(request.params.strategy_id, 'strategy_id'), expectedRevision: ifMatch(request.headers['if-match']),
         name: text(body.name, 'name', 1, 191), description: text(body.description, 'description', 0, 2000),
       })
       return reply.header('ETag', etag(detail.summary.revision)).send(response(request.id, detailDto(detail)))
     } catch (error) { return problem(error, request, reply) }
   })
 
-  fastify.post<{ Params: { strategyId: string }; Body: Record<string, unknown> }>('/strategies/:strategyId/versions', async (request, reply) => {
+  fastify.post<{ Params: { strategy_id: string }; Body: Record<string, unknown> }>('/strategies/:strategy_id/versions', async (request, reply) => {
     try {
       const { userId } = await writeUser(options, request)
       const body = objectBody(request.body)
       assertKeys(body, ['prompt_text', 'config'])
       const detail = await options.service.createVersion({
-        userId, strategyId: opaque(request.params.strategyId, 'strategy_id'), expectedRevision: ifMatch(request.headers['if-match']),
+        userId, strategyId: opaque(request.params.strategy_id, 'strategy_id'), expectedRevision: ifMatch(request.headers['if-match']),
         promptText: text(body.prompt_text, 'prompt_text', 1, 100_000), config: objectBody(body.config),
       })
       return reply.code(201).header('ETag', etag(detail.summary.revision)).send(response(request.id, detailDto(detail)))
     } catch (error) { return problem(error, request, reply) }
   })
 
-  fastify.post<{ Params: { strategyId: string; versionId: string } }>('/strategies/:strategyId/versions/:versionId/publish', async (request, reply) => {
+  fastify.post<{ Params: { strategy_id: string; version_id: string } }>('/strategies/:strategy_id/versions/:version_id/publish', async (request, reply) => {
     try {
       const { userId } = await writeUser(options, request)
       const detail = await options.service.publishVersion({
-        userId, strategyId: opaque(request.params.strategyId, 'strategy_id'), versionId: opaque(request.params.versionId, 'version_id'),
+        userId, strategyId: opaque(request.params.strategy_id, 'strategy_id'), versionId: opaque(request.params.version_id, 'version_id'),
         expectedRevision: ifMatch(request.headers['if-match']),
       })
       return reply.header('ETag', etag(detail.summary.revision)).send(response(request.id, detailDto(detail)))
     } catch (error) { return problem(error, request, reply) }
   })
 
-  fastify.post<{ Params: { strategyId: string } }>('/strategies/:strategyId/retire', async (request, reply) => {
+  fastify.post<{ Params: { strategy_id: string } }>('/strategies/:strategy_id/retire', async (request, reply) => {
     try {
       const { userId } = await writeUser(options, request)
-      const detail = await options.service.retire({ userId, strategyId: opaque(request.params.strategyId, 'strategy_id'), expectedRevision: ifMatch(request.headers['if-match']) })
+      const detail = await options.service.retire({ userId, strategyId: opaque(request.params.strategy_id, 'strategy_id'), expectedRevision: ifMatch(request.headers['if-match']) })
       return reply.header('ETag', etag(detail.summary.revision)).send(response(request.id, detailDto(detail)))
     } catch (error) { return problem(error, request, reply) }
   })
@@ -117,14 +117,14 @@ export const strategyRoutes: FastifyPluginAsync<StrategyRoutesOptions> = async (
     } catch (error) { return problem(error, request, reply) }
   })
 
-  fastify.patch<{ Params: { subscriptionId: string }; Body: Record<string, unknown> }>('/strategy-subscriptions/:subscriptionId', async (request, reply) => {
+  fastify.patch<{ Params: { subscription_id: string }; Body: Record<string, unknown> }>('/strategy-subscriptions/:subscription_id', async (request, reply) => {
     try {
       const { userId } = await writeUser(options, request)
       const body = objectBody(request.body)
       assertKeys(body, ['symbol', 'analysis_strategy_id', 'trader_strategy_id', 'analysis_enabled', 'trader_enabled', 'trade_send_enabled', 'status'])
       if (Object.keys(body).length === 0) throw new StrategyAccessError('strategy_subscription_patch_empty', 422)
       const subscription = await options.service.updateSubscription({
-        userId, subscriptionId: opaque(request.params.subscriptionId, 'subscription_id'), expectedRevision: ifMatch(request.headers['if-match']),
+        userId, subscriptionId: opaque(request.params.subscription_id, 'subscription_id'), expectedRevision: ifMatch(request.headers['if-match']),
         ...(body.symbol === undefined ? {} : { standardSymbol: symbol(body.symbol) }),
         ...(body.analysis_strategy_id === undefined ? {} : { analysisStrategyId: opaque(body.analysis_strategy_id, 'analysis_strategy_id') }),
         ...(body.trader_strategy_id === undefined ? {} : { traderStrategyId: body.trader_strategy_id === null ? null : opaque(body.trader_strategy_id, 'trader_strategy_id') }),

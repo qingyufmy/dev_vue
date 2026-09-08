@@ -22,8 +22,8 @@ export const tradeHistoryRoutes: FastifyPluginAsync<TradeHistoryRoutesOptions> =
     } catch (error) { return problem(error, request, reply) }
   })
 
-  fastify.get<{ Params: { recordId: string } }>('/trade-history/:recordId', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); return response(request.id, detailDto(await options.service.detail(userId, request.params.recordId))) }
+  fastify.get<{ Params: { trade_record_id: string } }>('/trade-history/:trade_record_id', async (request, reply) => {
+    try { const { userId } = await options.auth.authenticate(request); return response(request.id, detailDto(await options.service.detail(userId, request.params.trade_record_id))) }
     catch (error) { return problem(error, request, reply) }
   })
 }

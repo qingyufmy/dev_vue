@@ -150,12 +150,12 @@ describe('V4 browser realtime runtime', () => {
       ['POST', '/api/v4/bridge/legacy-credential-exchanges'], ['POST', '/api/v4/bridge/session-tokens'],
       ['POST', '/api/v4/bridge/credential-revocations'],
       ['GET', '/api/v4/trading-context'], ['GET', '/api/v4/market/candles'],
-      ['POST', '/api/v4/analysis-jobs'], ['GET', '/api/v4/risk-accounts/:accountId/policy'],
-      ['GET', '/api/v4/operations/:operationId'], ['GET', '/api/v4/trading-accounts/:accountId/execution-context'],
+      ['POST', '/api/v4/analysis-jobs'], ['GET', '/api/v4/risk-accounts/:account_id/policy'],
+      ['GET', '/api/v4/operations/:operation_id'], ['GET', '/api/v4/trading-accounts/:account_id/execution-context'],
       ['GET', '/api/v4/execution-distributions/preview'], ['GET', '/api/v4/execution-distributions/:distribution_id'],
       ['GET', '/api/v4/admin/observer/sources'], ['POST', '/api/v4/admin/observer/sources'],
       ['PUT', '/api/v4/admin/observer/default-channel'], ['PUT', '/api/v4/admin/observer/channels/:channel_id/accesses/:user_id'],
-      ['GET', '/api/v4/audit/events'], ['GET', '/api/v4/audit/events/:sourceKind/:sourceId'],
+      ['GET', '/api/v4/audit/events'], ['GET', '/api/v4/audit/events/:source_kind/:source_id'],
     ] as const) expect(app.hasRoute({ method: route[0], url: route[1] })).toBe(true)
     const audit = await app.inject({ url: '/api/v4/audit/events?account_id=42', headers: { host: 'trade.example.test' } })
     expect(audit.statusCode).toBe(403)

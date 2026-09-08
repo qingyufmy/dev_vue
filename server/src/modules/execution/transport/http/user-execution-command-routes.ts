@@ -36,12 +36,12 @@ const response = (requestId: string, data: unknown) => ({ data, meta: { request_
  * still performs the authoritative validation and normalization.
  */
 export const userExecutionCommandRoutes: FastifyPluginAsync<UserExecutionCommandRoutesOptions> = async (fastify, options) => {
-  fastify.get<{ Params: { accountId: string }; Querystring: { symbol?: string; ticket?: string } }>('/trading-accounts/:accountId/execution-context', async (request, reply) => {
+  fastify.get<{ Params: { account_id: string }; Querystring: { symbol?: string; ticket?: string } }>('/trading-accounts/:account_id/execution-context', async (request, reply) => {
     try {
       const { userId } = await options.auth.authenticate(request)
       const result = await options.service.commandContext({
         userId,
-        accountId: request.params.accountId,
+        accountId: request.params.account_id,
         symbol: request.query.symbol ?? null,
         ticket: request.query.ticket ?? null,
       })
@@ -49,7 +49,7 @@ export const userExecutionCommandRoutes: FastifyPluginAsync<UserExecutionCommand
     } catch (error) { return problem(error, request, reply) }
   })
 
-  fastify.post<{ Params: { accountId: string }; Body: RequestBody }>('/trading-accounts/:accountId/execution-commands', async (request, reply) => {
+  fastify.post<{ Params: { account_id: string }; Body: RequestBody }>('/trading-accounts/:account_id/execution-commands', async (request, reply) => {
     try {
       // Authenticate before parsing or mutating anything.  assertWrite owns
       // the CSRF/write-token decision and is mandatory for this route.
@@ -57,7 +57,7 @@ export const userExecutionCommandRoutes: FastifyPluginAsync<UserExecutionCommand
       const idempotencyKey = request.headers['idempotency-key']
       if (typeof idempotencyKey !== 'string' || !idempotencyKey.trim()) throw new UserExecutionCommandError('idempotency_key_required', 428)
       const body = request.body ?? {}
-      const input = toCommandInput(userId, request.params.accountId, body, idempotencyKey)
+      const input = toCommandInput(userId, request.params.account_id, body, idempotencyKey)
       const result = await options.service.execute(input)
       return reply.code(202).send(response(request.id, commandResultDto(result)))
     } catch (error) { return problem(error, request, reply) }

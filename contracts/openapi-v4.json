@@ -32,6 +32,41 @@
     { "name": "Observer Management", "description": "Administrator-only observer source, channel and explicit audience authorization configuration" }
   ],
   "paths": {
+    "/auth/session": {
+      "get": {
+        "operationId": "getAuthCenterSession",
+        "tags": ["Session"],
+        "summary": "Read the identity center session",
+        "description": "Identity center host only. Uses the auth session, not an application session. Returns Cache-Control: no-store. Does not provide application permissions.",
+        "security": [{ "authCenterSession": [] }],
+        "responses": {
+          "200": { "description": "Identity center session", "headers": { "Cache-Control": { "schema": { "const": "no-store" } } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthCenterSessionResponse" } } } },
+          "401": { "$ref": "#/components/responses/AuthCenterProblem" },
+          "404": { "$ref": "#/components/responses/AuthCenterProblem" },
+          "503": { "$ref": "#/components/responses/AuthCenterProblem" }
+        }
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "operationId": "logoutAuthCenterSession",
+        "tags": ["Session"],
+        "summary": "Revoke the current identity center session",
+        "description": "Identity center host only. Requires the current auth session CSRF token and exact issuer Origin. Clears the auth cookie; does not revoke other application or Bridge sessions. A repeated request after revocation returns 401.",
+        "security": [{ "authCenterSession": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "name": "Origin", "in": "header", "required": true, "schema": { "type": "string", "format": "uri" }, "description": "Must equal the configured identity center issuer origin." }
+        ],
+        "responses": {
+          "204": { "description": "Current auth session revoked; empty body", "headers": { "Set-Cookie": { "description": "Expires the host-only auth session cookie with Max-Age=0.", "schema": { "type": "string" } } } },
+          "401": { "$ref": "#/components/responses/AuthCenterProblem" },
+          "403": { "$ref": "#/components/responses/AuthCenterProblem" },
+          "404": { "$ref": "#/components/responses/AuthCenterProblem" },
+          "503": { "$ref": "#/components/responses/AuthCenterProblem" }
+        }
+      }
+    },
     "/learning/courses/{courseId}/lessons/{lessonId}/completion": {
       "put": {
         "operationId": "setLearningCompletion",
@@ -2145,6 +2180,12 @@
   },
   "components": {
     "securitySchemes": {
+      "authCenterSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-Http-auth_session",
+        "description": "Host-only identity center session. Local insecure development uses aurum_dev_auth_session. Application session cookies are not accepted."
+      },
       "applicationSession": {
         "type": "apiKey",
         "in": "cookie",
@@ -2334,6 +2375,10 @@
       }
     },
     "responses": {
+      "AuthCenterProblem": {
+        "description": "Identity center problem details. Current transport uses application/json. Codes include auth_session_required, auth_session_invalid, auth_csrf_invalid, auth_host_invalid and auth_service_unavailable.",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+      },
       "Problem": {
         "description": "Problem details",
         "content": {
@@ -2796,6 +2841,25 @@
           "authenticated_at": { "$ref": "#/components/schemas/UtcDateTime" },
           "mfa_level": { "type": "string", "enum": ["none", "otp", "strong"] },
           "csrf_token": { "type": "string", "minLength": 16, "maxLength": 256 }
+        }
+      },
+      "AuthCenterSessionResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["data", "meta"],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["user", "authenticated_at", "mfa_level", "csrf_token"],
+            "properties": {
+              "user": { "$ref": "#/components/schemas/Session/properties/user" },
+              "authenticated_at": { "$ref": "#/components/schemas/UtcDateTime" },
+              "mfa_level": { "type": "string", "enum": ["none", "otp", "strong"] },
+              "csrf_token": { "type": "string", "minLength": 16, "maxLength": 256 }
+            }
+          },
+          "meta": { "$ref": "#/components/schemas/Meta" }
         }
       },
       "SessionResponse": {

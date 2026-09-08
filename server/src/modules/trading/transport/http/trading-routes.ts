@@ -76,9 +76,9 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesOptions> = async (fa
     try { const { userId } = await options.auth.authenticate(request); return response(request.id, { items: (await options.service.listObserverChannels(userId)).map(observerDto) }) }
     catch (error) { return problem(error, request, reply) }
   })
-  fastify.get<{ Params: { accountId: string }; Querystring: { observer_channel_id?: string } }>('/trading-accounts/:accountId/snapshot', async (request, reply) => {
+  fastify.get<{ Params: { account_id: string }; Querystring: { observer_channel_id?: string } }>('/trading-accounts/:account_id/snapshot', async (request, reply) => {
     try {
-      const { userId } = await options.auth.authenticate(request); const data = await options.service.workspace(userId, request.params.accountId, request.query.observer_channel_id)
+      const { userId } = await options.auth.authenticate(request); const data = await options.service.workspace(userId, request.params.account_id, request.query.observer_channel_id)
       return response(request.id, { account: accountDto(data.account), snapshot: data.snapshot ? snapshotDto(data.snapshot) : null, symbols: data.symbols, positions: { revision: String(data.positions.revision), items: data.positions.items.map(positionDto) }, pending_orders: { revision: String(data.pendingOrders.revision), items: data.pendingOrders.items.map(orderDto) } })
     }
     catch (error) { return problem(error, request, reply) }

@@ -14,24 +14,24 @@ export const reviewRoutes: FastifyPluginAsync<ReviewRoutesOptions> = async (fast
     try { const { userId } = await options.auth.authenticate(request); return response(request.id, { items: (await options.service.cases(userId, { ...(request.query.kind === undefined ? {} : { kind: request.query.kind }), ...(request.query.account_id === undefined ? {} : { tradingAccountId: request.query.account_id }), limit: Number(request.query.page_size ?? 50) })).map(caseDto) }) }
     catch (error) { return problem(error, request, reply) }
   })
-  fastify.get<{ Params: { caseId: string } }>('/review-cases/:caseId', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); const detail = await options.service.detail(userId, request.params.caseId); return reply.header('ETag', etag(detail.summary.revision)).send(response(request.id, detailDto(detail))) }
+  fastify.get<{ Params: { review_case_id: string } }>('/review-cases/:review_case_id', async (request, reply) => {
+    try { const { userId } = await options.auth.authenticate(request); const detail = await options.service.detail(userId, request.params.review_case_id); return reply.header('ETag', etag(detail.summary.revision)).send(response(request.id, detailDto(detail))) }
     catch (error) { return problem(error, request, reply) }
   })
-  fastify.post<{ Params: { caseId: string }; Body: { mode?: string } }>('/review-cases/:caseId/generations', async (request, reply) => {
-    try { const { userId } = await options.auth.assertWrite(request); const detail = await options.service.requestGeneration(userId, request.params.caseId, ifMatch(request.headers['if-match']), request.body?.mode ?? 'retry'); return reply.code(202).header('ETag', etag(detail.summary.revision)).send(response(request.id, detailDto(detail))) }
+  fastify.post<{ Params: { review_case_id: string }; Body: { mode?: string } }>('/review-cases/:review_case_id/generations', async (request, reply) => {
+    try { const { userId } = await options.auth.assertWrite(request); const detail = await options.service.requestGeneration(userId, request.params.review_case_id, ifMatch(request.headers['if-match']), request.body?.mode ?? 'retry'); return reply.code(202).header('ETag', etag(detail.summary.revision)).send(response(request.id, detailDto(detail))) }
     catch (error) { return problem(error, request, reply) }
   })
-  fastify.post<{ Params: { caseId: string }; Body: { content?: unknown } }>('/review-cases/:caseId/versions', async (request, reply) => {
-    try { const { userId } = await options.auth.assertWrite(request); if (!request.body?.content) throw new ReviewError('review_content_required', 422); const detail = await options.service.createVersion(userId, request.params.caseId, ifMatch(request.headers['if-match']), reviewContentFromWire(request.body.content)); return reply.code(201).header('ETag', etag(detail.summary.revision)).send(response(request.id, detailDto(detail))) }
+  fastify.post<{ Params: { review_case_id: string }; Body: { content?: unknown } }>('/review-cases/:review_case_id/versions', async (request, reply) => {
+    try { const { userId } = await options.auth.assertWrite(request); if (!request.body?.content) throw new ReviewError('review_content_required', 422); const detail = await options.service.createVersion(userId, request.params.review_case_id, ifMatch(request.headers['if-match']), reviewContentFromWire(request.body.content)); return reply.code(201).header('ETag', etag(detail.summary.revision)).send(response(request.id, detailDto(detail))) }
     catch (error) { return problem(error, request, reply) }
   })
-  fastify.post<{ Params: { caseId: string }; Body: { version_id?: string } }>('/review-cases/:caseId/confirm', async (request, reply) => {
-    try { const { userId } = await options.auth.assertWrite(request); const versionId = text(request.body?.version_id, 'review_version_id'); const detail = await options.service.confirm(userId, request.params.caseId, versionId, ifMatch(request.headers['if-match'])); return reply.header('ETag', etag(detail.summary.revision)).send(response(request.id, detailDto(detail))) }
+  fastify.post<{ Params: { review_case_id: string }; Body: { version_id?: string } }>('/review-cases/:review_case_id/confirm', async (request, reply) => {
+    try { const { userId } = await options.auth.assertWrite(request); const versionId = text(request.body?.version_id, 'review_version_id'); const detail = await options.service.confirm(userId, request.params.review_case_id, versionId, ifMatch(request.headers['if-match'])); return reply.header('ETag', etag(detail.summary.revision)).send(response(request.id, detailDto(detail))) }
     catch (error) { return problem(error, request, reply) }
   })
-  fastify.post<{ Params: { caseId: string }; Body: { reason?: string } }>('/review-cases/:caseId/return', async (request, reply) => {
-    try { const { userId } = await options.auth.assertWrite(request); const detail = await options.service.returnForChanges(userId, request.params.caseId, ifMatch(request.headers['if-match']), text(request.body?.reason, 'reason')); return reply.header('ETag', etag(detail.summary.revision)).send(response(request.id, detailDto(detail))) }
+  fastify.post<{ Params: { review_case_id: string }; Body: { reason?: string } }>('/review-cases/:review_case_id/return', async (request, reply) => {
+    try { const { userId } = await options.auth.assertWrite(request); const detail = await options.service.returnForChanges(userId, request.params.review_case_id, ifMatch(request.headers['if-match']), text(request.body?.reason, 'reason')); return reply.header('ETag', etag(detail.summary.revision)).send(response(request.id, detailDto(detail))) }
     catch (error) { return problem(error, request, reply) }
   })
   fastify.get<{ Querystring: { account_id?: string; page_size?: string } }>('/manual-review-candidates', async (request, reply) => {
@@ -49,16 +49,16 @@ export const reviewRoutes: FastifyPluginAsync<ReviewRoutesOptions> = async (fast
     try { const { userId } = await options.auth.authenticate(request); return response(request.id, { items: (await options.service.memories(userId)).map(memorySummaryDto) }) }
     catch (error) { return problem(error, request, reply) }
   })
-  fastify.get<{ Params: { memoryId: string } }>('/strategy-memories/:memoryId', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); const memory = await options.service.memory(userId, request.params.memoryId); return reply.header('ETag', etag(memory.revision)).send(response(request.id, memoryDetailDto(memory))) }
+  fastify.get<{ Params: { memory_id: string } }>('/strategy-memories/:memory_id', async (request, reply) => {
+    try { const { userId } = await options.auth.authenticate(request); const memory = await options.service.memory(userId, request.params.memory_id); return reply.header('ETag', etag(memory.revision)).send(response(request.id, memoryDetailDto(memory))) }
     catch (error) { return problem(error, request, reply) }
   })
-  fastify.get<{ Params: { memoryId: string } }>('/strategy-memories/:memoryId/updates', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); return response(request.id, { items: (await options.service.memoryUpdates(userId, request.params.memoryId)).map(memoryUpdateDto) }) }
+  fastify.get<{ Params: { memory_id: string } }>('/strategy-memories/:memory_id/updates', async (request, reply) => {
+    try { const { userId } = await options.auth.authenticate(request); return response(request.id, { items: (await options.service.memoryUpdates(userId, request.params.memory_id)).map(memoryUpdateDto) }) }
     catch (error) { return problem(error, request, reply) }
   })
-  fastify.post<{ Params: { updateId: string }; Body: { decision?: string } }>('/strategy-memory-updates/:updateId/decision', async (request, reply) => {
-    try { const { userId } = await options.auth.assertWrite(request); const update = await options.service.decideMemoryUpdate(userId, request.params.updateId, ifMatch(request.headers['if-match']), request.body?.decision ?? ''); return reply.header('ETag', etag(update.revision)).send(response(request.id, memoryUpdateDto(update))) }
+  fastify.post<{ Params: { update_id: string }; Body: { decision?: string } }>('/strategy-memory-updates/:update_id/decision', async (request, reply) => {
+    try { const { userId } = await options.auth.assertWrite(request); const update = await options.service.decideMemoryUpdate(userId, request.params.update_id, ifMatch(request.headers['if-match']), request.body?.decision ?? ''); return reply.header('ETag', etag(update.revision)).send(response(request.id, memoryUpdateDto(update))) }
     catch (error) { return problem(error, request, reply) }
   })
 }

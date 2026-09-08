@@ -59,18 +59,18 @@ export const inferenceRoutes: FastifyPluginAsync<InferenceRoutesOptions> = async
     try { const { userId } = await options.auth.authenticate(request); return response(request.id, { items: (await options.service.analyses(userId, Number(request.query.page_size ?? 50))).map(analysisSummaryDto) }) }
     catch (error) { return problem(error, request, reply) }
   })
-  fastify.get<{ Params: { analysisId: string } }>('/market-analyses/:analysisId', async (request, reply) => {
+  fastify.get<{ Params: { analysis_id: string } }>('/market-analyses/:analysis_id', async (request, reply) => {
     try {
-      const { userId } = await options.auth.authenticate(request); const item = await options.service.analysis(userId, request.params.analysisId)
+      const { userId } = await options.auth.authenticate(request); const item = await options.service.analysis(userId, request.params.analysis_id)
       if (!item) throw new InferenceError('analysis_not_found', 404)
       return response(request.id, analysisDetailDto(item))
     } catch (error) { return problem(error, request, reply) }
   })
-  fastify.post<{ Params: { analysisId: string }; Body: { trading_account_id: string; subscription_id: string; subscription_revision: string; trader_strategy_id: string; trader_strategy_version_id: string } }>('/market-analyses/:analysisId/trader-evaluations', async (request, reply) => {
+  fastify.post<{ Params: { analysis_id: string }; Body: { trading_account_id: string; subscription_id: string; subscription_revision: string; trader_strategy_id: string; trader_strategy_version_id: string } }>('/market-analyses/:analysis_id/trader-evaluations', async (request, reply) => {
     try {
       const { userId } = await options.auth.assertWrite(request)
       const item = await options.service.requestAccountEvaluation(userId, {
-        marketAnalysisId: request.params.analysisId, tradingAccountId: request.body.trading_account_id,
+        marketAnalysisId: request.params.analysis_id, tradingAccountId: request.body.trading_account_id,
         subscriptionId: request.body.subscription_id, subscriptionRevision: Number(request.body.subscription_revision),
         strategyId: request.body.trader_strategy_id, strategyVersionId: request.body.trader_strategy_version_id,
       }, String(request.headers['idempotency-key'] ?? ''))
@@ -81,9 +81,9 @@ export const inferenceRoutes: FastifyPluginAsync<InferenceRoutesOptions> = async
     try { const { userId } = await options.auth.authenticate(request); return response(request.id, { items: (await options.service.decisions(userId, request.query.account_id, Number(request.query.page_size ?? 50))).map(decisionSummaryDto) }) }
     catch (error) { return problem(error, request, reply) }
   })
-  fastify.get<{ Params: { decisionId: string } }>('/trade-decisions/:decisionId', async (request, reply) => {
+  fastify.get<{ Params: { decision_id: string } }>('/trade-decisions/:decision_id', async (request, reply) => {
     try {
-      const { userId } = await options.auth.authenticate(request); const item = await options.service.decision(userId, request.params.decisionId)
+      const { userId } = await options.auth.authenticate(request); const item = await options.service.decision(userId, request.params.decision_id)
       if (!item) throw new InferenceError('trade_decision_not_found', 404)
       return response(request.id, decisionDetailDto(item))
     } catch (error) { return problem(error, request, reply) }

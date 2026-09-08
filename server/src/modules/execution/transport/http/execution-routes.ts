@@ -11,10 +11,10 @@ export interface ExecutionRoutesOptions { service: ExecutionService; auth: Execu
 const response = (requestId: string, data: unknown) => ({ data, meta: { request_id: requestId, generated_at: new Date().toISOString() } })
 
 export const executionRoutes: FastifyPluginAsync<ExecutionRoutesOptions> = async (fastify, options) => {
-  fastify.get<{ Params: { operationId: string } }>('/operations/:operationId', async (request, reply) => {
+  fastify.get<{ Params: { operation_id: string } }>('/operations/:operation_id', async (request, reply) => {
     try {
       const { userId } = await options.auth.authenticate(request)
-      return response(request.id, operationDto(await options.service.operation(userId, request.params.operationId)))
+      return response(request.id, operationDto(await options.service.operation(userId, request.params.operation_id)))
     } catch (error) { return problem(error, request, reply) }
   })
 }

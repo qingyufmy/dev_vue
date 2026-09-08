@@ -86,3 +86,13 @@ audit 的 index 只公开 AuditReadApi、查询/结果合同及错误类型；�
 ## 第七批：API 实际注册对账
 
 新增 inspect:api-contracts，构建后捕获真实 Fastify 注册路径并与 OpenAPI 双向对账；不启动监听或真实依赖。93项合同操作与87项业务注册中匹配85项，8项缺失、2项认证中心路由未声明、29项参数名差异，完整处置见[API 差异报告](api-registration-gap-review-20260908.md)。5项比较器测试和V4构建通过。检查如实退出1，不隐藏缺口，也不把注册匹配当作请求/响应及业务验收。合同编译、消费者覆盖和其它P0事项仍待收口。
+
+## 第八批：路由参数对齐与认证中心合同
+
+29项操作的路径参数统一到合同命名，同步修改 Params 类型及 handler 取值，实际 URL 形状和应用用例输入保持。涉及 audit、execution、inference、reviews、risk、strategies、trade-history、trading；对应注册检查同步更新。参数改动后服务端96个测试文件720项测试通过。
+
+补齐 GET /auth/session 与 POST /auth/logout 的身份中心合同：单独声明 auth cookie、host、CSRF/Origin、会话响应、当前会话退出及重复退出401；不复用含 app/permissions 的应用会话响应。现有认证错误媒体类型是 application/json，合同按实际行为声明；统一 problem 媒体类型仍需接续处理。
+
+新增两种 Cookie 配置的真实 Fastify inject 行为测试，以 JSON Schema 2020-12 校验实际响应；覆盖额外应用字段/非法时间拒绝、错误 host、缺 Cookie、错误 Cookie 名、缺 CSRF、错误 Origin、退出清 Cookie、会话失效及其它会话不被撤销。认证与比较器合计17项测试通过，完整服务端类型检查和V4构建通过。前端目前没有这两个路径的消费者，不能据此宣称已完成生成客户端或浏览器认证验收。
+
+[最新对账](migration/api-route-coverage-20260908-v2.json)：95项合同、87项业务注册全部匹配；未声明路由0、参数命名差异0，仍有8项合同路由缺实现，检查继续退出1。合同同源编译、域拆分、模块/表所有权、精确例外和正式自动门禁仍未收口，P0及P1–P7继续。未启动服务、连接真实依赖或执行数据库操作。

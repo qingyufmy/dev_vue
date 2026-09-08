@@ -130,31 +130,31 @@ function problem(error: unknown, request: { id: string; url: string }, reply: { 
 }
 
 export const riskRoutes: FastifyPluginAsync<RiskRoutesOptions> = async (fastify, options) => {
-  fastify.get<{ Params: { accountId: string } }>('/risk-accounts/:accountId/policy', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); const policy = await options.service.policy(userId, request.params.accountId); return reply.header('ETag', `"${policy.policySetRevision}"`).send(response(request.id, policyDto(policy))) }
+  fastify.get<{ Params: { account_id: string } }>('/risk-accounts/:account_id/policy', async (request, reply) => {
+    try { const { userId } = await options.auth.authenticate(request); const policy = await options.service.policy(userId, request.params.account_id); return reply.header('ETag', `"${policy.policySetRevision}"`).send(response(request.id, policyDto(policy))) }
     catch (error) { return problem(error, request, reply) }
   })
-  fastify.put<{ Params: { accountId: string }; Body: Record<string, unknown> & { reason?: string } }>('/risk-accounts/:accountId/policy', async (request, reply) => {
+  fastify.put<{ Params: { account_id: string }; Body: Record<string, unknown> & { reason?: string } }>('/risk-accounts/:account_id/policy', async (request, reply) => {
     try {
       const { userId } = await options.auth.assertWrite(request)
-      const policy = await options.service.replacePolicy(userId, request.params.accountId, expectedRevision(request.headers['if-match']), policyPatch(request.body), String(request.body.reason ?? ''))
+      const policy = await options.service.replacePolicy(userId, request.params.account_id, expectedRevision(request.headers['if-match']), policyPatch(request.body), String(request.body.reason ?? ''))
       return reply.header('ETag', `"${policy.policySetRevision}"`).send(response(request.id, policyDto(policy)))
     } catch (error) { return problem(error, request, reply) }
   })
-  fastify.get<{ Params: { accountId: string } }>('/risk-accounts/:accountId/summary', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); return response(request.id, summaryDto(await options.service.summary(userId, request.params.accountId))) }
+  fastify.get<{ Params: { account_id: string } }>('/risk-accounts/:account_id/summary', async (request, reply) => {
+    try { const { userId } = await options.auth.authenticate(request); return response(request.id, summaryDto(await options.service.summary(userId, request.params.account_id))) }
     catch (error) { return problem(error, request, reply) }
   })
-  fastify.get<{ Params: { accountId: string } }>('/risk-accounts/:accountId/manual-release', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); return response(request.id, manualReleaseStateDto(await options.service.manualReleaseState(userId, request.params.accountId))) }
+  fastify.get<{ Params: { account_id: string } }>('/risk-accounts/:account_id/manual-release', async (request, reply) => {
+    try { const { userId } = await options.auth.authenticate(request); return response(request.id, manualReleaseStateDto(await options.service.manualReleaseState(userId, request.params.account_id))) }
     catch (error) { return problem(error, request, reply) }
   })
-  fastify.post<{ Params: { accountId: string }; Body: { acknowledge_risk?: boolean; reason?: string } }>('/risk-accounts/:accountId/manual-release', async (request, reply) => {
+  fastify.post<{ Params: { account_id: string }; Body: { acknowledge_risk?: boolean; reason?: string } }>('/risk-accounts/:account_id/manual-release', async (request, reply) => {
     try {
       const { userId } = await options.auth.assertWrite(request)
       const body = request.body ?? {}
       const release = await options.service.createManualRelease({
-        userId, accountId: request.params.accountId, expectedSummaryRevision: expectedRevision(request.headers['if-match']),
+        userId, accountId: request.params.account_id, expectedSummaryRevision: expectedRevision(request.headers['if-match']),
         idempotencyKey: String(request.headers['idempotency-key'] ?? ''), acknowledgeRisk: body.acknowledge_risk === true,
         reason: String(body.reason ?? ''),
       })
@@ -165,8 +165,8 @@ export const riskRoutes: FastifyPluginAsync<RiskRoutesOptions> = async (fastify,
     try { const { userId } = await options.auth.authenticate(request); return response(request.id, { items: (await options.service.decisions(userId, request.query.account_id, Number(request.query.page_size ?? 50))).map(decisionDto) }) }
     catch (error) { return problem(error, request, reply) }
   })
-  fastify.get<{ Params: { decisionId: string } }>('/risk-decisions/:decisionId', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); return response(request.id, detailDto(await options.service.decision(userId, request.params.decisionId))) }
+  fastify.get<{ Params: { risk_decision_id: string } }>('/risk-decisions/:risk_decision_id', async (request, reply) => {
+    try { const { userId } = await options.auth.authenticate(request); return response(request.id, detailDto(await options.service.decision(userId, request.params.risk_decision_id))) }
     catch (error) { return problem(error, request, reply) }
   })
 }
