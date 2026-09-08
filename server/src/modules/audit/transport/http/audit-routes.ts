@@ -1,4 +1,5 @@
 import type { FastifyPluginAsync, FastifyReply } from 'fastify'
+import { randomUUID } from 'node:crypto'
 import { AuthError } from '../../../auth/index.js'
 import { createHttpContractValidator, HttpContractError } from '../../../../transport/http-contract.js'
 import { httpRuntimeContracts } from '../../../../transport/generated/http-contracts.js'
@@ -31,7 +32,7 @@ export const auditRoutes: FastifyPluginAsync<AuditRoutesOptions> = async (fastif
         has_more: result.hasMore, summary: { total: result.summary.total, succeeded: result.summary.succeeded,
           rejected: result.summary.rejected, failed: result.summary.failed, uncertain: result.summary.uncertain, active: result.summary.active },
       }))
-    } catch (error) { return problem(error, request, reply) }
+    } catch (error) { return problem(error, request, reply, contract, 'listAuditEvents') }
   })
 
   fastify.get<{ Params: { source_kind: string; source_id: string } }>('/audit/events/:source_kind/:source_id', async (request, reply) => {
@@ -39,7 +40,7 @@ export const auditRoutes: FastifyPluginAsync<AuditRoutesOptions> = async (fastif
       const { userId } = await options.auth.authenticate(request)
       contract.request('getAuditEvent', request)
       return contract.response('getAuditEvent', response(request.id, detailDto(await options.service.detail(userId, request.params.source_kind, request.params.source_id))))
-    } catch (error) { return problem(error, request, reply) }
+    } catch (error) { return problem(error, request, reply, contract, 'getAuditEvent') }
   })
 }
 
@@ -53,8 +54,16 @@ function traceDto(value: AuditTraceNode) { return { stage: value.stage, status: 
   source_id: value.sourceId, title: value.title, detail: value.detail, reason_code: value.reasonCode, occurred_at: value.occurredAt } }
 function detailDto(value: AuditEventDetail) { return { event: eventDto(value.event), trace: value.trace.map(traceDto),
   evidence: value.evidence, links: value.links } }
-function problem(error: unknown, request: { id: string; url: string }, reply: FastifyReply) {
+function problem(error: unknown, request: { id: string; url: string }, reply: FastifyReply, contract: ReturnType<typeof createHttpContractValidator>, operationId: string) {
   const known = error instanceof AuditError || error instanceof HttpContractError || error instanceof AuthError ? error : new AuditError('audit_unavailable', 503)
-  return reply.type('application/problem+json').code(known.status).send({ type: `urn:aurum:problem:${known.code}`, title: 'Audit request failed', status: known.status,
-    code: known.code, detail: known.code, instance: request.url, correlation_id: request.id, retryable: known.status >= 500 })
+  const body = { type: `urn:aurum:problem:${known.code}`, title: 'Audit request failed', status: known.status,
+    code: known.code, detail: known.code, instance: request.url, correlation_id: request.id, retryable: known.status >= 500 }
+  try {
+    return reply.type('application/problem+json').code(known.status).send(contract.response(operationId, body, known.status, 'application/problem+json'))
+  } catch {
+    // Never echo a value that failed the error contract, or recursively retry it.
+    const fallback = { type: 'urn:aurum:problem:api_response_invalid', title: 'Response validation failed', status: 503,
+      code: 'api_response_invalid', detail: 'api_response_invalid', instance: '/api/v4/audit/events', correlation_id: randomUUID(), retryable: true }
+    return reply.type('application/problem+json').code(503).send(contract.response(operationId, fallback, 503, 'application/problem+json'))
+  }
 }

@@ -26,9 +26,19 @@ for (const item of Object.values(document.paths)) {
       if (!['path', 'query'].includes(value.in) || !value.schema || value.content) throw new Error('unsupported_runtime_parameter')
       return { name: value.name, location: value.in, required: value.required === true, integerQuery: value.in === 'query' && resolve(value.schema).type === 'integer', schema: value.schema }
     })
-    const response = resolve(operation.responses?.['200'])?.content?.['application/json']?.schema
-    if (!response) throw new Error('runtime_response_schema_required')
-    operations[operation.operationId] = { parameters, response }
+    const responses = {}
+    for (const [status, raw] of Object.entries(operation.responses ?? {})) {
+      if (!/^[1-5][0-9]{2}$/.test(status)) throw new Error('unsupported_runtime_response_status')
+      const response = resolve(raw)
+      if (!response.content || !Object.keys(response.content).length) throw new Error('runtime_response_schema_required')
+      responses[status] = {}
+      for (const [mediaType, content] of Object.entries(response.content)) {
+        if (!['application/json', 'application/problem+json'].includes(mediaType) || !content.schema) throw new Error('unsupported_runtime_response_content')
+        responses[status][mediaType] = content.schema
+      }
+    }
+    if (!responses['200']?.['application/json']) throw new Error('runtime_response_schema_required')
+    operations[operation.operationId] = { parameters, responses }
   }
 }
 if (Object.keys(operations).length !== selected.length) throw new Error('runtime_operation_not_found')

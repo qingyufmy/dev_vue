@@ -1,7 +1,7 @@
 import Fastify from 'fastify'
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it, vi } from 'vitest'
-import type { AuditEventDetail } from '../src/modules/audit/index.js'
+import { AuditError, type AuditEventDetail } from '../src/modules/audit/index.js'
 import { AuditService } from '../src/modules/audit/application/audit-service.js'
 import type { AuditRepository } from '../src/modules/audit/application/audit-ports.js'
 import { auditRoutes } from '../src/modules/audit/transport/http/audit-routes.js'
@@ -27,6 +27,21 @@ function repository(overrides: Partial<AuditRepository> = {}): AuditRepository {
 }
 
 describe('Stage 12U system audit and execution trace', () => {
+  it('replaces invalid error payloads with a validated non-recursive fallback', async () => {
+    const app = Fastify()
+    try {
+      await app.register(auditRoutes, { prefix: '/api/v4', service: new AuditService(repository({
+        find: async () => { throw new AuditError('raw internal secret', 503) },
+      })), auth: { authenticate: async () => ({ userId: 7 }) } })
+      const result = await app.inject({ url: '/api/v4/audit/events/operation/operation-1' })
+      expect(result.statusCode).toBe(503)
+      expect(result.headers['content-type']).toContain('application/problem+json')
+      expect(result.json()).toMatchObject({ status: 503, code: 'api_response_invalid', retryable: true })
+      expect(result.body).not.toContain('raw internal secret')
+      expect(result.json().correlation_id).toMatch(/^[0-9a-f-]{36}$/)
+    } finally { await app.close() }
+  })
+
   it('rejects invalid HTTP query and path values before reading data', async () => {
     const list = vi.fn(repository().list)
     const find = vi.fn(repository().find)

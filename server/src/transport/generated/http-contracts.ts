@@ -378,6 +378,29 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         ],
         "type": "object"
       },
+      "FieldProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "field": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "message": {
+            "maxLength": 512,
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "code",
+          "message"
+        ],
+        "type": "object"
+      },
       "Meta": {
         "additionalProperties": false,
         "properties": {
@@ -398,6 +421,64 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         "maxLength": 191,
         "minLength": 1,
         "type": "string"
+      },
+      "Problem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "pattern": "^[a-z][a-z0-9_]{1,127}$",
+            "type": "string"
+          },
+          "correlation_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "detail": {
+            "maxLength": 2048,
+            "type": "string"
+          },
+          "errors": {
+            "items": {
+              "$ref": "#/components/schemas/FieldProblem"
+            },
+            "maxItems": 50,
+            "type": "array"
+          },
+          "instance": {
+            "maxLength": 2048,
+            "type": "string"
+          },
+          "retry_after_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "status": {
+            "maximum": 599,
+            "minimum": 400,
+            "type": "integer"
+          },
+          "title": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "type": {
+            "format": "uri-reference",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "detail",
+          "instance",
+          "correlation_id",
+          "retryable"
+        ],
+        "type": "object"
       },
       "UtcDateTime": {
         "format": "date-time",
@@ -500,8 +581,37 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
           }
         }
       ],
-      "response": {
-        "$ref": "#/components/schemas/AuditEventPageResponse"
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/AuditEventPageResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "404": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
       }
     },
     "getAuditEvent": {
@@ -525,8 +635,37 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
           }
         }
       ],
-      "response": {
-        "$ref": "#/components/schemas/AuditEventDetailResponse"
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/AuditEventDetailResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "404": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
       }
     }
   }

@@ -11,7 +11,7 @@ interface HttpParameterContract {
 }
 export interface HttpRuntimeContracts {
   components: { schemas: Record<string, unknown> }
-  operations: Record<string, { parameters: HttpParameterContract[]; response: Record<string, unknown> }>
+  operations: Record<string, { parameters: HttpParameterContract[]; responses: Record<string, Record<string, Record<string, unknown>>> }>
 }
 export class HttpContractError extends Error {
   constructor(readonly code: 'api_request_invalid' | 'api_response_invalid', readonly status: 400 | 503) { super(code) }
@@ -22,11 +22,13 @@ export function createHttpContractValidator(contracts: HttpRuntimeContracts) {
   const addFormats = createRequire(import.meta.url)('ajv-formats') as (validator: Ajv2020) => void
   addFormats(ajv)
   ajv.addKeyword('components')
-  const compiled = new Map<string, { parameters: (HttpParameterContract & { validate: ValidateFunction })[]; response: ValidateFunction }>()
+  const compiled = new Map<string, { parameters: (HttpParameterContract & { validate: ValidateFunction })[]; responses: Map<string, ValidateFunction> }>()
   for (const [id, operation] of Object.entries(contracts.operations)) {
     compiled.set(id, {
       parameters: operation.parameters.map(parameter => ({ ...parameter, validate: ajv.compile({ ...parameter.schema, components: contracts.components }) })),
-      response: ajv.compile({ ...operation.response, components: contracts.components }),
+      responses: new Map(Object.entries(operation.responses).flatMap(([status, media]) => Object.entries(media).map(([mediaType, schema]) => [
+        `${status}:${mediaType}`, ajv.compile({ ...schema, components: contracts.components }),
+      ] as const))),
     })
   }
   const operation = (id: string) => {
@@ -47,8 +49,12 @@ export function createHttpContractValidator(contracts: HttpRuntimeContracts) {
         if (!parameter.validate(value)) throw new HttpContractError('api_request_invalid', 400)
       }
     },
-    response<T>(id: string, value: T): T {
-      if (!operation(id).response(value)) throw new HttpContractError('api_response_invalid', 503)
+    response<T>(id: string, value: T, status = 200, mediaType = 'application/json'): T {
+      const validate = operation(id).responses.get(`${status}:${mediaType}`)
+      if (!validate || !validate(value)) throw new HttpContractError('api_response_invalid', 503)
+      if (mediaType === 'application/problem+json' && (!value || typeof value !== 'object' || !('status' in value) || value.status !== status)) {
+        throw new HttpContractError('api_response_invalid', 503)
+      }
       return value
     },
   }
