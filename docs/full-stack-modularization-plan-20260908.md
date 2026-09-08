@@ -552,3 +552,11 @@ trading声明只读AccountLiveRouteReader，替代对BridgeGatewayLeaseStore及�
 静态扫描不再报告原bridge/execution/inference/risk/trading五域类型环，精确删除该环记录，其余104条存量不变，无新增/陈旧记录。新增最小端口实现验证及私有快照epoch冲突拒绝；36项定向测试、server类型/构建及合同生成检查通过，321个冻结输入一致。
 
 本批不代表跨域SQL所有权或完整扫描范围已收口；账户/Bridge权限SQL、整表就绪检查及正向账户浏览器验收仍需继续。本批没有数据库操作或运行角色重启。
+
+## 35. 真实 MySQL 事务与 UTC 写入修复（第一百零五批）
+
+通过server/.env应用账号在当前dev_vue的独立连接建立8张最小临时InnoDB表，全部适配器表先完成遮蔽再写入，执行构建后的execution吸收适配器；正式业务表写入0，连接销毁后临时表消失。首次真实执行在commit阶段前报ER_TRUNCATED_WRONG_VALUE，确认ISO带Z字符串直接绑定DATETIME(3)不兼容，见[失败回执](architecture/projection-absorption-mysql-20260909.json)。
+
+适配器将now解析为Date并校验有效性，由UTC驱动序列化；19项定向测试及server类型/构建通过，债务104、冻结输入321项不变。修复后[事务回执](architecture/projection-absorption-mysql-fixed-20260909.json)与补充时间读回的[UTC回执](architecture/projection-absorption-mysql-utc-20260909.json)均4项通过：旧revision/时间拒绝、提交及审计、重复无操作、审计重复键失败后预留和同行为事务写入共同回滚；三个DATETIME字段读回与输入UTC一致。
+
+这证明真实MySQL驱动和临时InnoDB事务中的该适配器行为，不证明正式业务schema/FK、完整投影用例、并发锁或未知提交恢复。没有重启服务或运行终端。下一步应核查完整投影路径其它时间绑定，再继续真实账户/观摩流程及结构就绪耦合收口，不能把本批扩大为全域时间兼容完成。

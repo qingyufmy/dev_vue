@@ -129,10 +129,13 @@ describe('MysqlTradingRepository P3 offline account read model', () => {
         action_json: { expectedState: { positionsRevision: 1 } }, completed_at_utc: new Date('2026-09-05T07:00:00Z'),
       }], []]
       if (sql.includes('UPDATE risk_reservations_v4')) {
+        expect(params[0]).toBeInstanceOf(Date)
+        expect(params[1]).toBe(params[0])
         pool.transactionCalls.push('reservation-update')
         return [{ affectedRows: 1 }, []] as never
       }
       if (sql.includes('INSERT INTO risk_reservation_events_v4')) {
+        expect(params.at(-1)).toBeInstanceOf(Date)
         pool.transactionCalls.push('reservation-event')
         if (eventFailure) throw new Error('event-write-failed')
       }

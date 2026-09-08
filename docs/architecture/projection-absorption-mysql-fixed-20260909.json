@@ -1,0 +1,18 @@
+{
+  "kind": "projection-absorption-mysql/v1",
+  "observedAt": "2026-09-08T16:39:27.134Z",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00",
+    "version": "8.4.8"
+  },
+  "checks": [
+    "stale-revision-and-pre-result-time-rejected",
+    "reservation-and-audit-committed",
+    "already-absorbed-replay-noop",
+    "audit-failure-rolls-back-reservation-and-peer-write"
+  ],
+  "permanentBusinessWrites": 0,
+  "scope": "Actual compiled execution adapter, MySQL driver and InnoDB transactions on connection-private minimal temporary tables. Does not verify actual business schema/FKs, full projection writer, concurrent locks, unknown commits, browser or terminal behavior."
+}
