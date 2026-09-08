@@ -1085,3 +1085,12 @@ mysql-context-target 的 ownedTarget 移除 users 联查，仅查询账户、当
 一致性退出条件：会员到期与 grant 的 TTL 截断、token revision、运营者停用、频道版本和账户归属均保持现有拒绝规则；普通读取不能将不同时点的身份与频道事实拼成有效授权；authorizeOn 必须使用外层同一连接，并记录多主体锁序与死锁失败行为。list 的100条分页、过期检测和去重不能退化为无限查询。需要正反例与真实依赖验证后才能删除原联查，不能只给单一调用者注入能力就关闭该项。
 
 整体账户/观摩正向夹具、浏览器恢复和数据所有权仍未全验收；本批是账户候选职责整理，不是 P1 完成。
+
+
+## 60. 观摩身份版本的结构就绪缺口（第一百三十批）
+
+核对观摩身份事实时发现 users.token_version 已被 MysqlObserverAccessReader 用于授权版本，但 auth/account-principal-read/v1 未检查该列。新增 mysql-account-principal-schema-v2.ts，复用原六列、引擎和主键检查，并验证 token_version 为非空 INT、无字符排序规则。API 启动与 readiness 改用受限 composition 的 assertAccountPrincipalReadSchemaV2。V1 与旧验证脚本保留，避免历史回执被静默重定义。
+
+17项结构能力正反例通过，覆盖V1兼容、V2缺列、错误类型、可空、异常排序规则、重复元数据及驱动失败脱敏；server 类型/构建和API生成运行检查通过，321个冻结输入一致。新只读脚本 verify-account-principal-schema-v2-local.mjs 对当前开发 MySQL 在升级锁下验证 V2 与其余22表检查通过，数据库写入0，回执为 architecture/account-principal-schema-v2-readiness-20260909.json。
+
+本批解决真实的就绪检查遗漏，没有完成观摩身份事实端口或 SQL 拆分；第59节的所有构造入口、普通读取一致快照及事务内多主体锁要求继续执行。静态债务仍64条。未重启本地 API，本次只读编译产物验证不等同当前已运行进程接入V2；下一次运行验收需使用新构建。

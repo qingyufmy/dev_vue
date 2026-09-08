@@ -1,6 +1,6 @@
 import type { PoolConnection } from 'mysql2/promise'
 import { expect, it, vi } from 'vitest'
-import { assertAccountPrincipalReadSchema } from '../src/modules/auth/composition.js'
+import { assertAccountPrincipalReadSchema, assertAccountPrincipalReadSchemaV2 } from '../src/modules/auth/composition.js'
 
 function fixture() {
   const state = {
@@ -13,15 +13,17 @@ function fixture() {
       { name: 'deleted_at', type: 'datetime(3)', nullable: 'YES', collationName: null },
       { name: 'deletion_status', type: 'varchar(24)', nullable: 'NO', collationName: 'utf8mb4_0900_ai_ci' },
     ],
+    token: [{ type: 'int', nullable: 'NO', collationName: null as string | null }],
     keys: [{ columnName: 'id', sequence: 1, nonUnique: '0' }],
   }
   const query = vi.fn(async (sql: string) => {
     if (sql.includes('information_schema.TABLES')) return [state.tables]
+    if (sql.includes("COLUMN_NAME='token_version'")) return [state.token]
     if (sql.includes('information_schema.COLUMNS')) return [state.columns]
     if (sql.includes('information_schema.STATISTICS')) return [state.keys]
     throw Error('unexpected_sql')
   })
-  return { state, query, run: () => assertAccountPrincipalReadSchema({ query } as unknown as PoolConnection) }
+  return { state, query, runV2: () => assertAccountPrincipalReadSchemaV2({ query } as unknown as PoolConnection), run: () => assertAccountPrincipalReadSchema({ query } as unknown as PoolConnection) }
 }
 
 it('checks the account principal read capability using metadata only', async () => {
@@ -45,4 +47,29 @@ it.each(['missing', 'type', 'nullable', 'collation', 'duplicate', 'key', 'compos
   if (issue === 'view') f.state.tables[0]!.kind = 'VIEW'
   if (issue === 'driver') f.query.mockRejectedValueOnce(Error('private SQL detail'))
   await expect(f.run()).rejects.toThrow(/^auth_account_principal_schema_not_ready$/)
+})
+
+
+it('requires the observer identity revision in v2 while retaining the v1 capability', async () => {
+  const f = fixture()
+  await f.runV2()
+  expect(f.query).toHaveBeenCalledTimes(4)
+  f.state.token = []
+  await f.run()
+  await expect(f.runV2()).rejects.toThrow(/^auth_account_principal_schema_not_ready$/)
+})
+
+it.each(['type', 'nullable', 'collation', 'duplicate', 'driver'])('v2 rejects incompatible identity revision: %s', async issue => {
+  const f = fixture()
+  if (issue === 'type') f.state.token[0]!.type = 'varchar(20)'
+  if (issue === 'nullable') f.state.token[0]!.nullable = 'YES'
+  if (issue === 'collation') f.state.token[0]!.collationName = 'utf8mb4_bin'
+  if (issue === 'duplicate') f.state.token.push({ ...f.state.token[0]! })
+  if (issue === 'driver') f.query.mockImplementation(async (sql: string) => {
+    if (sql.includes("COLUMN_NAME='token_version'")) throw Error('private-token-query-detail')
+    if (sql.includes('information_schema.TABLES')) return [f.state.tables]
+    if (sql.includes('information_schema.COLUMNS')) return [f.state.columns]
+    return [f.state.keys]
+  })
+  await expect(f.runV2()).rejects.toThrow(/^auth_account_principal_schema_not_ready$/)
 })

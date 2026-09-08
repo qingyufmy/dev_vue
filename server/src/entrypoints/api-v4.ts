@@ -10,7 +10,7 @@ import {
   assertV4RuntimeEnabled, connectCacheRedis, createCacheRedis, createMysqlPool, installProcessLifecycle,
   loadServerEnvironment, loadV4ApiRuntimeConfig, loadV4BaseRuntimeConfig, RoleHealth,
 } from '../bootstrap/index.js'
-import { createAuthModule, createAuthHttp, createBrowserRequestAccess, assertAccountPrincipalReadSchema, createActivePrincipalAccess } from '../modules/auth/composition.js'
+import { createAuthModule, createAuthHttp, createBrowserRequestAccess, assertAccountPrincipalReadSchemaV2, createActivePrincipalAccess } from '../modules/auth/composition.js'
 import { createBridgeDeviceRevoker } from '../modules/bridge/composition.js'
 import {
   BridgeCredentialService, MysqlBridgeCredentialRepository, RedisBridgeGatewayLeaseStore, RedisBridgeSessionTicketStore,
@@ -37,7 +37,7 @@ async function main() {
   const health = new RoleHealth('api-v4')
   const pool = createMysqlPool(runtime.mysql)
   const cache = createCacheRedis(runtime.cacheRedis)
-  await Promise.all([assertTradingSchemaReady(pool, assertAccountPrincipalReadSchema), connectCacheRedis(cache)])
+  await Promise.all([assertTradingSchemaReady(pool, assertAccountPrincipalReadSchemaV2), connectCacheRedis(cache)])
 
   const auth = createAuthModule(pool, cache, web.auth, createBridgeDeviceRevoker(pool))
   const trading = createTradingApiModule(pool, cache, createBrowserRequestAccess(auth), new RedisBridgeGatewayLeaseStore(cache), createActivePrincipalAccess)
@@ -95,7 +95,7 @@ async function main() {
 }
 
 async function dependenciesReady(pool: ReturnType<typeof createMysqlPool>, cache: ReturnType<typeof createCacheRedis>) {
-  try { await Promise.all([assertTradingSchemaReady(pool, assertAccountPrincipalReadSchema), cache.ping()]); return true } catch { return false }
+  try { await Promise.all([assertTradingSchemaReady(pool, assertAccountPrincipalReadSchemaV2), cache.ping()]); return true } catch { return false }
 }
 
 void main().catch(error => {

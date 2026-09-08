@@ -38,3 +38,6 @@ AuthService通过自身所需的BridgeDeviceRevoker端口触发设备撤销；�
 
 
 账户回执授权：ActivePrincipalAccess 支持 none/share/update，share/update 必须绑定调用者事务。独立回执查询先在同连接获取 auth 用户共享锁，读取完后由 trading rollback；写命令保持用户排他锁。auth 不管理交易事务，trading 回执 SQL 不再读取 users。真实双连接锁验证入口 scripts/verify-context-principal-lock-mysql.mjs，使用私有合成用户文件和新建报告绝对路径；只执行并回滚无值变化 UPDATE。其它跨域 SQL 不据此视为完成。
+
+
+账户身份只读结构能力 V2 由 composition 的 assertAccountPrincipalReadSchemaV2 提供，在 V1 基础上校验观摩授权依赖的 token_version；API 启动与 readiness 使用V2，旧V1保持可复现。验证入口 scripts/verify-account-principal-schema-v2-local.mjs（新报告绝对路径），只读当前开发库元数据与迁移账本；不代表完整auth写入能力或观摩 SQL 已拆分。
