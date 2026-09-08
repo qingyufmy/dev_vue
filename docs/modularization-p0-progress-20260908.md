@@ -306,3 +306,13 @@ SSO的两种Cookie课程解锁与完成写入用例改经实际HTTP工厂；学�
 从当前MysqlAccountRegistration.lockCurrentOwnership提取SQL条件，构建表替换及移除FOR UPDATE后执行75组用户/账户组合，3组允许、72组拒绝，返回区间和归属revision匹配。该验证不覆盖行锁并发、Bridge凭据、额度和其它API权限，未把只读投影等同完整授权链路。
 
 [真实只读回执](architecture/account-wave-projection-verification-20260908.json)和脚本语法检查通过。无数据库写入，临时SSH隧道已关闭。下一步继续恢复副本的正式根提升/旧引用保留及异常恢复，当前dev_vue尚未切换。
+
+## 第三十四批：恢复副本原子根提升与独立恢复
+
+新增固定5表重命名协议、全库DDL/行快照及本机演练入口。先持久化带工具摘要的前后状态计划，再在dev_vue_m1_source_20260907_02执行原子RENAME；模拟成功后响应丢失，按222表实际状态确认完成，不重复DDL。
+
+另一本机进程加载落盘计划并恢复全部表名；全库DDL（含自增值）和数据摘要必须精确一致，不能在新增写入后盲目回退。真实提升1DDL、恢复1DDL、再次恢复0DDL，旧strategy_subscriptions外键提升时指向legacy根，恢复后指回原根。副本最终恢复原状态，回填构建数据保留；临时SSH隧道已关闭。
+
+7项状态/冲突/未知结果/重复恢复测试及真实MySQL演练通过。最终证据为[提升](architecture/account-root-promotion-rehearsal-20260908-v2.json)、[恢复](architecture/account-root-restoration-rehearsal-20260908-v2.json)、[重复恢复](architecture/account-root-restoration-repeat-20260908.json)与对应plan文件。早期中间演练回执已清理。
+
+这仍是恢复副本实验，未改当前dev_vue、未追加迁移记录，也未启用运行服务。下一步把已验证的多表转换纳入正式追加迁移与提升后结构检查，保持旧147步checksum及旧引用可追溯。
