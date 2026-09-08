@@ -1224,3 +1224,11 @@ api-registration-series-20260909.json 实际路由匹配92/96，仍缺快照列�
 原九项真实MySQL探针在新SQL通过，回执macro-snapshot-lateral-mysql-20260909.json；扩展探针加入2000条无关映射及EXPLAIN ANALYZE，十项通过，归档macro-snapshot-indexed-mysql-20260909.json。实际计划m使用PRIMARY(snapshot_id=p.id)，每个候选读1条、loops=2，没有为两条结果聚合2000条无关映射。该证据不覆盖海量候选、单快照大量lineage、来源全部拒绝及并发负载，不能称整体性能验收完成。
 
 12项快照HTTP/服务/投影/映射回归及构建、50条边界和22项生成校验通过。使用临时LIKE结构、回滚并销毁会话，无正式数据写入、索引迁移或服务重启。下一步继续来源日历与全栈消费者/账户样板，不扩大成无查询依据的全库索引改造。
+
+## 101. 宏观客户端与版本精度（第一百七十一批）
+
+核对前端发现宏观HTTP schema已有，但api-client没有对应方法。新增独立market.ts模块，七项读取复用send的认证/Problem/响应校验，经公开createApiClient组装；URLSearchParams编码筛选与游标、路径ID编码、no-store和AbortSignal传递，无业务Store或账户状态。没有新增页面或扩大共享UI。
+
+发现macroSnapshotFields和economicCalendarEventSchema沿用numericRevisionSchema将大整数转Number。仅这两类改为规范十进制文本，保留9007199254740993原值；其余域及实时协议不顺带修改。快照与日历未来消费者必须按文本比较revision，不做浮点运算。
+
+market-client-contract.test.mjs通过实际Fastify HTTP适配器消费全部七项路由，验证DTO转换、精确值、查询编码、404及取消信号。合同包实际执行53项全部通过（命令过滤未缩小执行范围，按真实结果记数）；四应用与共享包类型、前端边界0新增、生成类型及冻结321通过。此为客户端/HTTP联测，不是页面或真实浏览器验收；无数据库连接、部署或重启。后续按feature实现页面与实时失效流程，来源日历和发布链路待办保留。

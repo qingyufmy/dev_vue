@@ -203,7 +203,7 @@ export const macroFactorSchema = z.object({
 const macroSnapshotFields = {
   id: z.string().trim().min(1).max(191),
   schema_version: z.number().int().positive(),
-  revision: numericRevisionSchema,
+  revision: z.string().regex(/^(0|[1-9]\d*)$/),
   business_date: macroBusinessDateSchema,
   horizon: z.literal('medium_term'),
   data_cutoff_at: macroUtcDatetimeSchema,
@@ -278,7 +278,7 @@ export const economicCalendarEventSchema = z.object({
   revised_previous: decimalSchema.nullable(),
   status: economicCalendarStatusSchema,
   provider_updated_at: macroUtcDatetimeSchema.nullable(),
-  revision: numericRevisionSchema,
+  revision: z.string().regex(/^(0|[1-9]\d*)$/),
 }).strict().transform((value) => ({
   id: value.id, providerEventId: value.provider_event_id, country: value.country, currency: value.currency,
   title: value.title, scheduledAt: value.scheduled_at, timePrecision: value.time_precision,

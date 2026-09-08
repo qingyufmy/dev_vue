@@ -47,7 +47,7 @@ describe('macro market HTTP contracts', () => {
   it('parses a strict snapshot and keeps decimal/time fields typed', () => {
     const { factors: _factors, ...snapshotSummary } = snapshot
     expect(macroSnapshotResponseSchema.parse({ data: snapshot, meta })).toMatchObject({
-      data: { id: 'macro-snapshot-1', revision: 4, factors: [{ code: 'DFII10', observationAt: factor.observation_at, value: '1.82' }] },
+      data: { id: 'macro-snapshot-1', revision: '4', factors: [{ code: 'DFII10', observationAt: factor.observation_at, value: '1.82' }] },
     })
     expect(macroSnapshotsResponseSchema.safeParse({ data: {
       items: [{ ...snapshot, factor_count: 1 }], next_cursor: null, has_more: false,
@@ -59,7 +59,7 @@ describe('macro market HTTP contracts', () => {
 
   it('supports nullable provider values and rejects non-UTC or camelCase fields', () => {
     expect(economicCalendarEventSchema.parse({ ...calendarEvent, provider_event_id: null, currency: null, previous: null, consensus: null })).toMatchObject({
-      providerEventId: null, currency: null, scheduledAt: calendarEvent.scheduled_at, actual: null, revision: 2,
+      providerEventId: null, currency: null, scheduledAt: calendarEvent.scheduled_at, actual: null, revision: '2',
     })
     expect(economicCalendarEventsResponseSchema.safeParse({ data: { items: [calendarEvent], next_cursor: null, has_more: false }, meta }).success).toBe(true)
     expect(macroSnapshotResponseSchema.safeParse({ data: { ...snapshot, published_at: '2026-09-05T16:00:00+08:00' }, meta }).success).toBe(false)
