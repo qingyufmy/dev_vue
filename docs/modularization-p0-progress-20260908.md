@@ -766,3 +766,9 @@ HTTP和生产组装已切换到ContextWritePort，移除读取接口、应用服
 新增全表 WRITE 锁保护及独立连接锁核验，解决回填范围锁不能跨 RENAME 使用的问题。真实临时库 7 项验证通过，确认日志提交/原子重命名后锁保留、外键转移及提前释放可检测；临时库已清理。8 项新增回归与既有根表协调器测试合计 29 项通过。
 
 详见[接入方案第13节](architecture/current-dev-vue-upgrade-plan-20260908.md)和[最终探针回执](architecture/account-root-write-freeze-probe-20260908-v4.json)。当前 dev_vue 业务数据本批未写，035 提升入口与当前库实际升级仍待接入；不把隔离锁探针当作当前库迁移完成证据。
+
+## 第八十九批：当前 dev_vue 账户根表正式提升
+
+当前库专属入口持升级锁/全表写锁，重新核验回填、旧数据、来源/映射回执，生成当前proof及工具绑定；完整协调器持锁预检通过。实际执行035原子重命名1次，当前147→148步、222表，旧账户4行及旧ID保留，正式账户/设置/区间/授权为3/4/274/4。重复执行返回completed、DDL0次。
+
+47项定向测试通过。[应用回执](architecture/current-account-root-applied-20260908.json)、[重复回执](architecture/current-account-root-repeat-20260908.json)和[详细接入记录](architecture/current-dev-vue-upgrade-plan-20260908.md)已归档。当前库149–165及后续K线回填、应用就绪与真实联合验收继续；本批不启用应用消费者。

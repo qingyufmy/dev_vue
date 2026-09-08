@@ -1,0 +1,15 @@
+{
+  "kind": "current-account-root-migration-result/v1",
+  "observedAt": "2026-09-08T14:33:28.146Z",
+  "target": "dev_vue",
+  "mode": "--apply",
+  "result": {
+    "status": "applied",
+    "ddlCount": 1
+  },
+  "proofHash": "6b2f763e36c3571d7e76c938401132a16b0fcb564554cb6d7391b27d47a70829",
+  "registrySteps": 148,
+  "waveManifestHash": "69b520257fc9101e9a34c1329bbc2d311935ddfacd6898f4af04a7647aa57936",
+  "runtimeActivated": false,
+  "scope": "Current database root promotion only; legacy rows preserved. Later migrations and runtime integration remain pending."
+}

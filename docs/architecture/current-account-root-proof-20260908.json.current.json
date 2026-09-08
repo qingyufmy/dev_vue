@@ -1,0 +1,68 @@
+{
+  "frozen": {
+    "kind": "current-account-root-binding/v1",
+    "waveManifestHash": "69b520257fc9101e9a34c1329bbc2d311935ddfacd6898f4af04a7647aa57936",
+    "proofFileSha256": "0c2db8b23ba536124223ab966926ec650b30bcfaae21c5c04e300123fc0cf1e9",
+    "state": {
+      "protectedTables": 212,
+      "priorLedgerTablesPreserved": 6,
+      "projections": [
+        {
+          "table": "trading_accounts_v4_build",
+          "rows": 3,
+          "expectedRows": 3,
+          "sha256": "595262a35fc765b0fccc34750b5070b7f2a3e21c6914524f09eec3078e9ab1c0"
+        },
+        {
+          "table": "user_trading_account_settings_v4_build",
+          "rows": 4,
+          "expectedRows": 4,
+          "sha256": "721c3363e290707efb6b57a34c3dc2b86ef150aebeba4035df42549684e44756"
+        },
+        {
+          "table": "trading_account_ownership_intervals_v4_build",
+          "rows": 274,
+          "expectedRows": 274,
+          "sha256": "4a4002d3a8167ee5b2364a91ce489bf2190eb7b67716c5550802cf3b58f61f7b"
+        },
+        {
+          "table": "trading_account_ownerships_v4_build",
+          "rows": 4,
+          "expectedRows": 4,
+          "sha256": "2443575bfcee5c58492b7a51786c23c66a855c1ca86ae892a381e7faa35df6f1"
+        }
+      ]
+    },
+    "tools": [
+      {
+        "path": "docs/architecture/current-account-wave-preparation-20260908.json",
+        "sha256": "a739fb79e1239147b667ed035e892c5b3afd894a4efc278c6de58e5dc4ea2aec"
+      },
+      {
+        "path": "docs/architecture/current-account-wave-execution-plan-20260908.json",
+        "sha256": "315c309aec3f4d8aec574ec908326ee92dc31e1d9ec289b755d6913249da9085"
+      },
+      {
+        "path": "docs/architecture/current-account-wave-applied-20260908.json",
+        "sha256": "c5d56b942ab4e5e32f28be618c51eec41e00da78de7451834444dd994f1c1388"
+      },
+      {
+        "path": "docs/architecture/current-local-backup-restoration-20260908.json",
+        "sha256": "42f9b0ed9f5c43f9a8bb8ef8b810cb902f220d3aae55dbe94a9ab5faafe98820"
+      },
+      {
+        "path": "docs/architecture/account-root-write-freeze-probe-20260908-v4.json",
+        "sha256": "04da545fc15ae5bbcdb0492e7ceb39e13f65d345e3a239a51e5462a6685bb51d"
+      },
+      {
+        "path": "scripts/promote-current-account-root-local.mjs",
+        "sha256": "3bb5736ea6467308a424c71e494aedd903c915ac3b021e85d18480a98d9f26ac"
+      },
+      {
+        "path": "scripts/lib/current-account-wave-receipts.mjs",
+        "sha256": "f029fe50ef168ed21dcbb8728319f526e45ebdd5299c2b310f7afb344b6ea661"
+      }
+    ]
+  },
+  "manifestHash": "b314580466937471e9ab2674c4b74b0c935a164f16dc986780b6bc81085fee67"
+}
