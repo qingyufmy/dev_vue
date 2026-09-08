@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { effectScope, ref } from 'vue'
 import { ApiClientError } from '@aurum/api-client'
 import { useHomeWorkspace } from '../src/features/home/use-home-workspace'
 import { accountSnapshot, clearAccountRuntime, marketQuote } from '../src/features/home/home-runtime'
+import { applyAccountSnapshot } from '../src/features/trading-context'
 
 const mocks = vi.hoisted(() => ({
+  session: null as any,
   api: {
     getTradingContext: vi.fn(), listTradingAccounts: vi.fn(), listObserverChannels: vi.fn(),
     listMarketAnalyses: vi.fn(), listStrategies: vi.fn(), selectTradingAccount: vi.fn(),
@@ -16,7 +19,7 @@ vi.mock('@aurum/api-client', async importOriginal => ({
   ...await importOriginal<typeof import('@aurum/api-client')>(), createApiClient: () => mocks.api,
 }))
 vi.mock('~/features/auth', () => ({
-  useTradeSession: () => ({ session: { value: { csrf_token: 'test-csrf', user: { id: '9' } } } }),
+  useTradeSession: () => ({ session: mocks.session }),
 }))
 vi.mock('../src/features/home/trading-realtime', () => ({
   startTradingRealtime: mocks.start, stopTradingRealtime: mocks.stop,
@@ -28,14 +31,16 @@ function workspace(id: string) {
 }
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>(done => { resolve = done })
-  return { promise, resolve }
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail })
+  return { promise, resolve, reject }
 }
 function latestResync(): () => Promise<void> {
   return mocks.start.mock.calls.at(-1)![5]
 }
 
 beforeEach(() => {
+  mocks.session = ref({ csrf_token: 'test-csrf', user: { id: '9' } })
   Object.values(mocks.api).forEach(mock => mock.mockReset())
   mocks.start.mockReset()
   mocks.stop.mockReset()
@@ -54,6 +59,69 @@ beforeEach(() => {
 })
 
 describe('observer HTTP resync scope protection', () => {
+  it('clears identity-scoped data immediately on logout and refuses an in-flight resync', async () => {
+    const scope = effectScope()
+    const home = scope.run(() => useHomeWorkspace())!
+    try {
+      await home.load()
+      const pending = deferred<unknown>()
+      mocks.api.getTradingWorkspace.mockReturnValueOnce(pending.promise)
+      const resync = latestResync()()
+      mocks.session.value = null
+      expect(home.snapshot.value).toBeNull()
+      expect(home.accounts.value).toEqual([])
+      expect(home.observers.value).toEqual([])
+      expect(home.hasAccount.value).toBe(false)
+      pending.resolve(workspace('1'))
+      await resync
+      expect(home.snapshot.value).toBeNull()
+      expect(home.latestAnalysis.value).toBeNull()
+    } finally { home.stop(); scope.stop() }
+  })
+  it('does not let a stopped context load failure erase data published by the next workspace', async () => {
+    const pending = deferred<unknown>()
+    mocks.api.getTradingContext.mockReturnValueOnce(pending.promise)
+    const home = useHomeWorkspace()
+    const loading = home.load()
+    home.stop()
+    applyAccountSnapshot({ id: 'new-account', revision: 9 } as never)
+    pending.reject(new Error('old_context_failed'))
+    await loading
+    expect(accountSnapshot.value).toMatchObject({ id: 'new-account', revision: 9 })
+    expect(home.error.value).toBe('')
+    expect(home.loading.value).toBe(false)
+  })
+
+  it('ignores a stopped nested snapshot failure but still reports an active snapshot failure', async () => {
+    const pending = deferred<unknown>()
+    mocks.api.getTradingWorkspace.mockReturnValueOnce(pending.promise)
+    const home = useHomeWorkspace()
+    const loading = home.load()
+    await vi.waitFor(() => expect(mocks.api.getTradingWorkspace).toHaveBeenCalled())
+    home.stop()
+    applyAccountSnapshot({ id: 'new-account', revision: 9 } as never)
+    pending.reject(new Error('old_snapshot_failed'))
+    await loading
+    expect(accountSnapshot.value?.id).toBe('new-account')
+    expect(home.error.value).toBe('')
+    mocks.api.getTradingWorkspace.mockRejectedValueOnce(new Error('active_snapshot_failed'))
+    await home.load()
+    expect(home.error.value).toBe('active_snapshot_failed')
+    expect(accountSnapshot.value).toBeNull()
+    expect(home.loading.value).toBe(false)
+  })
+
+  it('does not apply an old analysis after stopping the workspace', async () => {
+    const pending = deferred<unknown>()
+    mocks.api.listMarketAnalyses.mockReturnValueOnce(pending.promise)
+    const home = useHomeWorkspace()
+    const loading = home.load()
+    home.stop()
+    pending.resolve({ data: { items: [{ id: 'old-analysis' }] } })
+    await loading
+    expect(home.latestAnalysis.value).toBeNull()
+    expect(home.analysisLoading.value).toBe(false)
+  })
   it('leaves explicitly without a personal account and retains the independent latest analysis', async () => {
     mocks.api.listTradingAccounts.mockResolvedValue({ data: { items: [] } })
     mocks.api.listMarketAnalyses.mockResolvedValue({ data: { items: [{ id: 'personal-analysis' }] } })

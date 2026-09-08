@@ -8,7 +8,7 @@
 
 调用方先完成已有请求代次、当前用户及账户作用域检查，再应用响应。模块当前只负责投影所有权，不将任意 DTO 当作授权依据，不新增并发版本接受规则。账户流程后续需要统一异步请求协调和清理策略。
 
-`createRequestScope`提供按通道独立的最新请求检查。调用方提供包含用户会话与工作区代次的生命周期键，在成功、错误和finally写状态前调用返回的检查函数；它不取消网络请求，也不代替服务端revision或幂等。交易员已接入workspace、decisions、detail、refresh与realtime通道，身份变化同步失效旧生命周期并清理数据；首页最新分析和策略读取使用独立通道，原账户/行情流程仍有待统一的局部代次检查。
+`createRequestScope`提供按通道独立的最新请求检查。调用方提供包含用户会话与工作区代次的生命周期键，在成功、错误和finally写状态前调用返回的检查函数；它不取消网络请求，也不代替服务端revision或幂等。交易员已接入workspace、decisions、detail、refresh与realtime通道，身份变化同步失效旧生命周期并清理数据；首页context、account-load、snapshot、market、analysis和analysis-strategies使用同一工具。首页stop推进生命周期并停止实时；内部账户加载不再次推进父流程代次。行情仍额外核对账户、品种和周期，身份变化同步清理上下文与页面投影。
 
 依赖只有 Vue 与公共合同类型；无其它 feature 依赖，无数据库或浏览器持久化写入。home、risk、trader、应用壳层与实验室时间读取通过本入口协作。
 
