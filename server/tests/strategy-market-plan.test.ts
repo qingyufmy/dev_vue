@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { compileStrategy } from '../src/modules/strategies/application/strategy-service.js'
 import { marketPlan } from '../src/modules/inference/application/analysis-context-builder.js'
-import { TradingAnalysisMarketSource } from '../src/modules/inference/infrastructure/trading-analysis-market-source.js'
+import { createAnalysisMarketSource } from '../src/modules/inference/composition.js'
 import type { TradingReadRepository } from '../src/modules/trading/application/trading-ports.js'
 
 const plan = { version: 1, primary_timeframe: 'H1', timeframes: [{ timeframe: 'H1', kline_count: 150 }, { timeframe: 'M1', kline_count: 30 }] }
@@ -26,7 +26,7 @@ describe('explicit strategy market data plan', () => {
     const trading = { listAccounts: async () => [{ id: '7', platform: 'mt5', server: 'test', bridgeState: 'online' }],
       getQuote: async () => ({ bid: '1', ask: '2', last: '1', spread: '1', tradeMode: 'full', observedAt: '2026-09-07T00:00:00Z', revision: 1 }),
       listCandles: vi.fn().mockResolvedValue([{ openTime: '2026-09-07T00:00:00Z', open: '1', high: '2', low: '1', close: '2', tickVolume: '1', closed: true, revision: 1 }]) }
-    const result = await new TradingAnalysisMarketSource(trading as unknown as TradingReadRepository).read({ userId: 1, preferredAccountId: null, symbol: 'XAUUSD', plan: marketPlan({ market_data_plan: plan }) })
+    const result = await createAnalysisMarketSource(trading as unknown as TradingReadRepository).read({ userId: 1, preferredAccountId: null, symbol: 'XAUUSD', plan: marketPlan({ market_data_plan: plan }) })
     expect(trading.listCandles.mock.calls.map(call => call.slice(2))).toEqual([['H1', 150], ['M1', 30]])
     expect(result.primary_timeframe).toBe('H1')
     expect(result.market_data_plan).toEqual(plan)
@@ -42,7 +42,7 @@ describe('EMA34 frozen analysis evidence', () => {
     const trading = { listAccounts: async () => [{ id: '7', platform: 'mt5', server: 'test', bridgeState: 'online' }],
       getQuote: async () => ({ bid: '1', ask: '2', last: '1', spread: '1', tradeMode: 'full', observedAt: referenceTime, revision: 1 }),
       listCandles: vi.fn().mockResolvedValue(rows) }
-    return { rows, trading, source: new TradingAnalysisMarketSource(trading as unknown as TradingReadRepository) }
+    return { rows, trading, source: createAnalysisMarketSource(trading as unknown as TradingReadRepository) }
   }
   const config = { market_data_plan: { version: 1, primary_timeframe: 'M1', timeframes: [{ timeframe: 'M1', kline_count: 30 }] }, ema34_evidence: { version: 1, timeframe: 'M1' } }
   it('compiles explicit evidence and rejects malformed contracts', () => {
@@ -56,15 +56,15 @@ describe('EMA34 frozen analysis evidence', () => {
     const { source, trading } = fixture()
     const result = await source.read({ userId: 1, preferredAccountId: null, symbol: 'XAUUSD', referenceTime, plan: marketPlan(config) })
     expect(trading.listCandles.mock.calls).toEqual([['7', 'XAUUSD', 'M1', 61]])
-    expect((result.candles.M1 as unknown[]).length).toBe(30)
-    expect(result.indicators?.ema34).toMatchObject({ ready: true, barsUsed: 60, source_account_id: '7', reference_time: referenceTime, analysis: { warmup_complete: true } })
-    expect((result.indicators?.ema34 as { input_bars: unknown[] }).input_bars).toHaveLength(61)
+    expect(result).toHaveProperty('candles.M1.length', 30)
+    expect(result).toMatchObject({ indicators: { ema34: { ready: true, barsUsed: 60, source_account_id: '7', reference_time: referenceTime, analysis: { warmup_complete: true } } } })
+    expect(result).toHaveProperty('indicators.ema34.input_bars.length', 61)
   })
   it('keeps indicator-only history out of the model candle windows', async () => {
     const { source, trading } = fixture()
     const result = await source.read({ userId: 1, preferredAccountId: null, symbol: 'XAUUSD', referenceTime,
       plan: marketPlan({ ...config, market_data_plan: { version: 1, primary_timeframe: 'H1', timeframes: [{ timeframe: 'H1', kline_count: 100 }] } }) })
-    expect(Object.keys(result.candles)).toEqual(['H1'])
+    expect(result.candles).toEqual({ H1: expect.any(Array) })
     expect(trading.listCandles.mock.calls.map(call => call.slice(2))).toEqual([['H1', 100], ['M1', 61]])
   })
   it.each(['gap', 'stale', 'short'])('does not present %s history as usable EMA', async failure => {
@@ -73,6 +73,6 @@ describe('EMA34 frozen analysis evidence', () => {
     if (failure === 'short') rows.splice(0, 40)
     const result = await source.read({ userId: 1, preferredAccountId: null, symbol: 'XAUUSD',
       referenceTime: failure === 'stale' ? '2026-09-08T01:01:00.000Z' : referenceTime, plan: marketPlan(config) })
-    expect(result.indicators?.ema34).toMatchObject({ ready: false, value: null, reason: failure === 'gap' ? 'indicator_internal_gap_unresolved' : failure === 'stale' ? 'indicator_source_stale' : 'indicator_history_insufficient' })
+    expect(result).toMatchObject({ indicators: { ema34: { ready: false, value: null, reason: failure === 'gap' ? 'indicator_internal_gap_unresolved' : failure === 'stale' ? 'indicator_source_stale' : 'indicator_history_insufficient' } } })
   })
 })

@@ -1,12 +1,12 @@
 import { calculateEma34Evidence } from '../../strategies/index.js'
-import type { TradingReadRepository } from '../../trading/application/trading-ports.js'
-import type { Timeframe, TradingAccountSummary } from '../../trading/domain/trading.js'
+import type { AnalysisTradingReader } from '../application/trading-read-capabilities.js'
+import type { Timeframe, TradingAccountSummary } from '../../trading/index.js'
 import type { AnalysisMarketPlan, AnalysisMarketSource } from '../application/analysis-context-builder.js'
 import type { JsonObject } from '../domain/inference.js'
 import { InferenceError } from '../domain/inference.js'
 
 export class TradingAnalysisMarketSource implements AnalysisMarketSource {
-  constructor(private readonly trading: TradingReadRepository) {}
+  constructor(private readonly trading: AnalysisTradingReader) {}
 
   async read(input: { userId: number; preferredAccountId: string | null; symbol: string; referenceTime?: string; plan: AnalysisMarketPlan }) {
     const referenceTime = input.referenceTime ?? new Date().toISOString()

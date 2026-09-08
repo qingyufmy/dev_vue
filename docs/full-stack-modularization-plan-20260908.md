@@ -629,3 +629,12 @@ projectionProvesCommandResult 不再导入 trading/application 的 BridgeExactTr
 算法、精确十进制比较、结果票据匹配、全量投影缺失与部分平仓判断均保持不变。21 项吸收及可信投影回归、服务端类型/构建、API 生成运行检查通过，321 个冻结输入一致。精确删除同一依赖的 cross-module-internal 和 domain-dependency 两项，债务 104→102，无新增或陈旧记录。本批无数据库操作或进程重启。
 
 该改动关闭的是领域层内部类型依赖；不扩大为吸收规则全审计、其它账户跨域 SQL 或全局模块化验收。后续继续账户全栈样板及对应依赖，P0–P7 未完成。
+
+
+## 44. 推理账户读取能力与行情组装（第一百一十四批）
+
+inference 通过 trading 公开合同定义 AnalysisTradingReader 四项读取和 TraderAccountReader 六项读取，替代整个 TradingReadRepository 构造依赖；内部类型导入改为公开入口。TradingAnalysisMarketSource 具体类移出业务 index，由新建受限 composition 的 createAnalysisMarketSource 返回应用端口，worker-analysis 同步使用工厂。
+
+30 项定向测试通过；策略行情测试经实际工厂运行，适配公开 JsonObject 返回类型后保留字段与条数断言，14 项相关测试重跑通过。server 类型/构建及 API 生成运行校验通过，精确删除三个跨域内部依赖与一项具体实现公开导出，债务 102→98，无新增或陈旧记录。交易、行情采样、EMA 与账户来源选择逻辑未变；本批未运行 Worker、连接数据库或调用模型。
+
+本批只关闭对应读取和组装依赖，其余推理基础设施公开导出、跨域 SQL、账户完整流程及 P0–P7 继续推进。

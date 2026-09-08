@@ -1,4 +1,4 @@
-import type { TradingReadRepository } from '../../trading/application/trading-ports.js'
+import type { TraderAccountReader } from './trading-read-capabilities.js'
 import type { StrategyVersion } from '../../strategies/domain/strategy.js'
 import type { SubscriptionExecutionPreferences } from '../../strategies/index.js'
 import { parseStrategyEntryMethods, strategyEntryMethods } from '../../strategies/index.js'
@@ -22,7 +22,7 @@ export interface RiskSummaryReader {
 export class TraderContextBuilder {
   constructor(
     private readonly inference: Pick<InferenceRepository, 'getAnalysisDetail'>,
-    private readonly trading: TradingReadRepository,
+    private readonly trading: TraderAccountReader,
     private readonly instruments: InstrumentSnapshotReader,
     private readonly risks: RiskSummaryReader,
     private readonly preferences?: { read(run: TraderRun): Promise<SubscriptionExecutionPreferences> },

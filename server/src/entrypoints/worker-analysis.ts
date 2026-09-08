@@ -1,4 +1,5 @@
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
+import { createAnalysisMarketSource } from '../modules/inference/composition.js'
 import { Worker } from 'bullmq'
 import {
   assertV4RuntimeEnabled, closeHttpServer, connectCacheRedis, createCacheRedis, createMysqlPool, installProcessLifecycle,
@@ -8,7 +9,7 @@ import { RedisBridgeGatewayLeaseStore } from '../modules/bridge/index.js'
 import {
   AnalysisContextBuilder, AnalysisWorker, InferenceService, loadCredentialKeyring,
   MysqlAnalysisModelGatewayResolver, MysqlInferenceRepository, MysqlMacroSnapshotReader, MysqlModelUsageLedger,
-  MysqlRuntimeModelProfileCatalog, TradingAnalysisMarketSource,
+  MysqlRuntimeModelProfileCatalog,
   MysqlAnalysisWindowGuard,
 } from '../modules/inference/index.js'
 import { MysqlStrategyCatalog, StrategyService } from '../modules/strategies/index.js'
@@ -37,7 +38,7 @@ async function main() {
     repository,
     new InferenceService(repository, strategies),
     strategies,
-    new AnalysisContextBuilder(new TradingAnalysisMarketSource(trading), new MysqlMacroSnapshotReader(pool)),
+    new AnalysisContextBuilder(createAnalysisMarketSource(trading), new MysqlMacroSnapshotReader(pool)),
     new MysqlAnalysisModelGatewayResolver(profiles, new MysqlModelUsageLedger(pool), () => {
       usageSettlementFailureRevision += 1
       health.workFailed('model_usage_settlement_failed')
