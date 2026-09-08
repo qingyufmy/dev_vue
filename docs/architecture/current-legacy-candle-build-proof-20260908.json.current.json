@@ -1,0 +1,89 @@
+{
+  "frozen": {
+    "kind": "current-legacy-candle-build-binding/v1",
+    "proofFileSha256": "008217d772b2841807d85f3452058aa0a2189d106ae7a3f1d45dfac25345d6fe",
+    "reference": {
+      "database": "dev_vue_candle_reference_485338d055c2c338a027ebcb",
+      "removed": true,
+      "mysqlVersion": "8.4.8",
+      "parentDefinitions": [
+        {
+          "table": "trading_accounts",
+          "id": {
+            "columnType": "bigint unsigned",
+            "charset": null,
+            "collation": null
+          }
+        },
+        {
+          "table": "market_candles",
+          "id": {
+            "columnType": "bigint unsigned",
+            "charset": null,
+            "collation": null
+          }
+        },
+        {
+          "table": "market_data_sources",
+          "id": {
+            "columnType": "bigint unsigned",
+            "charset": null,
+            "collation": null
+          }
+        }
+      ]
+    },
+    "sourceHistoryHash": "643a11884746e6b67beb2a79732d17dba67f6dd61d26129825b8f3e5d8592be7",
+    "tools": [
+      {
+        "path": "scripts/upgrade-current-legacy-candle-build-local.mjs",
+        "sha256": "53a66f3656f12d0282b41db44b0c5a8b56eed19c29ee0fa297dc259afe0c261a"
+      },
+      {
+        "path": "docs/architecture/current-account-root-proof-20260908.json",
+        "sha256": "0c2db8b23ba536124223ab966926ec650b30bcfaae21c5c04e300123fc0cf1e9"
+      },
+      {
+        "path": "docs/architecture/current-account-root-proof-20260908.json.current.json",
+        "sha256": "2495159e6b47b7fa2fa01957944465ccfb865f7e10e8d0e76fb5df037f6ac141"
+      },
+      {
+        "path": "docs/architecture/current-account-root-applied-20260908.json",
+        "sha256": "9b957fd0195544252a09dd7c2c466f0f4c16667f8905d6e30b37a8e9cc790c3f"
+      },
+      {
+        "path": "docs/architecture/current-terminal-route-proof-20260908.json",
+        "sha256": "89dcc2061049bcf4ff87b155d32adb106c7167068488a566f252ab82c2dc9020"
+      },
+      {
+        "path": "docs/architecture/current-terminal-route-proof-20260908.json.current.json",
+        "sha256": "12ccf2769bff07388554bf5e44017d766d5194f4ca9cba63fc09771983a3f86f"
+      },
+      {
+        "path": "scripts/lib/mysql-current-legacy-candle-build-migration.mjs",
+        "sha256": "e360da12fd118991378b7b44f612600da4e741351fb4672d429da3a8997fdb16"
+      },
+      {
+        "path": "docs/architecture/current-legacy-candle-build-reference-20260908.json",
+        "sha256": "7cd56c24fce82c90e3c154b2cc4eee44e182badd6455f57ad09e7839baadd52b"
+      },
+      {
+        "path": "docs/architecture/current-observer-context-proof-20260908.json",
+        "sha256": "adf462fdd584528e98356a80b3ca88a0a92b79b30d9cd6ea14b49c9438bf635c"
+      },
+      {
+        "path": "docs/architecture/current-observer-context-proof-20260908.json.current.json",
+        "sha256": "9652944b6ef1afb0e9e2e5bc5bca0da71afa409ce0a9d1302d9211ff02657a27"
+      },
+      {
+        "path": "docs/architecture/current-account-projection-proof-20260908.json",
+        "sha256": "a747f2fb2708357bdac65ac7cfb0af07f69babde3ec1ea788048431a41b44fa5"
+      },
+      {
+        "path": "docs/architecture/current-account-projection-proof-20260908.json.current.json",
+        "sha256": "2965cd566b6728a61791c684b86a492a1bbdf04834ba64758d57c860685a9934"
+      }
+    ]
+  },
+  "manifestHash": "3a9d37760071e3bfe5d98d252170e99f8f5b1c15f06646456c75d70672a275f1"
+}

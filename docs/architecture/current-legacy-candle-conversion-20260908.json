@@ -1,0 +1,101 @@
+{
+  "kind": "current-legacy-candle-conversion/v1",
+  "observedAt": "2026-09-08T15:07:38.862Z",
+  "identity": {
+    "databaseName": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "registrySteps": 163,
+  "buildProofHash": "8fd7faeecc51a3dc016ec3d91a9e3b5ef46ca357b1d857ec62c3495de3c92be6",
+  "accountPreparationManifestHash": "3d64378601c28b7641942316fcae7ea46f9e016fd49dfac8386e7d9c9781bbf5",
+  "sourcePlan": {
+    "kind": "legacy-candle-source-plan/v1",
+    "accountMappingHash": "e3446474af9da37b9935f8ffe3f7237d180d42b9f383069ad05f1217458de575",
+    "mappings": [
+      {
+        "sourceId": "1",
+        "targetAccountId": "1",
+        "platform": "mt5",
+        "sourceHash": "6aa948e47c2e3aac444c9875f339808a3e986955f311e364f3c78b6945752991",
+        "accountCandidateKey": "5358ac274d1a98ae857cd3dc1d632f35e55a8e4c8edd372c8f3029670ab5c46e",
+        "legacyAccountIds": [
+          "1"
+        ]
+      },
+      {
+        "sourceId": "9311",
+        "targetAccountId": "1",
+        "platform": "mt5",
+        "sourceHash": "689fbb1d4624763a112f0bbde9ed31cea473f53c7e1cb4330dd9cfff39ec7f6e",
+        "accountCandidateKey": "5358ac274d1a98ae857cd3dc1d632f35e55a8e4c8edd372c8f3029670ab5c46e",
+        "legacyAccountIds": [
+          "1"
+        ]
+      },
+      {
+        "sourceId": "9334",
+        "targetAccountId": "2",
+        "platform": "mt5",
+        "sourceHash": "48ad3ddb5ef24c6d2b24a6539153608368a0954ea4af0ca1fecd9f4ca637efe4",
+        "accountCandidateKey": "e931a652de55c61fd1544feaaae888aa27302cf191dea546cf3704b802d769b7",
+        "legacyAccountIds": [
+          "2"
+        ]
+      }
+    ],
+    "planHash": "52255a5e37243a4de10083d355578626c40fbd84b89adf9aae2bad6163e0f44b"
+  },
+  "conversion": {
+    "kind": "legacy-candle-conversion/v1",
+    "sourcePlanHash": "52255a5e37243a4de10083d355578626c40fbd84b89adf9aae2bad6163e0f44b",
+    "basis": {
+      "closedPolicy": "legacy-closed-writer/v1",
+      "symbolPolicy": "stored-standard-symbol/v1",
+      "writerHash": "7e2c0943db1f514f98e6a4837570f215c5a6d7a0368bb898f57df1de4f4ac697",
+      "revision": "1"
+    },
+    "inputRows": 35725,
+    "outputRows": 30226,
+    "duplicateRows": 5499,
+    "mappingHash": "04f5634058da85398e5952874236f5584e2fa162d106b05cd3f7ea85b6775056",
+    "projectionHash": "0adb0d7f5e983f0677161502be5b94b358e389ea8e0689cd8fddf9048f42db51",
+    "sourceRowsHash": "355dc4e8202d81c6ba363561f6e8a4132c4edb4a89e7a61c9de62b19b6c0f2e6",
+    "planHash": "ad02ff50e68a322d1c572a2b8276e15aeadfe6ef77a4c532590892541d5b3933"
+  },
+  "snapshotHash": "59c11d8a86a2c8f4491b9c7fee1b7aa825aa67eec3fe53eab60ce37e23932aab",
+  "historyHash": "c3177b89001822df6d69de40f997103c5616b935bca492bf71d80ced39cd8d0c",
+  "databaseWrites": 0,
+  "timeOffsetMinutes": 0,
+  "tools": [
+    {
+      "path": "scripts/read-current-legacy-candle-conversion-local.mjs",
+      "sha256": "bf337629cd274bc09b3c4a33563a973270b8d4ec3b3a9f93f6732bce187b1442"
+    },
+    {
+      "path": "scripts/lib/mysql-legacy-candle-source.mjs",
+      "sha256": "1d6d83132d9272f0f4d9c3538ae26dfbaedbd42afba0f15ba01d99c7deae1c4e"
+    },
+    {
+      "path": "scripts/lib/legacy-candle-conversion.mjs",
+      "sha256": "9e96ca8dafce2cd503e875f7e69ee7e378262658a63399413ce56d54aba41bb4"
+    },
+    {
+      "path": "server/routes/ai/platform-market-data.js",
+      "sha256": "7e2c0943db1f514f98e6a4837570f215c5a6d7a0368bb898f57df1de4f4ac697"
+    },
+    {
+      "path": "docs/architecture/current-account-wave-preparation-20260908.json",
+      "sha256": "a739fb79e1239147b667ed035e892c5b3afd894a4efc278c6de58e5dc4ea2aec"
+    },
+    {
+      "path": "docs/architecture/current-legacy-candle-build-proof-20260908.json",
+      "sha256": "008217d772b2841807d85f3452058aa0a2189d106ae7a3f1d45dfac25345d6fe"
+    },
+    {
+      "path": "docs/architecture/current-legacy-candle-build-proof-20260908.json.current.json",
+      "sha256": "352e1ba276674c04b6a6b363359f3a95c140f1b88fca9a65488ffa23d0f50b98"
+    }
+  ],
+  "scope": "Read-only current-database conversion plan; original IDs and UTC epoch times retained. No persisted candle backfill or promotion."
+}

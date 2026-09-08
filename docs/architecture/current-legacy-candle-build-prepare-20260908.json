@@ -1,0 +1,30 @@
+{
+  "kind": "current-legacy-candle-build-result/v1",
+  "observedAt": "2026-09-08T15:03:35.560Z",
+  "target": "dev_vue",
+  "mode": "--prepare",
+  "result": {
+    "ddlCount": 0,
+    "steps": [
+      {
+        "id": "inplace_039_01_legacy_candle_backfill_v4",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_039_02_market_candles_build_v4",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_039_03_legacy_candle_mappings_v4",
+        "status": "pending"
+      }
+    ]
+  },
+  "completedSteps": 160,
+  "targetSteps": 163,
+  "proofHash": "8fd7faeecc51a3dc016ec3d91a9e3b5ef46ca357b1d857ec62c3495de3c92be6",
+  "protectedTables": 234,
+  "addedTables": [],
+  "runtimeActivated": false,
+  "scope": "Append-only empty candle build/ledger/mapping tables; exact prior rows and history reconciled. Client check is observational, not a database-wide write lock."
+}

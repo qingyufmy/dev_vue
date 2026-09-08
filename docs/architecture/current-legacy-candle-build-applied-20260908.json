@@ -1,0 +1,46 @@
+{
+  "kind": "current-legacy-candle-build-result/v1",
+  "observedAt": "2026-09-08T15:05:11.778Z",
+  "target": "dev_vue",
+  "mode": "--apply",
+  "result": {
+    "ddlCount": 3,
+    "steps": [
+      {
+        "id": "inplace_039_01_legacy_candle_backfill_v4",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_039_02_market_candles_build_v4",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_039_03_legacy_candle_mappings_v4",
+        "status": "completed"
+      }
+    ]
+  },
+  "completedSteps": 163,
+  "targetSteps": 163,
+  "proofHash": "8fd7faeecc51a3dc016ec3d91a9e3b5ef46ca357b1d857ec62c3495de3c92be6",
+  "protectedTables": 234,
+  "addedTables": [
+    {
+      "name": "legacy_candle_backfill_v4",
+      "rows": 0,
+      "schemaSha256": "8c0dcc0337fc9006c4ed54061c69b5e9f795aec1177c013d94e25f5f2f5811c5"
+    },
+    {
+      "name": "legacy_candle_mappings_v4",
+      "rows": 0,
+      "schemaSha256": "88e058816c1f28bcb554d07a584471d0d7d607347e1fef537a8e5cf705f46a9b"
+    },
+    {
+      "name": "market_candles_build_v4",
+      "rows": 0,
+      "schemaSha256": "26d19b8fc0a6c0a1cda0d1f0ad759551ad535a6ed49178fecb8ff38aed745e99"
+    }
+  ],
+  "runtimeActivated": false,
+  "scope": "Append-only empty candle build/ledger/mapping tables; exact prior rows and history reconciled. Client check is observational, not a database-wide write lock."
+}

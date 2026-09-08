@@ -1,0 +1,211 @@
+{
+  "kind": "legacy-candle-build-reference/v1",
+  "identity": {
+    "database": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "priorProofHash": "46297eec104d0e03b32731bbc48d65dc1b1c3acbbb06bb005523011e2e1f80dd",
+  "registryHash": "b7874c43314a988c1e86744b55d327e20718f4157a418037db56bee799cc4edd",
+  "sourceSnapshotHash": "5938b2c2a48d56294bf0b983acaaee693d87b9af9ed7442ecf249855d202cd53",
+  "sourceHistoryHash": "643a11884746e6b67beb2a79732d17dba67f6dd61d26129825b8f3e5d8592be7",
+  "reference": "dev_vue_candle_reference_485338d055c2c338a027ebcb",
+  "referenceRemoved": true,
+  "sourceWritten": false,
+  "mysqlVersion": "8.4.8",
+  "parentDefinitions": [
+    {
+      "table": "trading_accounts",
+      "id": {
+        "columnType": "bigint unsigned",
+        "charset": null,
+        "collation": null
+      }
+    },
+    {
+      "table": "market_candles",
+      "id": {
+        "columnType": "bigint unsigned",
+        "charset": null,
+        "collation": null
+      }
+    },
+    {
+      "table": "market_data_sources",
+      "id": {
+        "columnType": "bigint unsigned",
+        "charset": null,
+        "collation": null
+      }
+    }
+  ],
+  "definitions": [
+    {
+      "table": "legacy_candle_backfill_v4",
+      "sourceSqlHash": "ec5a3cb17bd49861119d3ee39254c132c8e13da3368d253343b45d770f4df8a8",
+      "ddl": "CREATE TABLE `legacy_candle_backfill_v4` (\n  `id` tinyint unsigned NOT NULL,\n  `conversion_plan_hash` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_plan_hash` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_rows_hash` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `mapping_hash` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `projection_hash` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `expected_source_rows` bigint unsigned NOT NULL,\n  `expected_projection_rows` bigint unsigned NOT NULL,\n  `mapped_rows` bigint unsigned NOT NULL DEFAULT '0',\n  `projection_rows` bigint unsigned NOT NULL DEFAULT '0',\n  `last_legacy_id` bigint unsigned NOT NULL DEFAULT '0',\n  `status` enum('filling','verified') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'filling',\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_legacy_candle_plan` (`conversion_plan_hash`),\n  CONSTRAINT `chk_legacy_candle_counts` CHECK (((`expected_projection_rows` <= `expected_source_rows`) and (`mapped_rows` <= `expected_source_rows`) and (`projection_rows` <= `expected_projection_rows`) and (`projection_rows` <= `mapped_rows`))),\n  CONSTRAINT `chk_legacy_candle_single_run` CHECK ((`id` = 1)),\n  CONSTRAINT `chk_legacy_candle_verified` CHECK (((`status` <> _utf8mb4'verified') or ((`mapped_rows` = `expected_source_rows`) and (`projection_rows` = `expected_projection_rows`))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "schemaHash": "8c0dcc0337fc9006c4ed54061c69b5e9f795aec1177c013d94e25f5f2f5811c5"
+    },
+    {
+      "table": "market_candles_build_v4",
+      "sourceSqlHash": "4f0929d1e6c23f33febdf9c2be6347500f3913ef797fe007ae985118d08b1ed0",
+      "ddl": "CREATE TABLE `market_candles_build_v4` (\n  `trading_account_id` bigint unsigned NOT NULL,\n  `symbol` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `timeframe` enum('M1','M5','M15','M30','H1','H4','D1') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `open_time_utc` datetime(3) NOT NULL,\n  `open_price` decimal(24,10) NOT NULL,\n  `high_price` decimal(24,10) NOT NULL,\n  `low_price` decimal(24,10) NOT NULL,\n  `close_price` decimal(24,10) NOT NULL,\n  `tick_volume` decimal(24,8) NOT NULL,\n  `closed` tinyint(1) NOT NULL,\n  `revision` bigint unsigned NOT NULL,\n  PRIMARY KEY (`trading_account_id`,`symbol`,`timeframe`,`open_time_utc`),\n  KEY `idx_market_candles_tail` (`trading_account_id`,`symbol`,`timeframe`,`open_time_utc` DESC),\n  CONSTRAINT `fk_market_candles_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "schemaHash": "26d19b8fc0a6c0a1cda0d1f0ad759551ad535a6ed49178fecb8ff38aed745e99"
+    },
+    {
+      "table": "legacy_candle_mappings_v4",
+      "sourceSqlHash": "caf6b2baf8fc823c657446928bf792452bb083d1c02964b1a7b22793ba3e49e7",
+      "ddl": "CREATE TABLE `legacy_candle_mappings_v4` (\n  `legacy_candle_id` bigint unsigned NOT NULL,\n  `run_id` tinyint unsigned NOT NULL,\n  `source_id` bigint unsigned NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `symbol` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `timeframe` enum('M1','M5','M15','M30','H1','H4','D1') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `open_time_utc` datetime(3) NOT NULL,\n  `target_key_hash` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `payload_hash` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_hash` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  PRIMARY KEY (`legacy_candle_id`),\n  KEY `idx_legacy_candle_target` (`trading_account_id`,`symbol`,`timeframe`,`open_time_utc`),\n  KEY `fk_legacy_candle_run` (`run_id`),\n  KEY `fk_legacy_candle_source` (`source_id`),\n  CONSTRAINT `fk_legacy_candle_original` FOREIGN KEY (`legacy_candle_id`) REFERENCES `market_candles` (`id`),\n  CONSTRAINT `fk_legacy_candle_run` FOREIGN KEY (`run_id`) REFERENCES `legacy_candle_backfill_v4` (`id`),\n  CONSTRAINT `fk_legacy_candle_source` FOREIGN KEY (`source_id`) REFERENCES `market_data_sources` (`id`),\n  CONSTRAINT `fk_legacy_candle_target` FOREIGN KEY (`trading_account_id`, `symbol`, `timeframe`, `open_time_utc`) REFERENCES `market_candles_build_v4` (`trading_account_id`, `symbol`, `timeframe`, `open_time_utc`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "schemaHash": "88e058816c1f28bcb554d07a584471d0d7d607347e1fef537a8e5cf705f46a9b"
+    }
+  ],
+  "constraintChecks": [
+    {
+      "name": "exact_decimal_and_utc_milliseconds",
+      "passed": true
+    },
+    {
+      "name": "multiple_original_rows_share_one_projection_with_exact_ids",
+      "passed": true
+    },
+    {
+      "name": "singleton_checkpoint",
+      "expectedErrno": 3819,
+      "passed": true
+    },
+    {
+      "name": "premature_verified",
+      "expectedErrno": 3819,
+      "passed": true
+    },
+    {
+      "name": "mapped_count_bound",
+      "expectedErrno": 3819,
+      "passed": true
+    },
+    {
+      "name": "projection_count_bound",
+      "expectedErrno": 3819,
+      "passed": true
+    },
+    {
+      "name": "projection_exceeds_mapped",
+      "expectedErrno": 3819,
+      "passed": true
+    },
+    {
+      "name": "original_row_fk",
+      "expectedErrno": 1452,
+      "passed": true
+    },
+    {
+      "name": "source_fk",
+      "expectedErrno": 1452,
+      "passed": true
+    },
+    {
+      "name": "run_fk",
+      "expectedErrno": 1452,
+      "passed": true
+    },
+    {
+      "name": "target_composite_fk",
+      "expectedErrno": 1452,
+      "passed": true
+    },
+    {
+      "name": "original_delete_restricted",
+      "expectedErrno": 1451,
+      "passed": true
+    },
+    {
+      "name": "target_delete_restricted",
+      "expectedErrno": 1451,
+      "passed": true
+    },
+    {
+      "name": "price_overflow",
+      "expectedErrno": 1264,
+      "passed": true
+    },
+    {
+      "name": "binary_symbols_and_account_scope",
+      "passed": true
+    },
+    {
+      "name": "valid_complete_checkpoint",
+      "passed": true
+    },
+    {
+      "name": "promoted_original_delete_restricted",
+      "expectedErrno": 1451,
+      "passed": true
+    },
+    {
+      "name": "promoted_target_delete_restricted",
+      "expectedErrno": 1451,
+      "passed": true
+    },
+    {
+      "name": "atomic_rename_preserves_original_and_target_foreign_keys",
+      "passed": true
+    },
+    {
+      "name": "both_mappings_resolve_after_promotion",
+      "passed": true
+    }
+  ],
+  "promotionForeignKeys": [
+    {
+      "constraintName": "fk_legacy_candle_original",
+      "referencedTable": "market_candles_legacy_v3",
+      "columnName": "legacy_candle_id"
+    },
+    {
+      "constraintName": "fk_legacy_candle_run",
+      "referencedTable": "legacy_candle_backfill_v4",
+      "columnName": "run_id"
+    },
+    {
+      "constraintName": "fk_legacy_candle_source",
+      "referencedTable": "market_data_sources",
+      "columnName": "source_id"
+    },
+    {
+      "constraintName": "fk_legacy_candle_target",
+      "referencedTable": "market_candles",
+      "columnName": "trading_account_id"
+    },
+    {
+      "constraintName": "fk_legacy_candle_target",
+      "referencedTable": "market_candles",
+      "columnName": "symbol"
+    },
+    {
+      "constraintName": "fk_legacy_candle_target",
+      "referencedTable": "market_candles",
+      "columnName": "timeframe"
+    },
+    {
+      "constraintName": "fk_legacy_candle_target",
+      "referencedTable": "market_candles",
+      "columnName": "open_time_utc"
+    }
+  ],
+  "promotedDefinitions": [
+    {
+      "table": "market_candles_legacy_v3",
+      "ddl": "CREATE TABLE `market_candles_legacy_v3` (\n  `id` bigint unsigned NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "table": "market_candles",
+      "ddl": "CREATE TABLE `market_candles` (\n  `trading_account_id` bigint unsigned NOT NULL,\n  `symbol` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `timeframe` enum('M1','M5','M15','M30','H1','H4','D1') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `open_time_utc` datetime(3) NOT NULL,\n  `open_price` decimal(24,10) NOT NULL,\n  `high_price` decimal(24,10) NOT NULL,\n  `low_price` decimal(24,10) NOT NULL,\n  `close_price` decimal(24,10) NOT NULL,\n  `tick_volume` decimal(24,8) NOT NULL,\n  `closed` tinyint(1) NOT NULL,\n  `revision` bigint unsigned NOT NULL,\n  PRIMARY KEY (`trading_account_id`,`symbol`,`timeframe`,`open_time_utc`),\n  KEY `idx_market_candles_tail` (`trading_account_id`,`symbol`,`timeframe`,`open_time_utc` DESC),\n  CONSTRAINT `fk_market_candles_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "table": "legacy_candle_mappings_v4",
+      "ddl": "CREATE TABLE `legacy_candle_mappings_v4` (\n  `legacy_candle_id` bigint unsigned NOT NULL,\n  `run_id` tinyint unsigned NOT NULL,\n  `source_id` bigint unsigned NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `symbol` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `timeframe` enum('M1','M5','M15','M30','H1','H4','D1') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `open_time_utc` datetime(3) NOT NULL,\n  `target_key_hash` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `payload_hash` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_hash` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  PRIMARY KEY (`legacy_candle_id`),\n  KEY `idx_legacy_candle_target` (`trading_account_id`,`symbol`,`timeframe`,`open_time_utc`),\n  KEY `fk_legacy_candle_run` (`run_id`),\n  KEY `fk_legacy_candle_source` (`source_id`),\n  CONSTRAINT `fk_legacy_candle_original` FOREIGN KEY (`legacy_candle_id`) REFERENCES `market_candles_legacy_v3` (`id`),\n  CONSTRAINT `fk_legacy_candle_run` FOREIGN KEY (`run_id`) REFERENCES `legacy_candle_backfill_v4` (`id`),\n  CONSTRAINT `fk_legacy_candle_source` FOREIGN KEY (`source_id`) REFERENCES `market_data_sources` (`id`),\n  CONSTRAINT `fk_legacy_candle_target` FOREIGN KEY (`trading_account_id`, `symbol`, `timeframe`, `open_time_utc`) REFERENCES `market_candles` (`trading_account_id`, `symbol`, `timeframe`, `open_time_utc`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    }
+  ],
+  "captureToolHash": "53a66f3656f12d0282b41db44b0c5a8b56eed19c29ee0fa297dc259afe0c261a",
+  "constraintToolHash": "2fc4df33d0c428ef3761ff7eaa2357a6560a211ba5a136fa082033ee03143e48",
+  "proofHash": "d30381e68494659a011672d9402e1903ea78d9475a3771fd38e54ca6aee7baa5"
+}

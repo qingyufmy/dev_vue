@@ -790,3 +790,9 @@ HTTP和生产组装已切换到ContextWritePort，移除读取接口、应用服
 当前154→160步、228→234表，六张038投影表为空；原228表及旧154步日志完整对账，首次DDL6次、重复0次。当前专属适配器和proof接续当前库证据链，旧SQL/工具冻结不变。35项定向测试和20项真实MySQL约束检查通过，临时参考库已清理。
 
 见[应用回执](architecture/current-account-projection-applied-20260908.json)、[重复回执](architecture/current-account-projection-repeat-20260908.json)及[接入方案第17节](architecture/current-dev-vue-upgrade-plan-20260908.md)。下一步161–163构建表、当前K线回填、164提升和165回执表；应用消费者与账户联合验收尚未启用/完成。
+
+## 第九十三批：当前 K 线构建表和转换清单完成
+
+当前160→163步、234→237表，三张039构建/账本/映射表为空，原234表及旧160步日志完整对账；首次DDL3次、重复0次。当前参考库20项真实约束检查通过并清理，构建35项定向测试通过。
+
+新增只读当前K线转换入口：35725原始行→30226投影，5499同键同值重复来源保持旧ID映射，UTC零偏移，前后快照/日志不变；转换/分页22项测试通过。见[当前转换清单](architecture/current-legacy-candle-conversion-20260908.json)和[接入方案第18节](architecture/current-dev-vue-upgrade-plan-20260908.md)。实际K线回填、164提升和165仍待执行，不能把转换计划计作已迁移数据。
