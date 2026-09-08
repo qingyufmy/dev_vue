@@ -1,0 +1,390 @@
+{
+  "kind": "account-readiness-probe/v1",
+  "observedAt": "2026-09-08T08:44:27.209Z",
+  "identity": {
+    "databaseName": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "source": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+  "sourceHash": "4d4060296d74dd6fe8a370b74e2561f9e73e04188e7c0cfe025befdf3215bf63",
+  "runtimeHash": "8d1b334a4e67d0b16f5c52351f8422d3e08bbb3fd491bb2ff260ea8b5fcf49f9",
+  "capture": [
+    {
+      "operation": "context",
+      "queryCount": 1,
+      "outcome": "returned"
+    },
+    {
+      "operation": "current-accounts",
+      "queryCount": 1,
+      "outcome": "returned"
+    },
+    {
+      "operation": "historical-accounts",
+      "queryCount": 1,
+      "outcome": "returned"
+    },
+    {
+      "operation": "account-by-id",
+      "queryCount": 1,
+      "outcome": "returned"
+    },
+    {
+      "operation": "owned-account",
+      "queryCount": 1,
+      "outcome": "returned"
+    },
+    {
+      "operation": "terminal-profiles",
+      "queryCount": 1,
+      "outcome": "returned"
+    },
+    {
+      "operation": "observer-channels",
+      "queryCount": 1,
+      "outcome": "returned"
+    },
+    {
+      "operation": "account-snapshot",
+      "queryCount": 1,
+      "outcome": "returned"
+    },
+    {
+      "operation": "symbols",
+      "queryCount": 1,
+      "outcome": "returned"
+    },
+    {
+      "operation": "quote",
+      "queryCount": 1,
+      "outcome": "returned"
+    },
+    {
+      "operation": "candles",
+      "queryCount": 1,
+      "outcome": "returned"
+    },
+    {
+      "operation": "positions",
+      "queryCount": 1,
+      "outcome": "returned"
+    },
+    {
+      "operation": "pending-orders",
+      "queryCount": 1,
+      "outcome": "returned"
+    },
+    {
+      "operation": "revision",
+      "queryCount": 1,
+      "outcome": "returned"
+    }
+  ],
+  "dependencies": [
+    {
+      "table": "account_runtime_snapshots",
+      "present": false,
+      "columns": []
+    },
+    {
+      "table": "bridge_connection_sessions",
+      "present": false,
+      "columns": []
+    },
+    {
+      "table": "market_candles",
+      "present": true,
+      "columns": [
+        "id",
+        "source_id",
+        "broker_symbol",
+        "standard_symbol",
+        "timeframe",
+        "open_time_utc_msc",
+        "broker_time",
+        "open_price",
+        "high_price",
+        "low_price",
+        "close_price",
+        "tick_volume",
+        "spread",
+        "updated_at"
+      ]
+    },
+    {
+      "table": "market_quotes",
+      "present": false,
+      "columns": []
+    },
+    {
+      "table": "observer_channel_accesses",
+      "present": false,
+      "columns": []
+    },
+    {
+      "table": "observer_channels",
+      "present": false,
+      "columns": []
+    },
+    {
+      "table": "observer_sources",
+      "present": false,
+      "columns": []
+    },
+    {
+      "table": "terminal_account_bindings",
+      "present": false,
+      "columns": []
+    },
+    {
+      "table": "terminal_profiles",
+      "present": true,
+      "columns": [
+        "id",
+        "user_id",
+        "display_name",
+        "platform",
+        "installation_id",
+        "created_at_utc",
+        "updated_at_utc",
+        "deleted_at_utc"
+      ]
+    },
+    {
+      "table": "trading_account_ownership_intervals",
+      "present": false,
+      "columns": []
+    },
+    {
+      "table": "trading_account_ownerships",
+      "present": false,
+      "columns": []
+    },
+    {
+      "table": "trading_accounts",
+      "present": true,
+      "columns": [
+        "id",
+        "user_id",
+        "broker_server",
+        "login_account",
+        "nickname",
+        "margin_mode",
+        "review_status",
+        "observe_status",
+        "is_deleted",
+        "created_at",
+        "updated_at",
+        "observed_until",
+        "identity_verified_at",
+        "first_verified_at",
+        "anomaly_code"
+      ]
+    },
+    {
+      "table": "trading_contexts",
+      "present": false,
+      "columns": []
+    },
+    {
+      "table": "trading_projection_revisions",
+      "present": false,
+      "columns": []
+    },
+    {
+      "table": "user_trading_account_settings",
+      "present": false,
+      "columns": []
+    },
+    {
+      "table": "users",
+      "present": true,
+      "columns": [
+        "id",
+        "uid",
+        "email",
+        "email_verified",
+        "auth_method",
+        "password",
+        "nickname",
+        "avatar",
+        "role",
+        "plan",
+        "plan_period",
+        "plan_expires_at",
+        "telegram_id",
+        "telegram_username",
+        "telegram_name",
+        "telegram_chat_id",
+        "telegram_group_status",
+        "telegram_bot_started_at",
+        "telegram_joined_at",
+        "telegram_last_invite_sent_at",
+        "referral_code",
+        "referral_credit",
+        "referred_by",
+        "last_seen_at",
+        "bridge_heartbeat",
+        "created_at",
+        "updated_at",
+        "phone",
+        "phone_verified",
+        "changelog_seen_version",
+        "token_version",
+        "plan_source",
+        "deleted_at",
+        "deletion_status",
+        "last_seen_at_utc",
+        "profile_revision"
+      ]
+    }
+  ],
+  "results": [
+    {
+      "operation": "context",
+      "sqlHash": "f5d23381aa7742b7327fac51e419511ff9d32a95978657ca5c32c2c69ad4b116",
+      "sql": "SELECT user_id, mode, CAST(trading_account_id AS CHAR) trading_account_id, CAST(observer_channel_id AS CHAR) observer_channel_id, read_only, revision FROM trading_contexts WHERE user_id=?",
+      "parameterCount": 1,
+      "status": "schema_blocked",
+      "errno": 1146,
+      "code": "ER_NO_SUCH_TABLE",
+      "detail": "Table 'dev_vue.trading_contexts' doesn't exist"
+    },
+    {
+      "operation": "current-accounts",
+      "sqlHash": "b7e7aeecadf2a90787f6efffca35bdb8442981a4c8d11c3908913c4093ca9e5e",
+      "sql": "\n  SELECT CAST(a.id AS CHAR) AS id, a.platform, a.account_login, a.broker_server, a.currency,\n         o.user_id AS owner_user_id, o.interval_id AS ownership_interval_id, a.ownership_revision,\n         CASE WHEN COUNT(b.terminal_profile_id)=1 AND COUNT(p.id)=1 THEN MIN(p.id) ELSE NULL END AS profile_id,\n         CASE WHEN COUNT(b.terminal_profile_id)=1 AND COUNT(p.id)=1 THEN MIN(b.terminal_instance_id) ELSE NULL END AS terminal_instance_id,\n         CASE WHEN COALESCE(settings.connection_paused, 0)=1 THEN 'paused' ELSE 'offline' END AS bridge_state,\n         CASE WHEN COALESCE(settings.connection_paused, 0)=1 THEN 0 ELSE COALESCE(rs.trade_permission, 0) END AS trade_permission,\n         COALESCE(rs.trade_permission, 0) AS snapshot_trade_permission,\n         COALESCE(settings.connection_paused, 0) AS connection_paused,\n         NULL AS last_seen_at_utc\n  FROM trading_accounts a\n  INNER JOIN trading_account_ownerships o ON o.trading_account_id=a.id AND o.role='owner' AND o.revoked_at_utc IS NULL\n  INNER JOIN trading_account_ownership_intervals oi ON oi.id=o.interval_id AND oi.user_id=o.user_id\n    AND oi.trading_account_id=o.trading_account_id AND oi.role='owner' AND oi.ended_at_utc IS NULL\n    AND oi.started_at_utc=o.granted_at_utc AND oi.started_at_utc<=UTC_TIMESTAMP(3)\n  INNER JOIN users u ON u.id=o.user_id AND u.deletion_status='active' AND u.deleted_at IS NULL\n  LEFT JOIN terminal_account_bindings b ON b.trading_account_id=a.id AND b.unbound_at_utc IS NULL\n  LEFT JOIN terminal_profiles p ON p.id=b.terminal_profile_id AND p.user_id=o.user_id\n    AND p.platform=a.platform AND p.deleted_at_utc IS NULL\n  LEFT JOIN user_trading_account_settings settings ON settings.user_id=o.user_id AND settings.trading_account_id=a.id\n  LEFT JOIN account_runtime_snapshots rs ON rs.trading_account_id=a.id\n  WHERE a.deleted_at_utc IS NULL AND o.revision=a.ownership_revision AND o.user_id=?\n  GROUP BY a.id,a.platform,a.account_login,a.broker_server,a.currency,o.user_id,o.interval_id,a.ownership_revision,\n    settings.connection_paused,rs.trade_permission ORDER BY a.id",
+      "parameterCount": 1,
+      "status": "schema_blocked",
+      "errno": 1146,
+      "code": "ER_NO_SUCH_TABLE",
+      "detail": "Table 'dev_vue.trading_account_ownerships' doesn't exist"
+    },
+    {
+      "operation": "historical-accounts",
+      "sqlHash": "ff347be216b5e9a86a7069892b33f4975f6f6d4ec12e360a57cd7e3268670107",
+      "sql": "\n  SELECT CAST(a.id AS CHAR) AS id, a.platform, a.account_login, a.broker_server, a.currency,\n         NULL AS owner_user_id, NULL AS ownership_interval_id, NULL AS ownership_revision,\n         NULL AS profile_id, NULL AS terminal_instance_id, 'offline' AS bridge_state,\n         0 AS trade_permission, 0 AS snapshot_trade_permission, 0 AS connection_paused,\n         NULL AS last_seen_at_utc\n  FROM trading_accounts a\n  INNER JOIN users u ON u.id=? AND u.deletion_status='active' AND u.deleted_at IS NULL\n  WHERE EXISTS (\n    SELECT 1 FROM trading_account_ownership_intervals i\n    WHERE i.user_id=u.id AND i.trading_account_id=a.id AND i.role='owner'\n      AND i.started_at_utc<=UTC_TIMESTAMP(3)\n  ) ORDER BY a.id",
+      "parameterCount": 1,
+      "status": "schema_blocked",
+      "errno": 1146,
+      "code": "ER_NO_SUCH_TABLE",
+      "detail": "Table 'dev_vue.trading_account_ownership_intervals' doesn't exist"
+    },
+    {
+      "operation": "account-by-id",
+      "sqlHash": "ca76a7190d137e238e96e3337e7f6fda18529b392a0fe919803efbd11aa93dbc",
+      "sql": "\n  SELECT CAST(a.id AS CHAR) AS id, a.platform, a.account_login, a.broker_server, a.currency,\n         NULL AS owner_user_id, NULL AS ownership_interval_id, NULL AS ownership_revision,\n         CASE WHEN COUNT(b.terminal_profile_id)=1 AND COUNT(p.id)=1 THEN MIN(p.id) ELSE NULL END AS profile_id,\n         CASE WHEN COUNT(b.terminal_profile_id)=1 AND COUNT(p.id)=1 THEN MIN(b.terminal_instance_id) ELSE NULL END AS terminal_instance_id,\n         'offline' AS bridge_state, 0 AS trade_permission, 0 AS snapshot_trade_permission, 0 AS connection_paused,\n         NULL AS last_seen_at_utc\n  FROM trading_accounts a\n  LEFT JOIN terminal_account_bindings b ON b.trading_account_id=a.id AND b.unbound_at_utc IS NULL\n  LEFT JOIN terminal_profiles p ON p.id=b.terminal_profile_id AND p.deleted_at_utc IS NULL\n  WHERE a.id=? AND a.deleted_at_utc IS NULL\n  GROUP BY a.id,a.platform,a.account_login,a.broker_server,a.currency",
+      "parameterCount": 1,
+      "status": "schema_blocked",
+      "errno": 1146,
+      "code": "ER_NO_SUCH_TABLE",
+      "detail": "Table 'dev_vue.terminal_account_bindings' doesn't exist"
+    },
+    {
+      "operation": "owned-account",
+      "sqlHash": "4ffa194f5e27216053bd9fc7f7bae60f66f992f461d6f8b65832372167726a86",
+      "sql": "\n  SELECT CAST(a.id AS CHAR) AS id, a.platform, a.account_login, a.broker_server, a.currency,\n         o.user_id AS owner_user_id, o.interval_id AS ownership_interval_id, a.ownership_revision,\n         CASE WHEN COUNT(b.terminal_profile_id)=1 AND COUNT(p.id)=1 THEN MIN(p.id) ELSE NULL END AS profile_id,\n         CASE WHEN COUNT(b.terminal_profile_id)=1 AND COUNT(p.id)=1 THEN MIN(b.terminal_instance_id) ELSE NULL END AS terminal_instance_id,\n         CASE WHEN COALESCE(settings.connection_paused, 0)=1 THEN 'paused' ELSE 'offline' END AS bridge_state,\n         CASE WHEN COALESCE(settings.connection_paused, 0)=1 THEN 0 ELSE COALESCE(rs.trade_permission, 0) END AS trade_permission,\n         COALESCE(rs.trade_permission, 0) AS snapshot_trade_permission,\n         COALESCE(settings.connection_paused, 0) AS connection_paused,\n         NULL AS last_seen_at_utc\n  FROM trading_accounts a\n  INNER JOIN trading_account_ownerships o ON o.trading_account_id=a.id AND o.role='owner' AND o.revoked_at_utc IS NULL\n  INNER JOIN trading_account_ownership_intervals oi ON oi.id=o.interval_id AND oi.user_id=o.user_id\n    AND oi.trading_account_id=o.trading_account_id AND oi.role='owner' AND oi.ended_at_utc IS NULL\n    AND oi.started_at_utc=o.granted_at_utc AND oi.started_at_utc<=UTC_TIMESTAMP(3)\n  INNER JOIN users u ON u.id=o.user_id AND u.deletion_status='active' AND u.deleted_at IS NULL\n  LEFT JOIN terminal_account_bindings b ON b.trading_account_id=a.id AND b.unbound_at_utc IS NULL\n  LEFT JOIN terminal_profiles p ON p.id=b.terminal_profile_id AND p.user_id=o.user_id\n    AND p.platform=a.platform AND p.deleted_at_utc IS NULL\n  LEFT JOIN user_trading_account_settings settings ON settings.user_id=o.user_id AND settings.trading_account_id=a.id\n  LEFT JOIN account_runtime_snapshots rs ON rs.trading_account_id=a.id\n  WHERE a.deleted_at_utc IS NULL AND o.revision=a.ownership_revision AND o.user_id=? AND a.id=?\n  GROUP BY a.id,a.platform,a.account_login,a.broker_server,a.currency,o.user_id,o.interval_id,a.ownership_revision,\n    settings.connection_paused,rs.trade_permission",
+      "parameterCount": 2,
+      "status": "schema_blocked",
+      "errno": 1146,
+      "code": "ER_NO_SUCH_TABLE",
+      "detail": "Table 'dev_vue.trading_account_ownerships' doesn't exist"
+    },
+    {
+      "operation": "terminal-profiles",
+      "sqlHash": "3498e2510d927db1dee2bc656045d2e7c6faa7a215f3957ddbbb89d78d2eba73",
+      "sql": "SELECT p.id,p.display_name,p.platform,p.installation_id,CAST(b.trading_account_id AS CHAR) trading_account_id,CASE WHEN s.id IS NULL THEN 'offline' ELSE 'online' END connection_state,s.last_seen_at_utc FROM terminal_profiles p LEFT JOIN terminal_account_bindings b ON b.terminal_profile_id=p.id AND b.unbound_at_utc IS NULL LEFT JOIN bridge_connection_sessions s ON s.terminal_profile_id=p.id AND s.connection_epoch=(SELECT s2.connection_epoch FROM bridge_connection_sessions s2 WHERE s2.terminal_profile_id=p.id AND s2.disconnected_at_utc IS NULL ORDER BY s2.connected_at_utc DESC LIMIT 1) WHERE p.user_id=? AND p.deleted_at_utc IS NULL ORDER BY p.updated_at_utc DESC",
+      "parameterCount": 1,
+      "status": "schema_blocked",
+      "errno": 1146,
+      "code": "ER_NO_SUCH_TABLE",
+      "detail": "Table 'dev_vue.terminal_account_bindings' doesn't exist"
+    },
+    {
+      "operation": "observer-channels",
+      "sqlHash": "5343723802f89a506c6ed99e9705fbd790ed688fd57e3facf884a2a7f99d1e05",
+      "sql": "\n  SELECT CAST(c.id AS CHAR) AS channel_id,c.display_name,\n         CAST(c.source_id AS CHAR) AS source_id,\n         CAST(c.source_trading_account_id AS CHAR) AS source_trading_account_id,\n         c.slug AS channel_slug,\n         CAST(s.trading_account_id AS CHAR) AS source_account_id,\n         CAST(a.ownership_revision AS CHAR) AS ownership_revision,\n         c.active AS channel_active,c.audience,CAST(c.revision AS CHAR) AS channel_revision,\n         CAST(s.revision AS CHAR) AS source_revision,s.status AS source_status,\n         s.configuration_status AS source_configuration_status,\n         s.operator_user_id,\n         operator_user.deletion_status AS operator_deletion_status,\n         operator_user.deleted_at AS operator_deleted_at,\n         a.deleted_at_utc AS account_deleted_at,\n         viewer.deletion_status AS viewer_deletion_status,\n         viewer.deleted_at AS viewer_deleted_at,\n         viewer.plan AS viewer_plan,\n         viewer.plan_expires_at AS viewer_plan_expires_at,\n         viewer.token_version AS viewer_token_version,\n         x.granted_at_utc AS access_granted_at_utc,\n         x.revoked_at_utc AS access_revoked_at_utc,\n         CAST(x.revision AS CHAR) AS access_revision\n    FROM observer_channels c\n    INNER JOIN observer_sources s\n      ON s.id=c.source_id\n     AND s.trading_account_id IS NOT NULL\n     AND s.trading_account_id=c.source_trading_account_id\n    INNER JOIN trading_accounts a\n      ON a.id=s.trading_account_id\n     AND a.deleted_at_utc IS NULL\n    INNER JOIN users operator_user\n      ON operator_user.id=s.operator_user_id\n     AND operator_user.deletion_status='active'\n     AND operator_user.deleted_at IS NULL\n    INNER JOIN users viewer\n      ON viewer.id=?\n     AND viewer.deletion_status='active'\n     AND viewer.deleted_at IS NULL\n    LEFT JOIN observer_channel_accesses x\n      ON x.observer_channel_id=c.id\n     AND x.user_id=viewer.id\n   WHERE c.active=1\n     AND s.status='active'\n     AND s.configuration_status='ready'\n     AND c.slug IS NOT NULL\n     AND c.slug<>''\n     AND EXISTS (\n     SELECT 1\n       FROM trading_account_ownerships owner_grant\n       INNER JOIN trading_account_ownership_intervals owner_interval\n         ON owner_interval.id=owner_grant.interval_id\n        AND owner_interval.user_id=owner_grant.user_id\n        AND owner_interval.trading_account_id=owner_grant.trading_account_id\n        AND owner_interval.role='owner'\n        AND owner_interval.ended_at_utc IS NULL\n        AND owner_interval.started_at_utc=owner_grant.granted_at_utc\n        AND owner_interval.started_at_utc<=?\n      WHERE owner_grant.trading_account_id=a.id\n        AND owner_grant.user_id=s.operator_user_id\n        AND owner_grant.role='owner'\n        AND owner_grant.revoked_at_utc IS NULL\n        AND owner_grant.revision=a.ownership_revision\n   )\n     AND c.id>?\n   ORDER BY c.id\n   LIMIT 100",
+      "parameterCount": 3,
+      "status": "schema_blocked",
+      "errno": 1146,
+      "code": "ER_NO_SUCH_TABLE",
+      "detail": "Table 'dev_vue.observer_channels' doesn't exist"
+    },
+    {
+      "operation": "account-snapshot",
+      "sqlHash": "4ffa194f5e27216053bd9fc7f7bae60f66f992f461d6f8b65832372167726a86",
+      "sql": "\n  SELECT CAST(a.id AS CHAR) AS id, a.platform, a.account_login, a.broker_server, a.currency,\n         o.user_id AS owner_user_id, o.interval_id AS ownership_interval_id, a.ownership_revision,\n         CASE WHEN COUNT(b.terminal_profile_id)=1 AND COUNT(p.id)=1 THEN MIN(p.id) ELSE NULL END AS profile_id,\n         CASE WHEN COUNT(b.terminal_profile_id)=1 AND COUNT(p.id)=1 THEN MIN(b.terminal_instance_id) ELSE NULL END AS terminal_instance_id,\n         CASE WHEN COALESCE(settings.connection_paused, 0)=1 THEN 'paused' ELSE 'offline' END AS bridge_state,\n         CASE WHEN COALESCE(settings.connection_paused, 0)=1 THEN 0 ELSE COALESCE(rs.trade_permission, 0) END AS trade_permission,\n         COALESCE(rs.trade_permission, 0) AS snapshot_trade_permission,\n         COALESCE(settings.connection_paused, 0) AS connection_paused,\n         NULL AS last_seen_at_utc\n  FROM trading_accounts a\n  INNER JOIN trading_account_ownerships o ON o.trading_account_id=a.id AND o.role='owner' AND o.revoked_at_utc IS NULL\n  INNER JOIN trading_account_ownership_intervals oi ON oi.id=o.interval_id AND oi.user_id=o.user_id\n    AND oi.trading_account_id=o.trading_account_id AND oi.role='owner' AND oi.ended_at_utc IS NULL\n    AND oi.started_at_utc=o.granted_at_utc AND oi.started_at_utc<=UTC_TIMESTAMP(3)\n  INNER JOIN users u ON u.id=o.user_id AND u.deletion_status='active' AND u.deleted_at IS NULL\n  LEFT JOIN terminal_account_bindings b ON b.trading_account_id=a.id AND b.unbound_at_utc IS NULL\n  LEFT JOIN terminal_profiles p ON p.id=b.terminal_profile_id AND p.user_id=o.user_id\n    AND p.platform=a.platform AND p.deleted_at_utc IS NULL\n  LEFT JOIN user_trading_account_settings settings ON settings.user_id=o.user_id AND settings.trading_account_id=a.id\n  LEFT JOIN account_runtime_snapshots rs ON rs.trading_account_id=a.id\n  WHERE a.deleted_at_utc IS NULL AND o.revision=a.ownership_revision AND o.user_id=? AND a.id=?\n  GROUP BY a.id,a.platform,a.account_login,a.broker_server,a.currency,o.user_id,o.interval_id,a.ownership_revision,\n    settings.connection_paused,rs.trade_permission",
+      "parameterCount": 2,
+      "status": "schema_blocked",
+      "errno": 1146,
+      "code": "ER_NO_SUCH_TABLE",
+      "detail": "Table 'dev_vue.trading_account_ownerships' doesn't exist"
+    },
+    {
+      "operation": "symbols",
+      "sqlHash": "0442b8a5e9aca460fab509ad564eb4a2d982f8ff8fedc909f5fab9627b02e3d8",
+      "sql": "SELECT symbol FROM market_quotes WHERE trading_account_id=? UNION SELECT symbol FROM market_candles WHERE trading_account_id=? ORDER BY symbol",
+      "parameterCount": 2,
+      "status": "schema_blocked",
+      "errno": 1146,
+      "code": "ER_NO_SUCH_TABLE",
+      "detail": "Table 'dev_vue.market_quotes' doesn't exist"
+    },
+    {
+      "operation": "quote",
+      "sqlHash": "61f9ad0709151303f664cea403719bb42f4632df93824a38c7be2d91c18683f8",
+      "sql": "SELECT CAST(trading_account_id AS CHAR) trading_account_id,symbol,bid,ask,last_price,spread,trade_mode,observed_at_utc,revision FROM market_quotes WHERE trading_account_id=? AND symbol=?",
+      "parameterCount": 2,
+      "status": "schema_blocked",
+      "errno": 1146,
+      "code": "ER_NO_SUCH_TABLE",
+      "detail": "Table 'dev_vue.market_quotes' doesn't exist"
+    },
+    {
+      "operation": "candles",
+      "sqlHash": "c0f716be74ea401ba2c58f61a9ad0eb79c87b1cf42cd07b50ab44156232ba32d",
+      "sql": "SELECT * FROM (SELECT CAST(trading_account_id AS CHAR) trading_account_id,symbol,timeframe,open_time_utc,open_price,high_price,low_price,close_price,tick_volume,closed,revision FROM market_candles WHERE trading_account_id=? AND symbol=? AND timeframe=? ORDER BY open_time_utc DESC LIMIT ?) tail ORDER BY open_time_utc",
+      "parameterCount": 4,
+      "status": "schema_blocked",
+      "errno": 1054,
+      "code": "ER_BAD_FIELD_ERROR",
+      "detail": "Unknown column 'trading_account_id' in 'field list'"
+    },
+    {
+      "operation": "positions",
+      "sqlHash": "4ffa194f5e27216053bd9fc7f7bae60f66f992f461d6f8b65832372167726a86",
+      "sql": "\n  SELECT CAST(a.id AS CHAR) AS id, a.platform, a.account_login, a.broker_server, a.currency,\n         o.user_id AS owner_user_id, o.interval_id AS ownership_interval_id, a.ownership_revision,\n         CASE WHEN COUNT(b.terminal_profile_id)=1 AND COUNT(p.id)=1 THEN MIN(p.id) ELSE NULL END AS profile_id,\n         CASE WHEN COUNT(b.terminal_profile_id)=1 AND COUNT(p.id)=1 THEN MIN(b.terminal_instance_id) ELSE NULL END AS terminal_instance_id,\n         CASE WHEN COALESCE(settings.connection_paused, 0)=1 THEN 'paused' ELSE 'offline' END AS bridge_state,\n         CASE WHEN COALESCE(settings.connection_paused, 0)=1 THEN 0 ELSE COALESCE(rs.trade_permission, 0) END AS trade_permission,\n         COALESCE(rs.trade_permission, 0) AS snapshot_trade_permission,\n         COALESCE(settings.connection_paused, 0) AS connection_paused,\n         NULL AS last_seen_at_utc\n  FROM trading_accounts a\n  INNER JOIN trading_account_ownerships o ON o.trading_account_id=a.id AND o.role='owner' AND o.revoked_at_utc IS NULL\n  INNER JOIN trading_account_ownership_intervals oi ON oi.id=o.interval_id AND oi.user_id=o.user_id\n    AND oi.trading_account_id=o.trading_account_id AND oi.role='owner' AND oi.ended_at_utc IS NULL\n    AND oi.started_at_utc=o.granted_at_utc AND oi.started_at_utc<=UTC_TIMESTAMP(3)\n  INNER JOIN users u ON u.id=o.user_id AND u.deletion_status='active' AND u.deleted_at IS NULL\n  LEFT JOIN terminal_account_bindings b ON b.trading_account_id=a.id AND b.unbound_at_utc IS NULL\n  LEFT JOIN terminal_profiles p ON p.id=b.terminal_profile_id AND p.user_id=o.user_id\n    AND p.platform=a.platform AND p.deleted_at_utc IS NULL\n  LEFT JOIN user_trading_account_settings settings ON settings.user_id=o.user_id AND settings.trading_account_id=a.id\n  LEFT JOIN account_runtime_snapshots rs ON rs.trading_account_id=a.id\n  WHERE a.deleted_at_utc IS NULL AND o.revision=a.ownership_revision AND o.user_id=? AND a.id=?\n  GROUP BY a.id,a.platform,a.account_login,a.broker_server,a.currency,o.user_id,o.interval_id,a.ownership_revision,\n    settings.connection_paused,rs.trade_permission",
+      "parameterCount": 2,
+      "status": "schema_blocked",
+      "errno": 1146,
+      "code": "ER_NO_SUCH_TABLE",
+      "detail": "Table 'dev_vue.trading_account_ownerships' doesn't exist"
+    },
+    {
+      "operation": "pending-orders",
+      "sqlHash": "4ffa194f5e27216053bd9fc7f7bae60f66f992f461d6f8b65832372167726a86",
+      "sql": "\n  SELECT CAST(a.id AS CHAR) AS id, a.platform, a.account_login, a.broker_server, a.currency,\n         o.user_id AS owner_user_id, o.interval_id AS ownership_interval_id, a.ownership_revision,\n         CASE WHEN COUNT(b.terminal_profile_id)=1 AND COUNT(p.id)=1 THEN MIN(p.id) ELSE NULL END AS profile_id,\n         CASE WHEN COUNT(b.terminal_profile_id)=1 AND COUNT(p.id)=1 THEN MIN(b.terminal_instance_id) ELSE NULL END AS terminal_instance_id,\n         CASE WHEN COALESCE(settings.connection_paused, 0)=1 THEN 'paused' ELSE 'offline' END AS bridge_state,\n         CASE WHEN COALESCE(settings.connection_paused, 0)=1 THEN 0 ELSE COALESCE(rs.trade_permission, 0) END AS trade_permission,\n         COALESCE(rs.trade_permission, 0) AS snapshot_trade_permission,\n         COALESCE(settings.connection_paused, 0) AS connection_paused,\n         NULL AS last_seen_at_utc\n  FROM trading_accounts a\n  INNER JOIN trading_account_ownerships o ON o.trading_account_id=a.id AND o.role='owner' AND o.revoked_at_utc IS NULL\n  INNER JOIN trading_account_ownership_intervals oi ON oi.id=o.interval_id AND oi.user_id=o.user_id\n    AND oi.trading_account_id=o.trading_account_id AND oi.role='owner' AND oi.ended_at_utc IS NULL\n    AND oi.started_at_utc=o.granted_at_utc AND oi.started_at_utc<=UTC_TIMESTAMP(3)\n  INNER JOIN users u ON u.id=o.user_id AND u.deletion_status='active' AND u.deleted_at IS NULL\n  LEFT JOIN terminal_account_bindings b ON b.trading_account_id=a.id AND b.unbound_at_utc IS NULL\n  LEFT JOIN terminal_profiles p ON p.id=b.terminal_profile_id AND p.user_id=o.user_id\n    AND p.platform=a.platform AND p.deleted_at_utc IS NULL\n  LEFT JOIN user_trading_account_settings settings ON settings.user_id=o.user_id AND settings.trading_account_id=a.id\n  LEFT JOIN account_runtime_snapshots rs ON rs.trading_account_id=a.id\n  WHERE a.deleted_at_utc IS NULL AND o.revision=a.ownership_revision AND o.user_id=? AND a.id=?\n  GROUP BY a.id,a.platform,a.account_login,a.broker_server,a.currency,o.user_id,o.interval_id,a.ownership_revision,\n    settings.connection_paused,rs.trade_permission",
+      "parameterCount": 2,
+      "status": "schema_blocked",
+      "errno": 1146,
+      "code": "ER_NO_SUCH_TABLE",
+      "detail": "Table 'dev_vue.trading_account_ownerships' doesn't exist"
+    },
+    {
+      "operation": "revision",
+      "sqlHash": "4f6394151b0226a0d3992e4afc137f408724272635d391f281938b47bdcba823",
+      "sql": "SELECT revision FROM trading_projection_revisions WHERE trading_account_id=? AND resource_kind=? AND resource_id=?",
+      "parameterCount": 3,
+      "status": "schema_blocked",
+      "errno": 1146,
+      "code": "ER_NO_SUCH_TABLE",
+      "detail": "Table 'dev_vue.trading_projection_revisions' doesn't exist"
+    }
+  ],
+  "passed": 0,
+  "blocked": 14,
+  "databaseWrites": 0,
+  "businessRowsRead": 0,
+  "scope": "Empty-row fixture captures reached SELECTs only; EXPLAIN does not establish data, authorization, cache, transaction or complete branch readiness. No full module readiness claim."
+}
