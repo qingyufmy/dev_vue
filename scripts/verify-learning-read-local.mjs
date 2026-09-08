@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises'
 import mysql from 'mysql2/promise'
 import Fastify from 'fastify'
 import { loadSettingsMigrationEnvironment, settingsMigrationConnectionOptions } from './lib/settings-migration-environment.mjs'
-import { LearningService, MysqlLearningReader, learningRoutes } from '../server/dist-v4/modules/learning/index.js'
+import { createMysqlLearningService, createLearningHttp } from '../server/dist-v4/modules/learning/composition.js'
 import { MysqlLearningMembershipReader } from '../server/dist-v4/modules/commerce/index.js'
 import { requireBackfill as check } from './lib/v4-backfill-contract.mjs'
 
@@ -24,14 +24,15 @@ try {
   const ajv = new Ajv({ strict: false, formats: { 'date-time': true, uri: true } })
   const schema = name => ({ ...contract.components.schemas[name], components: { schemas: { LearningCourse: contract.components.schemas.LearningCourse } } })
   const validateList = ajv.compile(schema('LearningListResponse')), validateDetail = ajv.compile(schema('LearningDetailResponse'))
-  const service = new LearningService(new MysqlLearningReader(connection), new MysqlLearningMembershipReader(connection))
+  const service = createMysqlLearningService(connection, new MysqlLearningMembershipReader(connection))
   const [counts] = await connection.query("SELECT COUNT(*) total FROM learning_courses WHERE status='published'")
   let cursor, courses = []
   do { const page = await service.list(cursor); courses.push(...page.items); cursor = page.next_cursor ?? undefined } while (cursor)
   check(courses.length === Number(counts[0].total), 'learning_probe_course_count')
   app = Fastify()
-  await app.register(learningRoutes, { prefix: '/api/v4', service, wwwOrigin: 'https://learning.local.test',
-    auth: { cookieName: () => 'probe_www_session', resolveSession: async () => { throw Error('probe_real_session_not_enabled') } } })
+  await app.register(createLearningHttp({ read: service },
+    { cookieName: () => 'probe_www_session', resolveSession: async () => { throw Error('probe_real_session_not_enabled') } },
+    { wwwOrigin: 'https://learning.local.test' }))
   const response = await app.inject({ url: '/api/v4/learning/courses', headers: { host: 'learning.local.test' } })
   check(validateList(response.json()), 'learning_probe_list_contract')
   check(response.statusCode === 200 && response.json().data.items.length === Math.min(courses.length, 20), 'learning_probe_http_list')

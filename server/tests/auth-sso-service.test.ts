@@ -1,7 +1,8 @@
 import Fastify from 'fastify'
 import { Ajv2020 } from 'ajv/dist/2020.js'
 import { createRequire } from 'node:module'
-import { LearningService, learningRoutes, LearningCompletionService, learningCompletionRoutes } from '../src/modules/learning/index.js'
+import { LearningService, LearningCompletionService } from '../src/modules/learning/index.js'
+import { createLearningHttp } from '../src/modules/learning/composition.js'
 import { generateKeyPairSync, verify } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
@@ -300,15 +301,15 @@ describe('SSO V4 HTTP routes', () => {
     }, { activePlan: async () => 'free' })
     try {
       await www.register(appSessionRoutes, { service, surface: 'www', secureCookies })
-      await www.register(learningRoutes, { prefix: '/api/v4', service: learning, auth: service, wwwOrigin: 'https://www.example.test', secureCookies })
       let savedCount = 0
       let invalidCompletionResponse = false
-      await www.register(learningCompletionRoutes, { prefix: '/api/v4', auth: service, wwwOrigin: 'https://www.example.test', secureCookies,
-        service: new LearningCompletionService({ execute: async command => {
+      await www.register(createLearningHttp({ read: learning,
+        completion: new LearningCompletionService({ execute: async command => {
           savedCount++
           expect(command.userId).toBe(7)
           return { lesson_id: command.lessonId, completed: command.completed, revision: '2', updated_at: invalidCompletionResponse ? 'private-invalid-date' : '2026-09-07T01:00:00.123Z', replayed: false }
-        } }) })
+        } }),
+      }, service, { wwwOrigin: 'https://www.example.test', secureCookies }))
       await auth.register(authCenterRoutes, { service, secureCookies })
       const detail = (cookie?: string) => www.inject({ url: '/api/v4/learning/courses/12', headers: { host: 'www.example.test', ...(cookie ? { cookie } : {}) } })
       expect((await detail()).json().data.access).toBe('login_required')

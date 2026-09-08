@@ -1326,58 +1326,6 @@
     {
       "finding": {
         "rule": "public-implementation-export",
-        "source": "server/src/modules/learning/index.ts",
-        "target": "server/src/modules/learning/infrastructure/mysql-learning-completion.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "learning",
-      "phase": "P6",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/learning/index.ts",
-        "target": "server/src/modules/learning/infrastructure/mysql-learning-reader.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "learning",
-      "phase": "P6",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/learning/index.ts",
-        "target": "server/src/modules/learning/transport/http/learning-completion-routes.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "learning",
-      "phase": "P6",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/learning/index.ts",
-        "target": "server/src/modules/learning/transport/http/learning-routes.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "learning",
-      "phase": "P6",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
         "source": "server/src/modules/reviews/index.ts",
         "target": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
         "kind": "export",

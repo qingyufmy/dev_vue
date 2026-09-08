@@ -1,4 +1,3 @@
-import { learningRoutes, learningCompletionRoutes, type LearningService, type LearningCompletionService } from '../modules/learning/index.js'
 import { settingRoutes,adminSettingReadRoutes,type AdminSettingReader,type SettingManagementService } from '../modules/settings/management.js'
 import { referralRuleRoutes, type ReferralRuleManagementService } from '../modules/commerce/index.js'
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
@@ -19,8 +18,7 @@ import {
 } from '../modules/trading/index.js'
 
 export interface ApiV4RouteServices {
-  learning?: LearningService
-  learningCompletion?: LearningCompletionService
+  learningHttp?: FastifyPluginAsync
   auth: AuthService
   authHttp: FastifyPluginAsync
   bridgeCredentials: BridgeCredentialService
@@ -47,16 +45,9 @@ export interface ApiV4RouteServices {
 export async function registerApiV4Routes(
   fastify: FastifyInstance,
   services: ApiV4RouteServices,
-  input: { tradeOrigin: string; adminOrigin: string; wwwOrigin?: string; secureCookies: boolean },
+  input: { tradeOrigin: string; adminOrigin: string },
 ) {
-  if (services.learningCompletion) {
-    if (!input.wwwOrigin) throw new Error('learning_www_origin_required')
-    await fastify.register(learningCompletionRoutes, { prefix: '/api/v4', service: services.learningCompletion, auth: services.auth, wwwOrigin: input.wwwOrigin, secureCookies: input.secureCookies })
-  }
-  if (services.learning) {
-    if (!input.wwwOrigin) throw new Error('learning_www_origin_required')
-    await fastify.register(learningRoutes, { prefix: '/api/v4', service: services.learning, auth: services.auth, wwwOrigin: input.wwwOrigin, secureCookies: input.secureCookies })
-  }
+  if (services.learningHttp) await fastify.register(services.learningHttp)
   await fastify.register(services.authHttp)
   await fastify.register(async admin => {
     admin.addHook('onRequest', exactAdminHostHook(input.adminOrigin))

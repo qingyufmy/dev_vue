@@ -3,7 +3,7 @@ import type { CourseSummary, LearningReader, Lesson } from '../domain/learning.j
 const fields = `CAST(id AS CHAR) id,title,description,category_key category,access_level,
   CONCAT(LEFT(DATE_FORMAT(updated_at_utc,'%Y-%m-%dT%H:%i:%s.%f'),23),'Z') updated_at,COALESCE(sort_order,0) sort_order`
 export class MysqlLearningReader implements LearningReader {
-  constructor(private readonly pool: Pool) {}
+  constructor(private readonly pool: Pick<Pool, 'execute' | 'query'>) {}
   async list(after: { order: number; id: string } | null, limit: number) {
     const [rows] = await this.pool.query<(RowDataPacket & CourseSummary)[]>(`SELECT ${fields.replace('title,description,', 'title,LEFT(description,240) description,')} FROM learning_courses WHERE status='published'
       ${after ? 'AND (COALESCE(sort_order,0)>? OR (COALESCE(sort_order,0)=? AND id>?))' : ''}

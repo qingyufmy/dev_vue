@@ -145,7 +145,7 @@ describe('V4 browser realtime runtime', () => {
     services.auditHttp = createAuditModule({ ownsAccount: async () => false,
       list: async () => { throw new Error('forbidden audit must not query') }, find: async () => null,
     }, { authenticate: async () => ({ userId: 7 }) }).http
-    await registerApiV4Routes(app, services, { tradeOrigin: 'https://trade.example.test', adminOrigin: 'https://admin.example.test', secureCookies: false })
+    await registerApiV4Routes(app, services, { tradeOrigin: 'https://trade.example.test', adminOrigin: 'https://admin.example.test' })
     await app.ready()
     for (const route of [
       ['GET', '/oauth/authorize'], ['POST', '/api/v4/realtime/tickets'],

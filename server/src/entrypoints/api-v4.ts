@@ -1,4 +1,4 @@
-import { LearningService, MysqlLearningReader, LearningCompletionService, MysqlLearningCompletion } from '../modules/learning/index.js'
+import { createMysqlLearningService, createMysqlLearningCompletionService, createLearningHttp } from '../modules/learning/composition.js'
 import { MysqlLearningMembershipReader } from '../modules/commerce/index.js'
 import { validateSettingMenu,AdminSettingReader,MysqlAdminSettingReader,SettingManagementService,MysqlSettingManagement } from '../modules/settings/management.js'
 import { ReferralRuleManagementService, MysqlReferralRuleManagement } from '../modules/commerce/index.js'
@@ -52,8 +52,10 @@ async function main() {
   await registerApiV4Routes(app, {
     auth,
     authHttp: createAuthHttp(auth, web.secureCookies),
-    learning: new LearningService(new MysqlLearningReader(pool), new MysqlLearningMembershipReader(pool)),
-    learningCompletion: new LearningCompletionService(new MysqlLearningCompletion(pool, MysqlLearningMembershipReader.forTransaction)),
+    learningHttp: createLearningHttp({
+      read: createMysqlLearningService(pool, new MysqlLearningMembershipReader(pool)),
+      completion: createMysqlLearningCompletionService(pool, MysqlLearningMembershipReader.forTransaction),
+    }, auth, { wwwOrigin: web.auth.wwwOrigin, secureCookies: web.secureCookies }),
     bridgePairing: new BridgePairingService(new MysqlBridgePairingRepository(pool)),
     bridgeCredentials: new BridgeCredentialService(
       new MysqlBridgeCredentialRepository(pool),
@@ -76,7 +78,7 @@ async function main() {
     referralRules: new ReferralRuleManagementService(new MysqlReferralRuleManagement(pool)),
     observerManagement: new ObserverManagementService(new MysqlObserverManagementRepository(pool)),
     observerAdminAuth: new AuthObserverAdminAdapter(auth),
-  }, { wwwOrigin: web.auth.wwwOrigin, tradeOrigin: web.auth.tradeOrigin, adminOrigin: web.auth.adminOrigin, secureCookies: web.secureCookies })
+  }, { tradeOrigin: web.auth.tradeOrigin, adminOrigin: web.auth.adminOrigin })
 
   app.get('/health/live', async () => ({ status: 'ok', ...health.snapshot() }))
   app.get('/health/ready', async (_request, reply) => {
