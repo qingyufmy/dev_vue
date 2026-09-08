@@ -1,5 +1,7 @@
 # 数据库结构优化与全面规范化实施方案
 
+> 最新状态：阶段196完成5个基础外键和2个自动辅助索引，当前144步、222表、789索引、104外键，271337行业务数据不变。两组孤立用户引用保留，随业务迁移承接。验收：[阶段196](migration/dev-vue-inplace-stage196-20260908.md)、[目录v8](migration/dev-vue-structure-remaining-work-20260908-v8.json)。整体规范化继续推进。
+
 > 最新状态：阶段195完成6个运行索引，当前139步、222表、787索引，271337行业务数据保持。139个既有目标显式索引签名中120匹配、2个保留已有唯一索引、17个依赖根缺列。验收：[阶段195](migration/dev-vue-inplace-stage195-20260908.md)、[目录v7](migration/dev-vue-structure-remaining-work-20260908-v7.json)。全域规范化继续推进。
 
 > 最新状态：阶段194已完成模型归属和额度单例CHECK，当前133步、222表、117个CHECK，271337行业务数据不变。约束真实拒绝、中断恢复和重复执行通过；全域规范化仍在推进。验收：[阶段194](migration/dev-vue-inplace-stage194-20260908.md)、[目录v6](migration/dev-vue-structure-remaining-work-20260908-v6.json)。

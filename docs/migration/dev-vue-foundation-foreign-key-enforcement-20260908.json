@@ -1,0 +1,34 @@
+{
+  "kind": "foundation-foreign-key-enforcement/v1",
+  "identity": {
+    "db": "dev_vue_m1_source_20260907_02",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "schemaSteps": 144,
+  "rejected": [
+    {
+      "name": "fk_v4_bridge_refresh_user",
+      "code": "ER_NO_REFERENCED_ROW_2"
+    },
+    {
+      "name": "fk_v4_model_default_profile",
+      "code": "ER_NO_REFERENCED_ROW_2"
+    },
+    {
+      "name": "fk_v4_capabilities_profile",
+      "code": "ER_NO_REFERENCED_ROW_2"
+    },
+    {
+      "name": "fk_v4_capabilities_verifier",
+      "code": "ER_NO_REFERENCED_ROW_2"
+    },
+    {
+      "name": "fk_v4_model_usage_profile",
+      "code": "ER_NO_REFERENCED_ROW_2"
+    }
+  ],
+  "allTransactionsRolledBack": true,
+  "allBusinessDataSchemaCountersUnchanged": true,
+  "currentDevVueWritten": false,
+  "grantsRestored": true
+}
