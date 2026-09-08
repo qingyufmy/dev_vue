@@ -6,7 +6,7 @@ import { loadSettingsMigrationEnvironment, settingsMigrationConnectionOptions } 
 import { loadMigrationPlan, sha256 } from './lib/v4-migration-plan.mjs'
 import { plannedColumns, matrixRows } from './lib/v4-upgrade-review.mjs'
 import { reviewTableDependencies } from './lib/inplace-table-dependencies.mjs'
-import { loadColumnConstraintsCoordinator } from './lib/inplace-column-constraints-schema.mjs'
+import { loadDefaultNormalizationCoordinator } from './lib/inplace-default-normalization-schema.mjs'
 import { coordinateInplaceSchema } from './lib/inplace-schema-coordinator.mjs'
 import { withInplaceUpgradeLock, verifyInplaceJournal } from './lib/mysql-inplace-column-store.mjs'
 import { databaseTypeToken, defaultDifference } from './lib/database-structure-comparison.mjs'
@@ -31,9 +31,9 @@ try {
     await connection.query('START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY')
     try {
       check(await verifyInplaceJournal(connection), 'journal')
-      const coordinator = await loadColumnConstraintsCoordinator(root)
+      const coordinator = await loadDefaultNormalizationCoordinator(root)
       const schema = await coordinateInplaceSchema(coordinator.store(connection), coordinator)
-      check(schema.structureComplete && schema.steps.length === 114, 'schema_steps')
+      check(schema.structureComplete && schema.steps.length === 131, 'schema_steps')
       const collect = async () => {
         const query = async sql => (await connection.query(sql))[0]
         const tables = await query('SELECT TABLE_NAME table_name,TABLE_TYPE table_type,ENGINE engine,TABLE_COLLATION collation FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME')
