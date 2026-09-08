@@ -1,0 +1,14 @@
+{
+  "kind": "account-root-promotion-rehearsal/v1",
+  "observedAt": "2026-09-08T07:31:50.724Z",
+  "target": "dev_vue_m1_source_20260907_02",
+  "mode": "promoted",
+  "planHash": "398c7082eab238f5ab612dc82ad64377377a040f118681225f4de8bd3071d64a",
+  "ddlCount": 1,
+  "finalFingerprint": "3eac62447c6778a3c205e4046f097f62e126f75d28c8f3b8bb33e374071ea5b6",
+  "tables": 222,
+  "legacySubscriptionParent": "trading_accounts_legacy_v3",
+  "lostResponseReconciled": true,
+  "currentDevVueWritten": false,
+  "scope": "Restored-database experiment, not registered current dev_vue migration; restore requires all original row and DDL fingerprints unchanged."
+}

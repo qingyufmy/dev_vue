@@ -316,3 +316,13 @@ SSO的两种Cookie课程解锁与完成写入用例改经实际HTTP工厂；学�
 7项状态/冲突/未知结果/重复恢复测试及真实MySQL演练通过。最终证据为[提升](architecture/account-root-promotion-rehearsal-20260908-v2.json)、[恢复](architecture/account-root-restoration-rehearsal-20260908-v2.json)、[重复恢复](architecture/account-root-restoration-repeat-20260908.json)与对应plan文件。早期中间演练回执已清理。
 
 这仍是恢复副本实验，未改当前dev_vue、未追加迁移记录，也未启用运行服务。下一步把已验证的多表转换纳入正式追加迁移与提升后结构检查，保持旧147步checksum及旧引用可追溯。
+
+## 第三十五批：提升后历史结构只读适配
+
+新增account-root-historical-schema.mjs，将固定5表的元数据读取映射到提升后的物理表；只还原SHOW CREATE表头及外键目标，其余列、约束、表达式和字符串保持。连接适配仅允许固定元数据读取，所有DDL/DML、任意查询和日志写入均拒绝；要求旧日志完整且checksum正确，不过滤未知记录。
+
+在恢复副本再次实际提升后，通过[完整147步检查](architecture/account-root-historical-schema-verification-20260908.json)，不是仅模拟表名或检查存在性。旧订阅外键实际指向legacy根；随后独立进程[恢复](architecture/account-root-historical-validation-restoration-20260908.json)并核对222表完整DDL/数据摘要。此次[提升回执](architecture/account-root-historical-validation-promotion-20260908.json)引用同一冻结planHash，重复计划文件核对完全一致后删除。当前dev_vue未改，SSH隧道已关闭。
+
+8项新适配测试、36项原协调器测试、4项订阅外键测试通过；另7项提升/恢复测试通过。两轮复审见账户根设计，验证覆盖未知SQL拒绝、混合布局、陌生或错误日志和字段漂移，未修改旧147步SQL/checksum。
+
+这完成正式切换的历史结构校验前置能力；正式追加步骤、完整新日志校验、停写与软引用审查，以及当前库应用和全栈账户流程仍未完成。

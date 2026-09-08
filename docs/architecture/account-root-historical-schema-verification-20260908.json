@@ -1,0 +1,27 @@
+{
+  "kind": "account-root-historical-schema-verification/v1",
+  "observedAt": "2026-09-08T07:31:51.143Z",
+  "target": "dev_vue_m1_source_20260907_02",
+  "physicalState": "promoted",
+  "priorSteps": 147,
+  "priorRegistryHash": "6bd9b37a155323eeda3bc8e36cfb0e7f8beaf7743a6e92cbe3f9dc7e3040ef59",
+  "priorStructureComplete": true,
+  "legacySubscriptionParent": "trading_accounts_legacy_v3",
+  "tools": [
+    {
+      "path": "scripts/verify-account-root-historical-local.mjs",
+      "sha256": "1453738237a420227a1637870f98052731e85228f968a434e8142e172ca935bd"
+    },
+    {
+      "path": "scripts/lib/account-root-historical-schema.mjs",
+      "sha256": "9c33ce6c0549a0fa501bda468e14e25cf57e9872e47b0452e64635dde0404c99"
+    },
+    {
+      "path": "scripts/lib/account-root-promotion.mjs",
+      "sha256": "ef42c28c706e13df6f8470b7214eb43620ee8d6ffc3e45509d6577d02f55e795"
+    }
+  ],
+  "databaseWrites": 0,
+  "currentDevVueWritten": false,
+  "scope": "Read-only verification of the prior registry against physically promoted restored tables; not a registered promotion migration."
+}
