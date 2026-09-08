@@ -744,3 +744,14 @@ inference 业务 index 不再导出 HTTP 模型网关或 MySQL 凭据目录。co
 15 项模型运行/复盘回归通过，新增用替身 SQL 验证的策略作用域回归：分析与交易拒绝非活动策略，冻结复盘继续解析历史策略的模型。server 类型检查、构建和 API 生成运行检查通过，321 个冻结输入一致；精确移除两个已解决导出记录，服务端债务 66→64，无新增或陈旧记录。未调用模型、连接数据库或启动 Worker；测试不代表真实模型结算与完整复盘联调。
 
 当前推理组装工作包完成；inference 尚有其它登记依赖，跨域物理 SQL 也未全部收口。下一批按接续方案回到账户全栈样板，核对数据所有权、结构能力与正向浏览器流程，不以本批组装通过宣称 P4 或整体完成。
+
+
+## 57. 账户上下文真实 HTTP 命令验证（第一百二十七批）
+
+本地 API 已由旧进程更新为 b90d18e2 构建，使用可见 PowerShell 41152 承载 Node 33328、3010 端口；保留本地 Redis 与现有开发 MySQL 配置。本次未启动 Worker、Bridge 或执行交易。进程号仅为本次回执，后续需重新核验。
+
+verify-local-account-sso.mjs 新增显式 --context-commands 模式，默认登录只读模式保持。独立命令检查模块只在合成用户认证且账户/观摩/终端档案目录为空后运行。真实代理/API/Redis/MySQL 14 项检查通过：CSRF 拒绝不写入、提交与同键重放、UTC 回执、异体幂等冲突、旧版本拒绝、并发同键单版本、并发不同键单赢家，以及历史回执不覆盖当前上下文；两个新会话均撤销且旧 Cookie 重放返回 401。
+
+证据：architecture/local-account-context-http-20260909.json。合成用户上下文 revision 0→3，三个命令审计回执与上下文保留，未修改账户/归属/交易事实。测试是实际 blocked 上下文命令；不证明选中真实拥有账户、进入观摩频道、浏览器恢复、MySQL commit ACK 丢失或终端执行。另有当前 API 基础 smoke 回执 architecture/local-account-api-current-20260909.json。脚本语法与321个冻结输入检查通过，无应用源码或结构迁移变更。
+
+数据依赖核对：MysqlContextCommands 拥有 trading_contexts/trading_context_changes_v4 的同事务写入，先经 auth ActivePrincipalAccess 锁定用户；mysql-context-receipts 的 users EXISTS 与 mysql-context-target 的 users/账户归属联查仍有物理跨域 SQL。下一步继续按所有者能力及一致性要求收口，不把公开入口移除等同 SQL 所有权完成。账户/观摩正向夹具和浏览器联调继续保留为 P1 缺口。

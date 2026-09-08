@@ -1,11 +1,13 @@
+import { verifyLocalContextCommands } from './lib/local-context-command-checks.mjs'
 import assert from 'node:assert/strict'
 import { open, readFile } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import http from 'node:http'
 
 // Requires a private, explicitly provisioned synthetic user; never accepts real credentials on argv.
-const [fixturePath, destination] = process.argv.slice(2)
-assert.ok(process.argv.length === 4 && isAbsolute(fixturePath) && isAbsolute(destination) && fixturePath !== destination)
+const [fixturePath, destination, mode] = process.argv.slice(2)
+const contextCommands = mode === '--context-commands'
+assert.ok((contextCommands ? process.argv.length === 5 : process.argv.length === 4 && mode === undefined) && isAbsolute(fixturePath) && isAbsolute(destination) && fixturePath !== destination)
 const fixture = JSON.parse(await readFile(fixturePath, 'utf8'))
 assert.equal(fixture.kind, 'local-account-fixture/v1')
 assert.equal(fixture.identity.db, 'dev_vue')
@@ -14,15 +16,16 @@ assert.ok(Number.isSafeInteger(fixture.userId) && fixture.userId > 0 && fixture.
 const output = await open(destination, 'wx', 0o600)
 const sessions = new Map()
 const checks = []
-let phase = 'start', failed = false
+let phase = 'start', failed = false, contextResult = null
 
-function request(port, path, body, csrf) {
+function request(port, path, body, csrf, options = {}) {
   return new Promise((resolve, reject) => {
     const data = body === undefined ? null : JSON.stringify(body)
-    const req = http.request({ host: '127.0.0.1', port, path, method: data === null ? 'GET' : 'POST',
-      headers: { Host: `localhost:${port}`, ...(sessions.has(port) ? { Cookie: sessions.get(port) } : {}),
+    const req = http.request({ host: '127.0.0.1', port, path, method: options.method ?? (data === null ? 'GET' : 'POST'),
+      headers: { Host: `localhost:${port}`, ...(options.headers ?? {}), ...(sessions.has(port) ? { Cookie: sessions.get(port) } : {}),
         ...(csrf ? { 'X-CSRF-Token': csrf } : {}),
-        ...(data === null ? {} : { Origin: `http://localhost:${port}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) }) } }, res => {
+        ...((options.method && options.method !== 'GET') || data !== null ? { Origin: `http://localhost:${port}` } : {}),
+        ...(data === null ? {} : { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) }) } }, res => {
       const chunks = []; let length = 0
       res.on('error', reject)
       res.on('data', chunk => { length += chunk.length; if (length > 1048576) res.destroy(Error('response_budget')); else chunks.push(chunk) })
@@ -71,6 +74,10 @@ try {
     assert.equal(result.status, 200); assert.deepEqual(result.body.data.items, [])
     checks.push({ name: path, status: 200, items: 0 })
   }
+  if (contextCommands) {
+    phase = 'context-commands'
+    contextResult = await verifyLocalContextCommands(request, fixture.userId, checks)
+  }
 } catch {
   failed = true
 } finally {
@@ -89,8 +96,8 @@ try {
       checks.push({ name: `session-revocation-${port}`, logoutStatus: 204, replayStatus: 401 })
     } catch { failed = true; checks.push({ name: `session-revocation-${port}`, failed: true }) }
   }
-  const report = { kind: 'local-account-sso/v1', observedAt: new Date().toISOString(), failed, phase, checks,
-    scope: 'Real local Vite proxies, API, Redis and development MySQL using an existing synthetic user. Empty account reads only; no positive account/observer, browser, terminal or trading proof. Own sessions revoked; fixture and audit history retained.' }
+  const report = { kind: contextCommands ? 'local-account-context-http/v1' : 'local-account-sso/v1', observedAt: new Date().toISOString(), failed, phase, checks, contextResult,
+    scope: contextCommands ? 'Real local proxies/API/Redis/development MySQL: synthetic user blocked-context commands, replay, concurrency, CSRF and receipt reads. Context revisions and audit receipts retained; own sessions revoked. No positive owned-account/observer-channel, browser, lost MySQL commit ACK or terminal proof.' : 'Real local Vite proxies, API, Redis and development MySQL using an existing synthetic user. Empty account reads only; no positive account/observer, browser, terminal or trading proof. Own sessions revoked; fixture and audit history retained.' }
   await output.writeFile(JSON.stringify(report, null, 2) + '\n'); await output.sync(); await output.close()
   console.log(JSON.stringify({ failed, phase, checks: checks.length }))
   if (failed) process.exitCode = 1

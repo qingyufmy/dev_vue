@@ -1,0 +1,77 @@
+{
+  "kind": "local-account-context-http/v1",
+  "observedAt": "2026-09-08T17:52:59.494Z",
+  "failed": false,
+  "phase": "context-commands",
+  "checks": [
+    {
+      "name": "password-login-through-auth-proxy",
+      "status": 200
+    },
+    {
+      "name": "code-exchange-through-trade-proxy",
+      "status": 302
+    },
+    {
+      "name": "authenticated-session-string-user-id",
+      "status": 200
+    },
+    {
+      "name": "/api/v4/trading-accounts",
+      "status": 200,
+      "items": 0
+    },
+    {
+      "name": "/api/v4/observer-channels",
+      "status": 200,
+      "items": 0
+    },
+    {
+      "name": "/api/v4/bridge/terminal-profiles",
+      "status": 200,
+      "items": 0
+    },
+    {
+      "name": "missing-csrf-does-not-write",
+      "passed": true
+    },
+    {
+      "name": "commit-replay-and-utc-receipt",
+      "passed": true
+    },
+    {
+      "name": "changed-body-and-stale-revision-rejected",
+      "passed": true
+    },
+    {
+      "name": "concurrent-same-key-one-revision",
+      "passed": true
+    },
+    {
+      "name": "concurrent-different-keys-one-winner",
+      "passed": true
+    },
+    {
+      "name": "historical-receipt-kept-separate-from-current-context",
+      "passed": true
+    },
+    {
+      "name": "session-revocation-4174",
+      "logoutStatus": 204,
+      "replayStatus": 401
+    },
+    {
+      "name": "session-revocation-4176",
+      "logoutStatus": 204,
+      "replayStatus": 401
+    }
+  ],
+  "contextResult": {
+    "priorRevision": "0",
+    "finalRevision": "3",
+    "committedCommands": 3,
+    "retained": "synthetic-user context and audit receipts",
+    "businessAccountWrites": 0
+  },
+  "scope": "Real local proxies/API/Redis/development MySQL: synthetic user blocked-context commands, replay, concurrency, CSRF and receipt reads. Context revisions and audit receipts retained; own sessions revoked. No positive owned-account/observer-channel, browser, lost MySQL commit ACK or terminal proof."
+}

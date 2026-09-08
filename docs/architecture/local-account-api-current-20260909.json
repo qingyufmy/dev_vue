@@ -1,0 +1,50 @@
+{
+  "kind": "local-account-api-smoke/v1",
+  "observedAt": "2026-09-08T17:53:45.935Z",
+  "redis": {
+    "host": "127.0.0.1",
+    "port": 16379,
+    "version": "8.2.6",
+    "ping": "PONG"
+  },
+  "api": "http://127.0.0.1:3010",
+  "checks": [
+    {
+      "name": "/health/live",
+      "status": 200
+    },
+    {
+      "name": "/health/ready",
+      "status": 200
+    },
+    {
+      "name": "auth-discovery",
+      "status": 200
+    },
+    {
+      "name": "public-signing-key",
+      "status": 200,
+      "privateMaterial": false
+    },
+    {
+      "name": "wrong-auth-host",
+      "status": 404
+    },
+    {
+      "name": "anonymous-trade-session",
+      "status": 401
+    },
+    {
+      "name": "trade-login-start",
+      "status": 302,
+      "redisTransactionPresent": true
+    },
+    {
+      "name": "nonexistent-credentials",
+      "status": 401,
+      "sessionCookieCreated": false
+    }
+  ],
+  "ownLoginTransactionRemoved": true,
+  "scope": "Real local API, local Redis and configured development MySQL. No successful login, browser flow, account selection, observer grant or terminal execution proof."
+}
