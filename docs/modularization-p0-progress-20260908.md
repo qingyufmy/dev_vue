@@ -718,3 +718,9 @@ HTTP和生产组装已切换到ContextWritePort，移除读取接口、应用服
 新增review-current-dev-vue-upgrade-local.mjs，从.env连接当前库，只读一致性事务内调用147步旧协调器验证结构，逐项匹配目标165步注册前缀；重复读取日志和表清单，输出不可覆盖的独立回执。实测当前UUID匹配、MySQL8.4.8、222表、147步全部完成，旧账户4行、归属历史274行、四张账户构建表均0行；307项冻结工具摘要通过。未执行数据库写入。
 
 [接入方案](architecture/current-dev-vue-upgrade-plan-20260908.md)记录账户回填→035–038→K线回填/提升→041→本地真实联合验收的依赖、两轮复核和剩余风险。现有恢复副本入口及旧Linux备份入口不能直接替换目标使用；后续补当前库manifest、备份/恢复和各段proof链。实际只读入口成功退出；当前库仍未升级，不将观察报告当作apply proof。
+
+## 第八十一批：当前库账户波次数据准备
+
+新增当前库专属只读CLI与可复用准备模块，实测222张表数据/DDL、147条日志、309项工具及全部源输入摘要，4行账户→3实体、274归属区间→4授权投影。输出稳定批次ID与转换摘要，不含源行正文，不复用恢复副本targetIdentity。实际执行成功、数据库写入0；27项映射/转换/写入器回归通过。
+
+清单见[current-account-wave-preparation](architecture/current-account-wave-preparation-20260908.json)，manifest仍禁止apply，备份恢复、停写与执行前重验继续。当前数据库仍147步，账户构建表未写入。
