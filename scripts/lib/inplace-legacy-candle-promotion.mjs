@@ -24,7 +24,7 @@ export function prepareLegacyCandlePromotionProof(plan, identity, tables, backfi
   return { ...body, proofHash: hash(body) }
 }
 
-function validateProof(proof, plan, identity) {
+export function validateLegacyCandlePromotionProof(proof, plan, identity) {
   const { proofHash, ...body } = proof ?? {}
   check(body.kind === 'legacy-candle-promotion-proof/v1' && hash(body) === proofHash, 'proof_hash')
   check(hash(body.identity) === hash(identity) && body.stepChecksum === plan.step.checksum && body.priorRegistryHash === plan.priorRegistryHash, 'proof_binding')
@@ -54,7 +54,7 @@ export async function coordinateLegacyCandlePromotion(store, plan, { apply = fal
   const history = await store.history(), validated = validateColumnHistory(history, plan.steps)
   check(plan.prior.steps.every(step => validated.get(step.id)?.status === 'completed'), 'prior_incomplete')
   const proof = await store.proof()
-  validateProof(proof, plan, await store.identity())
+  validateLegacyCandlePromotionProof(proof, plan, await store.identity())
   await store.verifyTools(proof.tools)
   await store.verifyBackfillProof(proof.backfillProofHash)
   const ids = new Set(plan.prior.steps.map(step => step.id)), priorHistory = history.filter(row => ids.has(row.id))

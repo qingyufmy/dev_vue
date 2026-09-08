@@ -1,0 +1,51 @@
+{
+  "kind": "legacy-candle-promotion-rehearsal/v1",
+  "observedAt": "2026-09-08T11:07:24.395Z",
+  "identity": {
+    "database": "dev_vue_m1_source_20260907_02",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "mode": "--apply-lost-ddl-restored-only",
+  "result": {
+    "status": "ddl-unknown-injected",
+    "ddlCount": 1
+  },
+  "registrySteps": 164,
+  "proofHash": "ac5a0f8a0948a24985835a7fbb5c9f556598df03865aeb41636f78749626e22c",
+  "backfillProofHash": "90f2c20dbc380883a1349cb82953f10353c60de7fa9cab60089f8f8d49f0f0d4",
+  "tableCount": 237,
+  "snapshotHash": "1f105861a23ddce6ec4242993c1b200636707116106c046754190b36542ac4f7",
+  "priorHistoryHash": "b54145b32b179e8894252bc809e81171a916252e932ab0262008a5daf2701753",
+  "candleTables": [
+    {
+      "name": "legacy_candle_backfill_v4",
+      "ddlSha256": "8c0dcc0337fc9006c4ed54061c69b5e9f795aec1177c013d94e25f5f2f5811c5",
+      "schemaSha256": "8c0dcc0337fc9006c4ed54061c69b5e9f795aec1177c013d94e25f5f2f5811c5",
+      "rows": 1,
+      "rowsSha256": "bdb68383e82f58259a2794ee4a04865c284fe1e2f95704a52c7b10336d79575c"
+    },
+    {
+      "name": "legacy_candle_mappings_v4",
+      "ddlSha256": "bdfe52191ba46388b93ac4e1c2e34b9a4710e0b80785e6b0cd5438545722e88e",
+      "schemaSha256": "bdfe52191ba46388b93ac4e1c2e34b9a4710e0b80785e6b0cd5438545722e88e",
+      "rows": 35725,
+      "rowsSha256": "4e6021289ed34554d469c012dde6d8c040617cea73ffa422fc04b759e1fe6783"
+    },
+    {
+      "name": "market_candles",
+      "ddlSha256": "b636fc5b2a48c8529d881f6db7ebf128337b377cd4c0e1fc3dda8641ec71258c",
+      "schemaSha256": "b636fc5b2a48c8529d881f6db7ebf128337b377cd4c0e1fc3dda8641ec71258c",
+      "rows": 30226,
+      "rowsSha256": "741d2e96ab908641ed074de7dbbd1f7a5211d1bda30808e830707a2b0b4d6465"
+    },
+    {
+      "name": "market_candles_legacy_v3",
+      "ddlSha256": "f28e9e400794e2dd88f358695bb4c647104761b91abe787fb67d4c02312ab0ff",
+      "schemaSha256": "e8f4ae8d0246ceefb7f142b3d67a3296be7a742ff39ac420fb007963a9c6890a",
+      "rows": 35725,
+      "rowsSha256": "f9c30411b9b1a0a1192fef1eebfcf90188bd9335e78ea6ec2407b53a11e05863"
+    }
+  ],
+  "currentDevVueWritten": false,
+  "scope": "Restored database promotion only; all rows and registered history retained. No application or production cutover."
+}

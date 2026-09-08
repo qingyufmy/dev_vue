@@ -610,3 +610,12 @@ loadObserverContextMigration复用完整150步并追加四项checksum，总定�
 6项新组合测试及已有元数据/提升测试共25项通过，覆盖实际旧SHOW CREATE调用、三类schema漂移、混合布局、日志缺失/陌生日志及规范定义变化。两轮复核见[合同](architecture/account-projection-incremental-contract-20260908.md)。本批未连接数据库；恢复副本最近完成163步及全量回填，尚未改名。
 
 下一步MySQL提升proof与执行入口，核对已验证回填的前后快照，执行恢复副本163→164和独立重入，再检查账户查询。
+
+
+## 第六十六批：恢复副本K线提升与非空读取
+
+恢复副本完成164步，真实改名确认丢失后独立恢复并重入0 DDL；237表快照和旧163条日志保持合同要求，旧35725行保留，35725映射对应30226投影。299项冻结工具当前比对一致，28项相关Vitest测试通过。详见[合同记录](architecture/account-projection-incremental-contract-20260908.md)及legacy-candle-promotion五阶段回执。
+
+14条账户查询EXPLAIN通过。使用实际createMysqlPool连接的非空读取验证覆盖2账户11组220条样本，与独立SQL UTC字符串和精确价格逐项内容摘要一致。此前8小时差异来自探针dateStrings配置，与应用Date合同不一致；修正探针后通过，服务端及历史UTC不变。见[非空读取报告](architecture/promoted-candle-reader-probe-20260908.json)。服务端构建通过，边界债务110、运行校验3项仍未全量收口。
+
+当前dev_vue本批未写入。下一步按方案B推进账户全栈样板的公开端口、HTTP合同与前端账户/观摩流程，并准备C当前库专属升级；真实流程最终验收仍依赖C。本批结果不代表权限、实时、浏览器或交易执行验证。

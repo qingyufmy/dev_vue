@@ -1,0 +1,118 @@
+{
+  "kind": "promoted-candle-reader-probe/v1",
+  "observedAt": "2026-09-08T11:16:38.309Z",
+  "identity": {
+    "databaseName": "dev_vue_m1_source_20260907_02",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "sourceHash": "4d4060296d74dd6fe8a370b74e2561f9e73e04188e7c0cfe025befdf3215bf63",
+  "runtimeHash": "8d1b334a4e67d0b16f5c52351f8422d3e08bbb3fd491bb2ff260ea8b5fcf49f9",
+  "connectionFactory": "createMysqlPool",
+  "timestampMode": "UTC driver Date; independent SQL CHAR oracle",
+  "groups": [
+    {
+      "accountId": "1",
+      "symbol": "XAUUSD",
+      "timeframe": "M1",
+      "availableRows": 6882,
+      "returnedRows": 20,
+      "contentHash": "3418b23575f8b4314427a405072c3f9a259909aa8ccac3d6c9c6caa8ce234ae8",
+      "passed": true
+    },
+    {
+      "accountId": "1",
+      "symbol": "XAUUSD",
+      "timeframe": "M5",
+      "availableRows": 8485,
+      "returnedRows": 20,
+      "contentHash": "8809231c21b6ccf8b5eab2c504158fbbd34e3810d1edf060e8afe1673207a64e",
+      "passed": true
+    },
+    {
+      "accountId": "1",
+      "symbol": "XAUUSD",
+      "timeframe": "M15",
+      "availableRows": 4114,
+      "returnedRows": 20,
+      "contentHash": "d0bb5f163f40c2bd7777d5ed5323fe705f085f33a863fb7f26a56bfdc27523aa",
+      "passed": true
+    },
+    {
+      "accountId": "1",
+      "symbol": "XAUUSD",
+      "timeframe": "M30",
+      "availableRows": 995,
+      "returnedRows": 20,
+      "contentHash": "139e53a32bea2c4af7ed4883e12bd4037b6f817710997120e9ef364230f7770a",
+      "passed": true
+    },
+    {
+      "accountId": "1",
+      "symbol": "XAUUSD",
+      "timeframe": "H1",
+      "availableRows": 2529,
+      "returnedRows": 20,
+      "contentHash": "112b82f360d2b8cb8251dba9b37c4f8e13eeb357f2cf92d97fab2289c02b1522",
+      "passed": true
+    },
+    {
+      "accountId": "1",
+      "symbol": "XAUUSD",
+      "timeframe": "H4",
+      "availableRows": 2096,
+      "returnedRows": 20,
+      "contentHash": "f8fdd3ddd07b20544c31753cdd2b7406c67d4bebdd8586ddc46acdaadde6f53d",
+      "passed": true
+    },
+    {
+      "accountId": "1",
+      "symbol": "XAUUSD",
+      "timeframe": "D1",
+      "availableRows": 208,
+      "returnedRows": 20,
+      "contentHash": "04accae0ee63b101198301e28b23b732c1e9af931f612e654da77b26683d583d",
+      "passed": true
+    },
+    {
+      "accountId": "2",
+      "symbol": "XAUUSD",
+      "timeframe": "M5",
+      "availableRows": 4411,
+      "returnedRows": 20,
+      "contentHash": "760f3eadd5f878271e17bb5683076ea5333a73b7453e3eb5983a0b797687c202",
+      "passed": true
+    },
+    {
+      "accountId": "2",
+      "symbol": "XAUUSD",
+      "timeframe": "M15",
+      "availableRows": 200,
+      "returnedRows": 20,
+      "contentHash": "b45df5972e702b9b1dcc3be3eb6f75aa1a9b1b0bfe0b00f91b2f9ceb32b7b557",
+      "passed": true
+    },
+    {
+      "accountId": "2",
+      "symbol": "XAUUSD",
+      "timeframe": "H1",
+      "availableRows": 206,
+      "returnedRows": 20,
+      "contentHash": "a423528dc5d316b1e7a6a8e05fbab0120985e19bd314ea1f929823dd43aafd6d",
+      "passed": true
+    },
+    {
+      "accountId": "2",
+      "symbol": "XAUUSD",
+      "timeframe": "H4",
+      "availableRows": 100,
+      "returnedRows": 20,
+      "contentHash": "d110406338ce46f4aaefcff4d6f7718336ad1df1e30bcc8cdbb2fdd590ba17a5",
+      "passed": true
+    }
+  ],
+  "accountCount": 2,
+  "checkedRows": 220,
+  "totalCandleRows": 30226,
+  "databaseWrites": 0,
+  "scope": "Nonempty repository symbol and candle reads compared with bounded direct SQL tails. No HTTP authorization, realtime, browser or execution readiness claim."
+}
