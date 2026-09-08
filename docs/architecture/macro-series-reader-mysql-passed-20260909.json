@@ -1,0 +1,22 @@
+{
+  "kind": "macro-series-reader-mysql/v1",
+  "passed": true,
+  "observedAt": "2026-09-08T21:17:17.720Z",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "checks": [
+    "compiled-query-on-permanent-schema",
+    "one-vintage-per-observation-available-ingested-bigint-order",
+    "future-observation-available-ingested-excluded",
+    "decimal-and-utc-preserved",
+    "page-and-inclusive-range",
+    "unknown-code-empty",
+    "historical-cutoff-selects-old-vintage",
+    "current-access-denies-expired-suspended-hidden-retired-unreviewed",
+    "temporary-writes-rolled-back"
+  ],
+  "scope": "Unmodified compiled query against permanent schema and session-local LIKE tables. No SQL identifier rewriting, permanent writes, providers or service restart. Positive fixtures rolled back; not source calendar or HTTP validation."
+}

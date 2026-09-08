@@ -1112,3 +1112,107 @@ Bridge index移除MysqlBridgeCredentialRepository、MysqlBridgePairingRepository
 边界门确认无新增违规，精确移除四条public-implementation-export，服务端债务56→52；Bridge余两项HTTP transport导出，下一批需按已有API注册方式收口，不能让transport反向引用composition。没有通过新barrel或泛型万能工厂绕过边界。
 
 凭据、一次性会话票据、配对、WebSocket和运行角色组装共35项定向测试通过；类型/构建、52条增量边界、14项运行合同、diff和321冻结输入检查通过。本批为本地源码与模拟验证，未连接数据库、Redis或重启角色。整体模块化及账户生命周期仍未完成。
+
+
+## 88. Bridge HTTP 组装与全量 API 注册缺口（第一百五十八批，待提交）
+
+Bridge composition新增createBridgeHttp，API registrar只接收Fastify插件；两个HTTP transport退出业务index，五十条剩余服务端债务均在其它域。API入口、主机隔离测试及凭据测试同步调整，34项回归和server类型/构建通过，321冻结输入保持不变。
+
+同时修复inspect-api-contracts在此前模块拆分后遗漏的inference/strategies/reviews/trade-history插件注入，并加入Bridge插件；该工具只注册路由、不调用业务或连接依赖。真实离线注册对账报告api-registration-refresh-20260909.json：合同96、业务注册88、匹配88，缺少7项macro market读取与GET /api/v4/positions；其它重复/未登记/参数差异项为空。本次全量对账返回失败，不将生成一致或局部测试通过表述为完整API通过。
+
+源码定位持仓repository能力已存在，但独立列表路由未找到；宏观路由亦未找到，不能用空响应补齐数量。下一步按合同核对所需域能力、权限与数据结构并实施缺失接口。本批改动保留工作区，尚未提交推送；无数据库写入、服务启动或终端操作。整体目标继续推进。
+
+
+## 89. 持仓列表 API 与分页合同（第一百五十九批，待提交）
+
+新增PositionListService及独立HTTP适配器，通过TradingService.positions读取已有私有持仓投影；读取前后核对当前归属，不用观摩入口扩大读取范围。页面按精确ticket文本排序，游标绑定用户、账户及投影版本，版本改变返回409；无效游标400、无归属403、损坏/跨账户投影503。返回既有PositionListResponse、文本金额/大整数ticket、UTC时间及每页弱ETag，所有响应no-store。
+
+需求复核：按既有账户查询和游标分页合同实现，不把workspace全量数据塞进新路由；复用数据所有者，不新增跨域SQL。异常复核：补齐400/403/409响应、分页版本失效和读取期间撤权，游标不能替代权限。运行登记14→15，HTTP类型和运行模型由域合同生成。
+
+4项新增HTTP测试配合7项trading读取及8项运行注册共19项通过，覆盖分页、大ticket、跨账户游标、版本变化、无登录、无归属、读取中撤权及损坏投影。类型、构建、API生成/类型一致、50条边界和321冻结输入检查通过。
+
+全量实际注册匹配89/96，仍缺7项宏观接口，报告api-registration-positions-20260909.json。全量门仍失败，本批与上批变更保持未提交。下一步核对宏观合同与现有schema，不创建空响应填数。未连接实际数据库/Redis、重启或操作终端。
+
+
+## 90. 宏观读取数据边界与真实库预检（第一百六十批）
+
+新增inspect-macro-http-readiness.mjs，对精确dev_vue UUID执行只读一致快照，归档十张表的字段/类型和聚合计数。macro-http-readiness-20260909.json确认十表均存在且零行；不输出凭据、来源正文或用户信息，没有写入。无需为读取接口重复建表，但空库不能证明正确处理来源展示权利、观测vintage、日历revision或已发布快照。
+
+新增macro-http-read-implementation-20260909.md，完成职责及兼容/数据两轮复审。明确market模块拥有公开HTTP读取，现有inference reader仍只提供analysis_evidence；日历数值必须来自revision，观测需available/ingested时间过滤，快照需兼容版本/平台发布/哈希与字段白名单。列表、详情、latest及overview不能catch异常后伪造空结果。
+
+下一步先实现日历列表和详情，再完成series及四项快照/概览；公共payload路径、freshness日历及来源映射须按项目合同核实。脚本语法、实际只读查询、diff通过；此前未提交Bridge/持仓改动保持原样，全量API七项缺口仍待实现，未提交推送。没有迁移、服务重启或供应商/终端操作。
+
+
+## 91. 经济日历列表与详情实现（第一百六十一批，待提交）
+
+新增market模块，domain/application/infrastructure/transport及index/composition职责分离。CalendarService校验UTC区间、分页和筛选绑定游标；MysqlCalendarReader按approved/display权限/未退休/未过期来源，关联available_at及ingested_at均已到达的最新数值revision，保持DECIMAL和BIGINT文本。通过marketHttp在trade主机内注册列表与详情；认证先于读取、运行合同校验、no-store和内容弱ETag保持公开边界。
+
+补齐日历合同适用400/503，运行登记15→17并生成类型/运行模型。13项HTTP、宏观合同及主机组装测试通过，类型/构建/生成类型/50条边界/冻结321检查通过。新增模块README及实际SQL探针。
+
+真实MySQL九项验证归档calendar-reader-mysql-verified-20260909.json：正式空表执行未修改编译SQL；正向夹具验证未来available/ingested排除、数值精度、UTC、同时间分页、空数值及来源拒绝。MySQL同一TEMPORARY表不能以两个别名重开，首次夹具遇ER_CANT_REOPEN_TABLE；最终正向探针使用完全相同revision候选副本，仅替换内层表名。该限制明确写入报告，不误称正式表已有正向数据。临时数据回滚并销毁会话，无永久写入。
+
+API实际匹配91/96，剩余5项宏观series、快照和概览；报告api-registration-calendar-20260909.json。全量门尚未通过，因此累积变更仍未提交。后续继续序列PIT/freshness及发布快照白名单/哈希读取，不改已执行迁移，不启动提供者、模型或终端。
+
+## 92. 宏观序列历史版本与分页读取层（第一百六十二批，待提交）
+
+新增 MacroSeriesReader 应用端口、MacroSeriesService 与 MysqlMacroSeriesReader。查询按 observation_at 选取 asOf 时 available/ingested 均已到达的最新版本，并按 available、ingested、id 确定并列选择；DECIMAL 保持文本。游标绑定 code/from/to/asOf，单个 observation_at 只返回一个版本，分页键采用该时间；拒绝乱序、重复、跨序列及未来观测投影。
+
+复核权限后，将当前许可检查 accessAt 与历史读取 asOf 分离，翻页仍按当前状态及到期时间核对展示权限。历史 asOf 并不冻结当前来源权限，也不声称冻结所有元数据。来源文档仅有待验证的新鲜度建议，未找到已实现的美国/Cboe 日历；因此 freshness 是必需注入能力，未提供默认 fresh 或将工作日折算自然秒数。
+
+三项应用行为测试通过，覆盖冻结时间与当前许可时间、精确值、游标跨筛选/未来时间拒绝、损坏投影、非数值/禁用状态及依赖异常透传。服务端类型、50 条边界增量与 17 项运行合同生成一致检查通过。本批未执行实际 SQL，不把应用 mock 测试作为 vintage 查询验证。未接入新 HTTP 操作，全量路由缺口仍为最近归档的五项。
+
+后续先完成来源日历策略和实际 SQL 正反例，再接线序列 HTTP；随后完成快照与概览并重跑全量对账。当前代码与方案改动保留未提交，无数据库连接、迁移、服务重启或外部供应商调用。
+
+## 93. 宏观序列实际 MySQL 验证（第一百六十三批，待提交）
+
+将版本选择改为 ROW_NUMBER 窗口，先过滤查询时已知数据，再按 available/ingested/id 降序选每个 observation_at 的首个版本。每张表只引用一次，正式查询与正向临时夹具无需修改 SQL 标识符；未据此声称大数据性能已验收。
+
+新增 verify-macro-series-reader-mysql.mjs，校验现有 dev_vue 主机、UUID 和 UTC 会话，先在正式 schema 执行读取，然后从正式表 LIKE 创建会话临时结构，保留实际字段类型和索引。LIKE 不复制外键，本探针验证读取语义，不验证写入参照完整性。首次同名 LIKE 遇 ER_NONUNIQ_TABLE，改为临时名称创建后更名；第二次夹具缺少必填来源元数据，补齐后通过，未改正式表。
+
+macro-series-reader-mysql-passed-20260909.json 归档九项通过：正式 schema 查询、按精确 BIGINT 破同分的版本选择、未来 observation/available/ingested 排除、DECIMAL/UTC、分页和包含端点的区间、未知序列为空、历史 cutoff 选旧版、当前许可撤销/到期拒绝、临时数据回滚。未改写 SQL、正式 DML/DDL、启动服务或访问供应商；失败的两份临时诊断输出清理，仅保留成功回执及本文原因。
+
+服务端构建、边界/合同生成一致及三项应用回归通过。运行操作仍为 17，序列 HTTP 与来源日历尚未接线，剩余五项接口不能标记完成。下一批实现可验证的来源日历策略和新鲜度异常语义，再完成 HTTP 合同验证。
+
+## 94. 宏观序列 HTTP 与新鲜度策略（第一百六十四批，待提交）
+
+MacroFreshnessPolicy 实现自然经过时间与显式来源计时区间，按 observationAt 计算陈旧，不使用新下载时间掩盖旧观测。版本日历要求覆盖范围、排序且不重叠的 UTC 半开区间，以及自然时间最大陈旧上限；未知/覆盖不足返回 invalid。来源真实美国/Cboe 日历尚未取得验证，本批只启用 utc_elapsed_v1，合成区间测试不代表实际来源日历已完成，保留后续冻结与注入待办。
+
+新增宏观序列 HTTP，复用会话认证、运行合同、no-store 和脱敏 Problem；异常不能转换成空结果。域合同补503，运行登记18项，生成 OpenAPI/运行 schema/传输类型，API、路由检查器和组装测试同步注入服务。新鲜度3项、HTTP3项、序列应用3项、日历3项和运行组装8项共20项通过；类型、构建及生成类型检查通过，边界债务仍50条无新增。
+
+api-registration-series-20260909.json 实际路由匹配92/96，仍缺快照列表/详情/latest/overview四项，全量门返回失败；累计改动保持未提交。未连接数据库或重启运行进程。下一批核对快照公开 payload、hash 和来源映射并实现读取；来源日历登记作为 market 域退出条件保留，不被路由数量覆盖。
+
+## 95. 宏观快照展示投影（第一百六十五批，待提交）
+
+核对现有 inference reader 及合同后，确认完整浏览器存储投影尚未定义。新增 macro-snapshot-display-v1.md 与 domain 转换：明确只读 payload.display，完整 payload 哈希使用现有 shared canonical 编码，不回退 analysis_evidence。白名单保留精确金额、版本、合法 UTC、因子与摘要；拒绝重复因子、未来因子、损坏哈希及非法元数据。没有冻结综合方向规则时只接受 uncertain。到期历史投影 stale，不修改存储 hash。
+
+四项行为测试覆盖内部字段不泄漏、与 inference 哈希兼容、摘要去 factors、精确版本、证据-only 拒绝、坏元数据及到期状态；服务端类型、50条边界及18项运行生成检查通过。未接入数据库 reader 或新增 HTTP 操作，API 四项缺口不变。下一批关联发布状态、来源权利与 snapshot-observation 映射，不能把投影校验作为完整读取授权。本批无数据库连接或运行重启，改动待提交。
+
+## 96. 快照发布与来源读取边界（第一百六十六批，待提交）
+
+新增 PublicMacroSnapshotReader 应用端口与 MysqlPublicMacroSnapshotReader。单查询聚合全部 lineage，LEFT JOIN 避免缺失关联被内连接静默忽略；每个关联来源必须 approved、允许 display/derived、未退休且当前许可有效，空映射不会被选中。限定 platform/schema1/published或superseded；latest进一步限定当前有效、未替代、健康且fresh/partial。历史分页按published/id降序，保留大整数revision文本。
+
+新增 projectReadableMacroSnapshot，先执行完整哈希/展示投影，再确认全部 lineage 时间不晚于cutoff，且每个公开因子的code、observation/available和精确十进制值具有对应观测。允许1.82与1.8200000000等值，不允许浮点近似；内部未展示因子的未来ingested也拒绝。此公开投影目前只支持直接观测值；将来转换因子需另行定义版本化转换证据，不能放松等值校验。
+
+新增3项映射行为与既有4项投影测试共7项通过，类型、构建、边界和运行生成检查通过。实际SQL尚未执行，不能把编译通过作为来源过滤证明；当前lineage聚合查询的数据规模性能亦未验证。未新增HTTP注册，四项缺口仍待完成。下一步真实MySQL正反例验证后接列表/详情/latest及overview；本批无数据库连接或服务重启，改动待提交。
+
+## 97. 快照真实 SQL 与读取用例（第一百六十七批，待提交）
+
+新增 verify-macro-snapshot-reader-mysql.mjs，在精确开发库 UUID/UTC 会话上先读正式 schema，再使用 LIKE 临时结构执行同一编译 SQL。macro-snapshot-reader-mysql-20260909.json 九项通过：历史与当前发布、JSON日期/精度/白名单、latest和同时间分页、缺失及未来发布、过期/撤销来源、draft/空映射/悬空映射拒绝、未来ingested投影拒绝及回滚。LIKE不复制外键，明确用悬空夹具验证LEFT JOIN拒绝，未声称写入参照完整性验收；无正式写入或运行重启。
+
+新增 MacroSnapshotService，列表固定asOf和published/id游标，每次accessAt按当前时间检查；列表仅摘要，详情/latest不存在返回404，overview允许snapshot=null并聚合未来七天最多20条高影响日历。两个读取共用请求时间边界但不是跨查询数据库一致快照；任一依赖错误均传递，不伪造空概览。最新快照二次检查有效期和fresh/partial。
+
+新增2项服务行为配合3项lineage及4项投影共9项通过，类型/边界/运行生成检查通过。服务尚未接HTTP，路由登记仍18项运行校验、92/96最近匹配；下一批将四个用例接入合同与生产组装并完成HTTP正反例。全量lineage聚合规模性能及实际来源日历继续保留待办，累计代码未提交。
+
+## 98. 宏观 HTTP 完整注册（第一百六十八批，待提交）
+
+接入快照列表、详情、latest与overview，trade主机组装注入具体读取服务。路由认证先于校验，统一no-store、明确400/404/503问题响应；detail/latest的ETag根据最终DTO计算，过期投影变化不沿用存储payload哈希。域源更新后生成OpenAPI、运行schema和传输类型；运行登记22项，未宣称96项均已运行校验。
+
+新增3项HTTP行为配合其余快照/日历/序列及运行组装共26项通过，类型、构建、生成类型及50条边界检查通过。api-registration-complete-20260909.json本次全量对账96/96匹配、无缺失/未登记/重复，工具exit0。该证据只关闭实际路由登记缺口，不关闭权限全覆盖、所有消费者、运行进程、数据库全升级或全栈模块化目标。
+
+本批未连接数据库或重启服务，累计Bridge/持仓/market改动仍未提交。下一批按已有发布流程审查累计diff、冻结321输入及受影响回归后提交；继续处理market来源日历和读取规模、账户样板退出及其它域债务。用户目标仍覆盖P0–P7，不能因96/96结束整体重构。
+
+## 99. 累计 API 改动提交前审查（第一百六十九批）
+
+审查第88–98节累计范围：Bridge HTTP 从业务index迁到composition并删除两条精确债务，持仓通过归属前后核对和版本游标读取，market七项读取通过独立模块、公开字段和许可映射实现。检查器补齐已拆分域的实际插件，不用登记空路径通过。当前96/96实际路由对账通过，运行校验22项，边界债务50项，三个数字语义分别保留。
+
+源码发布预检ready，fetch后dev_vue与origin/dev_vue一致，冻结321输入完整未变；新增Bridge/持仓/运行组装43项回归通过。此前本批market26项及类型/构建/生成一致已通过，未重复无变化数据库探针。没有新增迁移、配置、供应商采集、终端或服务启动。本轮源码提交覆盖当前任务的合同、组装、读取、测试和回执；来源日历、SQL规模性能、生产者发布、前端消费者/浏览器及P1退出仍待处理，不宣称模块全验收。

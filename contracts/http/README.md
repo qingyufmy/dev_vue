@@ -35,7 +35,7 @@ contracts包公开ApiWireSchemas、ApiPaths、ApiOperations供业务使用；登
 
 ## 服务端运行校验
 
-runtime.json显式列出已接入操作，当前14项：listAuditEvents/getAuditEvent/setLearningCompletion/getTradingContext/listTradingAccounts/listObserverChannels/replaceTradingContext/leaveObserverMode/getTradingContextReceipt/getBridgeConnectionCapacity/listTerminalProfiles/getTradingAccountSnapshot/getMarketQuote/listMarketCandles。generate:api-runtime按合同提取参数、JSON请求体、各明确状态码下的JSON/problem响应及引用模型闭包，输出server/src/transport/generated/http-contracts.ts；verify:api-runtime拒绝漂移，已接入服务端类型检查和构建。Ajv和格式库是生产依赖；部署产物不依赖仓库contracts目录。各模块只编译自己选择的操作，登记缺失直接失败。
+runtime.json显式列出已接入操作，当前22项：listAuditEvents/getAuditEvent/setLearningCompletion/getTradingContext/listTradingAccounts/listObserverChannels/replaceTradingContext/leaveObserverMode/getTradingContextReceipt/getBridgeConnectionCapacity/listTerminalProfiles/getTradingAccountSnapshot/getMarketQuote/listMarketCandles/listPositions/listEconomicCalendarEvents/getEconomicCalendarEvent/listMacroSeriesPoints/listMacroSnapshots/getMacroSnapshot/getLatestMacroSnapshot/getMacroMarketOverview。generate:api-runtime按合同提取参数、JSON请求体、各明确状态码下的JSON/problem响应及引用模型闭包，输出server/src/transport/generated/http-contracts.ts；verify:api-runtime拒绝漂移，已接入服务端类型检查和构建。Ajv和格式库是生产依赖；部署产物不依赖仓库contracts目录。各模块只编译自己选择的操作，登记缺失直接失败。
 
 连接额度与终端档案读取先认证，随后校验请求、成功和400/401/403/503错误响应；非法提供者数据收敛为api_response_invalid，未知错误不暴露内部正文。trading-client-contract.test.mjs用真实API客户端经Fastify inject消费成功/失败响应；独立运行测试避免混用前端Bundler与服务端NodeNext类型图，两侧类型检查仍分别执行。这不是浏览器或真实依赖联合验收。
 
@@ -56,3 +56,11 @@ runtime.json显式列出已接入操作，当前14项：listAuditEvents/getAudit
 上下文PUT与观摩退出DELETE已接入运行合同，先assertWrite再校验CSRF格式、严格目标组合和必填revision。版本必须是规范非负十进制字符串且小于Number.MAX_SAFE_INTEGER，为递增保留空间；NULL、空串、指数、小数、重复query拒绝。PUT只允许与mode对应的唯一目标，另一目标可省略或为null。用例完成后DTO校验失败返回trading_context_commit_unknown/503，客户端必须保留原请求键与正文，查询回执后再读取当前上下文，不能据此断言写入失败。PUT/DELETE现在强制小写UUID格式的Idempotency-Key；同键同体重放历史结果，异体409，新键旧revision仍409。GET /trading-context/commands/{request_id}按当前用户查回执，200/null仅表示未见已提交回执，不证明失败；成功及错误均no-store。此阶段运行登记为9项，本批客户端/Fastify对接使用测试写端口，当前开发库与真实浏览器验收另行完成。
 
 报价与 K 线已接入 getMarketQuote/listMarketCandles，请求先认证再校验，成功与失败均 no-store。K 线 page_size 只接受 1–500 的规范整数字符串，缺省仍为 200；空报价保持 null。API 客户端经 Fastify inject 验证账户/观摩参数、UTC 毫秒与精确数字传输，以及非法提供者响应返回 api_response_invalid。该证据不代表实时行情来源或终端时钟已验收。
+
+
+持仓列表 listPositions 读取当前自有账户持仓投影。游标绑定用户、账户和快照revision，快照改变返回409并从首页重读；分页1–200、默认50，精确ticket文本排序。已登记400/403/409及运行校验，所有响应no-store，弱ETag区分页面。接口未新增终端采集，本次仅源码及HTTP模拟验证。
+
+
+经济日历列表/详情由market模块提供，来源必须approved且允许展示、未退休/未过期；revision同时过滤available_at和ingested_at。按当前可知revision读取数值，scheduled_at/id键游标绑定from/to/importance。读取先认证，补齐400/503问题响应，所有结果no-store。字段精度、DTO及错误由运行合同验证；当前正式数据表为空，正向SQL证据来自会话临时夹具。
+
+宏观序列 listMacroSeriesPoints 接入相同认证和运行校验，分页固定查询条件及观测 asOf，展示许可按当前 accessAt 核对；依赖失败返回503，不伪造空结果。freshness 的 invalid 包括未登记或覆盖不足的来源日历，不能解释为数据值为零或来源可用于交易。当前来源日历登记仍待验证，默认不推测美国/Cboe 工作日。

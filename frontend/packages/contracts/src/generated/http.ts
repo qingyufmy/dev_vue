@@ -847,7 +847,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List current positions */
+        /**
+         * List current positions
+         * @description Owner-only current position snapshot. Cursor is scoped to the authenticated user, account and snapshot revision; a changed snapshot returns 409 and requires restarting pagination. Tickets are ordered as exact text.
+         */
         get: operations["listPositions"];
         put?: never;
         post?: never;
@@ -4835,6 +4838,7 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     getEconomicCalendarEvent: {
@@ -4858,9 +4862,11 @@ export interface operations {
                     "application/json": components["schemas"]["EconomicCalendarEventResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     listMarketCandles: {
@@ -4922,6 +4928,15 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            /** @description Series data or dependency unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
+            };
         };
     };
     listMacroSnapshots: {
@@ -4948,6 +4963,7 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     getMacroSnapshot: {
@@ -4971,9 +4987,11 @@ export interface operations {
                     "application/json": components["schemas"]["MacroSnapshotResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     getLatestMacroSnapshot: {
@@ -4995,6 +5013,7 @@ export interface operations {
                     "application/json": components["schemas"]["MacroSnapshotResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
@@ -5020,6 +5039,7 @@ export interface operations {
                     "application/json": components["schemas"]["MacroMarketOverviewResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             503: components["responses"]["Problem"];
@@ -5126,7 +5146,10 @@ export interface operations {
                     "application/json": components["schemas"]["PositionListResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
             503: components["responses"]["Problem"];
         };
     };

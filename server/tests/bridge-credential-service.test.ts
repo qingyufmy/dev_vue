@@ -1,9 +1,9 @@
+import { bridgeCredentialRoutes } from '../src/modules/bridge/transport/http/bridge-credential-routes.js'
 import Fastify from 'fastify'
 import { describe, expect, it } from 'vitest'
 import {
   BridgeCredentialError,
   BridgeCredentialService,
-  bridgeCredentialRoutes,
 } from '../src/modules/bridge/index.js'
 import type {
   BridgeCredentialRepository,

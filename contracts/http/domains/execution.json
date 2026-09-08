@@ -345,8 +345,18 @@
           },
           "503": {
             "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "description": "Owner-only current position snapshot. Cursor is scoped to the authenticated user, account and snapshot revision; a changed snapshot returns 409 and requires restarting pagination. Tickets are ordered as exact text."
       }
     },
     "/operations/{operation_id}": {

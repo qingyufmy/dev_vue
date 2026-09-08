@@ -1,0 +1,22 @@
+{
+  "kind": "calendar-reader-mysql/v1",
+  "passed": true,
+  "observedAt": "2026-09-08T21:04:41.025Z",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "checks": [
+    "unmodified-sql-on-current-empty-permanent-tables",
+    "future-available-and-future-ingested-revisions-excluded",
+    "decimal-and-bigint-text-preserved",
+    "utc-milliseconds",
+    "same-time-id-pagination",
+    "scheduled-without-numeric-revision-remains-null",
+    "suspended-hidden-expired-retired-sources-denied",
+    "missing-detail-null",
+    "temporary-fixture-rollback"
+  ],
+  "scope": "Unmodified compiled SQL on current empty permanent tables. Positive cases use session-local temporary tables and an identical revision candidate copy to bypass MySQL TEMPORARY-table reopen restriction; only that inner table identifier is remapped. All fixture DML rolled back; no permanent writes, provider data, runtime restart or publication proof."
+}

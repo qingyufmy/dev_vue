@@ -1,3 +1,5 @@
+import { createCalendarService, createMacroSnapshotService, createMacroSeriesService, createMarketHttp } from '../modules/market/composition.js'
+import { createBridgeHttp } from '../modules/bridge/composition.js'
 import { createBridgeCredentialRepository, createBridgeGatewayLeases, createBridgeSessionTickets, createBridgePairingRepository } from '../modules/bridge/composition.js'
 import { createAnalysisStrategyAccess } from '../modules/strategies/composition.js'
 import { createAdminPrincipalAccess } from '../modules/auth/composition.js'
@@ -54,12 +56,12 @@ async function main() {
       read: createMysqlLearningService(pool, new MysqlLearningMembershipReader(pool)),
       completion: createMysqlLearningCompletionService(pool, MysqlLearningMembershipReader.forTransaction),
     }, auth, { wwwOrigin: web.auth.wwwOrigin, secureCookies: web.secureCookies }),
-    bridgePairing: new BridgePairingService(createBridgePairingRepository(pool)),
-    bridgeCredentials: new BridgeCredentialService(
-      createBridgeCredentialRepository(pool),
-      createBridgeSessionTickets(cache),
+    bridgeHttp: createBridgeHttp(
+      new BridgeCredentialService(createBridgeCredentialRepository(pool), createBridgeSessionTickets(cache)),
+      new BridgePairingService(createBridgePairingRepository(pool)), tradeAuth,
     ),
     tradingHttp: trading.tradeHttp,
+    marketHttp: createMarketHttp(createCalendarService(pool), tradeAuth, createMacroSeriesService(pool), createMacroSnapshotService(pool, createCalendarService(pool))),
     inferenceHttp: createInferenceHttp(new InferenceService(createMysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader), strategies), strategies, tradeAuth),
     strategiesHttp: createStrategyHttp(strategies, tradeAuth),
     risk: new RiskService(new MysqlRiskRepository(pool)),

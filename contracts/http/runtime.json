@@ -13,6 +13,14 @@
     "listTerminalProfiles",
     "getTradingAccountSnapshot",
     "getMarketQuote",
-    "listMarketCandles"
+    "listMarketCandles",
+    "listPositions",
+    "listEconomicCalendarEvents",
+    "getEconomicCalendarEvent",
+    "listMacroSeriesPoints",
+    "listMacroSnapshots",
+    "getMacroSnapshot",
+    "getLatestMacroSnapshot",
+    "getMacroMarketOverview"
   ]
 }

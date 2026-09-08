@@ -1,3 +1,5 @@
+import { createMarketHttp } from '../src/modules/market/composition.js'
+import { createBridgeHttp } from '../src/modules/bridge/composition.js'
 import { BrowserRealtimeHub } from '../src/modules/trading/transport/realtime/browser-realtime-hub.js'
 import Fastify from 'fastify'
 import { createServer } from 'node:http'
@@ -150,6 +152,8 @@ describe('V4 browser realtime runtime', () => {
     services.auth = { cookieName: cookieNameForClient } as ApiV4RouteServices['auth']
     services.authHttp = createAuthHttp(services.auth, false)
     const registrationOnly = new Proxy({}, { get: () => () => { throw new Error('registration_only') } })
+    services.marketHttp = createMarketHttp(...([registrationOnly, registrationOnly, registrationOnly, registrationOnly] as Parameters<typeof createMarketHttp>))
+    services.bridgeHttp = createBridgeHttp(...([registrationOnly, registrationOnly, registrationOnly] as Parameters<typeof createBridgeHttp>))
     services.tradingHttp = createTradingHttp(...([registrationOnly, registrationOnly, registrationOnly, registrationOnly] as Parameters<typeof createTradingHttp>))
     services.inferenceHttp = createInferenceHttp(...([registrationOnly, registrationOnly, registrationOnly] as Parameters<typeof createInferenceHttp>))
     services.strategiesHttp = createStrategyHttp(...([registrationOnly, registrationOnly] as Parameters<typeof createStrategyHttp>))

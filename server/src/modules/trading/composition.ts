@@ -17,6 +17,8 @@ import { observerManagementRoutes } from './transport/http/observer-management-r
 import type { AccountRegistration } from './application/account-registration.js'
 import type { ConnectionCapacityRepository, TradingReadRepository } from './application/trading-ports.js'
 import type { TradeSessionAuthenticator, ObserverManagementRequestAuthenticator } from './application/request-authentication.js'
+import { PositionListService } from './application/position-list-service.js'
+import { positionListRoutes } from './transport/http/position-list-routes.js'
 import { TradingService, ConnectionCapacityService } from './application/trading-service.js'
 import { ObserverManagementService } from './application/observer-management-service.js'
 import { ObserverPublicationService } from './application/observer-publication-service.js'
@@ -37,7 +39,10 @@ type GatewayLeases = AccountLiveRouteReader
 export const assertTradingSchemaReady = assertMysqlTradingSchemaReady
 
 export function createTradingHttp(service: TradingService, capacity: ConnectionCapacityService, auth: TradeSessionAuthenticator, contextCommands: ContextWritePort): FastifyPluginAsync {
-  return async app => { await app.register(tradingRoutes, { prefix: '/api/v4', service, capacity, auth, contextCommands }) }
+  return async app => {
+    await app.register(tradingRoutes, { prefix: '/api/v4', service, capacity, auth, contextCommands })
+    await app.register(positionListRoutes, { prefix: '/api/v4', service: new PositionListService(service), auth })
+  }
 }
 
 export function createObserverManagementHttp(service: ObserverManagementService, auth: ObserverManagementRequestAuthenticator): FastifyPluginAsync {

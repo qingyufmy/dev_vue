@@ -6,32 +6,6 @@
     {
       "finding": {
         "rule": "public-implementation-export",
-        "source": "server/src/modules/bridge/index.ts",
-        "target": "server/src/modules/bridge/transport/http/bridge-credential-routes.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "bridge",
-      "phase": "P5",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/bridge/index.ts",
-        "target": "server/src/modules/bridge/transport/http/bridge-pairing-routes.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "bridge",
-      "phase": "P5",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
         "source": "server/src/modules/commerce/index.ts",
         "target": "server/src/modules/commerce/infrastructure/mysql-learning-membership-reader.ts",
         "kind": "export",

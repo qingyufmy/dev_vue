@@ -11871,6 +11871,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "summary": "List economic calendar events by schedule and importance",
@@ -11908,6 +11911,9 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
           "401": {
             "$ref": "#/components/responses/Problem"
           },
@@ -11915,6 +11921,9 @@
             "$ref": "#/components/responses/Problem"
           },
           "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         },
@@ -12038,6 +12047,16 @@
           },
           "403": {
             "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Series data or dependency unavailable"
           }
         },
         "summary": "List point-in-time macro series observations",
@@ -12083,6 +12102,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "summary": "List published platform macro snapshot summaries with a stable cursor",
@@ -12109,6 +12131,9 @@
                 "$ref": "#/components/headers/ETag"
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
           },
           "401": {
             "$ref": "#/components/responses/Problem"
@@ -12158,6 +12183,9 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
           "401": {
             "$ref": "#/components/responses/Problem"
           },
@@ -12165,6 +12193,9 @@
             "$ref": "#/components/responses/Problem"
           },
           "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         },
@@ -12192,6 +12223,9 @@
                 "$ref": "#/components/headers/ETag"
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
           },
           "401": {
             "$ref": "#/components/responses/Problem"
@@ -12320,6 +12354,7 @@
     },
     "/positions": {
       "get": {
+        "description": "Owner-only current position snapshot. Cursor is scoped to the authenticated user, account and snapshot revision; a changed snapshot returns 409 and requires restarting pagination. Tickets are ordered as exact text.",
         "operationId": "listPositions",
         "parameters": [
           {
@@ -12348,7 +12383,16 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
           "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
             "$ref": "#/components/responses/Problem"
           },
           "503": {

@@ -971,6 +971,9 @@
           },
           "503": {
             "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -1008,6 +1011,9 @@
             "$ref": "#/components/responses/Problem"
           },
           "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "400": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -1054,6 +1060,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -1098,6 +1107,12 @@
             "$ref": "#/components/responses/Problem"
           },
           "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -1168,6 +1183,16 @@
           },
           "403": {
             "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "description": "Series data or dependency unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
           }
         }
       }
@@ -1242,6 +1267,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -1286,6 +1314,12 @@
             "$ref": "#/components/responses/Problem"
           },
           "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         }

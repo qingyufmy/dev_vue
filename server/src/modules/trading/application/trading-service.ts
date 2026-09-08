@@ -20,6 +20,14 @@ export class TradingService {
   listTerminalProfiles(userId: number) { return this.repository.listTerminalProfiles(userId) }
   listObserverChannels(userId: number) { return this.repository.listObserverChannels(userId) }
 
+  async positions(userId: number, accountId: string) {
+    const account = await this.ownedAccount(userId, accountId)
+    const positions = await this.repository.listPositions(account.id, userId)
+    // Do not publish a snapshot after current ownership was revoked during the read.
+    await this.ownedAccount(userId, account.id)
+    return positions
+  }
+
   async workspace(userId: number, accountId: string, observerChannelId?: string) {
     if (observerChannelId) return this.observerPublications().workspace(userId,
       assertOpaqueId(accountId, 'account_id'), assertOpaqueId(observerChannelId, 'observer_channel_id'))

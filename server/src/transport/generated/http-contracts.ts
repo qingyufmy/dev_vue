@@ -517,6 +517,11 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         ],
         "type": "object"
       },
+      "BusinessDate": {
+        "format": "date",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "type": "string"
+      },
       "Candle": {
         "additionalProperties": false,
         "properties": {
@@ -644,6 +649,215 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
         "type": "string"
       },
+      "EconomicCalendarEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "actual": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "consensus": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "country": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "currency": {
+            "maxLength": 16,
+            "minLength": 1,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "importance": {
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "period": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "previous": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider_event_id": {
+            "maxLength": 191,
+            "minLength": 1,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider_updated_at": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UtcDateTime"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revised_previous": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "scheduled_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "status": {
+            "enum": [
+              "scheduled",
+              "released",
+              "revised",
+              "delayed",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "time_precision": {
+            "enum": [
+              "exact",
+              "date_only",
+              "tentative"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 300,
+            "minLength": 1,
+            "type": "string"
+          },
+          "unit": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "provider_event_id",
+          "country",
+          "currency",
+          "title",
+          "scheduled_at",
+          "time_precision",
+          "importance",
+          "period",
+          "unit",
+          "previous",
+          "consensus",
+          "actual",
+          "revised_previous",
+          "status",
+          "provider_updated_at",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "EconomicCalendarEventListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "has_more": {
+                "type": "boolean"
+              },
+              "items": {
+                "items": {
+                  "$ref": "#/components/schemas/EconomicCalendarEvent"
+                },
+                "type": "array"
+              },
+              "next_cursor": {
+                "maxLength": 2048,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "items",
+              "next_cursor",
+              "has_more"
+            ],
+            "type": "object"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ],
+        "type": "object"
+      },
+      "EconomicCalendarEventResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/EconomicCalendarEvent"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ],
+        "type": "object"
+      },
       "FieldProblem": {
         "additionalProperties": false,
         "properties": {
@@ -738,6 +952,422 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         ],
         "type": "object"
       },
+      "MacroFactor": {
+        "additionalProperties": false,
+        "properties": {
+          "available_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "code": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "freshness": {
+            "enum": [
+              "fresh",
+              "stale",
+              "missing",
+              "disabled",
+              "invalid"
+            ],
+            "type": "string"
+          },
+          "gold_relation": {
+            "enum": [
+              "supportive",
+              "adverse",
+              "neutral",
+              "uncertain"
+            ],
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 191,
+            "minLength": 1,
+            "type": "string"
+          },
+          "observation_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "unit": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "label",
+          "value",
+          "unit",
+          "observation_at",
+          "available_at",
+          "freshness",
+          "gold_relation"
+        ],
+        "type": "object"
+      },
+      "MacroMarketOverviewResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "high_impact_events": {
+                "items": {
+                  "$ref": "#/components/schemas/EconomicCalendarEvent"
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
+              "snapshot": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/MacroSnapshotSummary"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "snapshot",
+              "high_impact_events"
+            ],
+            "type": "object"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ],
+        "type": "object"
+      },
+      "MacroSeriesPoint": {
+        "additionalProperties": false,
+        "properties": {
+          "available_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "code": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          "freshness": {
+            "enum": [
+              "fresh",
+              "stale",
+              "missing",
+              "disabled",
+              "invalid"
+            ],
+            "type": "string"
+          },
+          "observation_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "unit": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "code",
+          "observation_at",
+          "available_at",
+          "value",
+          "unit",
+          "freshness"
+        ],
+        "type": "object"
+      },
+      "MacroSeriesResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "has_more": {
+                "type": "boolean"
+              },
+              "items": {
+                "items": {
+                  "$ref": "#/components/schemas/MacroSeriesPoint"
+                },
+                "type": "array"
+              },
+              "next_cursor": {
+                "maxLength": 2048,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "items",
+              "next_cursor",
+              "has_more"
+            ],
+            "type": "object"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ],
+        "type": "object"
+      },
+      "MacroSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "business_date": {
+            "$ref": "#/components/schemas/BusinessDate"
+          },
+          "content_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "data_cutoff_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "direction": {
+            "enum": [
+              "supportive",
+              "adverse",
+              "neutral",
+              "uncertain"
+            ],
+            "type": "string"
+          },
+          "factors": {
+            "items": {
+              "$ref": "#/components/schemas/MacroFactor"
+            },
+            "maxItems": 128,
+            "type": "array"
+          },
+          "horizon": {
+            "const": "medium_term"
+          },
+          "id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "published_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "schema_version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "fresh",
+              "stale",
+              "partial",
+              "unavailable"
+            ],
+            "type": "string"
+          },
+          "summary": {
+            "maxLength": 5000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "valid_until": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          }
+        },
+        "required": [
+          "id",
+          "schema_version",
+          "revision",
+          "business_date",
+          "horizon",
+          "data_cutoff_at",
+          "published_at",
+          "valid_until",
+          "status",
+          "direction",
+          "summary",
+          "factors",
+          "content_sha256"
+        ],
+        "type": "object"
+      },
+      "MacroSnapshotListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "has_more": {
+                "type": "boolean"
+              },
+              "items": {
+                "items": {
+                  "$ref": "#/components/schemas/MacroSnapshotSummary"
+                },
+                "type": "array"
+              },
+              "next_cursor": {
+                "maxLength": 2048,
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "items",
+              "next_cursor",
+              "has_more"
+            ],
+            "type": "object"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ],
+        "type": "object"
+      },
+      "MacroSnapshotResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/MacroSnapshot"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ],
+        "type": "object"
+      },
+      "MacroSnapshotSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "business_date": {
+            "$ref": "#/components/schemas/BusinessDate"
+          },
+          "content_sha256": {
+            "pattern": "^[a-f0-9]{64}$",
+            "type": "string"
+          },
+          "data_cutoff_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "direction": {
+            "enum": [
+              "supportive",
+              "adverse",
+              "neutral",
+              "uncertain"
+            ],
+            "type": "string"
+          },
+          "factor_count": {
+            "maximum": 128,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "horizon": {
+            "const": "medium_term"
+          },
+          "id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "published_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "schema_version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "fresh",
+              "stale",
+              "partial",
+              "unavailable"
+            ],
+            "type": "string"
+          },
+          "summary": {
+            "maxLength": 5000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "valid_until": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          }
+        },
+        "required": [
+          "id",
+          "schema_version",
+          "revision",
+          "business_date",
+          "horizon",
+          "data_cutoff_at",
+          "published_at",
+          "valid_until",
+          "status",
+          "direction",
+          "summary",
+          "factor_count",
+          "content_sha256"
+        ],
+        "type": "object"
+      },
       "Meta": {
         "additionalProperties": false,
         "properties": {
@@ -806,6 +1436,39 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         "maxLength": 191,
         "minLength": 1,
         "type": "string"
+      },
+      "PageMeta": {
+        "additionalProperties": false,
+        "properties": {
+          "generated_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "has_more": {
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "page_size": {
+            "maximum": 500,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "request_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          }
+        },
+        "required": [
+          "request_id",
+          "generated_at",
+          "page_size",
+          "next_cursor",
+          "has_more"
+        ],
+        "type": "object"
       },
       "PendingOrder": {
         "additionalProperties": false,
@@ -998,6 +1661,24 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
           "opened_at",
           "source",
           "revision"
+        ],
+        "type": "object"
+      },
+      "PositionListResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/Position"
+            },
+            "type": "array"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/PageMeta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
         ],
         "type": "object"
       },
@@ -2001,6 +2682,140 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         "required": true
       }
     },
+    "listEconomicCalendarEvents": {
+      "parameters": [
+        {
+          "name": "from",
+          "location": "query",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          }
+        },
+        {
+          "name": "to",
+          "location": "query",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          }
+        },
+        {
+          "name": "importance",
+          "location": "query",
+          "required": false,
+          "integerQuery": false,
+          "schema": {
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "unknown"
+            ],
+            "type": "string"
+          }
+        },
+        {
+          "name": "limit",
+          "location": "query",
+          "required": false,
+          "integerQuery": true,
+          "schema": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        {
+          "name": "cursor",
+          "location": "query",
+          "required": false,
+          "integerQuery": false,
+          "schema": {
+            "maxLength": 2048,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/EconomicCalendarEventListResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      }
+    },
+    "getEconomicCalendarEvent": {
+      "parameters": [
+        {
+          "name": "event_id",
+          "location": "path",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "$ref": "#/components/schemas/OpaqueId"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/EconomicCalendarEventResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "404": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      }
+    },
     "listMarketCandles": {
       "parameters": [
         {
@@ -2074,6 +2889,257 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
           }
         },
         "404": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      }
+    },
+    "listMacroSeriesPoints": {
+      "parameters": [
+        {
+          "name": "code",
+          "location": "query",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        {
+          "name": "from",
+          "location": "query",
+          "required": false,
+          "integerQuery": false,
+          "schema": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          }
+        },
+        {
+          "name": "to",
+          "location": "query",
+          "required": false,
+          "integerQuery": false,
+          "schema": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          }
+        },
+        {
+          "name": "limit",
+          "location": "query",
+          "required": false,
+          "integerQuery": true,
+          "schema": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        {
+          "name": "cursor",
+          "location": "query",
+          "required": false,
+          "integerQuery": false,
+          "schema": {
+            "maxLength": 2048,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/MacroSeriesResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      }
+    },
+    "listMacroSnapshots": {
+      "parameters": [
+        {
+          "name": "limit",
+          "location": "query",
+          "required": false,
+          "integerQuery": true,
+          "schema": {
+            "default": 20,
+            "maximum": 100,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        {
+          "name": "cursor",
+          "location": "query",
+          "required": false,
+          "integerQuery": false,
+          "schema": {
+            "maxLength": 2048,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/MacroSnapshotListResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      }
+    },
+    "getLatestMacroSnapshot": {
+      "parameters": [],
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/MacroSnapshotResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "404": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      }
+    },
+    "getMacroSnapshot": {
+      "parameters": [
+        {
+          "name": "snapshot_id",
+          "location": "path",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "$ref": "#/components/schemas/OpaqueId"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/MacroSnapshotResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "404": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      }
+    },
+    "getMacroMarketOverview": {
+      "parameters": [],
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/MacroMarketOverviewResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
           "application/problem+json": {
             "$ref": "#/components/schemas/Problem"
           }
@@ -2167,6 +3233,76 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
           }
         },
         "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      }
+    },
+    "listPositions": {
+      "parameters": [
+        {
+          "name": "account_id",
+          "location": "query",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "$ref": "#/components/schemas/OpaqueId"
+          }
+        },
+        {
+          "name": "page_size",
+          "location": "query",
+          "required": false,
+          "integerQuery": true,
+          "schema": {
+            "default": 50,
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        {
+          "name": "cursor",
+          "location": "query",
+          "required": false,
+          "integerQuery": false,
+          "schema": {
+            "maxLength": 2048,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/PositionListResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "409": {
           "application/problem+json": {
             "$ref": "#/components/schemas/Problem"
           }

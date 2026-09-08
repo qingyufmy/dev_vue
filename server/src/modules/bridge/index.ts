@@ -1,6 +1,5 @@
 export { BridgeCredentialService } from './application/bridge-credential-service.js'
 export { BridgePairingService } from './application/bridge-pairing-service.js'
-export { bridgePairingRoutes } from './transport/http/bridge-pairing-routes.js'
 export type {
   BridgeCredentialRepository,
   BridgeSessionTicketClaims,
@@ -21,4 +20,3 @@ export * from './application/bridge-gateway-query-transport.js'
 export * from './application/bridge-gateway-session.js'
 export * from './application/bridge-stream-ingestor.js'
 export * from './application/bridge-trade-projection-decoder.js'
-export { bridgeCredentialRoutes } from './transport/http/bridge-credential-routes.js'

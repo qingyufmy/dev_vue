@@ -1,7 +1,6 @@
 import { referralRuleRoutes, type ReferralRuleManagementService } from '../modules/commerce/index.js'
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type { AuthService } from '../modules/auth/index.js'
-import { bridgeCredentialRoutes, bridgePairingRoutes, type BridgeCredentialService, type BridgePairingService } from '../modules/bridge/index.js'
 import {
   executionDistributionRoutes, executionRoutes, userExecutionCommandRoutes, type ExecutionDistributionService,
   type ExecutionService, type UserExecutionCommandService,
@@ -15,9 +14,9 @@ export interface ApiV4RouteServices {
   learningHttp?: FastifyPluginAsync
   auth: AuthService
   authHttp: FastifyPluginAsync
-  bridgeCredentials: BridgeCredentialService
-  bridgePairing: BridgePairingService
+  bridgeHttp: FastifyPluginAsync
   tradingHttp: FastifyPluginAsync
+  marketHttp: FastifyPluginAsync
   inferenceHttp: FastifyPluginAsync
   strategiesHttp: FastifyPluginAsync
   risk: RiskService
@@ -51,9 +50,9 @@ export async function registerApiV4Routes(
   })
   await fastify.register(async trade => {
     trade.addHook('onRequest', exactTradeHostHook(input.tradeOrigin))
-    await trade.register(bridgeCredentialRoutes, { prefix: '/api/v4', service: services.bridgeCredentials })
-    await trade.register(bridgePairingRoutes, { prefix: '/api/v4', service: services.bridgePairing, auth: services.tradeAuth })
+    await trade.register(services.bridgeHttp)
     await trade.register(services.tradingHttp)
+    await trade.register(services.marketHttp)
     await trade.register(services.inferenceHttp)
     await trade.register(services.strategiesHttp)
     await trade.register(riskRoutes, { prefix: '/api/v4', service: services.risk, auth: services.tradeAuth })

@@ -1,0 +1,1073 @@
+{
+  "kind": "macro-http-readiness/v1",
+  "observedAt": "2026-09-08T20:56:53.788Z",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "missing": [],
+  "columns": [
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "id",
+      "columnType": "char(36)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "event_id",
+      "columnType": "char(36)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "revision_number",
+      "columnType": "int unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "provider_revision_key",
+      "columnType": "varchar(191)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "status",
+      "columnType": "enum('scheduled','released','revised','delayed','cancelled')",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "scheduled_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "previous_value",
+      "columnType": "decimal(30,10)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "consensus_value",
+      "columnType": "decimal(30,10)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "actual_value",
+      "columnType": "decimal(30,10)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "revised_previous_value",
+      "columnType": "decimal(30,10)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "display_previous",
+      "columnType": "varchar(128)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "display_consensus",
+      "columnType": "varchar(128)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "display_actual",
+      "columnType": "varchar(128)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "display_revised_previous",
+      "columnType": "varchar(128)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "provider_updated_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "available_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "ingested_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "availability_confidence",
+      "columnType": "enum('exact','provider_date','retrieval_only','unknown')",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "content_sha256",
+      "columnType": "char(64)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "evidence_ref",
+      "columnType": "varchar(2048)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "ingestion_run_id",
+      "columnType": "char(36)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_event_revisions",
+      "columnName": "created_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_events",
+      "columnName": "id",
+      "columnType": "char(36)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_events",
+      "columnName": "source_id",
+      "columnType": "bigint unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_events",
+      "columnName": "provider_event_id",
+      "columnType": "varchar(191)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_events",
+      "columnName": "country_code",
+      "columnType": "char(2)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_events",
+      "columnName": "country_name",
+      "columnType": "varchar(191)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_events",
+      "columnName": "currency_code",
+      "columnType": "char(3)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "economic_calendar_events",
+      "columnName": "title",
+      "columnType": "varchar(500)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_events",
+      "columnName": "scheduled_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_events",
+      "columnName": "time_precision",
+      "columnType": "enum('exact','date_only','tentative')",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_events",
+      "columnName": "importance",
+      "columnType": "enum('low','medium','high','unknown')",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_events",
+      "columnName": "period_label",
+      "columnType": "varchar(128)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "economic_calendar_events",
+      "columnName": "unit",
+      "columnType": "varchar(64)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "economic_calendar_events",
+      "columnName": "status",
+      "columnType": "enum('scheduled','released','revised','delayed','cancelled')",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_events",
+      "columnName": "revision",
+      "columnType": "bigint unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_events",
+      "columnName": "provider_updated_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "economic_calendar_events",
+      "columnName": "created_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "economic_calendar_events",
+      "columnName": "updated_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "id",
+      "columnType": "bigint unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "source_key",
+      "columnType": "varchar(64)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "provider",
+      "columnType": "varchar(64)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "display_name",
+      "columnType": "varchar(191)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "status",
+      "columnType": "enum('candidate','trial','legal_review','approved','suspended','retired')",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "credential_ref",
+      "columnType": "varchar(191)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "terms_uri",
+      "columnType": "varchar(2048)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "terms_version",
+      "columnType": "varchar(128)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "attribution_text",
+      "columnType": "varchar(2000)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "display_allowed",
+      "columnType": "tinyint(1)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "cache_allowed",
+      "columnType": "tinyint(1)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "retention_allowed",
+      "columnType": "tinyint(1)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "modeling_allowed",
+      "columnType": "tinyint(1)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "derived_data_allowed",
+      "columnType": "tinyint(1)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "license_reviewed_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "license_expires_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "rate_limit_json",
+      "columnType": "json",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "revision",
+      "columnType": "bigint unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "created_by_user_id",
+      "columnType": "int",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "created_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "updated_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_data_sources",
+      "columnName": "retired_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_feature_sets",
+      "columnName": "id",
+      "columnType": "bigint unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_feature_sets",
+      "columnName": "feature_key",
+      "columnType": "varchar(64)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_feature_sets",
+      "columnName": "version_number",
+      "columnType": "int unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_feature_sets",
+      "columnName": "schema_version",
+      "columnType": "smallint unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_feature_sets",
+      "columnName": "definition_json",
+      "columnType": "json",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_feature_sets",
+      "columnName": "definition_sha256",
+      "columnType": "char(64)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_feature_sets",
+      "columnName": "status",
+      "columnType": "enum('draft','active','retired')",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_feature_sets",
+      "columnName": "created_by_user_id",
+      "columnType": "int",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_feature_sets",
+      "columnName": "created_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_feature_sets",
+      "columnName": "activated_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_feature_sets",
+      "columnName": "retired_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "id",
+      "columnType": "char(36)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "source_id",
+      "columnType": "bigint unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "series_id",
+      "columnType": "bigint unsigned",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "idempotency_key",
+      "columnType": "varchar(255)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "requested_from_utc",
+      "columnType": "datetime(3)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "requested_to_utc",
+      "columnType": "datetime(3)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "status",
+      "columnType": "enum('queued','running','succeeded','failed','status_unknown','cancelled')",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "lease_owner",
+      "columnType": "varchar(128)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "lease_expires_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "fencing_token",
+      "columnType": "bigint unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "request_started_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "response_received_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "response_sha256",
+      "columnType": "char(64)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "evidence_ref",
+      "columnType": "varchar(2048)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "parser_version",
+      "columnType": "varchar(64)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "inserted_count",
+      "columnType": "int unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "skipped_count",
+      "columnType": "int unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "error_code",
+      "columnType": "varchar(128)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "error_summary",
+      "columnType": "varchar(1000)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "revision",
+      "columnType": "bigint unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "created_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "updated_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_ingestion_runs",
+      "columnName": "completed_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_model_versions",
+      "columnName": "id",
+      "columnType": "bigint unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_model_versions",
+      "columnName": "model_key",
+      "columnType": "varchar(64)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_model_versions",
+      "columnName": "version_number",
+      "columnType": "int unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_model_versions",
+      "columnName": "feature_set_id",
+      "columnType": "bigint unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_model_versions",
+      "columnName": "model_kind",
+      "columnType": "enum('baseline','linear','elastic_net','xgboost','regime')",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_model_versions",
+      "columnName": "lifecycle_status",
+      "columnType": "enum('draft','evaluating','shadow','active','rejected','retired')",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_model_versions",
+      "columnName": "training_cutoff_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_model_versions",
+      "columnName": "config_json",
+      "columnType": "json",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_model_versions",
+      "columnName": "input_sha256",
+      "columnType": "char(64)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_model_versions",
+      "columnName": "artifact_ref",
+      "columnType": "varchar(2048)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_model_versions",
+      "columnName": "artifact_sha256",
+      "columnType": "char(64)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_model_versions",
+      "columnName": "report_ref",
+      "columnType": "varchar(2048)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_model_versions",
+      "columnName": "report_sha256",
+      "columnType": "char(64)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_model_versions",
+      "columnName": "revision",
+      "columnType": "bigint unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_model_versions",
+      "columnName": "created_by_user_id",
+      "columnType": "int",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_model_versions",
+      "columnName": "created_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_model_versions",
+      "columnName": "activated_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_model_versions",
+      "columnName": "retired_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_observations",
+      "columnName": "id",
+      "columnType": "bigint unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_observations",
+      "columnName": "series_id",
+      "columnType": "bigint unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_observations",
+      "columnName": "ingestion_run_id",
+      "columnType": "char(36)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_observations",
+      "columnName": "observation_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_observations",
+      "columnName": "available_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_observations",
+      "columnName": "ingested_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_observations",
+      "columnName": "provider_updated_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_observations",
+      "columnName": "provider_vintage_key",
+      "columnType": "varchar(191)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_observations",
+      "columnName": "availability_confidence",
+      "columnType": "enum('exact','provider_date','retrieval_only','unknown')",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_observations",
+      "columnName": "decimal_value",
+      "columnType": "decimal(30,10)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_observations",
+      "columnName": "text_value",
+      "columnType": "varchar(2000)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_observations",
+      "columnName": "content_sha256",
+      "columnType": "char(64)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_observations",
+      "columnName": "evidence_ref",
+      "columnType": "varchar(2048)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_observations",
+      "columnName": "parser_version",
+      "columnType": "varchar(64)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_observations",
+      "columnName": "created_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "id",
+      "columnType": "char(36)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "schema_version",
+      "columnType": "smallint unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "business_date",
+      "columnType": "date",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "data_cutoff_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "feature_set_id",
+      "columnType": "bigint unsigned",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "model_version_id",
+      "columnType": "bigint unsigned",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "owner_scope",
+      "columnType": "enum('platform','user')",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "owner_user_id",
+      "columnType": "int",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "revision",
+      "columnType": "bigint unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "publication_status",
+      "columnType": "enum('legacy','draft','published','superseded','invalidated')",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "freshness_status",
+      "columnType": "enum('fresh','stale','partial','unavailable')",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "health_status",
+      "columnType": "enum('healthy','degraded','failed')",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "horizon",
+      "columnType": "varchar(64)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "observed_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "valid_until_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "published_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "superseded_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "content_sha256",
+      "columnType": "char(64)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "payload_json",
+      "columnType": "json",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "created_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "columnName": "active_publication_key",
+      "columnType": "varchar(96)",
+      "nullable": "YES"
+    },
+    {
+      "tableName": "macro_series",
+      "columnName": "id",
+      "columnType": "bigint unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_series",
+      "columnName": "source_id",
+      "columnType": "bigint unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_series",
+      "columnName": "series_code",
+      "columnType": "varchar(64)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_series",
+      "columnName": "provider_series_key",
+      "columnType": "varchar(191)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_series",
+      "columnName": "display_name",
+      "columnType": "varchar(191)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_series",
+      "columnName": "series_kind",
+      "columnType": "enum('factor','gold_benchmark','volatility','geopolitical_risk')",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_series",
+      "columnName": "value_kind",
+      "columnType": "enum('decimal','text')",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_series",
+      "columnName": "unit",
+      "columnType": "varchar(64)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_series",
+      "columnName": "frequency",
+      "columnType": "enum('intraday','daily','weekly','monthly','irregular')",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_series",
+      "columnName": "freshness_calendar",
+      "columnType": "varchar(64)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_series",
+      "columnName": "freshness_limit_seconds",
+      "columnType": "int unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_series",
+      "columnName": "gold_relation_rule_json",
+      "columnType": "json",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_series",
+      "columnName": "status",
+      "columnType": "enum('enabled','disabled','retired')",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_series",
+      "columnName": "revision",
+      "columnType": "bigint unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_series",
+      "columnName": "created_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_series",
+      "columnName": "updated_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_snapshot_observations",
+      "columnName": "snapshot_id",
+      "columnType": "char(36)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_snapshot_observations",
+      "columnName": "observation_id",
+      "columnType": "bigint unsigned",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_snapshot_observations",
+      "columnName": "factor_code",
+      "columnType": "varchar(64)",
+      "nullable": "NO"
+    },
+    {
+      "tableName": "macro_snapshot_observations",
+      "columnName": "created_at_utc",
+      "columnType": "datetime(3)",
+      "nullable": "NO"
+    }
+  ],
+  "counts": [
+    {
+      "table": "macro_data_sources",
+      "count": "0"
+    },
+    {
+      "table": "macro_series",
+      "count": "0"
+    },
+    {
+      "table": "macro_observations",
+      "count": "0"
+    },
+    {
+      "table": "macro_ingestion_runs",
+      "count": "0"
+    },
+    {
+      "table": "macro_feature_sets",
+      "count": "0"
+    },
+    {
+      "table": "macro_model_versions",
+      "count": "0"
+    },
+    {
+      "table": "macro_research_snapshots",
+      "count": "0"
+    },
+    {
+      "table": "macro_snapshot_observations",
+      "count": "0"
+    },
+    {
+      "table": "economic_calendar_events",
+      "count": "0"
+    },
+    {
+      "table": "economic_calendar_event_revisions",
+      "count": "0"
+    }
+  ],
+  "groups": {
+    "sources": [],
+    "snapshots": []
+  },
+  "scope": "Read-only schema/aggregate evidence. No provider names, credentials, payloads, user identities or API requests. Table presence does not prove compatible contents, publication readiness or a functioning reader."
+}

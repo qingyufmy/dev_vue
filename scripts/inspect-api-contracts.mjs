@@ -1,3 +1,9 @@
+import { createMarketHttp } from '../server/dist-v4/modules/market/composition.js'
+import { createTradeHistoryHttp } from '../server/dist-v4/modules/trade-history/composition.js'
+import { createReviewHttp } from '../server/dist-v4/modules/reviews/composition.js'
+import { createStrategyHttp } from '../server/dist-v4/modules/strategies/composition.js'
+import { createInferenceHttp } from '../server/dist-v4/modules/inference/composition.js'
+import { createBridgeHttp } from '../server/dist-v4/modules/bridge/composition.js'
 import Fastify from 'fastify'
 import { createTradingHttp, createObserverManagementHttp } from '../server/dist-v4/modules/trading/composition.js'
 import { readFile } from 'node:fs/promises'
@@ -24,6 +30,12 @@ const services = Object.fromEntries([
   'inference', 'strategies', 'risk', 'reviews', 'execution', 'userExecution', 'executionDistribution',
   'tradeHistory', 'tradeAuth', 'referralRules', 'observerManagement', 'observerAdminAuth',
 ].map(name => [name, stub]))
+services.inferenceHttp = createInferenceHttp(stub, stub, stub)
+services.strategiesHttp = createStrategyHttp(stub, stub)
+services.reviewsHttp = createReviewHttp(stub, stub)
+services.tradeHistoryHttp = createTradeHistoryHttp(stub, stub)
+services.marketHttp = createMarketHttp(stub, stub, stub, stub)
+services.bridgeHttp = createBridgeHttp(stub, stub, stub)
 services.tradingHttp = createTradingHttp(stub, stub, stub, stub)
 services.observerManagementHttp = createObserverManagementHttp(stub, stub)
 services.auth = { cookieName: cookieNameForClient }
