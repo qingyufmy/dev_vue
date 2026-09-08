@@ -1070,3 +1070,14 @@ MysqlContextCommands 增加最多三次尝试：仅在 begin 成功、commit 尚
 真实MySQL探针升级v2，保留v1历史报告；新回执account-context-deadlock-retry-mysql-20260909.json确认一次context死锁、两次完整尝试，第二次到达唯一写入拦截点。探针仅允许SELECT且拦截commit，归属与上下文原值保留、无回执。该证据证明死锁后的重新进入与校验，不证明本批执行了真实成功写入；成功提交的原子性由定向行为测试验证。没有服务重启、迁移或终端操作。
 
 下一步继续收口Bridge/多用户参与者的事务协调与错误恢复合同，并验证完整路径。归属退役仍未实现，P1与整体目标保持未完成。
+
+
+## 84. Auth 主体能力保留明确事务中止语义（第一百五十四批）
+
+发现 ActivePrincipalAccess、AdminPrincipalAccess 和 AccountPrincipalReader 原先统一吞并驱动异常，上层无法区分已被MySQL明确中止的死锁事务与一般不可用。新增auth公开应用错误 PrincipalTransactionAbortedError，由域内mysql-principal-error仅针对明确ER_LOCK_DEADLOCK映射；不携带原始error/cause、SQL、数据库code或凭据。超时、断连、错误正文包含死锁字样、非法资料等仍返回原auth_principal_unavailable。
+
+上下文完整事务恢复经auth的index消费该公开错误，仍要求事务已开始、commit未尝试且rollback成功，重跑原命令最多三次。auth能力自身不重试SQL、不新建连接、不提交调用者事务；其它消费者仍由已有错误处理失败关闭，不自动推广Bridge或观摩重试。定向复核确认这补齐公开能力异常合同，没有通过barrel暴露基础设施或改动权限判断。
+
+六项新能力合同测试分别验证三类reader的明确中止与非中止错误，增加实际auth adapter到上下文重试的回归；相关身份、管理员、资料、观摩和上下文共68项测试通过。server类型/构建、64条存量增量门、14项运行合同和321冻结输入检查通过。本批未连接数据库、Redis或重启运行服务；上一批真实锁环证据保留，本批新增证据为源码/模拟行为验证。
+
+下一步继续账户事务协调与Bridge恢复合同，不能把异常分类补齐当成全局锁序统一。归属退役、P1及整体模块化仍未完成。

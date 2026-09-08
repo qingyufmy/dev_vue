@@ -1,5 +1,6 @@
 import type { PoolConnection, RowDataPacket } from 'mysql2/promise'
 import type { ActivePrincipalAccess } from '../application/active-principal-access.js'
+import { principalStorageError } from './mysql-principal-error.js'
 
 export function createMysqlActivePrincipalAccess(connection: Pick<PoolConnection, 'execute'>): ActivePrincipalAccess {
   return {
@@ -13,7 +14,7 @@ export function createMysqlActivePrincipalAccess(connection: Pick<PoolConnection
       try {
         const [rows] = await connection.execute<RowDataPacket[]>(sql, [userId])
         return rows.length === 1
-      } catch { throw Error('auth_principal_unavailable') }
+      } catch (error) { throw principalStorageError(error) }
     },
   }
 }

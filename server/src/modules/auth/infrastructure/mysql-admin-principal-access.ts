@@ -1,5 +1,6 @@
 import type { PoolConnection, RowDataPacket } from 'mysql2/promise'
 import type { AdminPrincipalAccess } from '../application/admin-principal-access.js'
+import { principalStorageError } from './mysql-principal-error.js'
 
 export function createMysqlAdminPrincipalAccess(connection: Pick<PoolConnection, 'execute'>): AdminPrincipalAccess {
   return {
@@ -9,7 +10,7 @@ export function createMysqlAdminPrincipalAccess(connection: Pick<PoolConnection,
         const [rows] = await connection.execute<RowDataPacket[]>(`SELECT id FROM users
           WHERE id=? AND role='admin' AND deletion_status='active' AND deleted_at IS NULL LIMIT 1${lock === 'share' ? ' FOR SHARE' : ''}`, [userId])
         return rows.length === 1
-      } catch { throw Error('auth_principal_unavailable') }
+      } catch (error) { throw principalStorageError(error) }
     },
   }
 }

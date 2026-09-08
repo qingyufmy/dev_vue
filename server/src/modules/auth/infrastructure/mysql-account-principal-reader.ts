@@ -1,5 +1,6 @@
 import type { PoolConnection, RowDataPacket } from 'mysql2/promise'
 import type { AccountPrincipalFacts, AccountPrincipalReader } from '../application/account-principal-reader.js'
+import { principalStorageError } from './mysql-principal-error.js'
 
 export function createMysqlAccountPrincipalReader(connection: Pick<PoolConnection, 'execute'>): AccountPrincipalReader {
   return {
@@ -27,7 +28,7 @@ export function createMysqlAccountPrincipalReader(connection: Pick<PoolConnectio
           result.set(id, Object.freeze({ userId: id, plan: row.plan, planExpiresAtUtc: expiry, tokenVersion: Number(row.token_version) }))
         }
         return result
-      } catch { throw Error('auth_principal_unavailable') }
+      } catch (error) { throw principalStorageError(error) }
     },
   }
 }

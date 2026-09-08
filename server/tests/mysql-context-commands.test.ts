@@ -11,6 +11,7 @@ function fixture() {
   let state: State = { revision: 0, receipts: {} }
   let beginFailure = false
   let receiptDeadlocks = 0
+  let principalDeadlocks = 0
   let active = true, receiptFailure = false, lostAck = false, rollbackFailure = false
   const connections: Array<{ calls: string[] }> = []
   const pool = { async getConnection() {
@@ -19,6 +20,9 @@ function fixture() {
     return {
       async beginTransaction() { calls.push('begin'); if (beginFailure) throw Error('private-begin-error'); pending = structuredClone(state) },
       async execute(sql: string, params: unknown[]) {
+        if (sql.startsWith('SELECT id FROM users') && principalDeadlocks > 0) {
+          principalDeadlocks--; throw Object.assign(Error('private-user-query'), { code: 'ER_LOCK_DEADLOCK' })
+        }
         if (sql.startsWith('SELECT id FROM users')) { calls.push(sql.includes('FOR UPDATE') ? 'user-lock' : sql.includes('FOR SHARE') ? 'user-share' : 'user-read'); return [active ? [{ id: 42 }] : []] }
         if (sql.includes('FROM trading_context_changes_v4')) { calls.push('receipt-read'); return [active && pending.receipts[String(params[1])] ? [pending.receipts[String(params[1])]] : []] }
         if (sql.includes('FROM trading_contexts')) { calls.push('context-lock'); return [pending.revision ? [{ revision: String(pending.revision) }] : []] }
@@ -43,6 +47,7 @@ function fixture() {
   return { writer: new MysqlContextCommands(pool as unknown as Pool, resolve, createActivePrincipalAccess), resolve, connections,
     failBegin: () => { beginFailure = true },
     deadlockReceipt: () => { receiptDeadlocks = 1 },
+    deadlockPrincipal: () => { principalDeadlocks = 1 },
     failRollback: () => { rollbackFailure = true }, state: () => state, failReceipt: () => { receiptFailure = true }, loseAck: () => { lostAck = true }, deactivate: () => { active = false } }
 }
 
@@ -167,6 +172,15 @@ it('restarts the full transaction on a confirmed deadlock with the original comm
   expect(f.connections[0]!.calls.slice(-2)).toEqual(['rollback', 'release'])
   expect(f.connections[1]!.calls.slice(0, 4)).toEqual(['begin', 'user-lock', 'receipt-read', 'context-lock'])
   expect(f.resolve.mock.calls.map(call => call[1])).toEqual([command, command])
+  expect(Object.keys(f.state().receipts)).toEqual([command.requestId])
+})
+
+it('recovers a definitive abort from the actual auth capability before target resolution', async () => {
+  const f = fixture(); f.deadlockPrincipal()
+  await expect(f.writer.execute(command)).resolves.toMatchObject({ result: { revision: 1 } })
+  expect(f.connections).toHaveLength(2)
+  expect(f.connections[0]!.calls).toEqual(['begin', 'rollback', 'release'])
+  expect(f.resolve).toHaveBeenCalledOnce()
   expect(Object.keys(f.state().receipts)).toEqual([command.requestId])
 })
 

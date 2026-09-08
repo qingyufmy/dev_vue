@@ -1,6 +1,7 @@
 import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { ActivePrincipalAccess } from '../../auth/index.js'
+import { PrincipalTransactionAbortedError } from '../../auth/index.js'
 import type { ContextWritePort } from '../application/context-write-port.js'
 import { normalizeContextWrite, type ContextWriteCommand, type ContextWriteReceipt } from '../domain/context-write.js'
 import { TradingAccessError, type TradingContext } from '../domain/trading.js'
@@ -71,7 +72,8 @@ export class MysqlContextCommands implements ContextWritePort {
         try { await connection.rollback() }
         catch { connection.destroy(); destroyed = true; throw new TradingAccessError('trading_context_rollback_unknown', 503) }
       }
-      if (started && error instanceof Error && 'code' in error && error.code === 'ER_LOCK_DEADLOCK') {
+      if (started && (error instanceof PrincipalTransactionAbortedError
+        || (error instanceof Error && 'code' in error && error.code === 'ER_LOCK_DEADLOCK'))) {
         throw new RolledBackContextDeadlock()
       }
       if (error instanceof TradingAccessError) throw error
