@@ -189,3 +189,15 @@ prepare在当前MySQL版本下建立唯一临时参考库，核对父键类型�
 沿同proof再次执行apply，完整内容对账通过，新增批次0、verificationCommitted=false、currentDevVueWritten=false，三张回填区域表摘要与首次结果一致。见[重复回执](current-legacy-candle-backfill-repeat-20260908.json)。本次未注入提交丢失；提交未知和断点协议的26项定向测试通过，另对真实proof检查298项摘要唯一且一致，并验证身份、转换、源计划、原表快照、历史日志五类绑定篡改均被拒绝。真实重复执行证明已完成断点恢复读取和无重复写入，不代替故障注入证据。
 
 职责复核：本批只回填三个构建区域表，schema仍163步、237表，未切换应用消费者。异常复核：写入事务重读并共享锁定来源范围，比较完整目标前缀、CAS推进断点；提交未知停止并沿同proof核对，不创建新回填身份；回执单独记录验证状态提交，避免最后验证单独写入时误报零写入。下一步绑定本次当前回填重复回执完成164原子提升和165上下文回执表，再验证本地应用/API/浏览器账户流程。
+
+## 20. 当前 K 线原子提升完成（第九十五批）
+
+当前dev_vue由163升至164步，仍237表。原market_candles重命名为market_candles_legacy_v3，market_candles_build_v4提升为market_candles；单条原子RENAME保持35725行旧K线、30226行正式K线、35725行ID映射和单行verified账本。提升后的目标/映射schema与当前参考库已验证的DDL一致，来源外键指向legacy表、目标外键指向正式表，逐表行数及内容摘要符合冻结的前后映射。
+
+新增当前版本适配器和专属入口，原040 SQL、状态协调器及已执行旧工具保持不变。prepare绑定当前库零写入重复回填回执、当前账户/终端/观摩/投影/构建proof链、全237表快照、311项工具/输入摘要。拒绝旧副本身份、只读检查代替重复apply、未完成回填以及非零写入回执。执行proof见[当前提升凭据](current-legacy-candle-promotion-proof-20260908.json)，prepare实际DDL为0。
+
+复用经真实探针验证的全表WRITE隔离：同一连接持有升级锁并执行日志与RENAME，独立观察连接检查每张表的锁拥有者及SHARED_NO_READ_WRITE；提升后按新表名继续检查，释放锁前完成全量快照/历史验证。首次DDL1次；沿同proof重复apply为completed、DDL0次、currentDevVueWritten=false，完整快照摘要和旧163步日志摘要一致。见[应用回执](current-legacy-candle-promotion-applied-20260908.json)和[重复回执](current-legacy-candle-promotion-repeat-20260908.json)。
+
+42项定向测试通过：当前适配器9项、提升协调13项、历史兼容12项、写入隔离8项。覆盖凭据身份、来源/目标内容变化、未知DDL与历史状态恢复、危险SQL拒绝、锁丢失和释放失败；本批没有在当前库注入DDL丢失。311项摘要已核对唯一且一致。
+
+职责复核：本批仅提升已完整回填的K线，未创建新行情或启用运行消费者；旧记录和迁移证据永久保留。异常复核：提升未知沿同proof确认真实表名及日志状态，不重跑回填、不重建proof、不恢复旧备份覆盖新增数据。下一步使用当前164步证明创建165上下文回执表；之后完成本地服务/API和浏览器账户流程验收。

@@ -480,3 +480,7 @@ A 完成后优先推进 B 的源码、合同和本地测试，同时准备 C；B
 ## 24. 当前库 K 线实际回填完成（第九十四批）
 
 当前dev_vue已完成72批历史K线回填：35725条旧ID映射、30226条目标投影，5499条重复来源保留各自映射，UTC原值不平移。234张受保护原表及完整163步日志前后相等，沿同proof重复执行新增批次0、验证状态写入0；见[应用回执](architecture/current-legacy-candle-backfill-applied-20260908.json)和[重复回执](architecture/current-legacy-candle-backfill-repeat-20260908.json)。schema仍为163步、237表，目标K线仍位于构建表；下一步164原子提升、165回执表，再完成账户样板实际API/浏览器联合验收。全域模块化仍按P0–P7持续推进。
+
+## 25. 当前库 K 线原子提升完成（第九十五批）
+
+当前dev_vue已达164步、237表。market_candles为30226行正式目标K线，market_candles_legacy_v3保留35725行旧记录，35725行ID映射及回填账本保留；全表数据与既有163步日志一致，首次原子RENAME一次、重复执行零写入。见[应用回执](architecture/current-legacy-candle-promotion-applied-20260908.json)及[重复回执](architecture/current-legacy-candle-promotion-repeat-20260908.json)。下一步165上下文回执表，然后进行账户真实API/浏览器联合验收；应用消费者尚未启用，全域模块化仍未完成。

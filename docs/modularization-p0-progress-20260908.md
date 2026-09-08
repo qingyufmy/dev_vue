@@ -802,3 +802,9 @@ HTTP和生产组装已切换到ContextWritePort，移除读取接口、应用服
 当前dev_vue实际完成72批回填，35725旧ID映射和30226目标K线通过完整内容核验，原234表及完整163步日志保持一致。5499重复来源各自保留映射，旧K线不删除、UTC不平移。沿同proof重复apply新增批次0、验证状态写入0，回填三表摘要一致；26项定向测试通过，当前proof的298项工具摘要一致。
 
 见[应用回执](architecture/current-legacy-candle-backfill-applied-20260908.json)、[重复回执](architecture/current-legacy-candle-backfill-repeat-20260908.json)和[接入方案第19节](architecture/current-dev-vue-upgrade-plan-20260908.md)。当前仍163步、237表，下一步164提升及165回执表，再进入账户实际API/浏览器联合验收；全域模块化未完成。
+
+## 第九十五批：当前 K 线原子提升完成
+
+当前dev_vue为164步、237表：正式market_candles为30226行，legacy表保留35725行旧K线，35725行映射和回填账本保留。持有全表WRITE锁并独立观察锁拥有者后执行单条原子RENAME，全表数据与旧163步日志对账一致；重复apply零DDL、零写入。
+
+当前适配器绑定本次回填重复回执和311项工具摘要，旧SQL及已执行工具冻结不变；42项定向测试通过。见[应用回执](architecture/current-legacy-candle-promotion-applied-20260908.json)、[重复回执](architecture/current-legacy-candle-promotion-repeat-20260908.json)及[接入方案第20节](architecture/current-dev-vue-upgrade-plan-20260908.md)。下一步165回执表，之后完成账户真实API/浏览器联合验收，应用运行尚未启用。

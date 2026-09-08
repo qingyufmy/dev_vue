@@ -1,0 +1,52 @@
+{
+  "kind": "current-legacy-candle-promotion-result/v1",
+  "observedAt": "2026-09-08T15:30:04.417Z",
+  "identity": {
+    "database": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "mode": "--apply",
+  "result": {
+    "status": "applied",
+    "ddlCount": 1
+  },
+  "registrySteps": 164,
+  "proofHash": "4d359d7f670456726534b527579b3aebe3c07da6a969b58006d3b31e58cf0055",
+  "backfillProofHash": "f1730d29d274498524515f70724ee4ba85cded1f0b71b1d8332d812fc557c8e1",
+  "tableCount": 237,
+  "snapshotHash": "bcd5257e4245498bbf0638e2d85dac1670a0c4629b76becf54746a5b3a5adf03",
+  "priorHistoryHash": "c3177b89001822df6d69de40f997103c5616b935bca492bf71d80ced39cd8d0c",
+  "candleTables": [
+    {
+      "name": "legacy_candle_backfill_v4",
+      "ddlSha256": "8c0dcc0337fc9006c4ed54061c69b5e9f795aec1177c013d94e25f5f2f5811c5",
+      "schemaSha256": "8c0dcc0337fc9006c4ed54061c69b5e9f795aec1177c013d94e25f5f2f5811c5",
+      "rows": 1,
+      "rowsSha256": "dd0acba73a490db059e57c70236002bb44f36b4ed44f21d62ade8653e8da9158"
+    },
+    {
+      "name": "legacy_candle_mappings_v4",
+      "ddlSha256": "bdfe52191ba46388b93ac4e1c2e34b9a4710e0b80785e6b0cd5438545722e88e",
+      "schemaSha256": "bdfe52191ba46388b93ac4e1c2e34b9a4710e0b80785e6b0cd5438545722e88e",
+      "rows": 35725,
+      "rowsSha256": "4e6021289ed34554d469c012dde6d8c040617cea73ffa422fc04b759e1fe6783"
+    },
+    {
+      "name": "market_candles",
+      "ddlSha256": "b636fc5b2a48c8529d881f6db7ebf128337b377cd4c0e1fc3dda8641ec71258c",
+      "schemaSha256": "b636fc5b2a48c8529d881f6db7ebf128337b377cd4c0e1fc3dda8641ec71258c",
+      "rows": 30226,
+      "rowsSha256": "741d2e96ab908641ed074de7dbbd1f7a5211d1bda30808e830707a2b0b4d6465"
+    },
+    {
+      "name": "market_candles_legacy_v3",
+      "ddlSha256": "e75942c811625970414dcc69330149bb529d81813d36de92f52d3721f4ab1989",
+      "schemaSha256": "e8f4ae8d0246ceefb7f142b3d67a3296be7a742ff39ac420fb007963a9c6890a",
+      "rows": 35725,
+      "rowsSha256": "f9c30411b9b1a0a1192fef1eebfcf90188bd9335e78ea6ec2407b53a11e05863"
+    }
+  ],
+  "currentDevVueWritten": true,
+  "runtimeActivated": false,
+  "scope": "Current database atomic promotion only; all legacy rows, target rows and registered history retained. No runtime cutover."
+}
