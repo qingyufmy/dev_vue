@@ -1,3 +1,4 @@
+import { createAccountPrincipalReader } from '../src/modules/auth/composition.js'
 import { expect, it, vi } from 'vitest'
 import type { Pool, PoolConnection } from 'mysql2/promise'
 import { prepareMysqlContextTarget } from '../src/modules/trading/infrastructure/mysql-context-target.js'
@@ -34,7 +35,7 @@ function fixture() {
 
 it('captures route outside the transaction and reuses exact repository permission checks on its connection', async () => {
   const f = fixture()
-  const resolve = await prepareMysqlContextTarget(f.pool, f.leases, command)
+  const resolve = await prepareMysqlContextTarget(f.pool, f.leases, command, createAccountPrincipalReader)
   f.enter()
   expect(await resolve(f.connection, command)).toEqual({ userId: 42, mode: 'full', accountId: '7', observerChannelId: null, readOnly: false })
   expect(f.leases.current).toHaveBeenCalledTimes(1)
@@ -45,14 +46,14 @@ it('captures route outside the transaction and reuses exact repository permissio
 
 it('keeps an owned account readable when its current projection does not match the route epoch', async () => {
   const f = fixture()
-  const resolve = await prepareMysqlContextTarget(f.pool, f.leases, command)
+  const resolve = await prepareMysqlContextTarget(f.pool, f.leases, command, createAccountPrincipalReader)
   f.permissionEpoch(5); f.enter()
   expect(await resolve(f.connection, command)).toMatchObject({ mode: 'full', accountId: '7', readOnly: true })
 })
 
 it('does not use later mutation of the external route object to authorize a different epoch', async () => {
   const f = fixture()
-  const resolve = await prepareMysqlContextTarget(f.pool, f.leases, command)
+  const resolve = await prepareMysqlContextTarget(f.pool, f.leases, command, createAccountPrincipalReader)
   f.route.connectionEpoch = 5; f.permissionEpoch(5); f.enter()
   expect(await resolve(f.connection, command)).toMatchObject({ readOnly: true })
   expect(f.leases.current).toHaveBeenCalledTimes(1)
@@ -60,7 +61,7 @@ it('does not use later mutation of the external route object to authorize a diff
 
 it('rejects changed ownership candidates and mismatched prepared commands', async () => {
   const f = fixture()
-  const resolve = await prepareMysqlContextTarget(f.pool, f.leases, command)
+  const resolve = await prepareMysqlContextTarget(f.pool, f.leases, command, createAccountPrincipalReader)
   f.candidate(null); f.enter()
   await expect(resolve(f.connection, command)).rejects.toMatchObject({ code: 'revision_conflict' })
   await expect(resolve(f.connection, { ...command, targetId: '8' })).rejects.toMatchObject({ code: 'trading_context_invalid' })
@@ -69,7 +70,7 @@ it('rejects changed ownership candidates and mismatched prepared commands', asyn
 it('exits observation to blocked when no owned account exists without checking revoked observation access', async () => {
   const f = fixture(); f.candidate(null)
   const leave = { ...command, action: 'leave_observer' as const, targetId: null }
-  const resolve = await prepareMysqlContextTarget(f.pool, f.leases, leave)
+  const resolve = await prepareMysqlContextTarget(f.pool, f.leases, leave, createAccountPrincipalReader)
   f.enter()
   expect(await resolve(f.connection, leave)).toMatchObject({ mode: 'blocked', readOnly: true, accountId: null })
   expect(f.leases.current).not.toHaveBeenCalled()
@@ -79,7 +80,7 @@ it('exits observation to blocked when no owned account exists without checking r
 it('rechecks observation through the existing authorization reader on the supplied connection', async () => {
   const f = fixture()
   const observe = { ...command, action: 'enter_observer' as const, targetId: '12' }
-  const resolve = await prepareMysqlContextTarget(f.pool, f.leases, observe)
+  const resolve = await prepareMysqlContextTarget(f.pool, f.leases, observe, createAccountPrincipalReader)
   f.enter()
   await expect(resolve(f.connection, observe)).rejects.toMatchObject({ code: 'trading_account_forbidden' })
   expect(f.leases.current).not.toHaveBeenCalled()

@@ -78,3 +78,6 @@ mysql-context-receipts 中原有 EXISTS users 条件仍保留，使回执与有�
 
 
 普通观摩授权/目录读取经 MysqlObserverSnapshotReader，整次操作（含全部分页）使用一个只读RR一致快照，完成后rollback并归还连接；API、浏览器组装与repository默认入口已接入。命令authorizeOn使用已有外层事务，不能调用快照包装器。测试入口mysql-observer-snapshot-reader.test.ts与scripts/verify-observer-snapshot-mysql.mjs。当前仍保留用户表联查，主体事实端口注入为下一步。
+
+
+观摩主体事实已注入：MysqlObserverAccessReader只查询频道/来源/归属/grant，用户事实来自auth AccountPrincipalReader。普通list/authorize共享快照，authorizeOn复用同一连接并使用share；不允许跨executor复核。整页被主体过滤仍按原SQL页推进。createTradingReader需要显式principal工厂；已有事务的工具使用createTransactionTradingReader，当前库脚本入口verify-current-trading-reads-v2-local.mjs。正向临时表验证入口verify-observer-principal-composition-mysql.mjs；实际观摩频道与浏览器验收仍未完成。

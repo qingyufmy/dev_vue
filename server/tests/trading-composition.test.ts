@@ -1,3 +1,4 @@
+import { createAccountPrincipalReader } from '../src/modules/auth/composition.js'
 import { createActivePrincipalAccess } from '../src/modules/auth/composition.js'
 import { EventEmitter } from 'node:events'
 import type { Pool } from 'mysql2/promise'
@@ -20,7 +21,7 @@ it('accepts capability-only authenticators and propagates session and CSRF rejec
     authenticate: vi.fn(async () => ({ userId: 9, role: 'admin' })),
     assertWrite: vi.fn(async () => ({ userId: 9, role: 'admin' })),
   }
-  const module = createTradingApiModule({} as Pool, {} as Redis, { trade, admin }, leases, createActivePrincipalAccess)
+  const module = createTradingApiModule({} as Pool, {} as Redis, { trade, admin }, leases, createActivePrincipalAccess, createAccountPrincipalReader)
   const request = { headers: {} }
   await expect(module.tradeAuth.authenticate(request)).rejects.toBe(denied)
   await expect(module.tradeAuth.assertWrite(request)).rejects.toBe(csrfDenied)
@@ -32,7 +33,7 @@ it('keeps trade and administrator authentication scopes distinct in the API comp
   const resolveSession = vi.fn(async (_cookie: unknown, client: string) => ({ user: { id: 7, role: client === 'admin-web' ? 'admin' : 'user' }, session: { id: 'session' } }))
   const assertCsrf = vi.fn()
   const auth = { cookieName: (client: string) => client + '-session', resolveSession, assertCsrf } as unknown as AuthService
-  const module = createTradingApiModule({} as Pool, {} as Redis, createBrowserRequestAccess(auth), leases, createActivePrincipalAccess)
+  const module = createTradingApiModule({} as Pool, {} as Redis, createBrowserRequestAccess(auth), leases, createActivePrincipalAccess, createAccountPrincipalReader)
   const headers = { cookie: 'trade-web-session=trade-secret; admin-web-session=admin-secret', 'x-csrf-token': 'csrf', origin: 'https://admin.example.test' }
   expect(await module.tradeAuth.authenticate({ headers })).toEqual({ userId: 7, role: 'user' })
   expect(resolveSession).toHaveBeenLastCalledWith('trade-secret', 'trade-web')
@@ -54,7 +55,7 @@ it('connects event and observer control channels to one hub and detaches them on
     unsubscribe = vi.fn(async () => 0)
   }
   const cache = new EventCache(), onEvent = vi.fn(), onInvalid = vi.fn()
-  const { hub, events } = createBrowserTradingModule({} as Pool, leases, cache as unknown as Redis, onEvent, onInvalid)
+  const { hub, events } = createBrowserTradingModule({} as Pool, leases, cache as unknown as Redis, onEvent, onInvalid, createAccountPrincipalReader)
   const publish = vi.spyOn(hub, 'publish')
   await events.start()
   expect(cache.subscribe).toHaveBeenCalledWith(BROWSER_REALTIME_EVENT_CHANNEL, OBSERVER_CONTROL_CHANNEL)

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { ExecuteValues, FieldPacket, RowDataPacket } from 'mysql2/promise'
 import { MysqlObserverAccessReader, type ObserverSqlExecutor } from '../src/modules/trading/infrastructure/mysql-observer-access-reader.js'
 
@@ -6,6 +6,7 @@ type TestRow = Record<string, unknown>
 
 class FakeExecutor {
   readonly calls: Array<{ sql: string; params: ExecuteValues[] }> = []
+  currentRows: TestRow[] = []
   authorizeRows: TestRow[] = []
   listPages: TestRow[][] = []
   failure: Error | null = null
@@ -14,6 +15,7 @@ class FakeExecutor {
     if (this.failure) throw this.failure
     this.calls.push({ sql, params })
     const rows = sql.includes('c.id>?') ? (this.listPages.shift() ?? []) : this.authorizeRows
+    this.currentRows = rows
     return [rows as unknown as T, []]
   }
 }
@@ -35,12 +37,12 @@ function row(overrides: TestRow = {}): TestRow {
 }
 
 function reader(executor: FakeExecutor) {
-  return new MysqlObserverAccessReader(executor as unknown as ObserverSqlExecutor, () => now)
+  return new MysqlObserverAccessReader(executor as unknown as ObserverSqlExecutor, principals(() => executor.currentRows), () => now)
 }
 
 function readerWithClock(executor: FakeExecutor, values: Date[]) {
   let index = 0
-  return new MysqlObserverAccessReader(executor as unknown as ObserverSqlExecutor, () => values[Math.min(index++, values.length - 1)]!)
+  return new MysqlObserverAccessReader(executor as unknown as ObserverSqlExecutor, principals(() => executor.currentRows), () => values[Math.min(index++, values.length - 1)]!)
 }
 
 describe('MysqlObserverAccessReader', () => {
@@ -143,4 +145,52 @@ describe('MysqlObserverAccessReader', () => {
       await expect(reader(executor).authorize(9, '12', '7')).resolves.toBeNull()
     }
   })
+})
+
+function principals(rows: () => Record<string, unknown>[]) {
+  return { async readMany(ids: readonly number[]) {
+    const row = rows()[0]
+    const facts = new Map<number, { userId: number; plan: string; planExpiresAtUtc: string | null; tokenVersion: number }>()
+    if (!row) return facts
+    for (const id of ids) {
+      const viewer = id === 9
+      if (viewer ? row.viewer_deletion_status !== 'active' || row.viewer_deleted_at !== null
+        : row.operator_deletion_status !== 'active' || row.operator_deleted_at !== null) continue
+      const expiry = viewer ? row.viewer_plan_expires_at : null
+      facts.set(id, { userId: id, plan: String(viewer ? row.viewer_plan : 'free'),
+        planExpiresAtUtc: expiry instanceof Date ? expiry.toISOString() : expiry as string | null,
+        tokenVersion: Number(viewer ? row.viewer_token_version : 0) })
+    }
+    return facts
+  } }
+}
+
+
+it('continues after a full page whose operators are inactive and batches identity facts', async () => {
+  const executor = new FakeExecutor()
+  executor.listPages = [Array.from({ length: 100 }, (_, index) => row({ channel_id: String(index + 1), operator_user_id: 42 })),
+    [row({ channel_id: '101', operator_user_id: 43 })]]
+  const facts = new Map([9, 43].map(userId => [userId, { userId, plan: 'free', planExpiresAtUtc: null, tokenVersion: 1 }] as const))
+  const readMany = vi.fn(async (_ids: readonly number[], _lock: 'none' | 'share') => facts)
+  const access = new MysqlObserverAccessReader(executor as unknown as ObserverSqlExecutor, { readMany }, () => now)
+  expect(await access.list(9)).toEqual([{ id: '101', displayName: '黄金观摩', sourceAccountId: '7', active: true }])
+  expect(readMany.mock.calls).toEqual([[[9, 42], 'none'], [[9, 43], 'none']])
+  expect(executor.calls.every(call => !/JOIN users|viewer\.|operator_user\./.test(call.sql))).toBe(true)
+})
+
+it('uses shared principal facts for transaction authorization and rejects another executor', async () => {
+  const executor = new FakeExecutor(); executor.authorizeRows = [row()]
+  const facts = new Map([9, 42].map(userId => [userId, { userId, plan: 'free', planExpiresAtUtc: null, tokenVersion: 8 }] as const))
+  const readMany = vi.fn(async (_ids: readonly number[], _lock: 'none' | 'share') => facts)
+  const access = new MysqlObserverAccessReader(executor as unknown as ObserverSqlExecutor, { readMany }, () => now)
+  expect(await access.authorizeOn(executor as unknown as ObserverSqlExecutor, 9, '12')).toMatchObject({ userTokenVersion: 8 })
+  expect(readMany).toHaveBeenCalledWith([9, 42], 'share')
+  await expect(access.authorizeOn(new FakeExecutor() as unknown as ObserverSqlExecutor, 9, '12')).rejects.toThrow('observer_transaction_connection_mismatch')
+  expect(readMany).toHaveBeenCalledOnce()
+})
+
+it('does not trust joined identity fields when the principal capability omits the viewer', async () => {
+  const executor = new FakeExecutor(); executor.authorizeRows = [row({ viewer_plan: 'pro' })]
+  const access = new MysqlObserverAccessReader(executor as unknown as ObserverSqlExecutor, { async readMany() { return new Map() } }, () => now)
+  expect(await access.authorize(9, '12')).toBe(null)
 })

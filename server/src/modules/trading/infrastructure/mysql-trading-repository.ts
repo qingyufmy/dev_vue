@@ -4,7 +4,6 @@ import type {
   BridgeExactTradeState, ConnectionCapacityRepository, TradingProjectionRepository, TradingProjectionWrite, TradingReadRepository,
   TrustedBridgeProjectionRepository, TrustedBridgeProjectionWrite,
 } from '../application/trading-ports.js'
-import { MysqlObserverSnapshotReader } from './mysql-observer-snapshot-reader.js'
 import type { ObserverAccessReader } from '../application/observer-ports.js'
 import type { AccountLiveRouteReader } from '../application/account-live-route-reader.js'
 import type {
@@ -147,7 +146,7 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
     private readonly gatewayLeases: AccountLiveRouteReader | null = null,
     observerAccessReader?: ObserverAccessReader,
     private readonly reservationAbsorber?: (connection: PoolConnection) => ProjectionReservationAbsorber,
-  ) { this.observerAccessReader = observerAccessReader ?? new MysqlObserverSnapshotReader(pool) }
+  ) { this.observerAccessReader = observerAccessReader ?? { async list() { throw new TradingAccessError('trading_context_invalid', 503) }, async authorize() { throw new TradingAccessError('trading_context_invalid', 503) } } }
 
   private readonly observerAccessReader: ObserverAccessReader
 

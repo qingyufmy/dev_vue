@@ -812,3 +812,16 @@ mysql-context-target 的 ownedTarget 移除 users 联查，仅查询账户、当
 新增快照覆盖整次list而非每页单独获取连接，原100条分页与TTL检测保留。短期代价是普通授权增加事务往返，连接占用至分页/TTL结束，后续容量验收需计入。当前验证不含跨连接并发版本变化与正向观摩频道；快照层建立不等于身份事实SQL已拆分。
 
 下一批在已明确的普通快照与外层写事务中注入AccountPrincipalReader，替换MysqlObserverAccessReader的users联查，并更新所有构造入口。原联查本批保留，未重启API或浏览器网关，静态登记仍64条，P1与整体目标未完成。
+
+
+## 63. 观摩主体事实注入与用户表联查移除（第一百三十三批）
+
+MysqlObserverAccessReader 的频道SQL移除operator_user/viewer两处users JOIN；同连接注入AccountPrincipalReader，按页批量读取观众和运营者活动事实，会员原值、UTC到期和tokenVersion来自auth。普通读取在既有RR只读快照中使用none，authorizeOn使用同一外层连接及share，拒绝传入其它executor。身份过滤后的分页仍用原始页长度/最后频道ID推进，避免整页运营者失效造成提前结束。
+
+API、浏览器实时、分析/交易Worker、分析调度及账户命令组装均显式注入createAccountPrincipalReader。repository依赖ObserverAccessReader端口，缺少观摩能力时明确拒绝，不再隐式创建跨域读取器。新增createTransactionTradingReader供已有一致快照使用，不嵌套事务；历史只读脚本保留，当前库检查使用新增verify-current-trading-reads-v2-local.mjs及身份schema V2。旧脚本应使用其历史构建，不能把冻结脚本直接视为当前组装API消费者。
+
+64项观摩、命令、账户repository和组装回归通过，补齐整页失效继续分页、主体事实优先、共享模式及不同executor拒绝；server类型/构建、API生成运行检查通过。真实MySQL快照检查4项通过，回执architecture/observer-principal-snapshot-mysql-20260909.json。新增verify-observer-principal-composition-mysql.mjs使用7个私有临时InnoDB表验证正向会员授权/版本与毫秒到期、运营者停用、会员过期、明确grant覆盖会员限制及停用观众拒绝，5项通过，永久写入0（architecture/observer-principal-composition-mysql-20260909.json）。
+
+当前库V2只读回执architecture/current-trading-principal-reads-20260909.json：7个活动用户、3个账户、3个合法归属组合、18个拒绝组合，1条上下文，观摩频道0；真实数据未写入。临时表不证明完整FK/约束或跨连接并发快照，空频道不证明真实观摩入口与浏览器恢复。多主体share在频道归属锁后读取、外层viewer锁仍优先；死锁失败必须回滚且不得在此局部重试，跨连接并发验收仍待完成。
+
+本批观摩reader已不直接读取用户表，但其它trading SQL与其余业务域仍有跨域事实读取。静态登记64条未变，扫描器不覆盖SQL归属；P1整体与P0–P7仍未完成。未重启API/实时网关，本批编译探针不代表运行角色已更新。

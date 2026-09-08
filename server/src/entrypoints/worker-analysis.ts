@@ -1,3 +1,4 @@
+import { createAccountPrincipalReader } from '../modules/auth/composition.js'
 import { createMysqlAnalysisModelResolver, loadCredentialKeyring } from '../modules/inference/composition.js'
 import { createMysqlInferenceRepository } from '../modules/inference/composition.js'
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
@@ -26,7 +27,7 @@ async function main() {
   await Promise.all([pool.query('SELECT 1'), connectCacheRedis(cache)])
   const repository = createMysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader)
   const strategies = createMysqlStrategyService(pool)
-  const trading = createTradingReader(pool, new RedisBridgeGatewayLeaseStore(cache))
+  const trading = createTradingReader(pool, new RedisBridgeGatewayLeaseStore(cache), createAccountPrincipalReader)
   let usageSettlementFailureRevision = 0
   const processor = new AnalysisWorker(
     repository,

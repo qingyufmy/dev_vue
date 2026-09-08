@@ -1,0 +1,20 @@
+{
+  "kind": "observer-snapshot-mysql/v1",
+  "observedAt": "2026-09-08T18:16:47.517Z",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00",
+    "isolationLevel": "REPEATABLE-READ",
+    "connectionId": "559"
+  },
+  "passed": true,
+  "checks": [
+    "principal-facts-inside-read-only-snapshot",
+    "locking-read-rejected",
+    "ordinary-observer-list",
+    "same-connection-reused-with-original-isolation-and-write-mode"
+  ],
+  "databaseWrites": 0,
+  "scope": "Real current MySQL, compiled snapshot wrapper and identity facts reader, synthetic user with no channels. Does not prove cross-connection concurrent snapshots, positive observer grants or browser behavior."
+}

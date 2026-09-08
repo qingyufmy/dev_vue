@@ -1,3 +1,4 @@
+import { createAccountPrincipalReader } from '../modules/auth/composition.js'
 import { createMysqlModelUsageLedger } from '../modules/inference/composition.js'
 import { createMysqlInferenceRepository, createMysqlAnalysisScheduler, createMysqlModelTaskRecovery } from '../modules/inference/composition.js'
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
@@ -21,7 +22,7 @@ async function main() {
   const pool = createMysqlPool(config.mysql)
   await pool.query('SELECT 1')
   const strategies = createMysqlStrategyService(pool)
-  const trading = createTradingReader(pool)
+  const trading = createTradingReader(pool, undefined, createAccountPrincipalReader)
   const scheduler = createMysqlAnalysisScheduler(
     pool,
     new InferenceService(createMysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader), strategies),

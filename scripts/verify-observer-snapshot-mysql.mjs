@@ -33,7 +33,7 @@ try {
       error => error.code === 'ER_CANT_EXECUTE_IN_READ_ONLY_TRANSACTION')
   })
   phase = 'ordinary-observer-read'
-  assert.deepEqual(await new MysqlObserverSnapshotReader(pool).list(fixture.userId), [])
+  assert.deepEqual(await new MysqlObserverSnapshotReader(pool, createAccountPrincipalReader).list(fixture.userId), [])
   phase = 'pool-reuse'
   const [[after]] = await pool.query('SELECT @@session.transaction_isolation isolationLevel,CONNECTION_ID() connectionId')
   assert.equal(after.isolationLevel, identity.isolationLevel)

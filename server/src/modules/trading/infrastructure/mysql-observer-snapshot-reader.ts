@@ -1,3 +1,4 @@
+import type { AccountPrincipalReader } from '../../auth/index.js'
 import type { Pool, PoolConnection } from 'mysql2/promise'
 import type { ObserverAccessReader } from '../application/observer-ports.js'
 import { isPositiveDatabaseId, isValidUserId } from '../domain/account-access.js'
@@ -6,17 +7,17 @@ import { MysqlObserverAccessReader } from './mysql-observer-access-reader.js'
 
 /** Pool-owned ordinary reads. Transactional command authorization uses authorizeOn instead. */
 export class MysqlObserverSnapshotReader implements ObserverAccessReader {
-  constructor(private readonly pool: Pick<Pool, 'getConnection'>, private readonly now: () => Date = () => new Date()) {}
+  constructor(private readonly pool: Pick<Pool, 'getConnection'>, private readonly principals: (connection: PoolConnection) => AccountPrincipalReader, private readonly now: () => Date = () => new Date()) {}
 
   async list(userId: number) {
     if (!isValidUserId(userId)) return []
-    return withMysqlObserverSnapshot(this.pool, connection => new MysqlObserverAccessReader(connection, this.now).list(userId))
+    return withMysqlObserverSnapshot(this.pool, connection => new MysqlObserverAccessReader(connection, this.principals(connection), this.now).list(userId))
   }
 
   async authorize(userId: number, channelId: string, accountId?: string) {
     if (!isValidUserId(userId) || !isPositiveDatabaseId(String(channelId))
       || (accountId !== undefined && !isPositiveDatabaseId(String(accountId)))) return null
-    return withMysqlObserverSnapshot(this.pool, connection => new MysqlObserverAccessReader(connection, this.now).authorize(userId, channelId, accountId))
+    return withMysqlObserverSnapshot(this.pool, connection => new MysqlObserverAccessReader(connection, this.principals(connection), this.now).authorize(userId, channelId, accountId))
   }
 }
 

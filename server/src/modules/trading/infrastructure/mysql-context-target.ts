@@ -1,3 +1,4 @@
+import type { AccountPrincipalReader } from '../../auth/index.js'
 import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise'
 import { contextWriteFingerprintInput, normalizeContextWrite, type ContextWriteCommand } from '../domain/context-write.js'
 import { TradingAccessError } from '../domain/trading.js'
@@ -25,7 +26,7 @@ async function ownedTarget(executor: Pick<Pool, 'execute'>, command: ContextWrit
 // account ownership is rechecked on that same connection. Neither candidate nor route grants access.
 // Capture the external route before entering a MySQL transaction. The resolver itself does only SQL.
 export async function prepareMysqlContextTarget(
-  pool: Pool, leases: GatewayLeases, input: ContextWriteCommand,
+  pool: Pool, leases: GatewayLeases, input: ContextWriteCommand, principals: (connection: PoolConnection) => AccountPrincipalReader,
 ): Promise<ContextTargetResolver> {
   const command = Object.freeze(normalizeContextWrite(input)), fingerprint = contextWriteFingerprintInput(command)
   const candidate = command.action === 'enter_observer' ? null : await ownedTarget(pool, command, false)
@@ -39,7 +40,7 @@ export async function prepareMysqlContextTarget(
   } }
   return async (connection: PoolConnection, currentCommand: ContextWriteCommand) => {
     if (contextWriteFingerprintInput(currentCommand) !== fingerprint) throw new TradingAccessError('trading_context_invalid', 400)
-    const observer = new MysqlObserverAccessReader(connection)
+    const observer = new MysqlObserverAccessReader(connection, principals(connection))
     if (command.action === 'enter_observer') {
       if (!await observer.authorizeOn(connection, command.userId, command.targetId!)) throw new TradingAccessError('trading_account_forbidden', 403)
       return { userId: command.userId, mode: 'observer', accountId: null, observerChannelId: command.targetId, readOnly: true }

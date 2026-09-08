@@ -1,0 +1,20 @@
+{
+  "kind": "observer-principal-composition-mysql/v1",
+  "observedAt": "2026-09-08T18:17:36.809Z",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "passed": true,
+  "checks": [
+    "positive-shared-authorization-with-membership-expiry-and-version",
+    "inactive-operator-rejected",
+    "expired-membership-rejected",
+    "explicit-grant-preserves-original-membership-override",
+    "inactive-viewer-cannot-use-explicit-grant"
+  ],
+  "permanentBusinessWrites": 0,
+  "temporaryTables": 7,
+  "scope": "Compiled observer and auth readers over seven private temporary InnoDB fixtures. Positive SQL authorization, expiry, revocation and grants are covered. Does not prove full schema constraints, concurrent cross-connection snapshots, permanent observer routing or browser behavior."
+}

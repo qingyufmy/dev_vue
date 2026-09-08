@@ -1,3 +1,4 @@
+import type { AccountPrincipalReader } from '../../auth/index.js'
 import type { ExecuteValues, Pool, PoolConnection, RowDataPacket } from 'mysql2/promise'
 import {
   isPositiveDatabaseId, isValidUserId, type AccountAccessRequest, type PublishedAccountAccessEvidence,
@@ -50,14 +51,7 @@ const OBSERVER_SELECT = `
          CAST(s.revision AS CHAR) AS source_revision,s.status AS source_status,
          s.configuration_status AS source_configuration_status,
          s.operator_user_id,
-         operator_user.deletion_status AS operator_deletion_status,
-         operator_user.deleted_at AS operator_deleted_at,
          a.deleted_at_utc AS account_deleted_at,
-         viewer.deletion_status AS viewer_deletion_status,
-         viewer.deleted_at AS viewer_deleted_at,
-         viewer.plan AS viewer_plan,
-         viewer.plan_expires_at AS viewer_plan_expires_at,
-         viewer.token_version AS viewer_token_version,
          x.granted_at_utc AS access_granted_at_utc,
          x.revoked_at_utc AS access_revoked_at_utc,
          CAST(x.revision AS CHAR) AS access_revision
@@ -69,17 +63,9 @@ const OBSERVER_SELECT = `
     INNER JOIN trading_accounts a
       ON a.id=s.trading_account_id
      AND a.deleted_at_utc IS NULL
-    INNER JOIN users operator_user
-      ON operator_user.id=s.operator_user_id
-     AND operator_user.deletion_status='active'
-     AND operator_user.deleted_at IS NULL
-    INNER JOIN users viewer
-      ON viewer.id=?
-     AND viewer.deletion_status='active'
-     AND viewer.deleted_at IS NULL
     LEFT JOIN observer_channel_accesses x
       ON x.observer_channel_id=c.id
-     AND x.user_id=viewer.id
+     AND x.user_id=?
    WHERE c.active=1
      AND s.status='active'
      AND s.configuration_status='ready'
@@ -116,6 +102,7 @@ export class MysqlObserverAccessReader implements ObserverAccessReader {
 
   constructor(
     private readonly executor: ObserverSqlExecutor,
+    private readonly principals: AccountPrincipalReader,
     private readonly now: () => Date = () => new Date(),
   ) {}
 
@@ -126,15 +113,16 @@ export class MysqlObserverAccessReader implements ObserverAccessReader {
     const proofs = new Map<string, ObserverAuthorization>()
     let cursor = '0'
     while (true) {
-      const [rows] = await this.executor.execute<ObserverAccessRow[]>(LIST_SQL, [userId, observedAt.toISOString(), cursor])
+      const [rawRows] = await this.executor.execute<ObserverAccessRow[]>(LIST_SQL, [userId, observedAt.toISOString(), cursor])
+      const rows = await this.withPrincipals(rawRows, userId, 'none')
       const completedAt = this.requestNow()
       if (!completedAt || completedAt.getTime() >= observedAt.getTime() + OBSERVER_AUTHORIZATION_TTL_MS) return []
       for (const row of rows) {
         const authorization = this.authorizationFromRow(row, userId, observedAt)
         if (authorization && !proofs.has(authorization.channelId)) proofs.set(authorization.channelId, authorization)
       }
-      if (rows.length < 100) break
-      const next = String(rows[rows.length - 1]?.channel_id ?? '')
+      if (rawRows.length < 100) break
+      const next = String(rawRows[rawRows.length - 1]?.channel_id ?? '')
       if (!isPositiveDatabaseId(next) || next === cursor) break
       cursor = next
     }
@@ -156,6 +144,7 @@ export class MysqlObserverAccessReader implements ObserverAccessReader {
 
   /** Used by context writes so authorization is checked on the transaction connection. */
   async authorizeOn(executor: ObserverSqlExecutor, userId: number, channelId: string, accountId?: string): Promise<ObserverAuthorization | null> {
+    if (executor !== this.executor) throw Error('observer_transaction_connection_mismatch')
     return this.authorizeWithExecutor(executor, userId, channelId, accountId, true)
   }
 
@@ -170,12 +159,27 @@ export class MysqlObserverAccessReader implements ObserverAccessReader {
       sql += ' AND c.source_trading_account_id=?'
       params.push(accountId)
     }
-    const [rows] = await executor.execute<ObserverAccessRow[]>(lock ? `${sql} FOR SHARE` : sql, params)
+    const [rawRows] = await executor.execute<ObserverAccessRow[]>(lock ? `${sql} FOR SHARE` : sql, params)
+    if (rawRows.length !== 1) return null
+    const rows = await this.withPrincipals(rawRows, userId, lock ? 'share' : 'none')
     if (rows.length !== 1) return null
     const authorization = this.authorizationFromRow(rows[0]!, userId, observedAt)
     const completedAt = this.requestNow()
     if (!authorization || !completedAt || !isExpiryAfter(authorization.expiresAtUtc, completedAt)) return null
     return authorization
+  }
+
+  private async withPrincipals(rows: ObserverAccessRow[], userId: number, lock: 'none' | 'share'): Promise<ObserverAccessRow[]> {
+    if (!rows.length) return []
+    const ids = [...new Set([userId, ...rows.map(row => Number(row.operator_user_id)).filter(isValidUserId)])]
+    const facts = await this.principals.readMany(ids, lock)
+    const viewer = facts.get(userId)
+    if (!viewer) return []
+    return rows.filter(row => facts.has(Number(row.operator_user_id))).map(row => ({ ...row,
+      operator_deletion_status: 'active', operator_deleted_at: null,
+      viewer_deletion_status: 'active', viewer_deleted_at: null, viewer_plan: viewer.plan,
+      viewer_plan_expires_at: viewer.planExpiresAtUtc, viewer_token_version: viewer.tokenVersion,
+    }))
   }
 
   private requestNow() {

@@ -42,7 +42,7 @@ class FakeObserverPool {
 }
 
 function repository(pool: FakeObserverPool) {
-  const reader = new MysqlObserverAccessReader(pool.asPool(), () => now)
+  const reader = new MysqlObserverAccessReader(pool.asPool(), principals(() => pool.observerRows), () => now)
   return new MysqlTradingRepository(pool.asPool(), null, reader)
 }
 
@@ -64,3 +64,21 @@ describe('MysqlTradingRepository observer context authorization', () => {
   })
 
 })
+
+function principals(rows: () => Record<string, unknown>[]) {
+  return { async readMany(ids: readonly number[]) {
+    const row = rows()[0]
+    const facts = new Map<number, { userId: number; plan: string; planExpiresAtUtc: string | null; tokenVersion: number }>()
+    if (!row) return facts
+    for (const id of ids) {
+      const viewer = id === 9
+      if (viewer ? row.viewer_deletion_status !== 'active' || row.viewer_deleted_at !== null
+        : row.operator_deletion_status !== 'active' || row.operator_deleted_at !== null) continue
+      const expiry = viewer ? row.viewer_plan_expires_at : null
+      facts.set(id, { userId: id, plan: String(viewer ? row.viewer_plan : 'free'),
+        planExpiresAtUtc: expiry instanceof Date ? expiry.toISOString() : expiry as string | null,
+        tokenVersion: Number(viewer ? row.viewer_token_version : 0) })
+    }
+    return facts
+  } }
+}

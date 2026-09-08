@@ -1,3 +1,4 @@
+import { createAccountPrincipalReader } from '../modules/auth/composition.js'
 import Fastify from 'fastify'
 import {
   assertV4RuntimeEnabled, connectCacheRedis, createCacheRedis, createMysqlPool, installProcessLifecycle,
@@ -21,7 +22,7 @@ async function main() {
   await Promise.all([pool.query('SELECT 1'), connectCacheRedis(ticketCache), connectCacheRedis(eventCache)])
 
   const { sessions, events } = createBrowserTradingModule(pool, new RedisBridgeGatewayLeaseStore(ticketCache), eventCache,
-    () => health.workSucceeded(), code => health.workFailed(code))
+    () => health.workSucceeded(), code => health.workFailed(code), createAccountPrincipalReader)
   const app = Fastify({ logger: true, bodyLimit: 8 * 1024, trustProxy: true })
   const webSockets = new BrowserRealtimeWebSocketServer(
     app.server,

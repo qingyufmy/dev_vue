@@ -1,4 +1,5 @@
-import type { ActivePrincipalAccess } from '../auth/index.js'
+import { MysqlObserverAccessReader } from './infrastructure/mysql-observer-access-reader.js'
+import type { ActivePrincipalAccess, AccountPrincipalReader } from '../auth/index.js'
 import type { ContextWritePort } from './application/context-write-port.js'
 import { assertMysqlTradingSchemaReady } from './infrastructure/mysql-schema-readiness.js'
 import { createMysqlContextWritePort } from './infrastructure/mysql-context-write-port.js'
@@ -42,15 +43,15 @@ export function createObserverManagementHttp(service: ObserverManagementService,
   return async app => { await app.register(observerManagementRoutes, { prefix: '/api/v4/admin/observer', service, auth }) }
 }
 
-export function createTradingContextWriter(pool: Pool, leases: GatewayLeases, principalAccess: (connection: PoolConnection) => ActivePrincipalAccess): ContextWritePort {
-  return createMysqlContextWritePort(pool, leases, principalAccess)
+export function createTradingContextWriter(pool: Pool, leases: GatewayLeases, principalAccess: (connection: PoolConnection) => ActivePrincipalAccess, principals: (connection: PoolConnection) => AccountPrincipalReader): ContextWritePort {
+  return createMysqlContextWritePort(pool, leases, principalAccess, principals)
 }
 
-export function createTradingReader(pool: Pool, leases?: GatewayLeases): TradingReadRepository {
-  return new MysqlTradingRepository(pool, leases)
+export function createTradingReader(pool: Pool, leases: GatewayLeases | undefined, principals: (connection: PoolConnection) => AccountPrincipalReader): TradingReadRepository {
+  return new MysqlTradingRepository(pool, leases, new MysqlObserverSnapshotReader(pool, principals))
 }
 
-export function createTradingApiModule(pool: Pool, cache: Redis, auth: { trade: TradeSessionAuthenticator; admin: ObserverManagementRequestAuthenticator }, leases: GatewayLeases, principalAccess: (connection: PoolConnection) => ActivePrincipalAccess): {
+export function createTradingApiModule(pool: Pool, cache: Redis, auth: { trade: TradeSessionAuthenticator; admin: ObserverManagementRequestAuthenticator }, leases: GatewayLeases, principalAccess: (connection: PoolConnection) => ActivePrincipalAccess, principals: (connection: PoolConnection) => AccountPrincipalReader): {
   trading: TradingService
   connectionCapacity: ConnectionCapacityService
   observerManagement: ObserverManagementService
@@ -59,7 +60,7 @@ export function createTradingApiModule(pool: Pool, cache: Redis, auth: { trade: 
   tradeAuth: TradeSessionAuthenticator
   observerAdminAuth: ObserverManagementRequestAuthenticator
 } {
-  const access = new MysqlObserverSnapshotReader(pool)
+  const access = new MysqlObserverSnapshotReader(pool, principals)
   const repository = new MysqlTradingRepository(pool, leases, access)
   const trading = new TradingService(repository, new ObserverPublicationService(access, repository))
   const connectionCapacity = new ConnectionCapacityService(repository, new RedisConnectionLeaseStore(cache))
@@ -67,7 +68,7 @@ export function createTradingApiModule(pool: Pool, cache: Redis, auth: { trade: 
   const tradeAuth = auth.trade
   const observerAdminAuth = auth.admin
   return { trading, connectionCapacity, observerManagement, tradeAuth, observerAdminAuth,
-    tradeHttp: createTradingHttp(trading, connectionCapacity, tradeAuth, createTradingContextWriter(pool, leases, principalAccess)),
+    tradeHttp: createTradingHttp(trading, connectionCapacity, tradeAuth, createTradingContextWriter(pool, leases, principalAccess, principals)),
     observerHttp: createObserverManagementHttp(observerManagement, observerAdminAuth),
   }
 }
@@ -81,12 +82,12 @@ export function createBridgeTradingModule(pool: Pool, cache: Redis, leases: Gate
   return { capacity: repository, projector: new BridgeStreamProjector(repository, new RedisBrowserRealtimePublisher(cache, undefined, onPublishError)) }
 }
 
-export function createBrowserTradingModule(pool: Pool, leases: GatewayLeases, eventCache: Redis, onEvent: () => void, onInvalidEvent: (code: string) => void): {
+export function createBrowserTradingModule(pool: Pool, leases: GatewayLeases, eventCache: Redis, onEvent: () => void, onInvalidEvent: (code: string) => void, principals: (connection: PoolConnection) => AccountPrincipalReader): {
   hub: BrowserRealtimePublication
   sessions: BrowserRealtimeSessions
   events: Pick<RedisBrowserRealtimeSubscriber, 'start' | 'close'>
 } {
-  const access = new MysqlObserverSnapshotReader(pool)
+  const access = new MysqlObserverSnapshotReader(pool, principals)
   const hub = new BrowserRealtimeHub(new MysqlTradingRepository(pool, leases, access), access)
   const events = new RedisBrowserRealtimeSubscriber(eventCache, {
     publish(event) { hub.publish(event); onEvent() },
@@ -105,4 +106,10 @@ export function createTransactionAccountClock(connection: PoolConnection): Accou
 
 export function createBrowserRealtimeSessions(hub: BrowserRealtimeHub): BrowserRealtimeSessions {
   return { open: (userId, sink) => new BrowserRealtimeSession(userId, hub, sink) }
+}
+
+
+/** Caller owns an existing consistent read snapshot; never open a nested pool transaction. */
+export function createTransactionTradingReader(connection: PoolConnection, principals: (connection: PoolConnection) => AccountPrincipalReader): TradingReadRepository {
+  return new MysqlTradingRepository(connection as unknown as Pool, null, new MysqlObserverAccessReader(connection, principals(connection)))
 }

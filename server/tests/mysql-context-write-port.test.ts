@@ -82,7 +82,7 @@ function fixture() {
     },
   }
   return {
-    port: createTradingContextWriter(pool as unknown as Pool, leases, createActivePrincipalAccess), calls, leases,
+    port: createTradingContextWriter(pool as unknown as Pool, leases, createActivePrincipalAccess, () => ({ async readMany(ids) { return new Map(active ? ids.map(userId => [userId, { userId, plan: 'free', planExpiresAtUtc: null, tokenVersion: 1 }] as const) : []) } })), calls, leases,
     revision: () => revision, lostAck: () => { lostAck = true }, failPreparation: () => { prepareFails = true },
     failConnection: () => { connectionFails = true }, removeTarget: () => { removed = true },
     onRoute: (callback: () => void) => { duringRoute = callback },

@@ -1,3 +1,4 @@
+import { createAccountPrincipalReader } from '../modules/auth/composition.js'
 import { createMysqlTraderModelResolver, loadCredentialKeyring } from '../modules/inference/composition.js'
 import { createMysqlInferenceRepository } from '../modules/inference/composition.js'
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
@@ -32,7 +33,7 @@ async function main() {
     repository,
     new InferenceService(repository, strategies),
     strategies,
-    createMysqlTraderContext(pool, repository, createTradingReader(pool, new RedisBridgeGatewayLeaseStore(cache)), createSubscriptionPreferencesReader),
+    createMysqlTraderContext(pool, repository, createTradingReader(pool, new RedisBridgeGatewayLeaseStore(cache), createAccountPrincipalReader), createSubscriptionPreferencesReader),
     createMysqlTraderModelResolver(pool, loadCredentialKeyring(), {
       allowPrivateEndpoints: config.allowPrivateModelEndpoints,
       maxAttempts: config.modelMaxAttempts,

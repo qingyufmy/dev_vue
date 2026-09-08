@@ -1,3 +1,4 @@
+import { createAccountPrincipalReader } from '../modules/auth/composition.js'
 import { createMysqlInferenceRepository, createInferenceHttp } from '../modules/inference/composition.js'
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import { createMysqlLearningService, createMysqlLearningCompletionService, createLearningHttp } from '../modules/learning/composition.js'
@@ -40,7 +41,7 @@ async function main() {
   await Promise.all([assertTradingSchemaReady(pool, assertAccountPrincipalReadSchemaV2), connectCacheRedis(cache)])
 
   const auth = createAuthModule(pool, cache, web.auth, createBridgeDeviceRevoker(pool))
-  const trading = createTradingApiModule(pool, cache, createBrowserRequestAccess(auth), new RedisBridgeGatewayLeaseStore(cache), createActivePrincipalAccess)
+  const trading = createTradingApiModule(pool, cache, createBrowserRequestAccess(auth), new RedisBridgeGatewayLeaseStore(cache), createActivePrincipalAccess, createAccountPrincipalReader)
   const { tradeAuth, observerAdminAuth } = trading
   const userExecution = new UserExecutionCommandService(new MysqlUserExecutionCommandRepository(pool, createTransactionAccountClock))
   const executionDistribution = new ExecutionDistributionService(new MysqlExecutionDistributionRepository(pool))

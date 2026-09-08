@@ -1,4 +1,4 @@
-import type { ActivePrincipalAccess } from '../../auth/index.js'
+import type { ActivePrincipalAccess, AccountPrincipalReader } from '../../auth/index.js'
 import type { Pool, PoolConnection } from 'mysql2/promise'
 import type { ContextWritePort } from '../application/context-write-port.js'
 import { normalizeContextWrite } from '../domain/context-write.js'
@@ -8,7 +8,7 @@ import { prepareMysqlContextTarget } from './mysql-context-target.js'
 
 type GatewayLeases = Parameters<typeof prepareMysqlContextTarget>[1]
 
-export function createMysqlContextWritePort(pool: Pool, leases: GatewayLeases, principalAccess: (connection: PoolConnection) => ActivePrincipalAccess): ContextWritePort {
+export function createMysqlContextWritePort(pool: Pool, leases: GatewayLeases, principalAccess: (connection: PoolConnection) => ActivePrincipalAccess, principals: (connection: PoolConnection) => AccountPrincipalReader): ContextWritePort {
   // A historical replay must not need the old account, channel or external route to still exist.
   // Re-enter the transaction to recheck the active user and digest under the user lock.
   const replay = new MysqlContextCommands(pool, async () => {
@@ -19,7 +19,7 @@ export function createMysqlContextWritePort(pool: Pool, leases: GatewayLeases, p
       const command = Object.freeze(normalizeContextWrite(input))
       try {
         if (await replay.receipt(command.userId, command.requestId)) return await replay.execute(command)
-        const resolve = await prepareMysqlContextTarget(pool, leases, command)
+        const resolve = await prepareMysqlContextTarget(pool, leases, command, principals)
         return await new MysqlContextCommands(pool, resolve, principalAccess).execute(command)
       } catch (error) {
         if (error instanceof TradingAccessError) throw error

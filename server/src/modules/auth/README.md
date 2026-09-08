@@ -44,3 +44,6 @@ AuthService通过自身所需的BridgeDeviceRevoker端口触发设备撤销；�
 
 
 主体事实公开能力 AccountPrincipalReader.readMany：最多101个请求ID，返回活动用户的会员原值、UTC到期时间与身份版本；缺失或停用主体不返回。composition 的 createAccountPrincipalReader 绑定调用者连接。none 读取必须与授权其它事实共享一致快照，share 使用外层事务，reader 不负责 begin/commit/release。验证入口 auth-account-principal-reader.test.ts 与 scripts/verify-account-principal-facts-mysql.mjs；观摩消费者尚待注入。
+
+
+观摩消费者现已通过运行组装注入AccountPrincipalReader：普通快照none、写事务share；auth负责主体字段与停用过滤，trading保留频道策略、会员到期/授权TTL及明确grant规则。消费者组装与真实临时表证据见总体方案第63节。
