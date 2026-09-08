@@ -1238,3 +1238,11 @@ market-client-contract.test.mjs通过实际Fastify HTTP适配器消费全部七�
 核对/market仍为占位路由后，新增独立feature及公开入口、README和createMarketWorkspace。概览与详情分离请求控制，取消与代次共同阻止迟到响应覆盖；会话reset清空数据，dispose清理且禁止再次读取；详情结果必须匹配所选ID。状态区分idle/loading/ready/error，合法空结果ready，错误文案不透传SQL等内部内容。
 
 四项行为测试通过，trade类型及前端边界通过。沿用ui-ux-pro-max/shadcn-vue指导现有设计系统，记录摘要优先、独立空/错/加载态、稳定刷新入口和北京时间；本批未新增UI或接路由，不能称页面、会话watch或卸载hook已经验收。下一批接概览与详情组件，并实际调用reset/dispose，随后响应式与浏览器验证。无依赖连接或服务重启。
+
+## 103. 市场概览与详情页面接线（第一百七十三批）
+
+替换/market占位路由，通过feature公开loadMarketView懒加载。MarketView组装研究摘要和未来七天事件，MarketCalendar展示前值/预期/实际及非精确时间标识，MarketSnapshotDetail复用Sheet展示摘要与因子。使用现有Card/Button/Sheet及北京时间工具；空、错误、加载区分，刷新保留原生按钮且函数内防重复。
+
+页面按身份ID同步reset并重新加载，登出清空数据，卸载dispose，详情关闭取消请求。新增两项Vue组件测试验证空结果、失败重试、重复刷新抑制、身份变化和卸载取消；配合四项状态测试共六项通过，trade类型/构建及前端边界通过。
+
+本批未运行真实浏览器视觉、键盘、Sheet焦点和桌面/平板/手机验收，未接实时失效事件，不能把组件测试当页面全验收。下一批在本地浏览器核对正向/空/失败及恢复流程，保留来源日历和发布链路待办。无数据库操作、服务重启或公网动作。

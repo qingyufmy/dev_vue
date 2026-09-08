@@ -1,16 +1,17 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useTradeSession, loadLoginView } from '~/features/auth'
 import { loadHomeView } from '~/features/home'
+import { loadMarketView } from '~/features/market'
 import { loadModulePlaceholderView } from '~/features/shell'
 
 const moduleRoutes = [
-  { path: '/market', title: '市场行情', description: '宏观环境、关键因子与黄金市场状态将在对应阶段接入。' },
   { path: '/settings/models', title: '模型配置', description: '个人与平台共享模型、默认模型和用途路由将在对应阶段接入。' },
 ]
 
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
+    { path: '/market', name: 'market', component: loadMarketView, meta: { title: '市场行情' } },
     {
       path: '/bridge', name: 'bridge',
       component: () => import('~/features/bridge').then((module) => module.BridgeView),
