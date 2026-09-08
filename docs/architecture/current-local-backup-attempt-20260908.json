@@ -1,0 +1,27 @@
+{
+  "kind": "current-local-backup-attempt/v1",
+  "status": "sql_review_rejected",
+  "source": "dev_vue",
+  "target": "dev_vue_m1_source_20260908_03",
+  "targetCreated": false,
+  "sourceWrites": 0,
+  "artifact": {
+    "format": "aurum-local-backup/aes-256-gcm/v1",
+    "iv": "f39197ee4dfb277f8c7deef1",
+    "tag": "5810e71f1341b700ac32de01669a9880",
+    "plaintext": {
+      "bytes": 683686779,
+      "sha256": "0abad5c3d2890a172a091416aae84b1dd4f1a589289cf02a2a9b20c7039dd863"
+    },
+    "ciphertext": {
+      "bytes": 683686779,
+      "sha256": "58bcc1f1092dbcee5228b25da1dcfa3be62a7559dad88473f16456f4ca49cbb2"
+    }
+  },
+  "cause": "backup_sql_function_forbidden",
+  "executionSource": {
+    "path": "scripts/backup-current-dev-vue-local.mjs",
+    "sha256": "8baa11643507b7fe7bb0d277966e12d0d882037a9d126b8c8b2694c445786759"
+  },
+  "restoreVerified": false
+}
