@@ -298,3 +298,11 @@ SSO的两种Cookie课程解锁与完成写入用例改经实际HTTP工厂；学�
 真实写后注入异常并验证回滚；实际commit成功后模拟响应丢失，确认返回backfill_commit_unknown，再由恢复查询确认committed；重复每批均不新增业务数据。当前工具摘要在执行前后核对相等，回执冻结工具、目标身份、源/转换摘要及run ID。临时失败回执已清理，SSH隧道已关闭。
 
 语法检查与真实MySQL演练通过，见[演练证据](architecture/account-wave-local-rehearsal-20260908-v3.json)。本批只写恢复副本4张构建表与迁移账本，没有写当前dev_vue或进行表提升；下一步核对完整目标行值与权限投影，再实现正式根切换及故障恢复。
+
+## 第三十三批：回填目标全字段与所有者投影
+
+新增verify-account-wave-projection-local.mjs，只读访问固定恢复副本；验证演练工具摘要、目标身份和两条转换流transformHash，重新由完整旧源生成期望值，再与四张构建表全部目标业务列比较。3账户×10列、4设置×14列、274区间×11列、4归属×7列均一致，整数/UTC毫秒按精确值比较，不只比较数量。
+
+从当前MysqlAccountRegistration.lockCurrentOwnership提取SQL条件，构建表替换及移除FOR UPDATE后执行75组用户/账户组合，3组允许、72组拒绝，返回区间和归属revision匹配。该验证不覆盖行锁并发、Bridge凭据、额度和其它API权限，未把只读投影等同完整授权链路。
+
+[真实只读回执](architecture/account-wave-projection-verification-20260908.json)和脚本语法检查通过。无数据库写入，临时SSH隧道已关闭。下一步继续恢复副本的正式根提升/旧引用保留及异常恢复，当前dev_vue尚未切换。

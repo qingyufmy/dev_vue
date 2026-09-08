@@ -1,0 +1,39 @@
+{
+  "kind": "account-wave-projection-verification/v1",
+  "observedAt": "2026-09-08T07:08:31.855Z",
+  "target": "dev_vue_m1_source_20260907_02",
+  "databaseWrites": 0,
+  "rehearsalManifestHash": "d387a423c6f3e7a583880493e7cd54945b4306a35a05803147b38a8199381221",
+  "comparisons": [
+    {
+      "table": "trading_accounts_v4_build",
+      "rows": 3,
+      "columns": 10,
+      "sha256": "595262a35fc765b0fccc34750b5070b7f2a3e21c6914524f09eec3078e9ab1c0"
+    },
+    {
+      "table": "user_trading_account_settings_v4_build",
+      "rows": 4,
+      "columns": 14,
+      "sha256": "721c3363e290707efb6b57a34c3dc2b86ef150aebeba4035df42549684e44756"
+    },
+    {
+      "table": "trading_account_ownership_intervals_v4_build",
+      "rows": 274,
+      "columns": 11,
+      "sha256": "4a4002d3a8167ee5b2364a91ce489bf2190eb7b67716c5550802cf3b58f61f7b"
+    },
+    {
+      "table": "trading_account_ownerships_v4_build",
+      "rows": 4,
+      "columns": 7,
+      "sha256": "2443575bfcee5c58492b7a51786c23c66a855c1ca86ae892a381e7faa35df6f1"
+    }
+  ],
+  "ownerPairs": {
+    "allowed": 3,
+    "denied": 72
+  },
+  "runtimeSourceSha256": "2fba71ed9b31193e966c78591cf48579af1c476b9cf5c22958dbb3f7092c70a5",
+  "scope": "Exact target business columns and current-owner predicate using build table names; excludes lock concurrency, Bridge credentials, quotas and full API permissions."
+}
