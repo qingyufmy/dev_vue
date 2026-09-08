@@ -23,6 +23,7 @@
     "inspect:server-boundaries": "node scripts/inspect-server-boundaries.mjs",
     "inspect:frontend-boundaries": "node scripts/inspect-frontend-boundaries.mjs",
     "inspect:api-contracts": "pnpm run build:server:v4 && node scripts/inspect-api-contracts.mjs",
+    "inspect:api-schemas": "node scripts/inspect-api-schemas.mjs",
     "typecheck:server": "tsc -p server/tsconfig.json --noEmit",
     "build:server:v4": "tsc -p server/tsconfig.build.json",
     "start:v4:api": "node server/dist-v4/entrypoints/api-v4.js",
@@ -76,6 +77,8 @@
     "@types/bcryptjs": "2.4.6",
     "@types/node": "24.13.3",
     "@types/ws": "8.18.1",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "typescript": "6.0.3",
     "vitest": "^3.2.7"
   },
