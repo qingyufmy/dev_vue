@@ -3,7 +3,7 @@ import {
   assertV4RuntimeEnabled, connectCacheRedis, createCacheRedis, createMysqlPool, installProcessLifecycle,
   loadServerEnvironment, loadV4BaseRuntimeConfig, loadV4BrowserRealtimeConfig, RoleHealth,
 } from '../bootstrap/index.js'
-import { createRealtimeTicketAuthenticator } from '../modules/auth/index.js'
+import { createRealtimeTicketAuthenticator } from '../modules/auth/composition.js'
 import { RedisBridgeGatewayLeaseStore } from '../modules/bridge/index.js'
 import {
   BrowserRealtimeHub, MysqlTradingRepository, MysqlObserverAccessReader, RedisBrowserRealtimeSubscriber,

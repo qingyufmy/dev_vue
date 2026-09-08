@@ -1,7 +1,7 @@
 {
   "version": 1,
   "scope": "server/src source candidates; not database or ownership verification",
-  "files": 235,
+  "files": 236,
   "limitations": [
     "Literal SQL candidates may be unused; writers describe source directories, not approved owners.",
     "Dynamic targets, CTEs, multi-table shapes and indirect execute/query calls require manual review.",
@@ -759,19 +759,9 @@
     {
       "table": "bridge_refresh_sessions",
       "writers": [
-        "auth",
         "bridge"
       ],
       "evidence": [
-        {
-          "file": "server/src/modules/auth/infrastructure/mysql-bridge-device-revoker.ts",
-          "line": 14,
-          "writer": "auth",
-          "operation": "UPDATE",
-          "table": "bridge_refresh_sessions",
-          "review": null,
-          "dynamic": false
-        },
         {
           "file": "server/src/modules/bridge/infrastructure/mysql-bridge-credential-repository.ts",
           "line": 67,
@@ -802,6 +792,15 @@
         {
           "file": "server/src/modules/bridge/infrastructure/mysql-bridge-credential-repository.ts",
           "line": 173,
+          "writer": "bridge",
+          "operation": "UPDATE",
+          "table": "bridge_refresh_sessions",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-device-revoker.ts",
+          "line": 13,
           "writer": "bridge",
           "operation": "UPDATE",
           "table": "bridge_refresh_sessions",
@@ -848,14 +847,13 @@
     {
       "table": "bridge_v4_pairing_requests",
       "writers": [
-        "auth",
         "bridge"
       ],
       "evidence": [
         {
-          "file": "server/src/modules/auth/infrastructure/mysql-bridge-device-revoker.ts",
-          "line": 12,
-          "writer": "auth",
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-device-revoker.ts",
+          "line": 11,
+          "writer": "bridge",
           "operation": "UPDATE",
           "table": "bridge_v4_pairing_requests",
           "review": null,
@@ -3827,7 +3825,7 @@
   "counts": {
     "tables": 92,
     "writeCandidates": 264,
-    "multipleWriterTables": 8,
+    "multipleWriterTables": 6,
     "unresolved": 5,
     "indirectCalls": 114
   }

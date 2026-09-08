@@ -8,7 +8,8 @@ import {
   assertV4RuntimeEnabled, connectCacheRedis, createCacheRedis, createMysqlPool, installProcessLifecycle,
   loadServerEnvironment, loadV4ApiRuntimeConfig, loadV4BaseRuntimeConfig, RoleHealth,
 } from '../bootstrap/index.js'
-import { createAuthModule } from '../modules/auth/index.js'
+import { createAuthModule } from '../modules/auth/composition.js'
+import { createBridgeDeviceRevoker } from '../modules/bridge/composition.js'
 import {
   BridgeCredentialService, MysqlBridgeCredentialRepository, RedisBridgeGatewayLeaseStore, RedisBridgeSessionTicketStore,
   BridgePairingService, MysqlBridgePairingRepository,
@@ -40,7 +41,7 @@ async function main() {
   const cache = createCacheRedis(runtime.cacheRedis)
   await Promise.all([pool.query('SELECT 1'), connectCacheRedis(cache)])
 
-  const auth = createAuthModule(pool, cache, web.auth)
+  const auth = createAuthModule(pool, cache, web.auth, createBridgeDeviceRevoker(pool))
   const tradeAuth = new AuthTradeRequestAdapter(auth)
   const observerAccess = new MysqlObserverAccessReader(pool)
   const tradingRepository = new MysqlTradingRepository(pool, new RedisBridgeGatewayLeaseStore(cache), observerAccess)

@@ -300,32 +300,6 @@
       "finding": {
         "rule": "public-implementation-export",
         "source": "server/src/modules/auth/index.ts",
-        "target": "server/src/modules/auth/infrastructure/create-auth-module.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "auth",
-      "phase": "P6",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/auth/index.ts",
-        "target": "server/src/modules/auth/infrastructure/create-auth-module.ts",
-        "kind": "export",
-        "typeOnly": true
-      },
-      "count": 1,
-      "owner": "auth",
-      "phase": "P6",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/auth/index.ts",
         "target": "server/src/modules/auth/infrastructure/es256-id-token-signer.ts",
         "kind": "export",
         "typeOnly": false
@@ -366,19 +340,6 @@
         "rule": "public-implementation-export",
         "source": "server/src/modules/auth/index.ts",
         "target": "server/src/modules/auth/infrastructure/mysql-auth-repository.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "auth",
-      "phase": "P6",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/auth/index.ts",
-        "target": "server/src/modules/auth/infrastructure/mysql-bridge-device-revoker.ts",
         "kind": "export",
         "typeOnly": false
       },

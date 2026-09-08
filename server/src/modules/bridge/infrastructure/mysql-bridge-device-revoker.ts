@@ -1,7 +1,6 @@
 import type { Pool } from 'mysql2/promise'
-import type { BridgeDeviceRevoker } from '../application/auth-ports.js'
 
-export class MysqlBridgeDeviceRevoker implements BridgeDeviceRevoker {
+export class MysqlBridgeDeviceRevoker {
   constructor(private readonly pool: Pool) {}
 
   async revokeUserDevices(userId: number, reason: string, now: Date) {

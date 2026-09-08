@@ -2,6 +2,8 @@
 
 日期：2026-09-08。P0 源码清单与首轮语义核查，未完成全表所有权验收。
 
+第十九批更新：认证模块的 Bridge 凭据撤销实现已迁入 bridge，运行入口通过受限 composition 入口创建并注入 auth；auth 不再直接写这两张 Bridge 表。当前 JSON 已刷新为236个源文件、264个候选、92张静态目标表、6张多模块写入表；5处未解析候选和114处间接调用保持。下文首轮统计为改造前证据。
+
 ## 证据与复现
 
 运行 `pnpm run inspect:sql-writes`，或者直接运行 `node scripts/inspect-sql-writes.mjs` 取得纯 JSON。本次结果保存于 [SQL 写入清单](sql-write-inventory-20260908.json)。工具只读取 `server/src`，不读取环境配置、连接数据库或执行 SQL。
@@ -20,7 +22,7 @@
 | --- | --- | --- | --- |
 | `trading_accounts`、`trading_account_ownership_intervals`、`trading_account_ownerships` | bridge | 账户实体与归属属于 trading。Bridge 首次认领通过 trading 的事务内公开能力完成；账户创建、归属、凭据重查、绑定和连接登记保留同一提交边界 | P1 |
 | `terminal_profiles`、`terminal_account_bindings`、`bridge_connection_sessions` | bridge | 设备档案、精确绑定和连接生命周期由 bridge 管理；trading 通过声明的查询能力取得账户连接投影 | P1 |
-| `bridge_refresh_sessions`、`bridge_v4_pairing_requests` | auth、bridge | 凭据与配对撤销由 bridge 拥有；auth 触发公开撤销能力，不在 auth infrastructure 直接写 Bridge 表。核对注销的失败恢复语义后迁移 | P1/P6 |
+| `bridge_refresh_sessions`、`bridge_v4_pairing_requests` | bridge（第十九批已移除 auth 直接写入） | 凭据与配对撤销实现由 bridge 拥有，运行入口注入 auth 所需的撤销端口。原用户锁、配对/凭据同一事务以及设备撤销完成后再退出网页的顺序保留；失败继续向上传播 | P1/P6，当前端口收口已实现 |
 | `subscription_schedules` | strategies、inference | 区分订阅配置变更与调度游标推进，通过所属域的比较并更新能力协作；不得以两个模块分别控制部分字段替代唯一所有者。最终归属结合 P3/P4 用例复审确定 | P3/P4 |
 | `trade_decisions` | inference、risk | 推理决策事实由 inference 拥有；risk 保存风险判断后，需在现有事务中调用明确的决策关联/状态迁移能力，不能直接改另一域状态 | P4/P5 |
 | `risk_decisions_v4` | risk、execution | 风险决策由 risk 拥有；execution 绑定 operation 时通过带 revision 的事务能力，不直接更新 risk 表 | P5 |
@@ -56,3 +58,5 @@
 3. 在明确所有权后实现增量检查；动态目标和无法分析的写入不能被宽泛例外自动批准。
 
 检测器 6 项定向测试通过，涵盖引号/注释、upsert、多表与多语句拒绝、动态目标、间接调用、分组和 TypeScript 解析失败。此次只新增离线工具与证据，没有修改服务端业务实现、迁移或运行配置，未连接 MySQL/Redis/终端。
+
+第十九批实现验证：Bridge 配对/撤销20项、认证SSO13项通过；新增存储失败回滚/释放连接以及注入撤销失败不提前退出网页的回归。完整服务端类型检查、构建及边界增量门通过。SQL double只证明调用与事务控制流程，未连接真实数据库验证回滚或运行撤销。其余多域事务与间接 SQL 尚未收口。

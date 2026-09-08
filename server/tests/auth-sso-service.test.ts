@@ -225,6 +225,14 @@ describe('SSO V4 service', () => {
     expect(bridge.revokedUsers).toEqual([7])
     await expect(service.resolveSession(authenticated.rawSession, 'auth')).rejects.toBeInstanceOf(AuthError)
   })
+
+  it('keeps the web session when the injected device revocation fails', async () => {
+    const { service, bridge } = fixture()
+    const authenticated = await service.authenticate('user@example.test', 'correct-password', false)
+    bridge.revokeUserDevices = async () => { throw new Error('device_revocation_unavailable') }
+    await expect(service.revokeAll(authenticated.session)).rejects.toThrow('device_revocation_unavailable')
+    await expect(service.resolveSession(authenticated.rawSession, 'auth')).resolves.toMatchObject({ session: { userId: 7, revokedAtUtc: null } })
+  })
 })
 
 describe('SSO V4 HTTP routes', () => {

@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { BridgePairingService, BridgePairingError } from '../src/modules/bridge/application/bridge-pairing-service.js'
 import { MysqlBridgePairingRepository } from '../src/modules/bridge/infrastructure/mysql-bridge-pairing-repository.js'
 import { bridgePairingRoutes } from '../src/modules/bridge/transport/http/bridge-pairing-routes.js'
-import { MysqlBridgeDeviceRevoker } from '../src/modules/auth/infrastructure/mysql-bridge-device-revoker.js'
+import { createBridgeDeviceRevoker } from '../src/modules/bridge/composition.js'
 import { AuthError } from '../src/modules/auth/domain/auth.js'
 
 const code = `bpc_${'a'.repeat(43)}`
@@ -111,11 +111,19 @@ describe('V4 pairing persistence (SQL double, not real MySQL)', () => {
   })
   it('revokes pending codes and credentials in one user-locked transaction', async () => {
     const f = database([[{ id: 7 }], { affectedRows: 1 }, { affectedRows: 1 }])
-    await new MysqlBridgeDeviceRevoker(f.pool).revokeUserDevices(7, 'revoke_all_devices', new Date())
+    await createBridgeDeviceRevoker(f.pool).revokeUserDevices(7, 'revoke_all_devices', new Date())
     expect(String(f.execute.mock.calls[0]![0])).toContain('FOR UPDATE')
     expect(String(f.execute.mock.calls[1]![0])).toContain('UPDATE bridge_v4_pairing_requests')
     expect(String(f.execute.mock.calls[2]![0])).toContain('UPDATE bridge_refresh_sessions')
     expect(f.connection.commit).toHaveBeenCalledOnce()
+  })
+  it('rolls back both device invalidations and releases the connection when credential storage fails', async () => {
+    const f = database([[{ id: 7 }], { affectedRows: 1 }, new Error('credential_storage_failed')])
+    await expect(createBridgeDeviceRevoker(f.pool).revokeUserDevices(7, 'revoke_all_devices', new Date()))
+      .rejects.toThrow('credential_storage_failed')
+    expect(f.connection.commit).not.toHaveBeenCalled()
+    expect(f.connection.rollback).toHaveBeenCalledOnce()
+    expect(f.connection.release).toHaveBeenCalledOnce()
   })
 })
 
