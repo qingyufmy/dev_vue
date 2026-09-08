@@ -50,3 +50,12 @@
 生成源为登记迁移与当前165步证明，不绑定VM身份或行数据。更新时运行`node scripts/generate-trading-schema-readiness.mjs`，核对兼容性并执行`node scripts/generate-trading-schema-readiness.mjs --check`和`tests/trading-schema-generation.test.js`；生成测试会拒绝源与产物漂移。既有package脚本属于历史冻结输入，本批未修改。就绪检查短暂持有同连接升级锁，仅读取有界日志与元数据；释放不确定则销毁连接并拒绝就绪。
 
 实际只读核验入口为`node scripts/verify-current-trading-reads-local.mjs <新绝对路径回执.json>`，先构建server。使用server/.env应用账号和UTC连接池，在只读一致事务内核验账户读取及归属拒绝；不会建立会话或写入用户上下文。HTTP、Redis、浏览器与正向观摩授权仍需独立验收。
+
+
+### 用户读取结构能力（第一百一十批）
+
+API 入口在启动与 health/ready 中注入 auth composition 的 assertAccountPrincipalReadSchema。它在原升级锁的同一连接内验证 auth/account-principal-read/v1：users 为 InnoDB 基表、六个账户授权读取字段的类型/空值/排序规则，以及单列 id 主键。trading 不再在此注入路径比较 users 整表摘要；其余 22 表、165 步账本、UTC、触发器及释放锁检查不变。能力失败不会回退至旧摘要。
+
+未注入能力的历史工具保留原完整摘要检查，旧生成文件和冻结输入不变。该兼容能力仅针对读取，不证明 users 所有写入、新增非空字段对认证写入的兼容性，或其它模块完整就绪。账户对 users 的直接 SQL 仍待端口化；它不是全域解耦完成。用户表无关字段不进入六字段元数据查询，但本批没有真实执行增列 DDL。
+
+定向测试：server/tests/auth-account-principal-schema.test.ts、server/tests/trading-schema-readiness.test.ts。构建后运行 node scripts/verify-account-principal-schema-local.mjs <新绝对路径回执>，在当前开发库仅读元数据与账本，无业务数据读取或写入。

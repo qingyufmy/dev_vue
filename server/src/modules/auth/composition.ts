@@ -13,6 +13,7 @@ import { registerSsoRoutes } from './transport/http/register-sso-routes.js'
 import type { BrowserRequestAccess } from './application/browser-request-access.js'
 import { AuthTradeRequestAdapter } from './transport/http/trade-request-access.js'
 import { AuthObserverAdminAdapter } from './transport/http/admin-request-access.js'
+export { assertMysqlAccountPrincipalReadSchema as assertAccountPrincipalReadSchema } from './infrastructure/mysql-account-principal-schema.js'
 
 export function createBrowserRequestAccess(service: AuthService): { trade: BrowserRequestAccess; admin: BrowserRequestAccess } {
   return { trade: new AuthTradeRequestAdapter(service), admin: new AuthObserverAdminAdapter(service) }

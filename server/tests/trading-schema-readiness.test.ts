@@ -5,7 +5,7 @@ import { expect, it, vi } from 'vitest'
 const sample = vi.hoisted(() => ({ ddl: 'CREATE TABLE `accounts` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4' }))
 vi.mock('../src/modules/trading/infrastructure/inplace-account-schema.js', () => ({
   inplaceAccountSchema: { steps: [{ id: 'required', checksum: 'checksum' }],
-    tables: [{ table: 'accounts', schemaSha256: createHash('sha256').update(sample.ddl).digest('hex') }] },
+    tables: ['accounts', 'users'].map(table => ({ table, schemaSha256: createHash('sha256').update(sample.ddl).digest('hex') })) },
 }))
 import { assertMysqlTradingSchemaReady } from '../src/modules/trading/infrastructure/mysql-schema-readiness.js'
 
@@ -76,4 +76,24 @@ it('destroys the connection and fails readiness when release cannot be confirmed
 it('sanitizes failure to obtain a connection', async () => {
   const f = fixture(); f.pool.getConnection.mockRejectedValueOnce(Error('secret'))
   await expect(f.run()).rejects.toThrow(/^trading_schema_not_ready$/)
+})
+
+it('delegates users to the owner under the same upgrade lock, retaining other table and trigger checks', async () => {
+  const f = fixture()
+  const owner = vi.fn(async (connection: unknown) => {
+    expect(connection).toBe(f.connection)
+    expect(f.connection.execute).toHaveBeenLastCalledWith('SELECT GET_LOCK(?,0) acquired', ['aurum:inplace:dev_vue'])
+  })
+  await assertMysqlTradingSchemaReady(f.pool as unknown as Pool, owner)
+  expect(owner).toHaveBeenCalledOnce()
+  expect(f.connection.query.mock.calls.filter(([sql]) => sql.startsWith('SHOW CREATE'))).toEqual([['SHOW CREATE TABLE `accounts`']])
+  f.state.triggers.push({ tableName: 'users' })
+  await expect(assertMysqlTradingSchemaReady(f.pool as unknown as Pool, owner)).rejects.toThrow('trading_schema_not_ready')
+})
+
+it('does not fall back to full-table acceptance after an owner check fails', async () => {
+  const f = fixture(), owner = vi.fn(async () => { throw Error('secret') })
+  await expect(assertMysqlTradingSchemaReady(f.pool as unknown as Pool, owner)).rejects.toThrow(/^trading_schema_not_ready$/)
+  expect(f.connection.release).toHaveBeenCalledOnce()
+  expect(f.connection.execute).toHaveBeenLastCalledWith('SELECT RELEASE_LOCK(?) released', ['aurum:inplace:dev_vue'])
 })

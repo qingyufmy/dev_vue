@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { Pool, RowDataPacket } from 'mysql2/promise'
+import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise'
 import { inplaceAccountSchema } from './inplace-account-schema.js'
 
 function schemaHash(ddl: string): string {
@@ -10,7 +10,8 @@ function schemaHash(ddl: string): string {
 
 // Current supported upgrade profile. Metadata only: never count rows, migrate or populate tables.
 // Future compatible steps are allowed; any unfinished step or consumed-schema drift rejects readiness.
-export async function assertMysqlTradingSchemaReady(pool: Pick<Pool, 'getConnection'>): Promise<void> {
+export async function assertMysqlTradingSchemaReady(pool: Pick<Pool, 'getConnection'>,
+  principalReadSchema?: (connection: Pick<PoolConnection, 'query'>) => Promise<void>): Promise<void> {
   const connection = await pool.getConnection().catch(() => { throw Error('trading_schema_not_ready') })
   let lock: string | undefined, destroyed = false
   try {
@@ -25,6 +26,10 @@ export async function assertMysqlTradingSchemaReady(pool: Pick<Pool, 'getConnect
     if (history.length > 1000 || byId.size !== history.length || history.some(row => row.status !== 'completed')
       || inplaceAccountSchema.steps.some(step => byId.get(step.id)?.checksum !== step.checksum)) throw Error('history')
     for (const requirement of inplaceAccountSchema.tables) {
+      if (requirement.table === 'users' && principalReadSchema) {
+        await principalReadSchema(connection)
+        continue
+      }
       const [[row]] = await connection.query<RowDataPacket[]>(`SHOW CREATE TABLE \`${requirement.table}\``)
       if (typeof row?.['Create Table'] !== 'string' || schemaHash(row['Create Table']) !== requirement.schemaSha256) throw Error('schema')
     }

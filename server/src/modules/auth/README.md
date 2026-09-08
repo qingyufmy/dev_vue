@@ -23,3 +23,10 @@ AuthService通过自身所需的BridgeDeviceRevoker端口触发设备撤销；�
 运行auth-sso-service、browser-realtime-runtime、bridge-pairing及受影响模块HTTP测试；服务端类型检查/构建包含边界和运行合同生成门。实际路由清单使用inspect:api-contracts，已知其它域缺失不能隐去。
 
 当前完成的是公开入口与组装封装，不表示认证全域、用户资料迁移、全部API同源校验、真实MySQL/Redis及浏览器集成均已完成。HTTP合同仍遵循contracts/http/domains/auth.json及总体P0–P7验收。
+
+
+## 账户身份读取结构合同
+
+受限 composition 导出 assertAccountPrincipalReadSchema，供 API 组装注入账户就绪检查，同一升级锁连接内执行。auth/account-principal-read/v1 所需 users 字段为 id、role、plan、plan_expires_at、deleted_at、deletion_status，验证 MySQL 类型、空值和字符串排序语义及 id 主键；只读取信息架构元数据。
+
+该能力不经业务 index 导出，不向 domain/application 暴露连接；不涵盖完整 auth 写入就绪，不允许将通过结果当作迁移、权限或权益状态证明。字段消费来自 trading 的当前账户归属/观摩查询，后续 SQL 端口化仍需继续。

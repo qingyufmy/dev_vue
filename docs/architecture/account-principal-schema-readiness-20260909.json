@@ -1,0 +1,15 @@
+{
+  "kind": "account-principal-schema-readiness/v1",
+  "observedAt": "2026-09-08T17:05:56.890Z",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "passed": true,
+  "ownerCapability": "auth/account-principal-read/v1",
+  "ownerChecks": 1,
+  "remainingExactTableChecks": 22,
+  "databaseWrites": 0,
+  "scope": "Compiled readiness against current MySQL metadata and migration ledger under upgrade lock. Does not mutate schema, prove additive DDL in a second database, validate all auth writes or remove cross-domain SQL."
+}
