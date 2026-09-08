@@ -1,5 +1,7 @@
 # 全量重构主路线图
 
+> 2026-09-08 模块化接续：按[全栈模块化方案](full-stack-modularization-plan-20260908.md)进入 P0。完整服务端类型检查已修复，新增前后端依赖检查原型与明细；存量越界仍存在，自动门禁及模块业务迁移尚未完成。见[P0 第一批](modularization-p0-progress-20260908.md)。
+
 > 当前验收（2026-09-08）：本次开发库可独立实施的结构升级已收口，dev_vue累计147步、222表、271337行业务数据保持；344项迁移相关测试与现有106FK/117CHECK全库检查通过。业务配合项按用户许可延期，完整V4规范化/读写切换/公网就绪仍未完成。[范围验收与接续清单](database-independent-upgrade-acceptance-20260908.md)、[阶段199](migration/dev-vue-inplace-stage199-20260908.md)。以下各阶段“当前/继续”文字为历史记录。
 
 > 最新状态：阶段198完成用量策略引用容量，当前145步、271337行业务数据保持，现有104FK/117CHECK全库复查无违规。目标外键完整签名核对发现订阅2组关系尚可继续独立核验。详见[阶段198](migration/dev-vue-inplace-stage198-20260908.md)与[目录v9](migration/dev-vue-structure-remaining-work-20260908-v9.json)。

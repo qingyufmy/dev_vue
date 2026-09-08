@@ -1,0 +1,899 @@
+{
+  "files": 232,
+  "edges": 842,
+  "findings": [
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/audit/application/audit-service.ts",
+      "target": "server/src/modules/trading/domain/trading.ts",
+      "line": 1
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/audit/index.ts",
+      "target": "server/src/modules/audit/infrastructure/mysql-audit-repository.ts",
+      "line": 4
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/audit/index.ts",
+      "target": "server/src/modules/audit/transport/http/audit-routes.ts",
+      "line": 5
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/auth/index.ts",
+      "target": "server/src/modules/auth/infrastructure/auth-client-registry.ts",
+      "line": 8
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/auth/index.ts",
+      "target": "server/src/modules/auth/infrastructure/auth-client-registry.ts",
+      "line": 9
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/auth/index.ts",
+      "target": "server/src/modules/auth/infrastructure/bcrypt-password-verifier.ts",
+      "line": 7
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/auth/index.ts",
+      "target": "server/src/modules/auth/infrastructure/create-auth-module.ts",
+      "line": 14
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/auth/index.ts",
+      "target": "server/src/modules/auth/infrastructure/create-auth-module.ts",
+      "line": 15
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/auth/index.ts",
+      "target": "server/src/modules/auth/infrastructure/es256-id-token-signer.ts",
+      "line": 16
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/auth/index.ts",
+      "target": "server/src/modules/auth/infrastructure/mysql-auth-cleanup.ts",
+      "line": 10
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/auth/index.ts",
+      "target": "server/src/modules/auth/infrastructure/mysql-auth-cleanup.ts",
+      "line": 11
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/auth/index.ts",
+      "target": "server/src/modules/auth/infrastructure/mysql-auth-repository.ts",
+      "line": 12
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/auth/index.ts",
+      "target": "server/src/modules/auth/infrastructure/mysql-bridge-device-revoker.ts",
+      "line": 13
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/auth/index.ts",
+      "target": "server/src/modules/auth/infrastructure/redis-auth-transient-store.ts",
+      "line": 17
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/auth/index.ts",
+      "target": "server/src/modules/auth/transport/http/auth-routes.ts",
+      "line": 18
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/auth/index.ts",
+      "target": "server/src/modules/auth/transport/http/register-sso-routes.ts",
+      "line": 19
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/bridge/application/bridge-gateway-session.ts",
+      "target": "server/src/modules/execution/application/bridge-command-service.ts",
+      "line": 2
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/bridge/application/bridge-gateway-session.ts",
+      "target": "server/src/modules/execution/domain/bridge-command.ts",
+      "line": 3
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/bridge/application/bridge-gateway-transport.ts",
+      "target": "server/src/modules/execution/application/bridge-command-ports.ts",
+      "line": 1
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/bridge/application/bridge-gateway-transport.ts",
+      "target": "server/src/modules/execution/domain/bridge-command.ts",
+      "line": 2
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/bridge/application/bridge-stream-ingestor.ts",
+      "target": "server/src/modules/trading/application/bridge-stream-projector.ts",
+      "line": 1
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/bridge/application/bridge-trade-projection-decoder.ts",
+      "target": "server/src/modules/trading/application/bridge-stream-projector.ts",
+      "line": 1
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/bridge/application/bridge-trade-projection-decoder.ts",
+      "target": "server/src/modules/trading/application/trading-ports.ts",
+      "line": 2
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/bridge/domain/bridge-gateway.ts",
+      "target": "server/src/modules/execution/domain/bridge-command.ts",
+      "line": 1
+    },
+    {
+      "rule": "domain-dependency",
+      "source": "server/src/modules/bridge/domain/bridge-gateway.ts",
+      "target": "server/src/modules/execution/domain/bridge-command.ts",
+      "line": 1
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/bridge/domain/bridge-query.ts",
+      "target": "server/src/modules/execution/domain/bridge-command.ts",
+      "line": 4
+    },
+    {
+      "rule": "domain-dependency",
+      "source": "server/src/modules/bridge/domain/bridge-query.ts",
+      "target": "server/src/modules/execution/domain/bridge-command.ts",
+      "line": 4
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/bridge/index.ts",
+      "target": "server/src/modules/bridge/infrastructure/mysql-bridge-credential-repository.ts",
+      "line": 25
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/bridge/index.ts",
+      "target": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
+      "line": 28
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/bridge/index.ts",
+      "target": "server/src/modules/bridge/infrastructure/mysql-bridge-pairing-repository.ts",
+      "line": 3
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/bridge/index.ts",
+      "target": "server/src/modules/bridge/infrastructure/redis-bridge-gateway-lease-store.ts",
+      "line": 27
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/bridge/index.ts",
+      "target": "server/src/modules/bridge/infrastructure/redis-bridge-session-ticket-store.ts",
+      "line": 26
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/bridge/index.ts",
+      "target": "server/src/modules/bridge/transport/http/bridge-credential-routes.ts",
+      "line": 29
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/bridge/index.ts",
+      "target": "server/src/modules/bridge/transport/http/bridge-pairing-routes.ts",
+      "line": 4
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/bridge/transport/http/bridge-pairing-routes.ts",
+      "target": "server/src/modules/auth/domain/auth.ts",
+      "line": 2
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/commerce/index.ts",
+      "target": "server/src/modules/commerce/infrastructure/mysql-learning-membership-reader.ts",
+      "line": 6
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/commerce/index.ts",
+      "target": "server/src/modules/commerce/infrastructure/mysql-referral-rule-management.ts",
+      "line": 2
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/commerce/index.ts",
+      "target": "server/src/modules/commerce/infrastructure/mysql-wallet-address-reader.ts",
+      "line": 4
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/commerce/index.ts",
+      "target": "server/src/modules/commerce/transport/http/referral-rule-routes.ts",
+      "line": 3
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/commerce/transport/http/referral-rule-routes.ts",
+      "target": "server/src/modules/auth/domain/auth.ts",
+      "line": 2
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/application/execution-distribution-ports.ts",
+      "target": "server/src/modules/inference/domain/inference.ts",
+      "line": 16
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/application/user-execution-command-ports.ts",
+      "target": "server/src/modules/inference/domain/inference.ts",
+      "line": 9
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/application/user-execution-command-ports.ts",
+      "target": "server/src/modules/risk/domain/manual-risk-release.ts",
+      "line": 16
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/application/user-execution-command-ports.ts",
+      "target": "server/src/modules/risk/domain/risk.ts",
+      "line": 1
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/application/user-execution-command-service.ts",
+      "target": "server/src/modules/inference/domain/inference.ts",
+      "line": 3
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/application/user-execution-command-service.ts",
+      "target": "server/src/modules/risk/domain/risk.ts",
+      "line": 2
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/domain/bridge-command.ts",
+      "target": "server/src/modules/inference/domain/inference.ts",
+      "line": 2
+    },
+    {
+      "rule": "domain-dependency",
+      "source": "server/src/modules/execution/domain/bridge-command.ts",
+      "target": "server/src/modules/inference/domain/inference.ts",
+      "line": 2
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/domain/execution-distribution.ts",
+      "target": "server/src/modules/inference/domain/inference.ts",
+      "line": 1
+    },
+    {
+      "rule": "domain-dependency",
+      "source": "server/src/modules/execution/domain/execution-distribution.ts",
+      "target": "server/src/modules/inference/domain/inference.ts",
+      "line": 1
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/domain/execution.ts",
+      "target": "server/src/modules/inference/domain/inference.ts",
+      "line": 2
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/domain/execution.ts",
+      "target": "server/src/modules/risk/domain/risk.ts",
+      "line": 3
+    },
+    {
+      "rule": "domain-dependency",
+      "source": "server/src/modules/execution/domain/execution.ts",
+      "target": "server/src/modules/inference/domain/inference.ts",
+      "line": 2
+    },
+    {
+      "rule": "domain-dependency",
+      "source": "server/src/modules/execution/domain/execution.ts",
+      "target": "server/src/modules/risk/domain/risk.ts",
+      "line": 3
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/domain/projection-absorption.ts",
+      "target": "server/src/modules/trading/application/trading-ports.ts",
+      "line": 1
+    },
+    {
+      "rule": "domain-dependency",
+      "source": "server/src/modules/execution/domain/projection-absorption.ts",
+      "target": "server/src/modules/trading/application/trading-ports.ts",
+      "line": 1
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/domain/user-execution-command.ts",
+      "target": "server/src/modules/inference/domain/inference.ts",
+      "line": 1
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/domain/user-execution-command.ts",
+      "target": "server/src/modules/risk/domain/risk.ts",
+      "line": 2
+    },
+    {
+      "rule": "domain-dependency",
+      "source": "server/src/modules/execution/domain/user-execution-command.ts",
+      "target": "server/src/modules/inference/domain/inference.ts",
+      "line": 1
+    },
+    {
+      "rule": "domain-dependency",
+      "source": "server/src/modules/execution/domain/user-execution-command.ts",
+      "target": "server/src/modules/risk/domain/risk.ts",
+      "line": 2
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/execution/index.ts",
+      "target": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+      "line": 19
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/execution/index.ts",
+      "target": "server/src/modules/execution/infrastructure/mysql-execution-command-source.ts",
+      "line": 20
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/execution/index.ts",
+      "target": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+      "line": 22
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/execution/index.ts",
+      "target": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+      "line": 18
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/execution/index.ts",
+      "target": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
+      "line": 21
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/execution/index.ts",
+      "target": "server/src/modules/execution/infrastructure/redis-account-execution-lease-store.ts",
+      "line": 23
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/execution/index.ts",
+      "target": "server/src/modules/execution/transport/http/execution-distribution-routes.ts",
+      "line": 26
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/execution/index.ts",
+      "target": "server/src/modules/execution/transport/http/execution-routes.ts",
+      "line": 24
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/execution/index.ts",
+      "target": "server/src/modules/execution/transport/http/user-execution-command-routes.ts",
+      "line": 25
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+      "target": "server/src/modules/inference/domain/inference.ts",
+      "line": 12
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/infrastructure/mysql-execution-command-source.ts",
+      "target": "server/src/modules/inference/domain/inference.ts",
+      "line": 2
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+      "target": "server/src/modules/inference/domain/inference.ts",
+      "line": 4
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+      "target": "server/src/modules/inference/domain/inference.ts",
+      "line": 4
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+      "target": "server/src/modules/risk/domain/risk.ts",
+      "line": 5
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
+      "target": "server/src/modules/inference/domain/inference.ts",
+      "line": 6
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
+      "target": "server/src/modules/risk/domain/manual-risk-release.ts",
+      "line": 38
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
+      "target": "server/src/modules/risk/domain/risk.ts",
+      "line": 27
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/inference/application/analysis-context-builder.ts",
+      "target": "server/src/modules/strategies/domain/strategy.ts",
+      "line": 1
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/inference/application/analysis-worker.ts",
+      "target": "server/src/modules/strategies/application/strategy-service.ts",
+      "line": 1
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/inference/application/inference-service.ts",
+      "target": "server/src/modules/strategies/application/strategy-service.ts",
+      "line": 2
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/inference/application/trader-context-builder.ts",
+      "target": "server/src/modules/strategies/domain/strategy.ts",
+      "line": 2
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/inference/application/trader-context-builder.ts",
+      "target": "server/src/modules/trading/application/trading-ports.ts",
+      "line": 1
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/inference/application/trader-worker.ts",
+      "target": "server/src/modules/strategies/application/strategy-service.ts",
+      "line": 1
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/inference/index.ts",
+      "target": "server/src/modules/inference/infrastructure/http-json-model-gateway.ts",
+      "line": 20
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/inference/index.ts",
+      "target": "server/src/modules/inference/infrastructure/mysql-analysis-schedule-repository.ts",
+      "line": 15
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/inference/index.ts",
+      "target": "server/src/modules/inference/infrastructure/mysql-analysis-window-guard.ts",
+      "line": 12
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/inference/index.ts",
+      "target": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 14
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/inference/index.ts",
+      "target": "server/src/modules/inference/infrastructure/mysql-macro-snapshot-reader.ts",
+      "line": 16
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/inference/index.ts",
+      "target": "server/src/modules/inference/infrastructure/mysql-model-gateway-resolver.ts",
+      "line": 21
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/inference/index.ts",
+      "target": "server/src/modules/inference/infrastructure/mysql-model-task-recovery-repository.ts",
+      "line": 23
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/inference/index.ts",
+      "target": "server/src/modules/inference/infrastructure/mysql-model-usage-ledger.ts",
+      "line": 22
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/inference/index.ts",
+      "target": "server/src/modules/inference/infrastructure/mysql-trader-context-readers.ts",
+      "line": 18
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/inference/index.ts",
+      "target": "server/src/modules/inference/infrastructure/mysql-trader-preferences.ts",
+      "line": 19
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/inference/index.ts",
+      "target": "server/src/modules/inference/infrastructure/mysql-trader-window-guard.ts",
+      "line": 10
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/inference/index.ts",
+      "target": "server/src/modules/inference/infrastructure/trading-analysis-market-source.ts",
+      "line": 17
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/inference/index.ts",
+      "target": "server/src/modules/inference/transport/http/inference-routes.ts",
+      "line": 24
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/inference/infrastructure/trading-analysis-market-source.ts",
+      "target": "server/src/modules/trading/application/trading-ports.ts",
+      "line": 2
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/inference/infrastructure/trading-analysis-market-source.ts",
+      "target": "server/src/modules/trading/domain/trading.ts",
+      "line": 3
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/inference/transport/http/inference-routes.ts",
+      "target": "server/src/modules/strategies/application/strategy-service.ts",
+      "line": 4
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/inference/transport/http/inference-routes.ts",
+      "target": "server/src/modules/strategies/domain/strategy.ts",
+      "line": 2
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/inference/transport/http/inference-routes.ts",
+      "target": "server/src/modules/strategies/domain/strategy.ts",
+      "line": 3
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/learning/index.ts",
+      "target": "server/src/modules/learning/infrastructure/mysql-learning-completion.ts",
+      "line": 5
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/learning/index.ts",
+      "target": "server/src/modules/learning/infrastructure/mysql-learning-reader.ts",
+      "line": 2
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/learning/index.ts",
+      "target": "server/src/modules/learning/transport/http/learning-completion-routes.ts",
+      "line": 6
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/learning/index.ts",
+      "target": "server/src/modules/learning/transport/http/learning-routes.ts",
+      "line": 3
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/reviews/index.ts",
+      "target": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+      "line": 5
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/reviews/index.ts",
+      "target": "server/src/modules/reviews/transport/http/review-routes.ts",
+      "line": 6
+    },
+    {
+      "rule": "source-cycle",
+      "source": "server/src/modules/risk/domain/manual-risk-release.ts",
+      "target": "server/src/modules/risk/domain/manual-risk-release.ts -> server/src/modules/risk/domain/risk.ts"
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/risk/domain/risk.ts",
+      "target": "server/src/modules/inference/domain/inference.ts",
+      "line": 2
+    },
+    {
+      "rule": "domain-dependency",
+      "source": "server/src/modules/risk/domain/risk.ts",
+      "target": "server/src/modules/inference/domain/inference.ts",
+      "line": 2
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/risk/index.ts",
+      "target": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "line": 6
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/risk/index.ts",
+      "target": "server/src/modules/risk/transport/http/risk-routes.ts",
+      "line": 7
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "target": "server/src/modules/inference/domain/inference.ts",
+      "line": 3
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/settings/index.ts",
+      "target": "server/src/modules/settings/infrastructure/mysql-setting-reader.ts",
+      "line": 1
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/strategies/index.ts",
+      "target": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+      "line": 7
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/strategies/index.ts",
+      "target": "server/src/modules/strategies/infrastructure/mysql-subscription-execution-preferences.ts",
+      "line": 8
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/strategies/index.ts",
+      "target": "server/src/modules/strategies/transport/http/strategy-routes.ts",
+      "line": 9
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/trade-history/application/trade-history-collector-ports.ts",
+      "target": "server/src/modules/bridge/domain/bridge-gateway.ts",
+      "line": 1
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/trade-history/application/trade-history-collector-ports.ts",
+      "target": "server/src/modules/bridge/domain/bridge-query.ts",
+      "line": 2
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/trade-history/application/trade-history-collector.ts",
+      "target": "server/src/modules/bridge/application/bridge-gateway-query-transport.ts",
+      "line": 1
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/trade-history/application/trade-history-collector.ts",
+      "target": "server/src/modules/bridge/domain/bridge-gateway.ts",
+      "line": 2
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/trade-history/application/trade-history-collector.ts",
+      "target": "server/src/modules/bridge/domain/bridge-query.ts",
+      "line": 3
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/trade-history/application/trade-history-service.ts",
+      "target": "server/src/modules/trading/domain/trading.ts",
+      "line": 2
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/trade-history/domain/terminal-history-projection.ts",
+      "target": "server/src/modules/bridge/domain/bridge-query.ts",
+      "line": 2
+    },
+    {
+      "rule": "domain-dependency",
+      "source": "server/src/modules/trade-history/domain/terminal-history-projection.ts",
+      "target": "server/src/modules/bridge/domain/bridge-query.ts",
+      "line": 2
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/trade-history/index.ts",
+      "target": "server/src/modules/trade-history/infrastructure/mysql-trade-history-collector-repository.ts",
+      "line": 10
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/trade-history/index.ts",
+      "target": "server/src/modules/trade-history/infrastructure/mysql-trade-history-repository.ts",
+      "line": 9
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/trade-history/index.ts",
+      "target": "server/src/modules/trade-history/infrastructure/mysql-trade-history-schedule-repository.ts",
+      "line": 11
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/trade-history/index.ts",
+      "target": "server/src/modules/trade-history/transport/http/trade-history-routes.ts",
+      "line": 12
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/trade-history/infrastructure/mysql-trade-history-collector-repository.ts",
+      "target": "server/src/modules/bridge/domain/bridge-gateway.ts",
+      "line": 3
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/trade-history/infrastructure/mysql-trade-history-collector-repository.ts",
+      "target": "server/src/modules/bridge/domain/bridge-query.ts",
+      "line": 4
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/trading/index.ts",
+      "target": "server/src/modules/trading/infrastructure/auth-observer-admin-adapter.ts",
+      "line": 9
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/trading/index.ts",
+      "target": "server/src/modules/trading/infrastructure/auth-trade-request-adapter.ts",
+      "line": 20
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/trading/index.ts",
+      "target": "server/src/modules/trading/infrastructure/mysql-observer-access-reader.ts",
+      "line": 12
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/trading/index.ts",
+      "target": "server/src/modules/trading/infrastructure/mysql-observer-management-repository.ts",
+      "line": 8
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/trading/index.ts",
+      "target": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+      "line": 21
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/trading/index.ts",
+      "target": "server/src/modules/trading/infrastructure/mysql-transaction-account-clock.ts",
+      "line": 2
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/trading/index.ts",
+      "target": "server/src/modules/trading/infrastructure/redis-browser-realtime-publisher.ts",
+      "line": 22
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/trading/index.ts",
+      "target": "server/src/modules/trading/infrastructure/redis-browser-realtime-subscriber.ts",
+      "line": 23
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/trading/index.ts",
+      "target": "server/src/modules/trading/infrastructure/redis-connection-lease-store.ts",
+      "line": 19
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/trading/index.ts",
+      "target": "server/src/modules/trading/transport/http/observer-management-routes.ts",
+      "line": 10
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/trading/index.ts",
+      "target": "server/src/modules/trading/transport/http/trading-routes.ts",
+      "line": 18
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/trading/index.ts",
+      "target": "server/src/modules/trading/transport/realtime/browser-realtime-hub.ts",
+      "line": 16
+    },
+    {
+      "rule": "public-implementation-export",
+      "source": "server/src/modules/trading/index.ts",
+      "target": "server/src/modules/trading/transport/realtime/browser-realtime-session.ts",
+      "line": 17
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/trading/infrastructure/auth-observer-admin-adapter.ts",
+      "target": "server/src/modules/auth/application/auth-service.ts",
+      "line": 1
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/trading/infrastructure/auth-trade-request-adapter.ts",
+      "target": "server/src/modules/auth/application/auth-service.ts",
+      "line": 1
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+      "target": "server/src/modules/execution/domain/execution.ts",
+      "line": 14
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+      "target": "server/src/modules/execution/domain/projection-absorption.ts",
+      "line": 15
+    },
+    {
+      "rule": "cross-module-internal",
+      "source": "server/src/modules/trading/transport/http/observer-management-routes.ts",
+      "target": "server/src/modules/auth/domain/auth.ts",
+      "line": 2
+    }
+  ]
+}

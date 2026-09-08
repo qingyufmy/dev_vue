@@ -1,0 +1,147 @@
+import ts from 'typescript'
+import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs'
+import { resolve, relative, dirname, extname } from 'node:path'
+
+const slash = value => value.replaceAll('\\', '/')
+const extensions = ['.ts', '.tsx', '.js', '.mjs', '.vue']
+const matchesAlias = (specifier, alias) => alias.endsWith('/') ? specifier.startsWith(alias) : specifier === alias
+
+export function sourceFiles(root) {
+  return readdirSync(root, { withFileTypes: true }).flatMap(entry => {
+    if (['node_modules', 'dist', 'dist-v4', '.nuxt', '.output', 'tests', '__tests__'].includes(entry.name)) return []
+    const file = resolve(root, entry.name)
+    return entry.isDirectory() ? sourceFiles(file)
+      : extensions.includes(extname(file)) && !/\.(test|spec)\./.test(file) ? [file] : []
+  }).sort()
+}
+
+export function parseDependencies(source, file) {
+  // Vue template auto-imports require a separate generated-component inventory.
+  const scripts = file.endsWith('.vue')
+    ? [...source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)].map(match => ({
+      text: match[1], offset: source.slice(0, match.index + match[0].indexOf('>') + 1).split('\n').length - 1,
+    })) : [{ text: source, offset: 0 }]
+  return scripts.flatMap(({ text, offset }) => {
+    const result = []
+    const ast = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+    const add = (node, value, kind) => result.push({
+      specifier: value && ts.isStringLiteralLike(value) ? value.text : null,
+      kind, line: offset + ast.getLineAndCharacterOfPosition(node.getStart(ast)).line + 1,
+    })
+    const visit = node => {
+      if (ts.isImportDeclaration(node)) add(node, node.moduleSpecifier, 'import')
+      if (ts.isExportDeclaration(node) && node.moduleSpecifier) add(node, node.moduleSpecifier, 'export')
+      if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) add(node, node.argument.literal, 'type-import')
+      if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword
+        || ts.isIdentifier(node.expression) && node.expression.text === 'require')) add(node, node.arguments[0], 'dynamic')
+      ts.forEachChild(node, visit)
+    }
+    visit(ast)
+    return result
+  })
+}
+
+export function buildDependencyGraph({ root, files, compilerOptions = {}, aliases = {} }) {
+  const edges = [], unresolved = []
+  for (const file of files) {
+    for (const dependency of parseDependencies(readFileSync(file, 'utf8'), file)) {
+      const edge = { source: slash(relative(root, file)), ...dependency }
+      if (dependency.specifier === null) { unresolved.push(edge); continue }
+      const specifier = dependency.specifier
+      let target = ts.resolveModuleName(specifier, file, compilerOptions, ts.sys).resolvedModule?.resolvedFileName
+      if (!target) {
+        const alias = Object.keys(aliases).sort((a, b) => b.length - a.length).find(key => matchesAlias(specifier, key))
+        const base = specifier.startsWith('.') ? resolve(dirname(file), specifier)
+          : alias ? resolve(aliases[alias], specifier.slice(alias.length)) : null
+        if (base) {
+          const stem = base.replace(/\.(js|mjs)$/, '')
+          target = [base, ...extensions.map(extension => stem + extension),
+            ...extensions.map(extension => resolve(base, 'index' + extension))]
+            .find(candidate => existsSync(candidate) && statSync(candidate).isFile())
+        }
+      }
+      if (target && !slash(target).includes('/node_modules/')) edges.push({ ...edge, target: slash(relative(root, target)) })
+      else if (specifier.startsWith('.') || Object.keys(aliases).some(key => matchesAlias(specifier, key))) unresolved.push(edge)
+      else edges.push({ ...edge, external: specifier })
+    }
+  }
+  return { edges, unresolved }
+}
+
+export function dependencyCycles(edges) {
+  // Strongly connected components give stable findings even with several paths around one cycle.
+  const adjacency = new Map()
+  for (const { source, target } of edges) {
+    if (!target) continue
+    if (!adjacency.has(source)) adjacency.set(source, new Set())
+    adjacency.get(source).add(target)
+  }
+  let next = 0
+  const indexes = new Map(), low = new Map(), stack = [], active = new Set(), cycles = []
+  function visit(node) {
+    indexes.set(node, next); low.set(node, next++)
+    stack.push(node); active.add(node)
+    for (const target of adjacency.get(node) ?? []) {
+      if (!indexes.has(target)) { visit(target); low.set(node, Math.min(low.get(node), low.get(target))) }
+      else if (active.has(target)) low.set(node, Math.min(low.get(node), indexes.get(target)))
+    }
+    if (low.get(node) !== indexes.get(node)) return
+    const component = []
+    let member
+    do { member = stack.pop(); active.delete(member); component.push(member) } while (member !== node)
+    if (component.length > 1 || adjacency.get(node)?.has(node)) cycles.push(component.sort())
+  }
+  for (const node of adjacency.keys()) if (!indexes.has(node)) visit(node)
+  return cycles.sort((a, b) => a[0].localeCompare(b[0]))
+}
+
+const moduleInfo = file => /^server\/src\/modules\/([^/]+)\/(.+)$/.exec(file ?? '')
+
+export function serverBoundaryFindings(graph) {
+  const findings = []
+  const add = (edge, rule) => findings.push({ rule, source: edge.source,
+    target: edge.target ?? edge.external ?? edge.specifier ?? '<computed>', line: edge.line })
+  for (const edge of graph.unresolved) add(edge, 'unresolved-dependency')
+  for (const edge of graph.edges) {
+    const source = moduleInfo(edge.source), target = moduleInfo(edge.target)
+    if (source && target && source[1] !== target[1] && target[2] !== 'index.ts') add(edge, 'cross-module-internal')
+    if (target?.[2] === 'composition.ts' && !/^server\/src\/(bootstrap|entrypoints)\//.test(edge.source)
+      && source?.[1] !== target[1]) add(edge, 'composition-access')
+    if (source?.[2].startsWith('domain/') && (edge.external
+      && !edge.external.startsWith('node:') || target && (source[1] !== target[1] ? target[2] !== 'index.ts' : !target[2].startsWith('domain/')))) add(edge, 'domain-dependency')
+    if (source?.[2].startsWith('application/') && target && source[1] === target[1]
+      && /^(infrastructure|transport)\//.test(target[2])) add(edge, 'application-reverse-dependency')
+    // Follow re-exports transitively: exporting an intermediate barrel must not hide infrastructure.
+    if (source?.[2] === 'index.ts' && edge.kind === 'export') {
+      const pending = [edge.target], seen = new Set()
+      while (pending.length) {
+        const current = pending.pop()
+        if (!current || seen.has(current)) continue
+        seen.add(current)
+        if (/\/(infrastructure|transport)\//.test(current) || current.endsWith('/composition.ts')) {
+          add({ ...edge, target: current }, 'public-implementation-export')
+        }
+        pending.push(...graph.edges.filter(item => item.source === current && item.kind === 'export').map(item => item.target))
+      }
+    }
+  }
+  for (const cycle of dependencyCycles(graph.edges)) findings.push({ rule: 'source-cycle', source: cycle[0], target: cycle.join(' -> ') })
+  return findings.sort((a, b) => `${a.source}|${a.rule}|${a.target}`.localeCompare(`${b.source}|${b.rule}|${b.target}`))
+}
+
+export function frontendBoundaryFindings(graph) {
+  const findings = graph.unresolved.map(edge => ({ rule: 'unresolved-dependency', source: edge.source,
+    target: edge.specifier ?? '<computed>', line: edge.line }))
+  const appOf = file => /^frontend\/apps\/([^/]+)\//.exec(file ?? '')?.[1]
+  const featureOf = file => /^(frontend\/apps\/[^/]+\/(?:src|app)\/features\/[^/]+)\/(.+)$/.exec(file ?? '')
+  for (const edge of graph.edges) {
+    const sourceApp = appOf(edge.source), targetApp = appOf(edge.target)
+    const sourceFeature = featureOf(edge.source), targetFeature = featureOf(edge.target)
+    const add = rule => findings.push({ rule, source: edge.source, target: edge.target, line: edge.line })
+    if (sourceApp && targetApp && sourceApp !== targetApp) add('cross-application')
+    if (edge.source.startsWith('frontend/packages/') && targetApp) add('shared-package-to-application')
+    if (targetFeature && sourceFeature?.[1] !== targetFeature[1] && targetFeature[2] !== 'index.ts') add('feature-internal')
+  }
+  for (const cycle of dependencyCycles(graph.edges)) findings.push({ rule: 'source-cycle', source: cycle[0], target: cycle.join(' -> ') })
+  return findings.sort((a, b) => `${a.source}|${a.rule}|${a.target}`.localeCompare(`${b.source}|${b.rule}|${b.target}`))
+}
