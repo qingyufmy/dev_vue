@@ -64,7 +64,7 @@ export function createTradingApiModule(pool: Pool, cache: Redis, auth: { trade: 
   const repository = new MysqlTradingRepository(pool, leases, access)
   const trading = new TradingService(repository, new ObserverPublicationService(access, repository))
   const connectionCapacity = new ConnectionCapacityService(repository, new RedisConnectionLeaseStore(cache))
-  const observerManagement = new ObserverManagementService(new MysqlObserverManagementRepository(pool, administrators))
+  const observerManagement = new ObserverManagementService(new MysqlObserverManagementRepository(pool, administrators, principalAccess))
   const tradeAuth = auth.trade
   const observerAdminAuth = auth.admin
   return { trading, connectionCapacity, observerManagement, tradeAuth, observerAdminAuth,

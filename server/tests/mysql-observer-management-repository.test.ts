@@ -1,4 +1,4 @@
-import { createAdminPrincipalAccess } from '../src/modules/auth/composition.js'
+import { createAdminPrincipalAccess, createActivePrincipalAccess } from '../src/modules/auth/composition.js'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import type { Pool } from 'mysql2/promise'
@@ -63,7 +63,7 @@ class FakeManagementPool {
   ownerProof = true
   readonly ownerProofUserIds: number[] = []
   strategyProof = true
-  activeUsers = new Set([7])
+  activeUsers = new Set([1, 7])
   failGetConnection = false
   failOutbox = false
   forceAccessUpdateConflict = false
@@ -310,7 +310,7 @@ class FakeManagementPool {
 function cloneMap(values: Map<string, Row>) { return new Map([...values].map(([key, value]) => [key, { ...value }])) }
 function replaceMap(target: Map<string, Row>, source: Map<string, Row>) { target.clear(); for (const [key, value] of source) target.set(key, { ...value }) }
 
-function repository(pool: FakeManagementPool) { return new MysqlObserverManagementRepository(pool.asPool(), createAdminPrincipalAccess) }
+function repository(pool: FakeManagementPool) { return new MysqlObserverManagementRepository(pool.asPool(), createAdminPrincipalAccess, createActivePrincipalAccess) }
 
 function sourceCreate(): ObserverManagementCommand {
   return {
@@ -327,6 +327,41 @@ function write(pool: FakeManagementPool, command: ObserverManagementCommand, key
 }
 
 describe('MysqlObserverManagementRepository', () => {
+  it('rejects inactive source operators even when account ownership remains, before writing', async () => {
+    const pool = new FakeManagementPool()
+    pool.sources.set('10', sourceRow('10', { operator_user_id: 42 }))
+    await expect(write(pool, {
+      kind: 'source.update', id: '10', expectedRevision: 1,
+      config: { displayName: '源', notes: null, tradingAccountId: '7', analysisStrategyId: null, status: 'active' },
+    })).rejects.toMatchObject({ code: 'observer_account_not_owned', status: 403 })
+    expect(pool.operations).toHaveLength(0)
+    expect(pool.outbox).toHaveLength(0)
+    expect(pool.registryRevision).toBe(0)
+    const ownerIndex = pool.calls.findIndex(call => call.sql.includes('FROM trading_accounts a'))
+    const principalIndex = pool.calls.findIndex(call => call.sql.includes('SELECT id FROM users') && !call.sql.includes("role='admin'"))
+    expect(ownerIndex).toBeLessThan(principalIndex)
+    expect(pool.calls[ownerIndex]!.sql).not.toContain('JOIN users')
+    expect(pool.calls[principalIndex]).toMatchObject({ client: 'connection', params: [42] })
+    expect(pool.calls[principalIndex]!.sql).toContain('FOR SHARE')
+    expect(pool.transactionEvents).toEqual(['begin', 'rollback', 'release'])
+  })
+
+  it('rejects a deleted access recipient and rolls back identity capability failures', async () => {
+    const pool = new FakeManagementPool()
+    pool.channels.set('20', channelRow('20'))
+    pool.activeUsers.delete(7)
+    const command: ObserverManagementCommand = { kind: 'access.set', channelId: '20', userId: 7, granted: true, expectedRevision: 0 }
+    await expect(write(pool, command)).rejects.toMatchObject({ code: 'observer_access_user_not_found', status: 404 })
+    const failed = new MysqlObserverManagementRepository(pool.asPool(), createAdminPrincipalAccess, () => ({
+      isActive: async () => { throw Error('auth_principal_unavailable') },
+    }))
+    await expect(failed.execute({ actorUserId: 1, idempotencyKey: 'principal-failure-1', requestHash: 'a'.repeat(64), command }))
+      .rejects.toMatchObject({ code: 'observer_management_storage_unavailable', status: 503 })
+    expect(pool.accesses.size).toBe(0)
+    expect(pool.outbox).toHaveLength(0)
+    expect(pool.transactionEvents.slice(-3)).toEqual(['begin', 'rollback', 'release'])
+  })
+
   it('replays a matching receipt without side effects and rejects a hash conflict', async () => {
     const pool = new FakeManagementPool()
     const first = await write(pool, sourceCreate())
@@ -536,6 +571,7 @@ describe('MysqlObserverManagementRepository', () => {
 
   it('keeps the source operator immutable while revalidating ownership with that operator', async () => {
     const pool = new FakeManagementPool()
+    pool.activeUsers.add(42)
     pool.sources.set('10', sourceRow('10', { operator_user_id: 42, created_by_user_id: 42 }))
     await expect(write(pool, {
       kind: 'source.update', id: '10', expectedRevision: 1,

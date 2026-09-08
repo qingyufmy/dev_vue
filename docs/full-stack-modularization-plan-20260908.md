@@ -937,3 +937,15 @@ MysqlAccountRegistration.lockCurrentOwnership 不再连接 auth.users：先按�
 新增只读探针verify-local-observer-admin-principal.mjs，使用本批编译产物对既有合成管理员/观众验证三项：精确开发库及夹具运营者身份、同连接共享锁管理员通过/普通用户拒绝、真实管理列表管理员通过/普通用户403。回执为[local-observer-admin-principal-20260909.json](architecture/local-observer-admin-principal-20260909.json)，commitState=not_attempted，事务rollback，没有数据写入、角色重启或HTTP/浏览器证明。原始夹具和操作历史保留。
 
 下一步继续观摩源/受众身份和策略数据所有权，随后账户完整浏览器恢复及精确退役；P1及整体重构保持未完成。
+
+## 72. 观摩源与受众使用 auth 主体能力（第一百四十二批）
+
+MysqlObserverManagementRepository 的用户表读取已移除：源所有者在账户/归属区间共享锁之后，经 auth ActivePrincipalAccess 的同连接共享锁检查；access.set 通过同能力检查受众有效性。运行组装沿用已注入的主体工厂，写事务创建一次能力并显式传入源更新、频道更新、默认频道及授权命令链，不创建独立事务或提交。管理员与幂等检查顺序不变。
+
+本次移除的用户有效性条件原先分别存在于归属 JOIN 和受众 SELECT；仍保持403归属拒绝、404受众不存在、存储异常503与整笔回滚。禁用源的已有恢复路径继续允许在归属失效时关闭默认频道，没有扩大激活权限。策略可用性SQL仍在trading中，不能宣称全部跨域数据所有权已收口。
+
+首次回归暴露SQL替身只登记受众7、未登记先前JOIN隐含的源运营者1/42；补齐合法夹具身份，同时增加运营者停用、受众停用、身份能力异常的拒绝回归，未放宽真实能力。最终30项通过（管理repository26、组装4），包含账户锁先于主体共享锁、同连接、无授权/审计/outbox残留及rollback。server类型与构建通过，运行合同14项一致，服务端债务64条无新增/陈旧项，321冻结输入不变。
+
+扩展只读身份探针为v2，保留原v1回执。真实开发库[local-observer-identities-20260909.json](architecture/local-observer-identities-20260909.json)四项通过：精确数据库/合成管理员、管理员与普通用户权限区分、源运营者及受众的同连接活动主体检查、管理列表权限分支。commitState=not_attempted，共享锁事务回滚；未写数据、未重启服务。本次真实验证不覆盖管理写操作或浏览器流程，写事务失败分支证据来自定向SQL替身回归。
+
+下一步收口观摩策略可用性读取，再推进完整账户浏览器恢复与夹具退役。P1及整体重构仍未完成。

@@ -75,7 +75,7 @@ try {
   assert.ok(Number.isSafeInteger(actorUserId) && actorUserId > 0 && actorUserId !== fixture.userId)
   connection.release(); connection = null
   checks.push('separate-synthetic-operator-and-owned-offline-account')
-  const management = new ObserverManagementService(new MysqlObserverManagementRepository(pool, createAdminPrincipalAccess))
+  const management = new ObserverManagementService(new MysqlObserverManagementRepository(pool, createAdminPrincipalAccess, createActivePrincipalAccess))
   const command = async (label, value) => {
     phase = label
     const key = `${runId}:${label}`

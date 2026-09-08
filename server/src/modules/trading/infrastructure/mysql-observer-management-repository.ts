@@ -1,4 +1,4 @@
-import type { AdminPrincipalAccess } from '../../auth/index.js'
+import type { AdminPrincipalAccess, ActivePrincipalAccess } from '../../auth/index.js'
 import { randomUUID } from 'node:crypto'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import {
@@ -127,7 +127,11 @@ const ACCESS_COLUMNS = `CAST(x.observer_channel_id AS CHAR) observer_channel_id,
  * (which is never touched here).
  */
 export class MysqlObserverManagementRepository implements ObserverManagementRepository {
-  constructor(private readonly pool: Pool, private readonly administrators: (executor: Pick<PoolConnection, 'execute'>) => AdminPrincipalAccess) {}
+  constructor(
+    private readonly pool: Pool,
+    private readonly administrators: (executor: Pick<PoolConnection, 'execute'>) => AdminPrincipalAccess,
+    private readonly principalAccess: (connection: PoolConnection) => ActivePrincipalAccess,
+  ) {}
 
   async list(actorUserId: number, input: ObserverManagementList): Promise<ObserverManagementPage> {
     validateActor(actorUserId)
@@ -160,7 +164,7 @@ export class MysqlObserverManagementRepository implements ObserverManagementRepo
         return parseResult(receipt.result_json)
       }
 
-      const effect = await executeCommand(connection, input.actorUserId, input.command, registry.revision)
+      const effect = await executeCommand(this.principalAccess(connection), connection, input.actorUserId, input.command, registry.revision)
       // Entity revisions are persisted as BIGINT values but exposed as safe
       // JavaScript integers.  Validate the command result before bumping the
       // global registry or writing its receipt/event so an invalid projection
@@ -211,21 +215,21 @@ export class MysqlObserverManagementRepository implements ObserverManagementRepo
   }
 }
 
-async function executeCommand(executor: PoolConnection, actorUserId: number, command: ObserverManagementCommand, registryRevision: number): Promise<CommandEffect> {
+async function executeCommand(principals: ActivePrincipalAccess, executor: PoolConnection, actorUserId: number, command: ObserverManagementCommand, registryRevision: number): Promise<CommandEffect> {
   switch (command.kind) {
-    case 'source.create': return createSource(executor, actorUserId, command.config)
-    case 'source.update': return updateSource(executor, actorUserId, command.id, command.expectedRevision, command.config)
+    case 'source.create': return createSource(principals, executor, actorUserId, command.config)
+    case 'source.update': return updateSource(principals, executor, actorUserId, command.id, command.expectedRevision, command.config)
     case 'channel.create': return createChannel(executor, actorUserId, command.config)
-    case 'channel.update': return updateChannel(executor, actorUserId, command.id, command.expectedRevision, command.config)
-    case 'channel.default': return setDefaultChannel(executor, command.channelId, command.expectedRevision, registryRevision)
-    case 'access.set': return setChannelAccess(executor, actorUserId, command.channelId, command.userId, command.granted, command.expectedRevision)
+    case 'channel.update': return updateChannel(principals, executor, actorUserId, command.id, command.expectedRevision, command.config)
+    case 'channel.default': return setDefaultChannel(principals, executor, command.channelId, command.expectedRevision, registryRevision)
+    case 'access.set': return setChannelAccess(principals, executor, actorUserId, command.channelId, command.userId, command.granted, command.expectedRevision)
   }
 }
 
-async function createSource(executor: PoolConnection, actorUserId: number, config: ObserverSourceConfig): Promise<CommandEffect> {
+async function createSource(principals: ActivePrincipalAccess, executor: PoolConnection, actorUserId: number, config: ObserverSourceConfig): Promise<CommandEffect> {
   validateSourceConfig(config)
   if (config.status !== 'disabled') throw managementError('observer_source_activation_requires_update', 409)
-  if (config.tradingAccountId) await assertOwnedAccount(executor, actorUserId, config.tradingAccountId)
+  if (config.tradingAccountId) await assertOwnedAccount(principals, executor, actorUserId, config.tradingAccountId)
   if (config.analysisStrategyId) await assertAnalysisStrategy(executor, actorUserId, config.analysisStrategyId)
 
   // Creation is intentionally a safe two-step operation.  A newly-created
@@ -242,6 +246,7 @@ async function createSource(executor: PoolConnection, actorUserId: number, confi
 }
 
 async function updateSource(
+  principals: ActivePrincipalAccess,
   executor: PoolConnection,
   _actorUserId: number,
   sourceId: string,
@@ -261,7 +266,7 @@ async function updateSource(
   const previousAccount = nullableId(existing.trading_account_id)
   const previousStrategy = nullableId(existing.analysis_strategy_id)
   if (config.tradingAccountId && (config.status === 'active' || config.tradingAccountId !== previousAccount)) {
-    await assertOwnedAccount(executor, operatorUserId, config.tradingAccountId)
+    await assertOwnedAccount(principals, executor, operatorUserId, config.tradingAccountId)
   }
   if (config.analysisStrategyId && (config.status === 'active' || config.analysisStrategyId !== previousStrategy)) {
     await assertAnalysisStrategy(executor, operatorUserId, config.analysisStrategyId)
@@ -306,6 +311,7 @@ async function createChannel(executor: PoolConnection, _actorUserId: number, con
 }
 
 async function updateChannel(
+  principals: ActivePrincipalAccess,
   executor: PoolConnection,
   _actorUserId: number,
   channelId: string,
@@ -326,7 +332,7 @@ async function updateChannel(
   if (config.sourceId && !source) throw managementError('observer_source_not_found', 404)
   if (config.active) {
     if (!source) throw managementError('observer_channel_source_required', 409)
-    await assertSourceAvailable(executor, source)
+    await assertSourceAvailable(principals, executor, source)
   }
   const existing = await selectChannel(executor, channelId, true)
   if (!existing) throw managementError('observer_channel_not_found', 404)
@@ -340,7 +346,7 @@ async function updateChannel(
     if (config.active) {
       sourceAvailable = true
     } else {
-      sourceAvailable = await isSourceAvailable(executor, source)
+      sourceAvailable = await isSourceAvailable(principals, executor, source)
     }
   }
   const keepDefault = databaseFlag(existing.is_default) && config.active && sourceAvailable
@@ -364,7 +370,7 @@ async function updateChannel(
   }
 }
 
-async function setDefaultChannel(executor: PoolConnection, channelId: string | null, expectedRevision: number, registryRevision: number): Promise<CommandEffect> {
+async function setDefaultChannel(principals: ActivePrincipalAccess, executor: PoolConnection, channelId: string | null, expectedRevision: number, registryRevision: number): Promise<CommandEffect> {
   validateExpectedRevision(expectedRevision)
   if (channelId !== null) validateId(channelId, 'observer_channel_id_invalid')
   if (registryRevision !== expectedRevision) throw managementError('observer_management_revision_conflict', 409)
@@ -373,13 +379,13 @@ async function setDefaultChannel(executor: PoolConnection, channelId: string | n
   if (channelId !== null) {
     const selectedSnapshot = await selectChannel(executor, channelId, false)
     if (!selectedSnapshot) throw managementError('observer_channel_not_found', 404)
-    await assertSourceAvailableForChannel(executor, selectedSnapshot)
+    await assertSourceAvailableForChannel(principals, executor, selectedSnapshot)
     selected = await selectChannel(executor, channelId, true)
     if (!selected) throw managementError('observer_channel_not_found', 404)
     // Re-read readiness after taking the row lock.  Ownership/account
     // projections may be changed by a different writer between the initial
     // snapshot and this command's final state change.
-    await assertSourceAvailableForChannel(executor, selected)
+    await assertSourceAvailableForChannel(principals, executor, selected)
   }
   const [currentRows] = await executor.execute<ChannelRow[]>(`SELECT ${CHANNEL_COLUMNS}
     FROM observer_channels c WHERE c.is_default=1 ORDER BY c.id LIMIT 1 FOR UPDATE`)
@@ -408,6 +414,7 @@ async function setDefaultChannel(executor: PoolConnection, channelId: string | n
 }
 
 async function setChannelAccess(
+  principals: ActivePrincipalAccess,
   executor: PoolConnection,
   actorUserId: number,
   channelId: string,
@@ -420,7 +427,7 @@ async function setChannelAccess(
   validateExpectedRevision(expectedRevision)
   const channel = await selectChannel(executor, channelId, true)
   if (!channel) throw managementError('observer_channel_not_found', 404)
-  await assertActiveUser(executor, userId, 'observer_access_user_not_found')
+  await assertActiveUser(principals, userId, 'observer_access_user_not_found')
   const [rows] = await executor.execute<AccessRow[]>(`SELECT ${ACCESS_COLUMNS}
     FROM observer_channel_accesses x WHERE x.observer_channel_id=? AND x.user_id=? LIMIT 1 FOR UPDATE`, [channelId, userId])
   const existing = rows[0] ?? null
@@ -468,7 +475,7 @@ async function selectChannel(executor: Executor, channelId: string, lock: boolea
   return rows[0] ?? null
 }
 
-async function assertSourceAvailableForChannel(executor: PoolConnection, channel: ChannelRow) {
+async function assertSourceAvailableForChannel(principals: ActivePrincipalAccess, executor: PoolConnection, channel: ChannelRow) {
   if (channel.active !== 1 && channel.active !== true) throw managementError('observer_channel_not_available', 409)
   if (typeof channel.slug !== 'string' || channel.slug.length === 0) throw managementError('observer_channel_not_available', 409)
   if (!channel.source_id) throw managementError('observer_channel_source_required', 409)
@@ -477,21 +484,21 @@ async function assertSourceAvailableForChannel(executor: PoolConnection, channel
   if (nullableId(source.trading_account_id) !== nullableId(channel.source_trading_account_id)) {
     throw managementError('observer_channel_source_mismatch', 409)
   }
-  await assertSourceAvailable(executor, source)
+  await assertSourceAvailable(principals, executor, source)
 }
 
-async function assertSourceAvailable(executor: PoolConnection, source: SourceRow) {
+async function assertSourceAvailable(principals: ActivePrincipalAccess, executor: PoolConnection, source: SourceRow) {
   if (source.status !== 'active' || source.configuration_status !== 'ready' || !source.trading_account_id) {
     throw managementError('observer_source_not_ready', 409)
   }
   const operatorUserId = toSafeUserId(source.operator_user_id)
-  await assertOwnedAccount(executor, operatorUserId, nullableId(source.trading_account_id)!)
+  await assertOwnedAccount(principals, executor, operatorUserId, nullableId(source.trading_account_id)!)
 }
 
-async function isSourceAvailable(executor: PoolConnection, source: SourceRow) {
+async function isSourceAvailable(principals: ActivePrincipalAccess, executor: PoolConnection, source: SourceRow) {
   if (source.status !== 'active' || source.configuration_status !== 'ready' || !source.trading_account_id) return false
   try {
-    await assertOwnedAccount(executor, toSafeUserId(source.operator_user_id), nullableId(source.trading_account_id)!)
+    await assertOwnedAccount(principals, executor, toSafeUserId(source.operator_user_id), nullableId(source.trading_account_id)!)
     return true
   } catch (error) {
     if (error instanceof ObserverManagementError && error.status === 403) return false
@@ -499,18 +506,17 @@ async function isSourceAvailable(executor: PoolConnection, source: SourceRow) {
   }
 }
 
-async function assertOwnedAccount(executor: Executor, userId: number, accountId: string) {
+async function assertOwnedAccount(principals: ActivePrincipalAccess, executor: Executor, userId: number, accountId: string) {
   const [rows] = await executor.execute<RowDataPacket[]>(`SELECT a.id,a.ownership_revision,o.interval_id,o.granted_at_utc,
-      oi.started_at_utc,oi.ended_at_utc,oi.role interval_role,u.id owner_user_id,u.deletion_status,u.deleted_at
+      oi.started_at_utc,oi.ended_at_utc,oi.role interval_role
     FROM trading_accounts a
     INNER JOIN trading_account_ownerships o ON o.trading_account_id=a.id AND o.user_id=?
       AND o.role='owner' AND o.revoked_at_utc IS NULL AND o.revision=a.ownership_revision
     INNER JOIN trading_account_ownership_intervals oi ON oi.id=o.interval_id
       AND oi.user_id=o.user_id AND oi.trading_account_id=o.trading_account_id AND oi.role='owner'
       AND oi.ended_at_utc IS NULL AND oi.started_at_utc=o.granted_at_utc AND oi.started_at_utc<=UTC_TIMESTAMP(3)
-    INNER JOIN users u ON u.id=o.user_id AND u.deletion_status='active' AND u.deleted_at IS NULL
     WHERE a.id=? AND a.deleted_at_utc IS NULL LIMIT 1 FOR SHARE`, [userId, accountId])
-  if (rows.length !== 1) throw managementError('observer_account_not_owned', 403)
+  if (rows.length !== 1 || !await principals.isActive(userId, 'share')) throw managementError('observer_account_not_owned', 403)
 }
 
 async function assertAnalysisStrategy(executor: Executor, userId: number, strategyId: string) {
@@ -520,10 +526,8 @@ async function assertAnalysisStrategy(executor: Executor, userId: number, strate
   if (rows.length !== 1) throw managementError('observer_analysis_strategy_not_available', 409)
 }
 
-async function assertActiveUser(executor: Executor, userId: number, code: string) {
-  const [rows] = await executor.execute<RowDataPacket[]>(`SELECT id FROM users
-    WHERE id=? AND deletion_status='active' AND deleted_at IS NULL LIMIT 1 FOR SHARE`, [userId])
-  if (rows.length !== 1) throw managementError(code, 404)
+async function assertActiveUser(principals: ActivePrincipalAccess, userId: number, code: string) {
+  if (!await principals.isActive(userId, 'share')) throw managementError(code, 404)
 }
 
 async function assertAdmin(access: AdminPrincipalAccess, userId: number, lock: 'none' | 'share') {

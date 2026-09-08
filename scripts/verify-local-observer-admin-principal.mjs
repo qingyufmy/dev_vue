@@ -3,7 +3,7 @@ import { open, readFile } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import { parse } from 'dotenv'
 import { createMysqlPool } from '../server/dist-v4/bootstrap/runtime-resources.js'
-import { createAdminPrincipalAccess } from '../server/dist-v4/modules/auth/composition.js'
+import { createAdminPrincipalAccess, createActivePrincipalAccess } from '../server/dist-v4/modules/auth/composition.js'
 import { MysqlObserverManagementRepository } from '../server/dist-v4/modules/trading/infrastructure/mysql-observer-management-repository.js'
 
 const [fixturePath, journalPath, destination] = process.argv.slice(2)
@@ -35,16 +35,20 @@ try {
   const access = createAdminPrincipalAccess(connection)
   assert.equal(await access.isAdmin(fixture.actorUserId, 'share'), true)
   assert.equal(await access.isAdmin(fixture.viewerUserId, 'share'), false)
+  const principals = createActivePrincipalAccess(connection)
+  assert.equal(await principals.isActive(fixture.actorUserId, 'share'), true)
+  assert.equal(await principals.isActive(fixture.viewerUserId, 'share'), true)
+  checks.push('same-connection-active-source-operator-and-recipient')
   await connection.rollback()
   connection.release(); connection = undefined
   checks.push('same-connection-shared-lock-admin-accepted-viewer-rejected')
-  const management = new MysqlObserverManagementRepository(pool, createAdminPrincipalAccess)
+  const management = new MysqlObserverManagementRepository(pool, createAdminPrincipalAccess, createActivePrincipalAccess)
   const page = await management.list(fixture.actorUserId, { kind: 'sources', afterId: null, limit: 100 })
   assert.ok(page.items.length > 0)
   await assert.rejects(management.list(fixture.viewerUserId, { kind: 'sources', afterId: null, limit: 100 }),
     error => error.code === 'observer_management_admin_required' && error.status === 403)
   checks.push('real-management-list-admin-accepted-viewer-forbidden')
-  await output.writeFile(JSON.stringify({ kind: 'local-observer-admin-principal/v1', passed: true,
+  await output.writeFile(JSON.stringify({ kind: 'local-observer-admin-principal/v2', passed: true,
     observedAt: new Date().toISOString(), identity, checks, commitState: 'not_attempted',
     scope: 'Compiled auth capability and observer management list against existing synthetic identities. Shared-lock transaction rolled back; no data mutation, runtime restart, HTTP or browser proof.' }, null, 2) + '\n')
   console.log(JSON.stringify({ passed: true, checks: checks.length }))
