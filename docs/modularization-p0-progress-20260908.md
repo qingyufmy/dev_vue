@@ -748,3 +748,9 @@ HTTP和生产组装已切换到ContextWritePort，移除读取接口、应用服
 新增版本化SQL审查器，48项审查测试通过，备份相关合计111项通过；原309项冻结文件不改。认证既有加密备份后只导入新的03恢复库一次。严格DDL比较发现6表8列显式字符集写法差异，独立只读等价验证确认222表271484行数据摘要、完整列元数据一致，其余DDL完全一致；8项等价验证回归通过。
 
 成功证据见[current-local-backup-restoration](architecture/current-local-backup-restoration-20260908.json)。保留byteIdenticalDdl=false与原始失败记录；当前dev_vue未写入、仍147步。现有加密备份可恢复性已证实，后续执行当前库回填/升级仍须重验写入窗口与源清单。
+
+## 第八十六批：源数据范围锁与固定回填清单
+
+新增五张输入表的数据库范围锁，真实双连接探针验证源修改/插入受阻且目标外键写入可行；临时库已删除。5项锁生命周期回归通过。当前库持锁重新核验准备manifest一致，生成两个固定runId和7个固定批次的[执行清单](architecture/current-account-wave-execution-plan-20260908.json)。
+
+当前dev_vue未写入，构建表与迁移版本不变；下一步实现当前清单执行及恢复，不能把清单生成视为回填完成。

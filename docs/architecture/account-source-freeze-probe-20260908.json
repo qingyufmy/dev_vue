@@ -1,0 +1,26 @@
+{
+  "kind": "account-source-freeze-mysql-probe/v1",
+  "observedAt": "2026-09-08T13:52:18.960Z",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "target": "dev_vue_lock_probe_ab1a3048cf31",
+  "checks": [
+    "source_update_blocked",
+    "source_insert_blocked",
+    "empty_source_insert_blocked",
+    "target_fk_write_allowed",
+    "source_writes_allowed_after_release"
+  ],
+  "tools": [
+    {
+      "path": "scripts/probe-account-source-freeze-local.mjs",
+      "sha256": "ccf4ab3eee481186ae3f3e1468b3cdb69ad7abcccf5667e679ca10519f3b8438"
+    },
+    {
+      "path": "scripts/lib/account-source-freeze.mjs",
+      "sha256": "ffc86eeb105d6ac36831d16d837825967d4112159811e3fa969c5559c83516aa"
+    }
+  ],
+  "currentDevVueWrites": 0,
+  "scope": "Two independent MySQL connections; synthetic tables only. Not a current-database backfill result.",
+  "temporaryDatabaseRemoved": true
+}

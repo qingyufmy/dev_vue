@@ -1,0 +1,139 @@
+{
+  "observedAt": "2026-09-08T13:54:53.282Z",
+  "frozen": {
+    "kind": "current-account-wave-execution-plan/v1",
+    "targetIdentity": {
+      "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+      "database": "dev_vue",
+      "storageMode": "inplace-account-v2",
+      "schemaHash": "233977958506374eebe4c7c5218b10e3b55f5871396dc927a2f8c58232222ee6"
+    },
+    "preparationManifestHash": "3d64378601c28b7641942316fcae7ea46f9e016fd49dfac8386e7d9c9781bbf5",
+    "backup": {
+      "path": "docs/architecture/current-local-backup-restoration-20260908.json",
+      "sha256": "42f9b0ed9f5c43f9a8bb8ef8b810cb902f220d3aae55dbe94a9ab5faafe98820",
+      "mirrorDatabase": "dev_vue_m1_source_20260908_03"
+    },
+    "sourceSnapshotHash": "d872b02ade42e5fb6868d2b2709f85b10e9126de1cb8c0973b32900217f65dc4",
+    "runs": [
+      {
+        "runId": "37af2a03-9aaf-4af3-be95-5123a61fa0e0",
+        "stream": {
+          "sourceTable": "trading_accounts",
+          "role": "account-entity-settings-v1"
+        },
+        "transformHash": "02c389b2e36f86919d087c0ebbe3b811c02a4077226c9410ac2d71299868f04f",
+        "sourceRows": 4,
+        "batches": [
+          {
+            "batchId": "1c9b5655abe9d6d584332c7410724163ae14fcca0fcdacb1edbf912b8a962315",
+            "sequence": 1,
+            "rows": 2
+          },
+          {
+            "batchId": "e7b4b533081f6974a396f6bcd34cfbaddd000ebf8abf6918e035b81aee8e4bd2",
+            "sequence": 2,
+            "rows": 2
+          }
+        ]
+      },
+      {
+        "runId": "15df1020-d165-44e2-9222-f4cd60ebf1b3",
+        "stream": {
+          "sourceTable": "mt5_account_ownership_history",
+          "role": "ownership-interval-grants-v1"
+        },
+        "transformHash": "66426dbb7c1ad455f7cfaea74a31e5dbff5f0b9700d36fa915bd7c4e199f79e8",
+        "sourceRows": 274,
+        "batches": [
+          {
+            "batchId": "13522def30dafa946596113fb52b40360533f137f83bd31e0d41b9cd3cad7b50",
+            "sequence": 1,
+            "rows": 64
+          },
+          {
+            "batchId": "af2ba86be6859dac57d780977e5e6131be44a910d2e7271cdf00c78090583119",
+            "sequence": 2,
+            "rows": 64
+          },
+          {
+            "batchId": "5212c4d2eba802572d04d1fba9323135d9287655490afbc2cedc1276dd591519",
+            "sequence": 3,
+            "rows": 64
+          },
+          {
+            "batchId": "733ad1ca5b05add1bc51db30cde0305ade47dfa6f038f2afbb44f2da61e83068",
+            "sequence": 4,
+            "rows": 64
+          },
+          {
+            "batchId": "5becdf87aa2ae0ec0c9781125c1b1fa4963b4970510ee20a4a9c7214aa8e1227",
+            "sequence": 5,
+            "rows": 18
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "path": "scripts/plan-current-account-wave-local.mjs",
+        "sha256": "8fe3aaa116ac7e9ab46e817cca09169d3f910dec019181b56c74055beec703f5"
+      },
+      {
+        "path": "scripts/lib/account-source-freeze.mjs",
+        "sha256": "ffc86eeb105d6ac36831d16d837825967d4112159811e3fa969c5559c83516aa"
+      }
+    ],
+    "requiredGuards": [
+      "inplace_upgrade_lock",
+      "live_source_range_locks",
+      "source_input_hash",
+      "protected_table_hashes",
+      "prior_ledger_rows_preserved",
+      "exact_final_projection"
+    ],
+    "timeOffsetMinutes": 0
+  },
+  "manifestHash": "69b520257fc9101e9a34c1329bbc2d311935ddfacd6898f4af04a7647aa57936",
+  "sourceLocksVerified": [
+    {
+      "table": "bridge_v3_terminal_sessions",
+      "rows": 7,
+      "primary": [
+        "terminal_instance_id"
+      ]
+    },
+    {
+      "table": "mt5_account_bindings",
+      "rows": 3,
+      "primary": [
+        "broker_server_key",
+        "login_account"
+      ]
+    },
+    {
+      "table": "mt5_account_ownership_history",
+      "rows": 274,
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "table": "trading_accounts",
+      "rows": 4,
+      "primary": [
+        "id"
+      ]
+    },
+    {
+      "table": "users",
+      "rows": 25,
+      "primary": [
+        "id"
+      ]
+    }
+  ],
+  "databaseWrites": 0,
+  "applied": false,
+  "scope": "Stable run IDs and exact batch manifests. Apply must reacquire live guards and revalidate source, existing receipts and protected rows; this file is not an execution receipt."
+}
