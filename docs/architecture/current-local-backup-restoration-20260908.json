@@ -1,0 +1,116 @@
+{
+  "kind": "current-local-backup-restoration/v2",
+  "status": "verified",
+  "observedAt": "2026-09-08T13:45:30.562Z",
+  "source": "dev_vue",
+  "target": "dev_vue_m1_source_20260908_03",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "preparationManifestHash": "3d64378601c28b7641942316fcae7ea46f9e016fd49dfac8386e7d9c9781bbf5",
+  "tableCount": 222,
+  "totalRows": "271484",
+  "sourceTablesSha256": "042f15f61d881cafa6cdbaff7f15485ff251103d00c713f2a4a69bfe8badb45b",
+  "restoredTablesSha256": "1a5ca522958d22adc596c91a9f3837363a1e049a1d130e28a5a25c6a7c00e019",
+  "columnsSha256": "e8a092a2e101197b5d4ab344b7a1e1ba3f8f09114d7e31f606f4f29033292df3",
+  "completeRowParity": true,
+  "completeColumnMetadataParity": true,
+  "semanticDdlParity": true,
+  "byteIdenticalDdl": false,
+  "ddlRenderingDifferences": [
+    {
+      "table": "global_risk_controls",
+      "differences": [
+        {
+          "column": "reason",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "outbox_events",
+      "differences": [
+        {
+          "column": "status",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "strategy_memory_injection_logs_v4",
+      "differences": [
+        {
+          "column": "runtime_kind",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "strategy_memory_libraries_v4",
+      "differences": [
+        {
+          "column": "mode",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "status",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "strategy_memory_library_revisions_v4",
+      "differences": [
+        {
+          "column": "content_text",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "source_kind",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "trade_history_migration_checkpoints_v4",
+      "differences": [
+        {
+          "column": "status",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    }
+  ],
+  "artifact": {
+    "format": "aurum-local-backup/aes-256-gcm/v1",
+    "iv": "f39197ee4dfb277f8c7deef1",
+    "tag": "5810e71f1341b700ac32de01669a9880",
+    "plaintext": {
+      "bytes": 683686779,
+      "sha256": "0abad5c3d2890a172a091416aae84b1dd4f1a589289cf02a2a9b20c7039dd863"
+    },
+    "ciphertext": {
+      "bytes": 683686779,
+      "sha256": "58bcc1f1092dbcee5228b25da1dcfa3be62a7559dad88473f16456f4ca49cbb2"
+    }
+  },
+  "tools": [
+    {
+      "path": "scripts/verify-current-local-backup-restoration.mjs",
+      "sha256": "ab8aa973ec3b060c97f5bbb6d9053a02e45c74846aeb69dd73095fe346ae8650"
+    },
+    {
+      "path": "scripts/lib/restore-ddl-equivalence.mjs",
+      "sha256": "13427edf8c50e1c2dc6c27a05102cef50f423d2219b73f2cdde3c343048985b6"
+    },
+    {
+      "path": "scripts/continue-current-local-backup-restore.mjs",
+      "sha256": "56c8329beee0a318e1495f26bf09a72fc6f0692e86540efd54e37d7cd3f8dddd"
+    },
+    {
+      "path": "scripts/lib/v4-backup-sql-scope-v2.mjs",
+      "sha256": "0da2f864cc9cc0442ad89893fd8b2b7b8afedaadfdfb5464809cc85a7b2c3b59"
+    }
+  ],
+  "currentDevVueWrites": 0,
+  "currentDatabaseUpgraded": false,
+  "scope": "Read-only full row/column verification. Only exact redundant utf8mb4 charset rendering is accepted; original raw DDL hashes remain distinct."
+}

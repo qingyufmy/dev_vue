@@ -8,7 +8,7 @@ import { runLocalBackupProcess, discardLocalBackupOutput } from './lib/local-bac
 import { encryptLocalBackup, decryptLocalBackup } from './lib/local-backup-stream.mjs'
 import { backupDumpArgs, backupRestoreArgs, compareRestoredDump } from './lib/v4-backup-executor.mjs'
 import { inspectBackupDatabase } from './lib/v4-backup-preflight.mjs'
-import { inspectBackupSql } from './lib/v4-backup-sql-scope.mjs'
+import { inspectBackupSql } from './lib/v4-backup-sql-scope-v2.mjs'
 import { readAccountRootSnapshot } from './lib/mysql-account-root-snapshot.mjs'
 import { sha256 } from './lib/v4-migration-plan.mjs'
 import { hash } from './lib/v4-backfill-contract.mjs'

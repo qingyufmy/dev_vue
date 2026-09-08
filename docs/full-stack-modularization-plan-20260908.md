@@ -414,3 +414,7 @@ A 完成后优先推进 B 的源码、合同和本地测试，同时准备 C；B
 ## 15. 当前库接入观察（第八十批）
 
 已新增[当前库升级接入方案](architecture/current-dev-vue-upgrade-plan-20260908.md)及[实际只读回执](architecture/current-dev-vue-upgrade-observation-20260908.json)。完整147步结构、日志前缀和307项冻结工具摘要通过。账户四张构建表仍为空；当前库备份恢复、回填、148–165升级与运行就绪验证继续按该方案执行，不能只建回执表后启用消费者。
+
+## 16. 当前库备份恢复结果（第八十五批）
+
+当前dev_vue专属备份已通过真实恢复与全量对账：222表、271484行，完整列元数据一致；6表8列存在等价的显式字符集DDL写法差异，原始摘要与差异均保留。见[回执](architecture/current-local-backup-restoration-20260908.json)和[接入方案第10节](architecture/current-dev-vue-upgrade-plan-20260908.md)。当前库仍147步，下一步执行前重验写入者/源清单并完成账户回填、148–165增量升级。备份恢复通过不代表该升级或账户联合验收已完成。
