@@ -570,3 +570,11 @@ loadObserverContextMigration复用完整150步并追加四项checksum，总定�
 [回执](architecture/legacy-candle-build-reference-20260908.json)绑定规范DDL、改名后FK/定义和工具摘要，proofHash=8cf22f903708e8f3a9a69f16f88249f95160f138a446036ad8962f76e58b789b。普通测试事务回滚，改名fixture删除后六表均空，参考库已删除。恢复副本完整快照及160条历史不变，当前dev_vue未写入，连接和隧道关闭。4项本地注册/参考边界检查与语法/差异检查通过。
 
 两轮复核和证据边界见[合同](architecture/account-projection-incremental-contract-20260908.md)。这不是恢复副本163步或真实旧数据提升完成；继续正式协调器、冻结计划及MySQL事务回填适配。
+
+## 第六十一批：K线构建区160→163正式演练
+
+新增三表协调器、MySQL适配器与固定恢复副本入口。163步全量日志与三表先验验证后，精确过滤已核验新增表，再调用原160步及下层真实协调器只读校验。持久化计划绑定旧234表、原proof、规范DDL和282项工具；同连接锁和身份每次写入前复核，未知响应立即退出。
+
+新增19项协调及10项适配测试，连同相关旧层共117项通过。恢复副本已实际160→163：首DDL响应丢失、独立只读识别、恢复仅2条DDL、独立重入0DDL。三表均空，原234表快照和160条日志一致。见[冻结计划](architecture/legacy-candle-build-registered-plan-20260908.json)，proofHash=0ee8913abb31631524306a3504d6ce283a54290e67a1944906c3a53aca37f4db，及同前缀五阶段回执。
+
+两轮职责/异常复核见[合同](architecture/account-projection-incremental-contract-20260908.md)。旧源冻结文件不变，当前dev_vue未写入，连接与SSH隧道关闭。下一步实际MySQL事务回填、逐行映射及摘要对账，然后实现正式名称提升与历史校验适配。

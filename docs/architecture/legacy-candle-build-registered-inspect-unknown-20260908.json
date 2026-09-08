@@ -1,0 +1,37 @@
+{
+  "kind": "legacy-candle-build-registered-rehearsal/v1",
+  "observedAt": "2026-09-08T10:27:16.125Z",
+  "target": "dev_vue_m1_source_20260907_02",
+  "mode": "--read-only-restored",
+  "result": {
+    "ddlCount": 0,
+    "steps": [
+      {
+        "id": "inplace_039_01_legacy_candle_backfill_v4",
+        "status": "reconcile"
+      },
+      {
+        "id": "inplace_039_02_market_candles_build_v4",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_039_03_legacy_candle_mappings_v4",
+        "status": "pending"
+      }
+    ]
+  },
+  "registrySteps": 163,
+  "proofHash": "0ee8913abb31631524306a3504d6ce283a54290e67a1944906c3a53aca37f4db",
+  "protectedTableCount": 234,
+  "protectedSnapshotHash": "9d34b6c2a728fa04c8eb9374b00d71e4aa3206836da53c46e5ac1170a9238fd3",
+  "priorHistoryHash": "cfa5353633014bdfdacb9185058b7f65cdc27b84074f2e0e43288373de370fc0",
+  "addedTables": [
+    {
+      "name": "legacy_candle_backfill_v4",
+      "rows": 0,
+      "schemaSha256": "8c0dcc0337fc9006c4ed54061c69b5e9f795aec1177c013d94e25f5f2f5811c5"
+    }
+  ],
+  "currentDevVueWritten": false,
+  "scope": "Restored database only; registered additions and history retained. No business facts synthesized."
+}
