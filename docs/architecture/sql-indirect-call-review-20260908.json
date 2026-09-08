@@ -1,0 +1,659 @@
+{
+  "version": 1,
+  "sourceCommit": "f87215c664c844722f01547384bdee34f444a16e",
+  "scope": "Manual classification of the 114 indirect calls in the referenced SQL inventory; not automatic approval or full write ownership acceptance.",
+  "inventory": "sql-write-inventory-20260908.json",
+  "counts": {
+    "sql-select": 107,
+    "business-write-port": 6,
+    "bridge-query-port": 1
+  },
+  "files": [
+    {
+      "file": "server/src/modules/audit/infrastructure/mysql-audit-repository.ts",
+      "sha256": "52b8158f804575d541997349d2d4715fd89838c5bfe9f7eb0f38ffc1e4f3a10a",
+      "classification": "sql-select",
+      "evidence": "operationId: queries is a closed map of three SELECT statements; absent kind returns before execute.",
+      "calls": [
+        {
+          "line": 127,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/bridge/infrastructure/mysql-bridge-pairing-repository.ts",
+      "sha256": "062c4961b6f1b0ca2cd09001ce14408cb1b43aa7c4b0375da3103ae1ec0b5776",
+      "classification": "sql-select",
+      "evidence": "PAIR_SELECT constant plus fixed predicates; includes locking reads.",
+      "calls": [
+        {
+          "line": 18,
+          "method": "execute"
+        },
+        {
+          "line": 33,
+          "method": "execute"
+        },
+        {
+          "line": 48,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/commerce/application/referral-rule-management.ts",
+      "sha256": "3bce41c38b4cf303c339ca0a19e50fc0b0387bc761adc174b39e8695390281da",
+      "classification": "business-write-port",
+      "evidence": "repository.execute -> MysqlReferralRuleManagement -> updateReferralRulesInTransaction; referral rules, receipts and request idempotency remain transactional.",
+      "calls": [
+        {
+          "line": 37,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/execution/application/execution-distribution-worker.ts",
+      "sha256": "0689dc01159c4e82669d82c287059ee7d6c32d9f1b9bf8dce719eb5cddc2699c",
+      "classification": "business-write-port",
+      "evidence": "commands.execute -> UserExecutionCommandService -> MysqlUserExecutionCommandRepository; operation/intent writes are already direct SQL candidates.",
+      "calls": [
+        {
+          "line": 28,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+      "sha256": "a28b0a4ccfe002a66f0fe8e07a322e2efb3e056d93ef39a73e7c901acc60821b",
+      "classification": "sql-select",
+      "evidence": "selectCommand constant plus fixed predicates/JOIN; includes locking reads.",
+      "calls": [
+        {
+          "line": 44,
+          "method": "execute"
+        },
+        {
+          "line": 102,
+          "method": "execute"
+        },
+        {
+          "line": 222,
+          "method": "execute"
+        },
+        {
+          "line": 248,
+          "method": "execute"
+        },
+        {
+          "line": 344,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+      "sha256": "870a786be21cd7c13b3f7f4532e461643f7693d07c2990d2f2fc3f537fa0a542",
+      "classification": "sql-select",
+      "evidence": "distributionSelect, targetSelect and operationSelect are SELECT constants.",
+      "calls": [
+        {
+          "line": 158,
+          "method": "execute"
+        },
+        {
+          "line": 238,
+          "method": "execute"
+        },
+        {
+          "line": 281,
+          "method": "execute"
+        },
+        {
+          "line": 290,
+          "method": "execute"
+        },
+        {
+          "line": 293,
+          "method": "execute"
+        },
+        {
+          "line": 317,
+          "method": "execute"
+        },
+        {
+          "line": 366,
+          "method": "execute"
+        },
+        {
+          "line": 482,
+          "method": "execute"
+        },
+        {
+          "line": 489,
+          "method": "execute"
+        },
+        {
+          "line": 492,
+          "method": "execute"
+        },
+        {
+          "line": 495,
+          "method": "execute"
+        },
+        {
+          "line": 636,
+          "method": "execute"
+        },
+        {
+          "line": 642,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+      "sha256": "1ff2b2143276b7962b25670c125d4f55511246d4d30c9901f7f2eb7bead402f3",
+      "classification": "sql-select",
+      "evidence": "sourceSql and operationSelect are SELECT constants; policySelect returns SELECT with fixed local WHERE arguments.",
+      "calls": [
+        {
+          "line": 67,
+          "method": "execute"
+        },
+        {
+          "line": 76,
+          "method": "execute"
+        },
+        {
+          "line": 82,
+          "method": "execute"
+        },
+        {
+          "line": 117,
+          "method": "execute"
+        },
+        {
+          "line": 123,
+          "method": "execute"
+        },
+        {
+          "line": 133,
+          "method": "execute"
+        },
+        {
+          "line": 144,
+          "method": "execute"
+        },
+        {
+          "line": 177,
+          "method": "execute"
+        },
+        {
+          "line": 224,
+          "method": "execute"
+        },
+        {
+          "line": 225,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
+      "sha256": "2a4725dc8550ff6af642dc7642ed916278607ff2b9614a38f50793fe2c129a68",
+      "classification": "sql-select",
+      "evidence": "userCommandSelect/manualReleaseSelect and policySelect produce SELECT statements.",
+      "calls": [
+        {
+          "line": 118,
+          "method": "execute"
+        },
+        {
+          "line": 331,
+          "method": "execute"
+        },
+        {
+          "line": 487,
+          "method": "execute"
+        },
+        {
+          "line": 494,
+          "method": "execute"
+        },
+        {
+          "line": 495,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/execution/transport/http/user-execution-command-routes.ts",
+      "sha256": "efe1fc8807f35d2959bf051b12f48ffe09984a59db5e64b890501554c75b476d",
+      "classification": "business-write-port",
+      "evidence": "service.execute -> UserExecutionCommandService -> MysqlUserExecutionCommandRepository; same write path as distribution worker.",
+      "calls": [
+        {
+          "line": 61,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "sha256": "3a8d0a986288e6896480bb9152d9a8dc0d16279ca57143a732e0add1e86d9f96",
+      "classification": "sql-select",
+      "evidence": "All 25 sites prefix analysisRunSelect/traderRunSelect/marketAnalysisSelect/traderDecisionSelect; each is a SELECT constant.",
+      "calls": [
+        {
+          "line": 200,
+          "method": "execute"
+        },
+        {
+          "line": 205,
+          "method": "execute"
+        },
+        {
+          "line": 214,
+          "method": "execute"
+        },
+        {
+          "line": 222,
+          "method": "execute"
+        },
+        {
+          "line": 229,
+          "method": "execute"
+        },
+        {
+          "line": 237,
+          "method": "execute"
+        },
+        {
+          "line": 245,
+          "method": "execute"
+        },
+        {
+          "line": 258,
+          "method": "execute"
+        },
+        {
+          "line": 265,
+          "method": "execute"
+        },
+        {
+          "line": 294,
+          "method": "execute"
+        },
+        {
+          "line": 299,
+          "method": "execute"
+        },
+        {
+          "line": 306,
+          "method": "execute"
+        },
+        {
+          "line": 336,
+          "method": "execute"
+        },
+        {
+          "line": 344,
+          "method": "execute"
+        },
+        {
+          "line": 349,
+          "method": "execute"
+        },
+        {
+          "line": 356,
+          "method": "execute"
+        },
+        {
+          "line": 360,
+          "method": "execute"
+        },
+        {
+          "line": 390,
+          "method": "execute"
+        },
+        {
+          "line": 397,
+          "method": "execute"
+        },
+        {
+          "line": 416,
+          "method": "execute"
+        },
+        {
+          "line": 423,
+          "method": "execute"
+        },
+        {
+          "line": 450,
+          "method": "execute"
+        },
+        {
+          "line": 459,
+          "method": "execute"
+        },
+        {
+          "line": 461,
+          "method": "execute"
+        },
+        {
+          "line": 468,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-model-gateway-resolver.ts",
+      "sha256": "0825870f0c3f7a96115b32bf1f5806ee4de1c8a3d809b934c11dcaf57569942e",
+      "classification": "sql-select",
+      "evidence": "profileSelect constant plus fixed JOIN/WHERE clauses.",
+      "calls": [
+        {
+          "line": 63,
+          "method": "execute"
+        },
+        {
+          "line": 77,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/learning/application/learning-completion-service.ts",
+      "sha256": "48888a71c133137a2c89a1f1549dbf85a990342aef557248b98ed5553587f221",
+      "classification": "business-write-port",
+      "evidence": "repository.execute -> MysqlLearningCompletion; progress and audit receipt share transaction and original idempotency/unknown-commit behavior.",
+      "calls": [
+        {
+          "line": 6,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+      "sha256": "125b904a1d2f9c8055159690d50a569070c602dc9c2a85f8b8b8c52c2fed3267",
+      "classification": "sql-select",
+      "evidence": "caseSelect, memorySelect and reviewJobContextSelect; filters append predicates, not statement prefixes.",
+      "calls": [
+        {
+          "line": 74,
+          "method": "execute"
+        },
+        {
+          "line": 198,
+          "method": "execute"
+        },
+        {
+          "line": 202,
+          "method": "execute"
+        },
+        {
+          "line": 271,
+          "method": "execute"
+        },
+        {
+          "line": 365,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "sha256": "6124aff09e8e5ed17131a15f23da5176d8a132a261dd0a717d7ae3116c593a54",
+      "classification": "sql-select",
+      "evidence": "manualReleaseSelect/riskDecisionSelect and policySelect; includes FOR UPDATE/FOR SHARE.",
+      "calls": [
+        {
+          "line": 53,
+          "method": "execute"
+        },
+        {
+          "line": 56,
+          "method": "execute"
+        },
+        {
+          "line": 65,
+          "method": "execute"
+        },
+        {
+          "line": 69,
+          "method": "execute"
+        },
+        {
+          "line": 97,
+          "method": "execute"
+        },
+        {
+          "line": 124,
+          "method": "execute"
+        },
+        {
+          "line": 141,
+          "method": "execute"
+        },
+        {
+          "line": 156,
+          "method": "execute"
+        },
+        {
+          "line": 158,
+          "method": "execute"
+        },
+        {
+          "line": 170,
+          "method": "execute"
+        },
+        {
+          "line": 179,
+          "method": "execute"
+        },
+        {
+          "line": 233,
+          "method": "execute"
+        },
+        {
+          "line": 248,
+          "method": "execute"
+        },
+        {
+          "line": 259,
+          "method": "execute"
+        },
+        {
+          "line": 264,
+          "method": "execute"
+        },
+        {
+          "line": 279,
+          "method": "execute"
+        },
+        {
+          "line": 280,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/settings/application/setting-management.ts",
+      "sha256": "cff80e4ea7f53ef11ebe02d6cebb085ff4c131881e03848cb7fcaa38b6b85774",
+      "classification": "business-write-port",
+      "evidence": "repository.execute -> MysqlSettingManagement -> updateSettingInTransaction; settings, change receipt and request row remain transactional.",
+      "calls": [
+        {
+          "line": 21,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/settings/infrastructure/mysql-setting-writer.ts",
+      "sha256": "d646603e2845b5fd75ac40e4fe0fb8748e8cf93b23557c6da550fbdbc38ede5c",
+      "classification": "sql-select",
+      "evidence": "snapshotSql constant is SELECT used before/after existing write.",
+      "calls": [
+        {
+          "line": 47,
+          "method": "execute"
+        },
+        {
+          "line": 58,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+      "sha256": "44285f20362ad7cfd561cb76712a3f74934205b94dc3215c5e3ed4ceb78c8f30",
+      "classification": "sql-select",
+      "evidence": "strategySelect/versionSelect/subscriptionSelect constants plus fixed/conditional predicates.",
+      "calls": [
+        {
+          "line": 91,
+          "method": "execute"
+        },
+        {
+          "line": 94,
+          "method": "execute"
+        },
+        {
+          "line": 178,
+          "method": "execute"
+        },
+        {
+          "line": 183,
+          "method": "execute"
+        },
+        {
+          "line": 216,
+          "method": "execute"
+        },
+        {
+          "line": 241,
+          "method": "execute"
+        },
+        {
+          "line": 279,
+          "method": "execute"
+        },
+        {
+          "line": 299,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/trade-history/application/trade-history-collector.ts",
+      "sha256": "df5b6a5bdeffae10bb2657f595a25f83cb3d1ddd4d7ed4985e6370b91883536a",
+      "classification": "bridge-query-port",
+      "evidence": "queries.query -> Bridge history query transport, not SQL execute. Collector persistence elsewhere is not excluded from ownership review.",
+      "calls": [
+        {
+          "line": 30,
+          "method": "query"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-repository.ts",
+      "sha256": "1d5d30e99d14dd4671472139473433d9c7b3ef975668796517f80c4560cbcfca",
+      "classification": "sql-select",
+      "evidence": "ownHistoryAccountSql from trade-history-ownership-sql.ts and local tradeSelect return SELECT; paging and ownership fragments are predicates.",
+      "calls": [
+        {
+          "line": 28,
+          "method": "execute"
+        },
+        {
+          "line": 36,
+          "method": "execute"
+        },
+        {
+          "line": 68,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/trading/application/observer-management-service.ts",
+      "sha256": "1497f557307846e5a50ea70924eda63082dd5773a6142f2fd24ff7ae0f105041",
+      "classification": "business-write-port",
+      "evidence": "repository.execute -> MysqlObserverManagementRepository; channel/source/access/request/audit/outbox SQL remains included in inventory.",
+      "calls": [
+        {
+          "line": 49,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/trading/infrastructure/mysql-observer-access-reader.ts",
+      "sha256": "cbc8ea6e3539587849fbb1fc1bba384f0e642a375b7c5e4118f769ec76a51641",
+      "classification": "sql-select",
+      "evidence": "LIST_SQL/AUTHORIZE_SQL expand OBSERVER_SELECT; optional account predicate and FOR SHARE preserve SELECT.",
+      "calls": [
+        {
+          "line": 129,
+          "method": "execute"
+        },
+        {
+          "line": 173,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+      "sha256": "4d4060296d74dd6fe8a370b74e2561f9e73e04188e7c0cfe025befdf3215bf63",
+      "classification": "sql-select",
+      "evidence": "historyAccountSelect/currentAccountSelect/accountByIdSelect return SELECT; arguments only choose fixed predicates.",
+      "calls": [
+        {
+          "line": 193,
+          "method": "execute"
+        },
+        {
+          "line": 196,
+          "method": "execute"
+        },
+        {
+          "line": 201,
+          "method": "execute"
+        },
+        {
+          "line": 206,
+          "method": "execute"
+        },
+        {
+          "line": 299,
+          "method": "execute"
+        }
+      ]
+    },
+    {
+      "file": "server/src/outbox/infrastructure/redis-outbox-realtime-publisher.ts",
+      "sha256": "b656a11bccc27a436cb1c7b9abdda6b04715af9c70fa187b84eb9612ab3be383",
+      "classification": "sql-select",
+      "evidence": "Private one helper: inspected all 11 current callers, all pass SELECT; helper is not exported.",
+      "calls": [
+        {
+          "line": 291,
+          "method": "execute"
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "SELECT may hold locks; classification is about write targets, not absence of effects.",
+    "Business write ports are not read-only; their concrete SQL remains in the original inventory.",
+    "File hashes and commit identify reviewed evidence. Any source/helper/wiring change requires reassessment.",
+    "No database, legacy service, trigger, stored procedure or ORM verification."
+  ]
+}
