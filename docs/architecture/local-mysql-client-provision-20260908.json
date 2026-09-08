@@ -1,0 +1,22 @@
+{
+  "kind": "local-mysql-client-provision/v1",
+  "observedAt": "2026-09-08T13:19:06.7081399Z",
+  "source": "https://cdn.mysql.com/archives/mysql-8.4/mysql-8.4.8-winx64.zip",
+  "archiveSha256": "53685bb61a1efc5ecc1b35c1b6bd0d30ba799f4943a1ef2c34df464f5a774c7f",
+  "version": "8.4.8",
+  "serverInstalled": false,
+  "clients": [
+    {
+      "path": "D:\\dev_codex\\.tools\\mysql-8.4.8-download\\mysql-8.4.8-winx64\\bin\\mysql.exe",
+      "sha256": "0022995ff8b7ef0b213a175fdf12d383667d28e062b1375a0b3cacd0e0f0ed28",
+      "signatureStatus": "Valid",
+      "signer": "CN=\"Oracle America, Inc.\", O=\"Oracle America, Inc.\", L=Redwood City, S=California, C=US"
+    },
+    {
+      "path": "D:\\dev_codex\\.tools\\mysql-8.4.8-download\\mysql-8.4.8-winx64\\bin\\mysqldump.exe",
+      "sha256": "6a00280b4091335939a8030031eef0fdea473f6bd93e12ee04077cb2b7585cf6",
+      "signatureStatus": "Valid",
+      "signer": "CN=\"Oracle America, Inc.\", O=\"Oracle America, Inc.\", L=Redwood City, S=California, C=US"
+    }
+  ]
+}

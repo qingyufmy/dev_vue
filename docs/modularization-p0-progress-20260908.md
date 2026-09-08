@@ -724,3 +724,9 @@ HTTP和生产组装已切换到ContextWritePort，移除读取接口、应用服
 新增当前库专属只读CLI与可复用准备模块，实测222张表数据/DDL、147条日志、309项工具及全部源输入摘要，4行账户→3实体、274归属区间→4授权投影。输出稳定批次ID与转换摘要，不含源行正文，不复用恢复副本targetIdentity。实际执行成功、数据库写入0；27项映射/转换/写入器回归通过。
 
 清单见[current-account-wave-preparation](architecture/current-account-wave-preparation-20260908.json)，manifest仍禁止apply，备份恢复、停写与执行前重验继续。当前数据库仍147步，账户构建表未写入。
+
+## 第八十二批：本地备份客户端与认证加密流
+
+准备官方MySQL8.4.8 Windows客户端，两程序签名与版本验证通过，下载ZIP已清理，未安装本地数据库服务。新增独立认证加密流模块，8项测试通过；修复初版文件句柄关闭挂起，损坏明文不会留下可供导入的文件。详见[当前库升级接入方案第7节](architecture/current-dev-vue-upgrade-plan-20260908.md)。
+
+真实备份/恢复尚未开始。后续接入Windows ACL、密钥保护、子进程退出校验、DDL保护与SQL作用域审核；当前dev_vue本轮未连接、未写入。
