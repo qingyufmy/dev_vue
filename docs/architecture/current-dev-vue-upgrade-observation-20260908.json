@@ -1,0 +1,1262 @@
+{
+  "kind": "current-dev-vue-upgrade-observation/v1",
+  "observedAt": "2026-09-08T13:08:12.557Z",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8",
+    "timeZone": "+00:00"
+  },
+  "schemaIdentity": {
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "database": "dev_vue",
+    "storageMode": "inplace-account-v2",
+    "schemaHash": "233977958506374eebe4c7c5218b10e3b55f5871396dc927a2f8c58232222ee6"
+  },
+  "completedSteps": 147,
+  "targetSteps": 165,
+  "historySha256": "8eda1c77d16092d6e2242017c002d47e869fda7cbc7e439791952221417d45df",
+  "registrySha256": "c600028bf22dfb26fc0b94b7500f7421986703c6e6af05f7ddd213112a720047",
+  "frozenMigrationFilesVerified": 307,
+  "tables": [
+    {
+      "name": "admin_position_close_jobs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "admin_position_close_targets",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "admin_position_protection_jobs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "admin_position_protection_targets",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "admin_strategy_pending_cancel_jobs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "admin_strategy_pending_cancel_targets",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "admin_strategy_trade_dispatches",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "admin_strategy_trade_targets",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_configs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_feature_flags",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_inference_preferences",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_manual_analysis_cooldowns",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_manual_analysis_jobs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_market_benchmark_cases",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_market_benchmark_sets",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_model_capacity_leases",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_model_capacity_policies",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_model_capacity_waiters",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_model_compare_checkpoints",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_model_compare_jobs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_model_profiles",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_model_provider_capabilities",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_model_provider_incidents",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_model_purpose_defaults",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_model_task_attempts",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_model_task_events",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_model_tasks",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_model_usage_logs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_observer_channel_assignments",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_observer_channels",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_observer_sources",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_position_management_commands",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_position_management_evaluations",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_position_management_events",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_position_management_tasks",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_signals",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "ai_trade_theses",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "audit_logs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "auth_authorization_codes",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "auth_sessions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "auto_prompt_types",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "auto_scheduler",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "auto_signal_deliveries",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "bridge_connection_capacity_grants",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "bridge_device_pairings",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "bridge_refresh_sessions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "bridge_update_events",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "bridge_v3_account_latest",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "bridge_v3_command_events",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "bridge_v3_command_ledger",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "bridge_v3_deals",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "bridge_v3_orders_latest",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "bridge_v3_positions_latest",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "bridge_v3_stream_revisions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "bridge_v3_terminal_sessions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "bridge_v4_pairing_requests",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "broadcast_messages",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "chan_structure_anchors",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "close_config",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "close_signal_tickets",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "comment_likes",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "comments",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "course_resources",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "courses",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "credential_migration_runs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "crypto_watch_list",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "data_migration_batches",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "data_migration_checkpoints",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "data_migration_id_maps",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "data_migration_row_receipts",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "data_migration_runs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "data_migration_source_rows",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "database_upgrade_steps_v4",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "economic_calendar_event_revisions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "economic_calendar_events",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "experience_long_term_memories",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "experience_memory_items",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "experience_memory_summaries",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "feedback",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "global_auto_config",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "global_position_guard_control",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "global_position_management_control",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "global_risk_control",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "global_risk_controls",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "history_range_preferences",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "inference_snapshots",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "learning_courses",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "learning_lessons",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "learning_media_references",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "learning_progress",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "learning_progress_changes",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "macro_data_sources",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "macro_feature_sets",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "macro_ingestion_runs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "macro_model_versions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "macro_observations",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "macro_pipeline_jobs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "macro_research_snapshots",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "macro_series",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "macro_snapshot_observations",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "manual_trade_review_aggregate_cases",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "manual_trade_review_aggregate_sources",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "manual_trade_review_aggregate_versions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "manual_trade_review_cases",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "manual_trade_review_counterfactual_points",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "manual_trade_review_jobs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "manual_trade_review_sources",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "manual_trade_review_stage_runs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "manual_trade_review_versions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "market_candles",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "market_clock_samples",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "market_data_sources",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "membership_expiry_notifications",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "memberships",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "memory_compression_jobs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "memory_injection_logs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "mt5_account_bindings",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "mt5_account_ownership_history",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "mt5_account_performance_daily",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "mt5_account_performance_sync_state",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "mt5_account_performance_totals",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "notification_campaigns",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "notification_deliveries",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "notification_idempotency_keys",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "notifications",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "observer_management_operations",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "observer_management_registry",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "order_intents",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "orders",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "outbox_events",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "payment_matches",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "payment_orders",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "payment_side_effects",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "payment_transactions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "payment_wallet_addresses",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "pending_orders",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "period_review_cases",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "period_review_derivation_jobs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "period_review_job_events",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "period_review_jobs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "period_review_monthly_checkpoints",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "period_review_sources",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "period_review_user_states",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "period_review_versions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "platform_model_usage_policy",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "platform_strategy_experience_items",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "platform_strategy_experience_logs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "platform_strategy_experience_policies",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "position_guard_position_states",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "position_guard_profile_versions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "position_guard_profiles",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "position_management_account_rollouts",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "post_assets",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "post_replies",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "post_reports",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "post_tags",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "posts",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "progress",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "quiz_questions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "referral_credit_ledger",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "referral_rule_changes",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "referral_rules",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "referrals",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "risk_account_state",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "risk_decisions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "risk_policy_change_items",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "risk_policy_sets",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "risk_policy_versions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "risk_profiles",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "risk_reservations",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "risk_rule_rollouts",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "schema_migrations",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "signal_outcome_deals",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "signal_outcomes",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "storage_upload_sessions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "stored_files",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategies",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_compression_jobs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_conflict_bindings",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_conflict_occurrences",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_conflicts",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_consistency_jobs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_injection_logs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_injection_logs_v4",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_libraries",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_libraries_v4",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_library_revisions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_library_revisions_v4",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_pending_updates",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_subscriptions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_subscriptions_v4_build",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_versions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "subscription_execution_preferences_v4_build",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "subscription_schedules_v4_build",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "system_config",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "system_prompts",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "system_setting_changes",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "system_setting_requests",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "system_settings",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "terminal_profiles",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "trade_audit_logs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "trade_history_migration_checkpoints_v4",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "trade_review_cases",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "trade_review_jobs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "trade_review_versions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "trades",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "trading_account_ownership_intervals_v4_build",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "trading_account_ownerships_v4_build",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "trading_accounts",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "trading_accounts_v4_build",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "user_bridge_settings",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "user_memory_settings",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "user_model_defaults",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "user_notices",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "user_position_guard_settings",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "user_position_management_settings",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "user_referral_accounts",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "user_trading_account_settings_v4_build",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "users",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "verification_codes",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "video_streams",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "wallet_keys",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    }
+  ],
+  "counts": [
+    {
+      "table": "users",
+      "rows": "25"
+    },
+    {
+      "table": "trading_accounts",
+      "rows": "4"
+    },
+    {
+      "table": "mt5_account_ownership_history",
+      "rows": "274"
+    },
+    {
+      "table": "trading_accounts_v4_build",
+      "rows": "0"
+    },
+    {
+      "table": "trading_account_ownerships_v4_build",
+      "rows": "0"
+    },
+    {
+      "table": "trading_account_ownership_intervals_v4_build",
+      "rows": "0"
+    },
+    {
+      "table": "user_trading_account_settings_v4_build",
+      "rows": "0"
+    }
+  ],
+  "pendingSteps": [
+    {
+      "id": "inplace_035_01_account_root_promotion",
+      "checksum": "6f468bae7f5d2a89c3cce2c60654680efd29a2bb7dc22579f3cb5af51c40fe93"
+    },
+    {
+      "id": "inplace_036_01_terminal_account_bindings",
+      "checksum": "5eeda88f7fe506d76786fb3e6cd656101f35dcdfc47686ff77947fc75bf48c0c",
+      "table": "terminal_account_bindings"
+    },
+    {
+      "id": "inplace_036_02_bridge_connection_sessions",
+      "checksum": "ca8ea61962e3a384cc3573de55d622cfa3ae8dd923ac58187e861ba3b3bf01c0",
+      "table": "bridge_connection_sessions"
+    },
+    {
+      "id": "inplace_037_01_observer_sources",
+      "checksum": "2d6f7b35a4bd492756d0054a0d1ca7eb37b77f982aaa2d4ba2dc18531e7e02e3",
+      "table": "observer_sources"
+    },
+    {
+      "id": "inplace_037_02_observer_channels",
+      "checksum": "22d7909156bd20413b33da623567467868268d11ff9fbaa78fae3635ae932d2b",
+      "table": "observer_channels"
+    },
+    {
+      "id": "inplace_037_03_observer_channel_accesses",
+      "checksum": "65931ff886b59c797b75f0e0c497ee50273256353b91d3b014afeef0e05d34fa",
+      "table": "observer_channel_accesses"
+    },
+    {
+      "id": "inplace_037_04_trading_contexts",
+      "checksum": "f8a18b842548ff6c990c851b19716f65867cdfa2a5b8febf41d54139c3da00c1",
+      "table": "trading_contexts"
+    },
+    {
+      "id": "inplace_038_01_account_runtime_snapshots",
+      "checksum": "c2aa18eff3045a59d2cc1045dd20de514b953744adcc301ed890ea9419f16e5b",
+      "table": "account_runtime_snapshots"
+    },
+    {
+      "id": "inplace_038_02_market_quotes",
+      "checksum": "2e097edff3a1aa1472454563af0ed7e1c4883abe5c7ea35ac91abe69bdcb523c",
+      "table": "market_quotes"
+    },
+    {
+      "id": "inplace_038_03_open_position_snapshots",
+      "checksum": "31f2282998ee53c274a19336db01359065f9545f0587f98f16a8f81dd1149351",
+      "table": "open_position_snapshots"
+    },
+    {
+      "id": "inplace_038_04_pending_order_snapshots",
+      "checksum": "10c8c481140f7d763915e82bbc687fdcfa1e22a9d3f57a5e0ab3668d981b3f18",
+      "table": "pending_order_snapshots"
+    },
+    {
+      "id": "inplace_038_05_trading_projection_revisions",
+      "checksum": "46aad19e8f4121c95a518a4b91893d684f0b915b2afe0b2acd1241f9ca657627",
+      "table": "trading_projection_revisions"
+    },
+    {
+      "id": "inplace_038_06_trading_projection_provenance_v4",
+      "checksum": "1f61e79ce1407858928175af324d6925768037b25bef155b626e5a3516dc683e",
+      "table": "trading_projection_provenance_v4"
+    },
+    {
+      "id": "inplace_039_01_legacy_candle_backfill_v4",
+      "checksum": "5bacf20ca52e58c81353640b117762694dbb06ff6a3bde6db85838d85e6c5da8",
+      "table": "legacy_candle_backfill_v4"
+    },
+    {
+      "id": "inplace_039_02_market_candles_build_v4",
+      "checksum": "b81e93421cb18e00f4e33cd80b82d29581cd6ebbca6bfd6ed28cfef8477bede6",
+      "table": "market_candles_build_v4"
+    },
+    {
+      "id": "inplace_039_03_legacy_candle_mappings_v4",
+      "checksum": "2d0eab50b94c5921f3d4a5007ee1dfd985763c6658093d7ebfbf76c41f367dba",
+      "table": "legacy_candle_mappings_v4"
+    },
+    {
+      "id": "inplace_040_01_legacy_candle_promotion",
+      "checksum": "39a5bc0342361fabeacae9643adb7f073a4aa76f8875715c6fe66b6fbc1f4a18"
+    },
+    {
+      "id": "inplace_041_01_trading_context_changes_v4",
+      "checksum": "9c6ebdd2085469655abd8ed45d89eb6f6b72f49566f065733d67661a87dee42e",
+      "table": "trading_context_changes_v4"
+    }
+  ],
+  "contextReceiptTablePresent": false,
+  "migrationReady": false,
+  "runtimeReady": false,
+  "databaseWrites": 0,
+  "limits": "Read-only consistent data snapshot and repeated metadata; not a backup, writer quiescence, full row reconciliation, or executable upgrade proof. Current-database backfill and promotion evidence must be prepared separately.",
+  "tool": {
+    "path": "scripts/review-current-dev-vue-upgrade-local.mjs",
+    "sha256": "3cbb642b086dfc08652c6bb9d2dfb7ba3916a566628877a75a067de0c7a0b135"
+  }
+}

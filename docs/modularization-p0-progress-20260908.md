@@ -712,3 +712,9 @@ MySQL适配器与受限历史连接已接入真实164步及嵌套协调链。恢
 HTTP和生产组装已切换到ContextWritePort，移除读取接口、应用服务和repository上的旧saveContext及旧V4写入器。PUT/DELETE强制原请求键，新增按用户查询历史回执的no-store接口；运行合同9项。home/trader/risk统一使用会话恢复适配，按最新上下文加载，恢复提示支持查询/原请求重试；待确认只读、会话清理和默认账户激活已配套处理。
 
 服务端与消费者91项、trade146项、api-client22项、contracts53项离线测试通过，完整前后端类型检查和相关构建通过。实际注册96合同/88匹配、既有8项缺失不变；307项冻结迁移hash保持。详情见[合同与验证边界](architecture/trading-context-write-contract-20260908.md)和[注册回执](architecture/context-command-api-registration-20260908.json)。当前dev_vue升级、真实权限锁序及实际浏览器验收尚未执行，整体目标继续推进。
+
+## 第八十批：当前 dev_vue 独立只读核验与接入方案
+
+新增review-current-dev-vue-upgrade-local.mjs，从.env连接当前库，只读一致性事务内调用147步旧协调器验证结构，逐项匹配目标165步注册前缀；重复读取日志和表清单，输出不可覆盖的独立回执。实测当前UUID匹配、MySQL8.4.8、222表、147步全部完成，旧账户4行、归属历史274行、四张账户构建表均0行；307项冻结工具摘要通过。未执行数据库写入。
+
+[接入方案](architecture/current-dev-vue-upgrade-plan-20260908.md)记录账户回填→035–038→K线回填/提升→041→本地真实联合验收的依赖、两轮复核和剩余风险。现有恢复副本入口及旧Linux备份入口不能直接替换目标使用；后续补当前库manifest、备份/恢复和各段proof链。实际只读入口成功退出；当前库仍未升级，不将观察报告当作apply proof。
