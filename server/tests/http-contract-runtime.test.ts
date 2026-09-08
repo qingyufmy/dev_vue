@@ -3,6 +3,24 @@ import { createHttpContractValidator } from '../src/transport/http-contract.js'
 import { httpRuntimeContracts } from '../src/transport/generated/http-contracts.js'
 
 describe('generated HTTP contract runtime', () => {
+  it('checks write headers and strict JSON bodies without coercion', () => {
+    const contract = createHttpContractValidator(httpRuntimeContracts, ['setLearningCompletion'])
+    const request = { params: { courseId: '12', lessonId: '99' }, headers: {
+      'idempotency-key': 'a56a2134-9105-4e93-a806-bb3793f7ad38', 'x-csrf-token': 'valid-csrf-token-at-least-16',
+    }, body: { completed: true, expected_revision: '1' } }
+    const before = structuredClone(request)
+    contract.request('setLearningCompletion', request)
+    expect(request).toEqual(before)
+    for (const body of [undefined, null, {}, { completed: 'true', expected_revision: '1' },
+      { completed: true, expected_revision: 1 }, { ...request.body, user_id: '9' }]) {
+      expect(() => contract.request('setLearningCompletion', { ...request, body })).toThrow('api_request_invalid')
+    }
+    for (const key of [undefined, 'invalid', ['a56a2134-9105-4e93-a806-bb3793f7ad38']]) {
+      expect(() => contract.request('setLearningCompletion', { ...request, headers: { ...request.headers, 'idempotency-key': key } })).toThrow('api_request_invalid')
+    }
+    expect(() => contract.request('listAuditEvents', {})).toThrow('http_contract_not_registered')
+  })
+
   it('selects the declared status and media type and rejects invalid problem responses', () => {
     const contract = createHttpContractValidator(httpRuntimeContracts)
     const problem = { type: 'urn:aurum:problem:api_request_invalid', title: 'Invalid request', status: 400,

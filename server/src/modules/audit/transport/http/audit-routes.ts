@@ -11,7 +11,7 @@ export interface AuditRoutesOptions { service: AuditReadApi; auth: AuditRequestA
 const response = (requestId: string, data: unknown) => ({ data, meta: { request_id: requestId, generated_at: new Date().toISOString() } })
 
 export const auditRoutes: FastifyPluginAsync<AuditRoutesOptions> = async (fastify, options) => {
-  const contract = createHttpContractValidator(httpRuntimeContracts)
+  const contract = createHttpContractValidator(httpRuntimeContracts, ['listAuditEvents', 'getAuditEvent'])
   fastify.get<{ Querystring: { account_id?: string; category?: string; status?: string; actor?: string; from?: string; to?: string; q?: string; page_size?: string; cursor?: string } }>('/audit/events', async (request, reply) => {
     try {
       const { userId } = await options.auth.authenticate(request)

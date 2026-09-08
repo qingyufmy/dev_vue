@@ -295,11 +295,12 @@ describe('SSO V4 HTTP routes', () => {
       await www.register(appSessionRoutes, { service, surface: 'www', secureCookies })
       await www.register(learningRoutes, { prefix: '/api/v4', service: learning, auth: service, wwwOrigin: 'https://www.example.test', secureCookies })
       let savedCount = 0
+      let invalidCompletionResponse = false
       await www.register(learningCompletionRoutes, { prefix: '/api/v4', auth: service, wwwOrigin: 'https://www.example.test', secureCookies,
         service: new LearningCompletionService({ execute: async command => {
           savedCount++
           expect(command.userId).toBe(7)
-          return { lesson_id: command.lessonId, completed: command.completed, revision: '2', updated_at: '2026-09-07T01:00:00.123Z', replayed: false }
+          return { lesson_id: command.lessonId, completed: command.completed, revision: '2', updated_at: invalidCompletionResponse ? 'private-invalid-date' : '2026-09-07T01:00:00.123Z', replayed: false }
         } }) })
       await auth.register(authCenterRoutes, { service, secureCookies })
       const detail = (cookie?: string) => www.inject({ url: '/api/v4/learning/courses/12', headers: { host: 'www.example.test', ...(cookie ? { cookie } : {}) } })
@@ -332,13 +333,23 @@ describe('SSO V4 HTTP routes', () => {
       expect((await write({ origin: 'https://evil.example.test' })).statusCode).toBe(403)
       expect((await write({ host: 'trade.example.test' })).statusCode).toBe(421)
       expect((await write({}, { completed: true, expected_revision: '1', user_id: 9 })).statusCode).toBe(400)
+      expect((await write({ 'idempotency-key': 'invalid' })).statusCode).toBe(400)
+      expect((await write({}, { completed: 'true', expected_revision: '1' })).statusCode).toBe(400)
+      expect(savedCount).toBe(0)
       expect((await write()).json().data).toMatchObject({ completed: true, revision: '2' })
       expect(savedCount).toBe(1)
+      invalidCompletionResponse = true
+      const uncertain = await write({ 'idempotency-key': 'a56a2134-9105-4e93-a806-bb3793f7ad38' })
+      expect(uncertain.statusCode).toBe(503)
+      expect(uncertain.headers['content-type']).toContain('application/problem+json')
+      expect(uncertain.json()).toMatchObject({ code: 'learning_commit_unknown', retryable: true })
+      expect(uncertain.body).not.toContain('private-invalid-date')
+      expect(savedCount).toBe(2)
       expect((await www.inject({ method: 'POST', url: '/api/v4/session/logout', headers: { cookie, origin: 'https://evil.example.test', 'x-csrf-token': csrf } })).statusCode).toBe(403)
       expect((await www.inject({ method: 'POST', url: '/api/v4/session/logout', headers: { cookie, origin: 'https://www.example.test', 'x-csrf-token': csrf } })).statusCode).toBe(204)
       expect((await detail(cookie)).statusCode).toBe(401)
       expect((await write()).statusCode).toBe(401)
-      expect(savedCount).toBe(1)
+      expect(savedCount).toBe(2)
     } finally { await www.close(); await auth.close() }
   })
 

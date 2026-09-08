@@ -4,28 +4,31 @@ import type { ValidateFunction } from 'ajv'
 
 interface HttpParameterContract {
   name: string
-  location: 'path' | 'query'
+  location: 'path' | 'query' | 'header'
   required: boolean
   integerQuery: boolean
   schema: Record<string, unknown>
 }
 export interface HttpRuntimeContracts {
   components: { schemas: Record<string, unknown> }
-  operations: Record<string, { parameters: HttpParameterContract[]; responses: Record<string, Record<string, Record<string, unknown>>> }>
+  operations: Record<string, { parameters: HttpParameterContract[]; body?: { required: boolean; schema: Record<string, unknown> }; responses: Record<string, Record<string, Record<string, unknown>>> }>
 }
 export class HttpContractError extends Error {
   constructor(readonly code: 'api_request_invalid' | 'api_response_invalid', readonly status: 400 | 503) { super(code) }
 }
 
-export function createHttpContractValidator(contracts: HttpRuntimeContracts) {
+export function createHttpContractValidator(contracts: HttpRuntimeContracts, operationIds = Object.keys(contracts.operations)) {
   const ajv = new Ajv2020({ strictSchema: true, strictTypes: false, strictRequired: false, coerceTypes: false, removeAdditional: false, useDefaults: false })
   const addFormats = createRequire(import.meta.url)('ajv-formats') as (validator: Ajv2020) => void
   addFormats(ajv)
   ajv.addKeyword('components')
-  const compiled = new Map<string, { parameters: (HttpParameterContract & { validate: ValidateFunction })[]; responses: Map<string, ValidateFunction> }>()
-  for (const [id, operation] of Object.entries(contracts.operations)) {
+  const compiled = new Map<string, { parameters: (HttpParameterContract & { validate: ValidateFunction })[]; body?: { required: boolean; validate: ValidateFunction }; responses: Map<string, ValidateFunction> }>()
+  for (const id of operationIds) {
+    const operation = contracts.operations[id]
+    if (!operation) throw new Error(`http_contract_not_registered:${id}`)
     compiled.set(id, {
       parameters: operation.parameters.map(parameter => ({ ...parameter, validate: ajv.compile({ ...parameter.schema, components: contracts.components }) })),
+      ...(operation.body ? { body: { required: operation.body.required, validate: ajv.compile({ ...operation.body.schema, components: contracts.components }) } } : {}),
       responses: new Map(Object.entries(operation.responses).flatMap(([status, media]) => Object.entries(media).map(([mediaType, schema]) => [
         `${status}:${mediaType}`, ajv.compile({ ...schema, components: contracts.components }),
       ] as const))),
@@ -37,9 +40,9 @@ export function createHttpContractValidator(contracts: HttpRuntimeContracts) {
     return value
   }
   return {
-    request(id: string, request: { params?: unknown; query?: unknown }) {
+    request(id: string, request: { params?: unknown; query?: unknown; headers?: unknown; body?: unknown }) {
       for (const parameter of operation(id).parameters) {
-        const source = parameter.location === 'path' ? request.params : request.query
+        const source = parameter.location === 'path' ? request.params : parameter.location === 'header' ? request.headers : request.query
         let value = source && typeof source === 'object' ? (source as Record<string, unknown>)[parameter.name] : undefined
         if (value === undefined && !parameter.required) continue
         if (parameter.integerQuery && typeof value === 'string' && /^(0|[1-9][0-9]*)$/.test(value)) {
@@ -48,6 +51,8 @@ export function createHttpContractValidator(contracts: HttpRuntimeContracts) {
         }
         if (!parameter.validate(value)) throw new HttpContractError('api_request_invalid', 400)
       }
+      const body = operation(id).body
+      if (body && (request.body !== undefined || body.required) && !body.validate(request.body)) throw new HttpContractError('api_request_invalid', 400)
     },
     response<T>(id: string, value: T, status = 200, mediaType = 'application/json'): T {
       const validate = operation(id).responses.get(`${status}:${mediaType}`)

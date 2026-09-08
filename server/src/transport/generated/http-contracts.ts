@@ -401,6 +401,77 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         ],
         "type": "object"
       },
+      "LearningCompletionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "completed": {
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "description": "Exact unsigned revision text, at most 18446744073709551614.",
+            "maxLength": 20,
+            "not": {
+              "pattern": "[^0-9]"
+            },
+            "pattern": "^(?:0|[1-9][0-9]{0,18}|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|18446744073709550[0-9]{3}|18446744073709551[0-5][0-9]{2}|1844674407370955160[0-9]{1}|1844674407370955161[0-3]|18446744073709551614)$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "completed",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
+      "LearningCompletionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "completed": {
+                "type": "boolean"
+              },
+              "lesson_id": {
+                "pattern": "^[1-9][0-9]*$",
+                "type": "string"
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "revision": {
+                "maxLength": 20,
+                "not": {
+                  "pattern": "[^0-9]"
+                },
+                "pattern": "^[1-9][0-9]*$",
+                "type": "string"
+              },
+              "updated_at": {
+                "format": "date-time",
+                "pattern": "Z$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "lesson_id",
+              "completed",
+              "revision",
+              "updated_at",
+              "replayed"
+            ],
+            "type": "object"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ],
+        "type": "object"
+      },
       "Meta": {
         "additionalProperties": false,
         "properties": {
@@ -666,6 +737,104 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
             "$ref": "#/components/schemas/Problem"
           }
         }
+      }
+    },
+    "setLearningCompletion": {
+      "parameters": [
+        {
+          "name": "courseId",
+          "location": "path",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "pattern": "^[1-9][0-9]{0,9}$",
+            "type": "string"
+          }
+        },
+        {
+          "name": "lessonId",
+          "location": "path",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "pattern": "^[1-9][0-9]{0,9}$",
+            "type": "string"
+          }
+        },
+        {
+          "name": "idempotency-key",
+          "location": "header",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "maxLength": 36,
+            "minLength": 36,
+            "not": {
+              "pattern": "[^0-9a-f-]"
+            },
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        },
+        {
+          "name": "x-csrf-token",
+          "location": "header",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "maxLength": 256,
+            "minLength": 16,
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/LearningCompletionResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "404": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "409": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "421": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      },
+      "body": {
+        "schema": {
+          "$ref": "#/components/schemas/LearningCompletionRequest"
+        },
+        "required": true
       }
     }
   }

@@ -19,12 +19,12 @@ const operations = {}
 for (const item of Object.values(document.paths)) {
   for (const [method, operation] of Object.entries(item)) {
     if (!selected.includes(operation.operationId)) continue
-    if (method !== 'get' || operation.requestBody) throw new Error('runtime_adapter_only_supports_get')
+    if (!['get', 'put', 'post', 'patch', 'delete'].includes(method)) throw new Error('unsupported_runtime_method')
     if (operations[operation.operationId]) throw new Error('duplicate_runtime_operation')
     const parameters = [...(item.parameters ?? []), ...(operation.parameters ?? [])].map(raw => {
       const value = resolve(raw)
-      if (!['path', 'query'].includes(value.in) || !value.schema || value.content) throw new Error('unsupported_runtime_parameter')
-      return { name: value.name, location: value.in, required: value.required === true, integerQuery: value.in === 'query' && resolve(value.schema).type === 'integer', schema: value.schema }
+      if (!['path', 'query', 'header'].includes(value.in) || !value.schema || value.content) throw new Error('unsupported_runtime_parameter')
+      return { name: value.in === 'header' ? value.name.toLowerCase() : value.name, location: value.in, required: value.required === true, integerQuery: value.in === 'query' && resolve(value.schema).type === 'integer', schema: value.schema }
     })
     const responses = {}
     for (const [status, raw] of Object.entries(operation.responses ?? {})) {
@@ -38,7 +38,16 @@ for (const item of Object.values(document.paths)) {
       }
     }
     if (!responses['200']?.['application/json']) throw new Error('runtime_response_schema_required')
-    operations[operation.operationId] = { parameters, responses }
+    let body
+    if (operation.requestBody) {
+      const requestBody = resolve(operation.requestBody)
+      const schema = requestBody.content?.['application/json']?.schema
+      if (!schema || Object.keys(requestBody.content).length !== 1) throw new Error('unsupported_runtime_request_content')
+      const resolved = resolve(schema)
+      if (resolved.additionalProperties !== false && resolved.unevaluatedProperties !== false) throw new Error('runtime_write_body_must_reject_unknown_fields')
+      body = { schema, required: requestBody.required === true }
+    }
+    operations[operation.operationId] = { parameters, responses, ...(body ? { body } : {}) }
   }
 }
 if (Object.keys(operations).length !== selected.length) throw new Error('runtime_operation_not_found')
