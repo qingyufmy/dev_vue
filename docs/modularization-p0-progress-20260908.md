@@ -1072,3 +1072,16 @@ trading 的回执 SELECT 移除 users EXISTS，认证域 ActivePrincipalAccess �
 本地 API 更新为本批工作区构建，3010 Node PID 43184；真实代理/API/Redis/MySQL 14项回归通过（architecture/local-account-context-shared-read-http-20260909.json），合成用户上下文 revision 3→6，新增三个命令回执保留，新会话撤销。未启动 Worker/终端交易，无 DDL。运行 PID 为本次证据，后续须核对实际进程。
 
 本批消除一处物理跨域 users 回执查询；静态登记仍64条，扫描器未覆盖 SQL 归属，不能因此改写债务数量。mysql-context-target、观察权限等仍有用户与归属联查，账户/观摩正向夹具及浏览器恢复仍待完成；整体 P1/P0–P7 未完成。
+
+
+## 59. 账户候选查询的身份职责收口（第一百二十九批）
+
+mysql-context-target 的 ownedTarget 移除 users 联查，仅查询账户、当前归属及归属区间。prepareMysqlContextTarget 是事务前候选/route 准备，不授予权限；公开写入口先通过回执预读检查主体，最终 MysqlContextCommands 在同事务锁定并复核主体后才调用目标解析，再次锁定账户归属。历史回执重放路径不依赖目标仍存在。
+
+35 项账户目标、写入口、事务及 HTTP 合同回归通过。新增两项撤销窗口回归：预先停用的用户不查询候选或采集 route；在 route 采集期间停用的用户在目标锁定和写入前被拒绝。保留已有账户归属变动、route epoch、只读权限与观摩拒绝测试。server 类型/构建、API 生成运行检查通过，321 个冻结输入一致，登记债务仍64条。本批未重新启动 API、连接数据库或执行迁移；上一批运行证据不作为本批源码的实际运行证明。
+
+观摩数据归属的下一步清单：MysqlObserverAccessReader 的 list/authorize/authorizeOn 分别服务目录、普通读取与写事务；还存在 MysqlTradingRepository 默认创建 reader、API/浏览器 composition 创建 reader 及目标解析事务 reader。统一替换前必须覆盖所有构造入口。users operator_user 提供运营者活动状态；users viewer 提供观众活动状态、plan/plan_expires_at/token_version；频道、来源、归属及明确 grant 仍归 trading。auth 公开主体事实能力应覆盖这些必要字段，禁止转导出 SQL adapter。
+
+一致性退出条件：会员到期与 grant 的 TTL 截断、token revision、运营者停用、频道版本和账户归属均保持现有拒绝规则；普通读取不能将不同时点的身份与频道事实拼成有效授权；authorizeOn 必须使用外层同一连接，并记录多主体锁序与死锁失败行为。list 的100条分页、过期检测和去重不能退化为无限查询。需要正反例与真实依赖验证后才能删除原联查，不能只给单一调用者注入能力就关闭该项。
+
+整体账户/观摩正向夹具、浏览器恢复和数据所有权仍未全验收；本批是账户候选职责整理，不是 P1 完成。

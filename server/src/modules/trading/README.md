@@ -72,3 +72,6 @@ mysql-context-receipts 中原有 EXISTS users 条件仍保留，使回执与有�
 
 
 账户回执授权：ActivePrincipalAccess 支持 none/share/update，share/update 必须绑定调用者事务。独立回执查询先在同连接获取 auth 用户共享锁，读取完后由 trading rollback；写命令保持用户排他锁。auth 不管理交易事务，trading 回执 SQL 不再读取 users。真实双连接锁验证入口 scripts/verify-context-principal-lock-mysql.mjs，使用私有合成用户文件和新建报告绝对路径；只执行并回滚无值变化 UPDATE。其它跨域 SQL 不据此视为完成。
+
+
+账户目标候选 ownedTarget 只负责账户及归属，不读取 users；它只供命令准备使用，不能作为独立授权 API。主体授权由回执预读与 MysqlContextCommands 同事务认证锁承担。新增调用者必须保留这条调用链；用户在 route 采集期间被停用的拒绝回归位于 mysql-context-write-port.test.ts。观摩 reader 的身份与会员联查仍待按一致性要求单独替换。

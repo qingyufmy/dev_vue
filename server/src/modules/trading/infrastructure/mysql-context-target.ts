@@ -14,13 +14,15 @@ async function ownedTarget(executor: Pick<Pool, 'execute'>, command: ContextWrit
     INNER JOIN trading_account_ownership_intervals oi ON oi.id=o.interval_id AND oi.user_id=o.user_id
       AND oi.trading_account_id=o.trading_account_id AND oi.role='owner' AND oi.ended_at_utc IS NULL
       AND oi.started_at_utc=o.granted_at_utc AND oi.started_at_utc<=UTC_TIMESTAMP(3)
-    INNER JOIN users u ON u.id=o.user_id AND u.deletion_status='active' AND u.deleted_at IS NULL
     WHERE o.user_id=? AND a.deleted_at_utc IS NULL AND o.revision=a.ownership_revision
       ${command.action === 'select_account' ? 'AND a.id=?' : ''}
     ORDER BY a.id LIMIT 1${lock ? ' FOR SHARE' : ''}`, command.action === 'select_account' ? [command.userId, command.targetId] : [command.userId])
   return rows[0] ? String(rows[0].account_id) : null
 }
 
+// Caller first checks the principal through the receipt preflight. This candidate query is advisory.
+// MysqlContextCommands rechecks and locks the active principal before invoking the returned resolver;
+// account ownership is rechecked on that same connection. Neither candidate nor route grants access.
 // Capture the external route before entering a MySQL transaction. The resolver itself does only SQL.
 export async function prepareMysqlContextTarget(
   pool: Pool, leases: GatewayLeases, input: ContextWriteCommand,

@@ -10,11 +10,13 @@ function fixture() {
   let rows: Record<string, Record<string, unknown>> = {}, revision = 0, active = true
   let lostAck = false, prepareFails = false, connectionFails = false, removed = false
   let observerAllowed = false
+  let duringRoute: (() => void) | undefined
   let betweenReads: (() => void) | undefined
   const calls: string[] = []
   let transactions = 0
   const leases = { current: vi.fn(async () => {
     calls.push('route')
+    duringRoute?.()
     if (transactions) throw Error('network-in-transaction')
     return null
   }) }
@@ -83,6 +85,7 @@ function fixture() {
     port: createTradingContextWriter(pool as unknown as Pool, leases, createActivePrincipalAccess), calls, leases,
     revision: () => revision, lostAck: () => { lostAck = true }, failPreparation: () => { prepareFails = true },
     failConnection: () => { connectionFails = true }, removeTarget: () => { removed = true },
+    onRoute: (callback: () => void) => { duringRoute = callback },
     deactivate: () => { active = false }, beforeTransaction: (callback: () => void) => { betweenReads = callback },
     removeReceipt: () => { rows = {} },
     allowObserver: () => { observerAllowed = true },
@@ -166,4 +169,23 @@ it('uses real observer authorization for both accepted and denied commands witho
   await expect(accepted.port.execute(observe)).resolves.toMatchObject({ result: { mode: 'observer', accountId: null, observerChannelId: '12', readOnly: true } })
   expect(accepted.leases.current).not.toHaveBeenCalled()
   expect(accepted.revision()).toBe(1)
+})
+
+
+it('rejects a user revoked during external route capture before locking the target or writing', async () => {
+  const f = fixture(); f.onRoute(f.deactivate)
+  await expect(f.port.execute(command)).rejects.toMatchObject({ code: 'trading_account_forbidden', status: 403 })
+  expect(f.leases.current).toHaveBeenCalledOnce()
+  expect(f.calls).toContain('prepare-target')
+  expect(f.calls).not.toContain('locked-target')
+  expect(f.calls).not.toContain('write')
+  expect(f.revision()).toBe(0)
+})
+
+it('does not collect a route or query a candidate for an already revoked user', async () => {
+  const f = fixture(); f.deactivate()
+  await expect(f.port.execute(command)).rejects.toMatchObject({ code: 'trading_account_forbidden', status: 403 })
+  expect(f.leases.current).not.toHaveBeenCalled()
+  expect(f.calls).not.toContain('prepare-target')
+  expect(f.calls).not.toContain('write')
 })
