@@ -426,3 +426,11 @@ trade完整29文件130项测试、类型检查、生产构建和前端边界检�
 最终[v2证据](architecture/account-readiness-probe-20260908-v2.json)保存查询、来源/构建摘要和实际列元数据；首次13查询中间报告清理。语法检查和实际只读探针完成；此结果是已验证的未就绪状态，不能称API联调通过。探针不穷举非空/有效授权分支，不覆盖所有写表和事务条件。
 
 下一步按终端绑定、交易上下文、账户行情投影和观摩分组落实增量结构及初始事实，核对148步后历史校验衔接，再推进当前库独立回填/提升。前端与模块边界成果保留，账户完整流程仍不具备当前库验收条件。
+
+## 第四十六批：终端路由增量结构与150步定义
+
+追加036_terminal_route_tables.sql，定义terminal_account_bindings和bridge_connection_sessions，外键指向正式V4账户根及已有users/terminal_profiles。会话表采用当前档案级numeric epoch普通索引和终端/opaque epoch唯一键，未恢复已废弃的终端/numeric唯一约束。两表初始为空，V3历史路由不伪造为V4在线连接，注册写入口继续归Bridge同事务用例。
+
+新增loadTerminalRouteMigration，复用完整148步并追加两项独立checksum步骤。注册表兼容测试通过，前148步完整对象保持一致、步骤ID唯一且重复加载确定。SQL经既有分句器解析，不代表已经过真实MySQL DDL验收；本批未连接数据库。
+
+[增量合同](architecture/terminal-route-incremental-contract-20260908.md)记录两轮复核及历史校验衔接：原035完成检查保护完整表集合，后续需先校验精确新增表与完整日志，再对原集合验证原148步，不能忽略任意新表或日志。执行协调器、持久化计划和恢复副本演练尚未实现，当前dev_vue未到150步。下一批接入这些恢复能力。
