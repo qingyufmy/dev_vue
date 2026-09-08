@@ -1,3 +1,5 @@
+export { createContextCommandController, ContextCommandRecoveryError } from './context-command-controller'
+export type { ContextCommandAction, ContextCommandScope, ContextCommandIntent, ContextCommandReceipt, ContextCommandTransport, ContextCommandStorage } from './context-command-controller'
 import { computed, readonly, ref } from 'vue'
 import type { AccountSnapshot, ObserverChannel, TradingAccount, TradingContext } from '@aurum/contracts'
 export { createRequestScope } from './request-scope'
