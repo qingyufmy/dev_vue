@@ -1,3 +1,4 @@
+import { MysqlTradingContextWriter } from './mysql-trading-context-writer.js'
 import { resolveStoredAccountClock } from './mysql-account-clock.js'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import type {
@@ -168,24 +169,8 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
     return { ...context, mode: 'blocked' as const, accountId: null, observerChannelId: null, readOnly: true }
   }
 
-  async saveContext(next: Omit<TradingContext, 'revision'>, expectedRevision: number | null) {
-    if (next.mode === 'observer' && !next.readOnly) throw new TradingAccessError('trading_context_invalid', 400)
-    return transaction(this.pool, async connection => {
-      const [rows] = await connection.execute<ContextRow[]>('SELECT revision FROM trading_contexts WHERE user_id=? FOR UPDATE', [next.userId])
-      const current = rows[0]?.revision ?? 0
-      if (expectedRevision !== null && Number(current) !== expectedRevision) throw new TradingAccessError('revision_conflict', 409)
-      if (next.mode === 'full') {
-        const [access] = await connection.execute<RowDataPacket[]>('SELECT 1 FROM trading_account_ownerships WHERE user_id=? AND trading_account_id=? AND role=\'owner\' AND revoked_at_utc IS NULL LIMIT 1 FOR SHARE', [next.userId, next.accountId])
-        if (!access[0]) throw new TradingAccessError('trading_account_forbidden', 403)
-      } else if (next.mode === 'observer') {
-        if (next.accountId !== null || !next.observerChannelId) throw new TradingAccessError('trading_account_forbidden', 403)
-        const allowed = await this.observerAccessReader.authorizeOn(connection, next.userId, next.observerChannelId)
-        if (!allowed) throw new TradingAccessError('trading_account_forbidden', 403)
-      }
-      const revision = Number(current) + 1
-      await connection.execute(`INSERT INTO trading_contexts (user_id,mode,trading_account_id,observer_channel_id,read_only,revision,updated_at_utc) VALUES (?,?,?,?,?,?,UTC_TIMESTAMP(3)) ON DUPLICATE KEY UPDATE mode=VALUES(mode),trading_account_id=VALUES(trading_account_id),observer_channel_id=VALUES(observer_channel_id),read_only=VALUES(read_only),revision=VALUES(revision),updated_at_utc=VALUES(updated_at_utc)`, [next.userId, next.mode, next.accountId, next.observerChannelId, next.readOnly ? 1 : 0, revision])
-      return { ...next, revision }
-    })
+  saveContext(next: Omit<TradingContext, 'revision'>, expectedRevision: number | null) {
+    return new MysqlTradingContextWriter(this.pool, this.observerAccessReader).saveContext(next, expectedRevision)
   }
 
   async listAccounts(userId: number, access: 'current' | 'history' = 'current') {

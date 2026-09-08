@@ -637,3 +637,12 @@ getTradingContext/listTradingAccounts/listObserverChannels接入同源运行校�
 5项新写入合同测试与读取、交易实时及观摩边界共37项通过；另1项跨栈合同测试用真实前端createApiClient请求Fastify inject，验证选择、进入/退出观摩、409及提交未知503能被真实客户端解析。用例为测试适配器，不能据此证明数据库事务。跨栈测试归根tests，避免将前端Bundler模块纳入服务端NodeNext类型图；完整server类型与生成类型漂移检查通过，边界债务110无新增。
 
 第一轮复核明确写目标及revision与既有前端调用一致；第二轮保留响应丢失后的不确定性，不将revision冲突描述成幂等成功。当前repository仍缺专属幂等回执、完整提交未知恢复及新增结构后的账户写引用复核；前端状态重新同步也未闭环。这些是下一批实际待办，本批未连接数据库，不宣称账户全栈完成。
+
+
+## 第六十九批：上下文事务异常归属与回执合同
+
+将saveContext事务实现移入MysqlTradingContextWriter，原repository只委托；保留SQL与同连接权限检查，不影响其它projection事务。持久化入口拒绝null/非法/耗尽revision，commit异常标记trading_context_commit_unknown并销毁连接，不rollback或自动重试；rollback异常也销毁连接并明确报告unknown。当前读端口仍含写方法，独立应用写端口与回执表未完成。
+
+5项新测试模拟提交实际生效后确认丢失、正常提交、版本冲突、回滚失败及非法版本；与已有MySQL观摩、HTTP写合同和真实客户端对接共16项通过。完整server类型检查通过，边界110无新增、运行合同8项。测试使用连接适配器，未连接MySQL，不代替真实事务验证。
+
+[上下文写入恢复合同](architecture/trading-context-write-contract-20260908.md)完成两轮复审，规定同事务回执/审计、同键同体、用户根锁、权限复核及前端历史回执与当前上下文分开读取。下一步实现专属增量表和独立应用写端口，再接通HTTP与前端待确认状态。当前dev_vue不变，整体目标继续推进。
