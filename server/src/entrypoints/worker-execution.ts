@@ -1,3 +1,4 @@
+import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import { Worker } from 'bullmq'
 import {
   assertV4RuntimeEnabled, closeHttpServer, connectCacheRedis, createCacheRedis, createMysqlPool,
@@ -20,17 +21,17 @@ async function main() {
   const pool = createMysqlPool(config.mysql)
   const cache = createCacheRedis(config.cacheRedis)
   await Promise.all([pool.query('SELECT 1'), connectCacheRedis(cache)])
-  const commands = new BridgeCommandService(new MysqlBridgeCommandRepository(pool))
+  const commands = new BridgeCommandService(new MysqlBridgeCommandRepository(pool, createTransactionAccountClock))
   const preparation = new ExecutionPreparationWorker(
     new MysqlExecutionCommandSource(pool, { magic: config.executionMagic, deviation: config.executionDeviation }),
     new RedisAccountExecutionLeaseStore(cache),
     commands,
   )
-  const planning = new ExecutionService(new MysqlExecutionRepository(pool))
+  const planning = new ExecutionService(new MysqlExecutionRepository(pool, createTransactionAccountClock))
   const distributionRepository = new MysqlExecutionDistributionRepository(pool)
   const distributionTargets = new ExecutionDistributionTargetWorker(
     distributionRepository,
-    new UserExecutionCommandService(new MysqlUserExecutionCommandRepository(pool)),
+    new UserExecutionCommandService(new MysqlUserExecutionCommandRepository(pool, createTransactionAccountClock)),
   )
   const worker = new Worker<ExecutionJob>(EXECUTION_QUEUE, async job => {
     if (job.name === 'execution.risk-decision.prepare') {

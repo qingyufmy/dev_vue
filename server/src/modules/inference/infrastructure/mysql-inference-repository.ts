@@ -1,3 +1,4 @@
+import type { AccountClockReader } from '../../trading/index.js'
 import { randomUUID } from 'node:crypto'
 import { traderWindowAllows } from './mysql-trader-window.js'
 import { readTraderWindowFingerprint } from './mysql-trader-window-guard.js'
@@ -194,7 +195,7 @@ function isDuplicateKey(error: unknown) {
 }
 
 export class MysqlInferenceRepository implements InferenceRepository {
-  constructor(private readonly pool: Pool) {}
+  constructor(private readonly pool: Pool, private readonly accountClock: (connection: PoolConnection) => AccountClockReader) {}
 
   async getAnalysisRun(runId: string) {
     const [rows] = await this.pool.execute<AnalysisRunRow[]>(`${analysisRunSelect} WHERE r.id=? LIMIT 1`, [runId])
@@ -285,7 +286,7 @@ export class MysqlInferenceRepository implements InferenceRepository {
         for (const subscription of subscriptions) {
           const taskMode = traderTaskMode(input.result.opportunity, Boolean(subscription.has_positions), Boolean(subscription.has_pending_orders))
           if (!taskMode) continue
-          if (!await traderWindowAllows(connection, subscription, new Date())) continue
+          if (!await traderWindowAllows(this.accountClock(connection), subscription, new Date())) continue
           const id = randomUUID()
           const idempotencyKey = `analysis:${input.marketAnalysisId}:subscription:${subscription.id}:revision:${subscription.revision}`
           await expireSupersededTraderRuns(connection, subscription.id, id)
@@ -368,7 +369,7 @@ export class MysqlInferenceRepository implements InferenceRepository {
       const [analysisRows] = await connection.execute<(HashRow & { revision: number })[]>('SELECT content_sha256,revision FROM market_analyses WHERE id=? AND valid_until_utc>UTC_TIMESTAMP(3) FOR SHARE', [row.market_analysis_id])
       if (analysisRows[0]?.content_sha256 !== input.snapshot.analysis.contentHash || Number(analysisRows[0]?.revision) !== input.snapshot.analysisRevision) throw new InferenceError('trader_analysis_hash_mismatch', 409)
       await assertTraderSnapshotCurrent(connection, row, input.snapshot)
-      if (input.snapshot.subscriptionWindowHash !== await readTraderWindowFingerprint(connection, traderRun(row), new Date())) throw new InferenceError('trader_schedule_changed', 409)
+      if (input.snapshot.subscriptionWindowHash !== await readTraderWindowFingerprint(this.accountClock(connection), connection, traderRun(row), new Date())) throw new InferenceError('trader_schedule_changed', 409)
       await assertTraderPreferencesCurrent(connection, traderRun(row), input.snapshot.executionPreferences)
       const [activeTasks] = await connection.execute<ActiveTraderTaskRow[]>(`SELECT t.id,t.lease_expires_at_utc FROM ai_model_tasks t INNER JOIN ai_trader_runs r ON r.model_task_id=t.id WHERE t.purpose='trader' AND t.trading_account_id=? AND t.status='running' ORDER BY t.id FOR UPDATE`, [row.trading_account_id])
       for (const task of activeTasks.filter(task => task.lease_expires_at_utc.getTime() <= Date.now())) {
@@ -402,7 +403,7 @@ export class MysqlInferenceRepository implements InferenceRepository {
       const task = tasks[0]
       if (!task || task.status !== 'running' || Number(task.fencing_token) !== input.fencingToken) throw new InferenceError('trader_task_fence_conflict', 409)
       if (task.deadline_at_utc.getTime() <= Date.now()) throw new InferenceError('trader_task_deadline_exceeded', 409)
-      const staleReason = await traderStaleReason(connection, row) ?? await traderWindowStaleReason(connection, traderRun(row))
+      const staleReason = await traderStaleReason(connection, row) ?? await traderWindowStaleReason(this.accountClock(connection), connection, traderRun(row))
       const decisionStatus = staleReason ? 'stale' : 'proposed'
       const payload = JSON.stringify(input.result)
       const payloadHash = contentHash(input.result)

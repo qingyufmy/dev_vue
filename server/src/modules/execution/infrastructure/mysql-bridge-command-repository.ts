@@ -1,3 +1,4 @@
+import type { AccountClockReader } from '../../trading/index.js'
 import { randomUUID } from 'node:crypto'
 import { assertDistributionWindow, assertRiskDecisionWindow } from './mysql-execution-window.js'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
@@ -36,7 +37,7 @@ const selectCommand = `SELECT c.*,p.request_envelope_json FROM bridge_commands_v
   INNER JOIN bridge_command_payloads_v4 p ON p.bridge_command_id=c.id`
 
 export class MysqlBridgeCommandRepository implements BridgeCommandRepository {
-  constructor(private readonly pool: Pool) {}
+  constructor(private readonly pool: Pool, private readonly accountClock: (connection: PoolConnection) => AccountClockReader) {}
 
   async create(command: BridgeCommand) {
     return transaction(this.pool, async connection => {
@@ -110,7 +111,7 @@ export class MysqlBridgeCommandRepository implements BridgeCommandRepository {
       if (intent.source_type === 'risk_decision' || intent.source_type === 'strategy_distribution') {
         try {
           const assertWindow = intent.source_type === 'risk_decision' ? assertRiskDecisionWindow : assertDistributionWindow
-          await assertWindow(connection, intent.source_id, intent.user_id, intent.trading_account_id, new Date())
+          await assertWindow(this.accountClock(connection), connection, intent.source_id, intent.user_id, intent.trading_account_id, new Date())
         }
         catch (error) {
           if (error instanceof ExecutionError) throw new BridgeCommandError(error.code, 409)

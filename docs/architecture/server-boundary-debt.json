@@ -8,7 +8,7 @@
         "rule": "module-cycle",
         "source": "bridge",
         "target": "bridge -> execution -> inference -> risk -> trading",
-        "runtime": true,
+        "runtime": false,
         "evidence": [
           {
             "source": "server/src/modules/bridge/application/bridge-gateway-session.ts",
@@ -149,6 +149,12 @@
             "typeOnly": true
           },
           {
+            "source": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+            "target": "server/src/modules/trading/index.ts",
+            "kind": "import",
+            "typeOnly": true
+          },
+          {
             "source": "server/src/modules/execution/infrastructure/mysql-execution-command-source.ts",
             "target": "server/src/modules/inference/domain/inference.ts",
             "kind": "import",
@@ -173,10 +179,16 @@
             "typeOnly": false
           },
           {
+            "source": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+            "target": "server/src/modules/trading/index.ts",
+            "kind": "import",
+            "typeOnly": true
+          },
+          {
             "source": "server/src/modules/execution/infrastructure/mysql-execution-window.ts",
             "target": "server/src/modules/trading/index.ts",
             "kind": "import",
-            "typeOnly": false
+            "typeOnly": true
           },
           {
             "source": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
@@ -197,8 +209,32 @@
             "typeOnly": false
           },
           {
+            "source": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
+            "target": "server/src/modules/trading/index.ts",
+            "kind": "import",
+            "typeOnly": true
+          },
+          {
             "source": "server/src/modules/inference/application/trader-context-builder.ts",
             "target": "server/src/modules/trading/application/trading-ports.ts",
+            "kind": "import",
+            "typeOnly": true
+          },
+          {
+            "source": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+            "target": "server/src/modules/trading/index.ts",
+            "kind": "import",
+            "typeOnly": true
+          },
+          {
+            "source": "server/src/modules/inference/infrastructure/mysql-trader-window-evidence.ts",
+            "target": "server/src/modules/trading/index.ts",
+            "kind": "import",
+            "typeOnly": true
+          },
+          {
+            "source": "server/src/modules/inference/infrastructure/mysql-trader-window-guard.ts",
+            "target": "server/src/modules/trading/index.ts",
             "kind": "import",
             "typeOnly": true
           },
@@ -206,7 +242,7 @@
             "source": "server/src/modules/inference/infrastructure/mysql-trader-window.ts",
             "target": "server/src/modules/trading/index.ts",
             "kind": "import",
-            "typeOnly": false
+            "typeOnly": true
           },
           {
             "source": "server/src/modules/inference/infrastructure/trading-analysis-market-source.ts",
@@ -255,7 +291,7 @@
       "count": 1,
       "owner": "execution",
       "phase": "P5",
-      "reason": "Bridge、执行、推理、风控与交易模块存在双向依赖；按执行流程明确编排与端口方向，精确冻结当前边。"
+      "reason": "既有五域类型依赖环仍保留；账户时钟改为同事务公开端口注入后，该组运行依赖已不成环。精确记录新增的类型声明边，P5继续消除类型环。"
     },
     {
       "finding": {
@@ -1660,19 +1696,6 @@
       "owner": "trade-history",
       "phase": "P5",
       "reason": "现有跨域内部依赖；随所属域迁移到公开业务端口并由组装入口注入，禁止继续新增。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/trading/index.ts",
-        "target": "server/src/modules/trading/infrastructure/mysql-transaction-account-clock.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "trading",
-      "phase": "P1",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
     },
     {
       "finding": {

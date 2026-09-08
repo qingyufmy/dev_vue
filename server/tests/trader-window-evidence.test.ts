@@ -1,3 +1,4 @@
+import { createTransactionAccountClock } from '../src/modules/trading/composition.js'
 import { describe, expect, it } from 'vitest'
 import type { PoolConnection } from 'mysql2/promise'
 import { contentHash, type TraderRun } from '../src/modules/inference/index.js'
@@ -14,10 +15,10 @@ describe('frozen trader window evidence', () => {
   it('does not manufacture evidence for old snapshots or accept tampered payload', async () => {
     for (const snapshot of [{ kind: 'trader' }, { subscriptionWindowHash: 'bad' }]) {
       const connection = { async execute() { return [[{ payload_json: snapshot, payload_sha256: contentHash(snapshot) }]] } } as unknown as PoolConnection
-      expect(await traderWindowStaleReason(connection, { inputSnapshotId: 's', userId: 42, tradingAccountId: '7' } as TraderRun)).toBe('trader_schedule_unproven')
+      expect(await traderWindowStaleReason(createTransactionAccountClock(connection), connection, { inputSnapshotId: 's', userId: 42, tradingAccountId: '7' } as TraderRun)).toBe('trader_schedule_unproven')
     }
     const connection = { async execute() { return [[{ payload_json: { subscriptionWindowHash: 'a'.repeat(64) }, payload_sha256: 'b'.repeat(64) }]] } } as unknown as PoolConnection
-    expect(await traderWindowStaleReason(connection, {} as TraderRun)).toBe('trader_schedule_unproven')
+    expect(await traderWindowStaleReason(createTransactionAccountClock(connection), connection, {} as TraderRun)).toBe('trader_schedule_unproven')
   })
   it('compares durable snapshot hash with current configuration, ignoring operational cursor revision', async () => {
     const fingerprint = subscriptionWindowFingerprint({ enabled: false }, 'UTC')
@@ -29,10 +30,10 @@ describe('frozen trader window evidence', () => {
       return [[{ receive_timezone: timezone, receive_window_json: { enabled: false }, revision: cursorRevision }]]
     } } as unknown as PoolConnection
     const run = { inputSnapshotId: 's', subscriptionId: 'sub', userId: 42, tradingAccountId: '7', subscriptionRevision: 1, strategyId: '20', strategyVersionId: '21' } as TraderRun
-    expect(await traderWindowStaleReason(connection, run)).toBeNull()
+    expect(await traderWindowStaleReason(createTransactionAccountClock(connection), connection, run)).toBeNull()
     cursorRevision = 99
-    expect(await traderWindowStaleReason(connection, run)).toBeNull()
+    expect(await traderWindowStaleReason(createTransactionAccountClock(connection), connection, run)).toBeNull()
     timezone = 'terminal_server'
-    expect(await traderWindowStaleReason(connection, run)).toBe('trader_schedule_changed')
+    expect(await traderWindowStaleReason(createTransactionAccountClock(connection), connection, run)).toBe('trader_schedule_changed')
   })
 })

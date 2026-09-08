@@ -1,13 +1,43 @@
+import { createTransactionAccountClock } from '../src/modules/trading/composition.js'
 import { describe, expect, it } from 'vitest'
 import type { Pool, PoolConnection } from 'mysql2/promise'
 import { MysqlInferenceRepository, MysqlTraderWindowGuard, type InferenceRepository, type TraderRun } from '../src/modules/inference/index.js'
 import { traderWindowAllows } from '../src/modules/inference/infrastructure/mysql-trader-window.js'
-import { readTransactionAccountClock } from '../src/modules/trading/index.js'
 
 const config = { version: 1, timezone: 'terminal_server', enabled: true, weekdays: [1], windows: [{ start: '22:00', end: '02:00' }], outsideBehavior: 'pause_all' }
 const subscription = { user_id: 42, trading_account_id: '7', receive_timezone: 'terminal_server', receive_window_json: config }
 const now = new Date('2026-09-07T19:00:00Z')
 describe('trader fan-out window', () => {
+  it('binds clock reads to the active guard transaction and rolls back untrusted or failed reads', async () => {
+    for (const outcome of ['calibrated', 'missing', 'error'] as const) {
+      const events: string[] = []
+      let active = false
+      const connection = {
+        async beginTransaction() { active = true; events.push('begin') },
+        async commit() { active = false; events.push('commit') },
+        async rollback() { active = false; events.push('rollback') },
+        release() { events.push('release') },
+        async execute(sql: string) {
+          expect(active).toBe(true)
+          if (sql.includes('FROM strategy_subscriptions')) return [[subscription]]
+          expect(sql).toContain('FROM trading_accounts a')
+          expect(sql).toContain('FOR SHARE')
+          events.push('clock')
+          if (outcome === 'error') throw new Error('clock_read_failed')
+          return [outcome === 'missing' ? [] : [{ timezone_offset_minutes: 180, clock_status: 'calibrated' }]]
+        },
+      } as unknown as PoolConnection
+      const guard = new MysqlTraderWindowGuard({ getConnection: async () => connection } as unknown as Pool, transaction => {
+        expect(transaction).toBe(connection)
+        expect(active).toBe(true)
+        return createTransactionAccountClock(transaction)
+      })
+      const run = { subscriptionId: 'sub', userId: 42, tradingAccountId: '7', subscriptionRevision: 4, strategyId: '20', strategyVersionId: '21' } as TraderRun
+      if (outcome === 'calibrated') await expect(guard.assertAllowed(run, now)).resolves.toMatch(/^[a-f0-9]{64}$/)
+      else await expect(guard.assertAllowed(run, now)).rejects.toThrow(outcome === 'missing' ? 'trader_schedule_closed' : 'clock_read_failed')
+      expect(events).toEqual(['begin', 'clock', outcome === 'calibrated' ? 'commit' : 'rollback', 'release'])
+    }
+  })
   it('rechecks exact subscription revision and releases its transaction on both outcomes', async () => {
     const events: string[] = []
     let present = true
@@ -19,7 +49,7 @@ describe('trader fan-out window', () => {
         return [present ? [{ ...subscription, receive_window_json: { enabled: false } }] : []]
       },
     }
-    const guard = new MysqlTraderWindowGuard({ async getConnection() { return connection } } as unknown as Pool)
+    const guard = new MysqlTraderWindowGuard({ async getConnection() { return connection } } as unknown as Pool, createTransactionAccountClock)
     const run = { subscriptionId: 'sub', userId: 42, tradingAccountId: '7', subscriptionRevision: 4, strategyId: '20', strategyVersionId: '21' } as TraderRun
     await guard.assertAllowed(run, now)
     present = false
@@ -42,7 +72,7 @@ describe('trader fan-out window', () => {
         throw new Error('unexpected_sql')
       },
     }
-    const repo = new MysqlInferenceRepository({ async getConnection() { return connection } } as unknown as Pool)
+    const repo = new MysqlInferenceRepository({ async getConnection() { return connection } } as unknown as Pool, createTransactionAccountClock)
     const input = { runId: 'run', userId: 42, expectedRevision: 2, marketAnalysisId: 'analysis', taskId: 'task', attemptId: 'attempt', fencingToken: 1, usage: null,
       result: { opportunity: 'long_setup', marketBias: 'bullish', confidence: 70, summary: 'result', analyzedAt: now.toISOString(), validUntil: now.toISOString() } } as Parameters<InferenceRepository['completeAnalysis']>[0]
     expect((await repo.completeAnalysis(input)).traderRuns).toEqual([])
@@ -54,20 +84,20 @@ describe('trader fan-out window', () => {
   it('requires an exact clock source, including uniqueness, for an enabled window', async () => {
     let rows: unknown[] = []
     const connection = { async execute(_sql: string, args: unknown[]) { expect(args).toEqual([42, '7']); return [rows] } } as unknown as PoolConnection
-    expect(await traderWindowAllows(connection, subscription, now)).toBe(false)
+    expect(await traderWindowAllows(createTransactionAccountClock(connection), subscription, now)).toBe(false)
     rows = [{ timezone_offset_minutes: 180, clock_status: 'calibrated' }]
-    expect(await traderWindowAllows(connection, subscription, now)).toBe(true)
+    expect(await traderWindowAllows(createTransactionAccountClock(connection), subscription, now)).toBe(true)
     rows.push(rows[0])
-    expect(await readTransactionAccountClock(connection, 42, '7')).toBeNull()
-    expect(await traderWindowAllows(connection, subscription, now)).toBe(false)
+    expect(await createTransactionAccountClock(connection).read(42, '7')).toBeNull()
+    expect(await traderWindowAllows(createTransactionAccountClock(connection), subscription, now)).toBe(false)
   })
   it('does not turn signals-only outside the window into a trader task', async () => {
     const connection = { async execute() { return [[{ timezone_offset_minutes: 180, clock_status: 'calibrated' }]] } } as unknown as PoolConnection
-    expect(await traderWindowAllows(connection, { ...subscription, receive_window_json: { ...config, outsideBehavior: 'signals_only' } }, new Date('2026-09-07T23:00:00Z'))).toBe(false)
+    expect(await traderWindowAllows(createTransactionAccountClock(connection), { ...subscription, receive_window_json: { ...config, outsideBehavior: 'signals_only' } }, new Date('2026-09-07T23:00:00Z'))).toBe(false)
   })
   it('allows disabled configuration without clock I/O and refuses missing config', async () => {
     const connection = { async execute() { throw new Error('unexpected_clock_read') } } as unknown as PoolConnection
-    expect(await traderWindowAllows(connection, { ...subscription, receive_timezone: 'UTC', receive_window_json: { enabled: false } }, now)).toBe(true)
-    await expect(traderWindowAllows(connection, { ...subscription, receive_window_json: null }, now)).rejects.toThrow('subscription_window_invalid')
+    expect(await traderWindowAllows(createTransactionAccountClock(connection), { ...subscription, receive_timezone: 'UTC', receive_window_json: { enabled: false } }, now)).toBe(true)
+    await expect(traderWindowAllows(createTransactionAccountClock(connection), { ...subscription, receive_window_json: null }, now)).rejects.toThrow('subscription_window_invalid')
   })
 })

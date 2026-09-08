@@ -1,3 +1,5 @@
+import type { AccountClockReader } from './application/account-clock-reader.js'
+import { readTransactionAccountClock } from './infrastructure/mysql-transaction-account-clock.js'
 import type { Pool, PoolConnection } from 'mysql2/promise'
 import type { Redis } from 'ioredis'
 import type { FastifyPluginAsync } from 'fastify'
@@ -81,4 +83,8 @@ export function createBrowserTradingModule(pool: Pool, leases: GatewayLeases, ev
 
 export function createAccountRegistration(connection: PoolConnection): AccountRegistration {
   return new MysqlAccountRegistration(connection)
+}
+
+export function createTransactionAccountClock(connection: PoolConnection): AccountClockReader {
+  return { read: (userId, accountId) => readTransactionAccountClock(connection, userId, accountId) }
 }

@@ -1,3 +1,4 @@
+import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import { Worker } from 'bullmq'
 import {
   assertV4RuntimeEnabled, closeHttpServer, connectCacheRedis, createCacheRedis, createMysqlPool, installProcessLifecycle,
@@ -23,7 +24,7 @@ async function main() {
   const pool = createMysqlPool(config.mysql)
   const cache = createCacheRedis(config.cacheRedis)
   await Promise.all([pool.query('SELECT 1'), connectCacheRedis(cache)])
-  const repository = new MysqlInferenceRepository(pool)
+  const repository = new MysqlInferenceRepository(pool, createTransactionAccountClock)
   const strategies = new StrategyService(new MysqlStrategyCatalog(pool))
   const trading = createTradingReader(pool, new RedisBridgeGatewayLeaseStore(cache))
   const profiles = new MysqlRuntimeModelProfileCatalog(pool, loadCredentialKeyring(), {

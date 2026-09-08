@@ -1,3 +1,4 @@
+import { createTransactionAccountClock } from '../src/modules/trading/composition.js'
 import { describe, expect, it, vi } from 'vitest'
 import type { Pool, PoolConnection } from 'mysql2/promise'
 import {
@@ -109,7 +110,7 @@ describe('user execution command MySQL boundary', () => {
     const command = closeCommand()
     const result = prepared(command)
     const fake = fakePool()
-    const repository = new MysqlUserExecutionCommandRepository(fake.pool)
+    const repository = new MysqlUserExecutionCommandRepository(fake.pool, createTransactionAccountClock)
 
     await expect(repository.persistCommand({ command, action: userCommandAction(command), riskEvaluation: result.riskEvaluation, result, expected: command.expected })).resolves.toBe(result)
 
@@ -135,7 +136,7 @@ describe('user execution command MySQL boundary', () => {
     const riskEvaluation = evaluation(command, 'rejected', action)
     const result = buildRejectedUserExecutionResult({ command, riskEvaluation, operationId: 'op-rejected-9001', now })
     const fake = fakePool()
-    const repository = new MysqlUserExecutionCommandRepository(fake.pool)
+    const repository = new MysqlUserExecutionCommandRepository(fake.pool, createTransactionAccountClock)
 
     await expect(repository.persistCommand({ command, action, riskEvaluation, result, expected: command.expected })).resolves.toBe(result)
     expect(result.operation.kind).toBe('user_execution_command')
@@ -153,7 +154,7 @@ describe('user execution command MySQL boundary', () => {
     const command = closeCommand()
     const result = prepared(command)
     const fake = fakePool({ targetPayloadRevision: 10 })
-    const repository = new MysqlUserExecutionCommandRepository(fake.pool)
+    const repository = new MysqlUserExecutionCommandRepository(fake.pool, createTransactionAccountClock)
 
     await expect(repository.persistCommand({ command, action: userCommandAction(command), riskEvaluation: result.riskEvaluation, result, expected: command.expected })).rejects.toMatchObject({ code: 'user_command_target_stale', status: 409 })
     expect(fake.connection.rollback).toHaveBeenCalledOnce()
@@ -164,7 +165,7 @@ describe('user execution command MySQL boundary', () => {
     const command = closeCommand()
     const result = prepared(command)
     const fake = fakePool({ revisionRow: { positions: 4 } })
-    const repository = new MysqlUserExecutionCommandRepository(fake.pool)
+    const repository = new MysqlUserExecutionCommandRepository(fake.pool, createTransactionAccountClock)
 
     await expect(repository.persistCommand({ command, action: userCommandAction(command), riskEvaluation: result.riskEvaluation, result, expected: command.expected })).rejects.toMatchObject({ code: 'user_command_expected_state_stale', status: 409 })
     expect(fake.connection.rollback).toHaveBeenCalledOnce()
@@ -182,7 +183,7 @@ describe('user execution command MySQL boundary', () => {
     const command = marketCommand()
     const result = prepared(command)
     const fake = fakePool()
-    const repository = new MysqlUserExecutionCommandRepository(fake.pool)
+    const repository = new MysqlUserExecutionCommandRepository(fake.pool, createTransactionAccountClock)
 
     await repository.persistCommand({ command, action: userCommandAction(command), riskEvaluation: result.riskEvaluation, result, expected: command.expected })
     const capacity = fake.calls.findIndex(call => /FROM account_risk_states/i.test(call.sql) && /FOR UPDATE/i.test(call.sql))

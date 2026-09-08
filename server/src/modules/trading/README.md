@@ -11,6 +11,7 @@
 - `createBridgeTradingModule`提供连接额度能力与Bridge投影用例；保留原投影事务，提交后再发布实时事件。
 - `createBrowserTradingModule`组装同一账户/观摩读取器、实时hub及Redis生命周期。启动与关闭仍由运行角色控制，工厂不会自动监听或订阅。
 - `createAccountRegistration`由Bridge的同事务工厂调用，使用传入连接完成账户及归属写入，不独立提交。
+- `createTransactionAccountClock`将调用方已经开启的事务连接绑定为`AccountClockReader`。推理与执行的repository/guard显式注入该工厂；任务生成、冻结证据复核、规划及派发前检查均使用各自当前事务，不新建连接或独立提交。业务公开入口不再导出时钟SQL实现。
 
 认证请求端口在application/request-authentication.ts声明，不再由infrastructure反向引用HTTP文件。API总注册器使用结构化认证端口，不依赖具体适配器类。
 
@@ -24,6 +25,6 @@
 
 定向验证覆盖trading-composition、账户离线查询、账户/观摩HTTP、浏览器实时、Bridge投影以及认证边界；服务端完整类型检查、构建与精确越界检查同时执行。
 
-本批移除8个基础设施及2个HTTP公开导出。createTradingHttp/createObserverManagementHttp负责固定路由前缀，总注册器继续拥有trade/admin的域名隔离。事务内账户时钟SQL和实时hub/session仍从index公开，且其它域内部依赖、跨域写入与整体依赖环尚未清零。此次组装变更不代表账户模块或全栈重构完成，也不改变数据库就绪状态。
+第三十九批移除8个基础设施及2个HTTP公开导出，第四十批另移除事务账户时钟SQL导出。createTradingHttp/createObserverManagementHttp负责固定路由前缀，总注册器继续拥有trade/admin的域名隔离。实时hub/session仍从index公开，且其它域内部依赖、跨域写入与类型依赖环尚未清零。此次组装变更不代表账户模块或全栈重构完成，也不改变数据库就绪状态。
 
 复核：职责侧保留既有业务用例和角色分工，将具体实现组装集中到受限入口；异常侧核对认证scope/CSRF、实时回调与关闭顺序、投影提交和发布顺序保持。剩余问题明确列出，不通过新增边界例外消除检查错误。

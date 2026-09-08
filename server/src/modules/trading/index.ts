@@ -1,5 +1,5 @@
 export * from './domain/trading.js'
-export * from './infrastructure/mysql-transaction-account-clock.js'
+export type { AccountClockReader } from './application/account-clock-reader.js'
 export * from './domain/account-access.js'
 export * from './application/account-access-policy.js'
 export * from './application/observer-ports.js'

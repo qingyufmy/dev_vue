@@ -1,3 +1,4 @@
+import { createTransactionAccountClock } from '../src/modules/trading/composition.js'
 import { describe, expect, it } from 'vitest'
 import type { PoolConnection } from 'mysql2/promise'
 import { assertDistributionWindow, assertRiskDecisionWindow } from '../src/modules/execution/infrastructure/mysql-execution-window.js'
@@ -19,11 +20,11 @@ describe('execution subscription window', () => {
     const base = { receive_timezone: 'UTC', receive_window_json: { enabled: false }, ...evidence({ enabled: false }, 'UTC') }
     for (const changes of [{ preference_mode: 'trend' }, { preference_revision: '2' }, { preference_version: null }, { preference_revision: null }]) {
       const db = { execute: async () => [[{ ...base, ...changes }]] } as unknown as PoolConnection
-      await expect(assertRiskDecisionWindow(db, 'risk', 42, '7', new Date())).rejects.toThrow('execution_preferences_changed')
+      await expect(assertRiskDecisionWindow(createTransactionAccountClock(db), db, 'risk', 42, '7', new Date())).rejects.toThrow('execution_preferences_changed')
     }
     const old = { subscriptionWindowHash: subscriptionWindowFingerprint({ enabled: false }, 'UTC') }
     const db = { execute: async () => [[{ ...base, snapshot_json: old, snapshot_sha256: sha256Canonical(old) }]] } as unknown as PoolConnection
-    await expect(assertRiskDecisionWindow(db, 'risk', 42, '7', new Date())).rejects.toThrow('execution_preferences_changed')
+    await expect(assertRiskDecisionWindow(createTransactionAccountClock(db), db, 'risk', 42, '7', new Date())).rejects.toThrow('execution_preferences_changed')
   })
   it('binds manual-order distribution to its frozen target and refuses a missing subscription', async () => {
     let present = false
@@ -31,30 +32,30 @@ describe('execution subscription window', () => {
       expect(args).toEqual(['target', 42, '7'])
       return [present ? [{ receive_timezone: 'UTC', receive_window_json: { enabled: false }, ...distributionEvidence() }] : []]
     } } as unknown as PoolConnection
-    await expect(assertDistributionWindow(connection, 'target', 42, '7', new Date())).rejects.toThrow('execution_subscription_changed')
+    await expect(assertDistributionWindow(createTransactionAccountClock(connection), connection, 'target', 42, '7', new Date())).rejects.toThrow('execution_subscription_changed')
     present = true
-    await expect(assertDistributionWindow(connection, 'target', 42, '7', new Date())).resolves.toBeUndefined()
+    await expect(assertDistributionWindow(createTransactionAccountClock(connection), connection, 'target', 42, '7', new Date())).resolves.toBeUndefined()
   })
   it('rejects old, tampered or changed distribution window evidence', async () => {
     const base = { receive_timezone: 'UTC', receive_window_json: { enabled: false } }
     let row: object = base
     const connection = { async execute() { return [[row]] } } as unknown as PoolConnection
-    await expect(assertDistributionWindow(connection, 'target', 42, '7', new Date())).rejects.toThrow('execution_schedule_unproven')
+    await expect(assertDistributionWindow(createTransactionAccountClock(connection), connection, 'target', 42, '7', new Date())).rejects.toThrow('execution_schedule_unproven')
     row = { ...base, ...distributionEvidence(), request_sha256: 'a'.repeat(64) }
-    await expect(assertDistributionWindow(connection, 'target', 42, '7', new Date())).rejects.toThrow('execution_schedule_unproven')
+    await expect(assertDistributionWindow(createTransactionAccountClock(connection), connection, 'target', 42, '7', new Date())).rejects.toThrow('execution_schedule_unproven')
     row = { ...base, ...distributionEvidence('terminal_server') }
-    await expect(assertDistributionWindow(connection, 'target', 42, '7', new Date())).rejects.toThrow('execution_schedule_changed')
+    await expect(assertDistributionWindow(createTransactionAccountClock(connection), connection, 'target', 42, '7', new Date())).rejects.toThrow('execution_schedule_changed')
   })
   it('refuses missing/changed subscription and malformed window, preserves disabled window', async () => {
     let rows: unknown[] = []
     const connection = { async execute(_sql: string, args: unknown[]) {
       expect(args).toEqual(['risk', 42, '7']); return [rows]
     } } as unknown as PoolConnection
-    await expect(assertRiskDecisionWindow(connection, 'risk', 42, '7', new Date())).rejects.toThrow('execution_subscription_changed')
+    await expect(assertRiskDecisionWindow(createTransactionAccountClock(connection), connection, 'risk', 42, '7', new Date())).rejects.toThrow('execution_subscription_changed')
     rows = [{ receive_timezone: 'UTC', receive_window_json: {} }]
-    await expect(assertRiskDecisionWindow(connection, 'risk', 42, '7', new Date())).rejects.toThrow('execution_schedule_invalid')
+    await expect(assertRiskDecisionWindow(createTransactionAccountClock(connection), connection, 'risk', 42, '7', new Date())).rejects.toThrow('execution_schedule_invalid')
     rows = [{ receive_timezone: 'UTC', receive_window_json: { enabled: false }, ...evidence({ enabled: false }, 'UTC') }]
-    await expect(assertRiskDecisionWindow(connection, 'risk', 42, '7', new Date())).resolves.toBeUndefined()
+    await expect(assertRiskDecisionWindow(createTransactionAccountClock(connection), connection, 'risk', 42, '7', new Date())).resolves.toBeUndefined()
   })
   it('rechecks terminal clock and exclusive boundary even for signals-only', async () => {
     let queries = 0
@@ -64,18 +65,18 @@ describe('execution subscription window', () => {
       if (sql.includes('FROM risk_decisions_v4')) return [[{ receive_timezone: 'terminal_server', receive_window_json: window, ...evidence(window, 'terminal_server') }]]
       return [[{ timezone_offset_minutes: 180, clock_status: 'calibrated' }]]
     } } as unknown as PoolConnection
-    await expect(assertRiskDecisionWindow(connection, 'risk', 42, '7', new Date('2026-09-07T19:00:00Z'))).resolves.toBeUndefined()
-    await expect(assertRiskDecisionWindow(connection, 'risk', 42, '7', new Date('2026-09-07T23:00:00Z'))).rejects.toThrow('execution_schedule_closed')
+    await expect(assertRiskDecisionWindow(createTransactionAccountClock(connection), connection, 'risk', 42, '7', new Date('2026-09-07T19:00:00Z'))).resolves.toBeUndefined()
+    await expect(assertRiskDecisionWindow(createTransactionAccountClock(connection), connection, 'risk', 42, '7', new Date('2026-09-07T23:00:00Z'))).rejects.toThrow('execution_schedule_closed')
     expect(queries).toBe(4)
   })
   it('refuses missing, tampered, or superseded evidence even when the current window allows execution', async () => {
     const base = { receive_timezone: 'UTC', receive_window_json: { enabled: false } }
     let row: object = base
     const connection = { async execute() { return [[row]] } } as unknown as PoolConnection
-    await expect(assertRiskDecisionWindow(connection, 'risk', 42, '7', new Date())).rejects.toThrow('execution_schedule_unproven')
+    await expect(assertRiskDecisionWindow(createTransactionAccountClock(connection), connection, 'risk', 42, '7', new Date())).rejects.toThrow('execution_schedule_unproven')
     row = { ...base, ...evidence({ enabled: false }, 'UTC'), snapshot_sha256: 'a'.repeat(64) }
-    await expect(assertRiskDecisionWindow(connection, 'risk', 42, '7', new Date())).rejects.toThrow('execution_schedule_unproven')
+    await expect(assertRiskDecisionWindow(createTransactionAccountClock(connection), connection, 'risk', 42, '7', new Date())).rejects.toThrow('execution_schedule_unproven')
     row = { ...base, ...evidence({ enabled: false }, 'terminal_server') }
-    await expect(assertRiskDecisionWindow(connection, 'risk', 42, '7', new Date())).rejects.toThrow('execution_schedule_changed')
+    await expect(assertRiskDecisionWindow(createTransactionAccountClock(connection), connection, 'risk', 42, '7', new Date())).rejects.toThrow('execution_schedule_changed')
   })
 })

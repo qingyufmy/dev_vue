@@ -1,3 +1,4 @@
+import type { AccountClockReader } from '../../trading/index.js'
 import { randomUUID } from 'node:crypto'
 import { assertDistributionWindow } from './mysql-execution-window.js'
 import { ExecutionError } from '../domain/execution.js'
@@ -47,7 +48,7 @@ import type { ManualReleaseRuleCode, ManualRiskRelease } from '../../risk/domain
  * this adapter; this file does not execute DDL.
  */
 export class MysqlUserExecutionCommandRepository implements UserExecutionCommandRepository {
-  constructor(private readonly pool: Pool) {}
+  constructor(private readonly pool: Pool, private readonly accountClock: (connection: PoolConnection) => AccountClockReader) {}
 
   async loadContext(input: LoadUserExecutionCommandContextInput): Promise<UserExecutionCommandContext | null> {
     const [accountRows] = await this.pool.execute<AccountIdentityRow[]>(`
@@ -144,7 +145,7 @@ export class MysqlUserExecutionCommandRepository implements UserExecutionCommand
 
       const symbol = await assertCurrentState(connection, input.command, input.action, account.currency, input.expected)
       if (input.command.sourceType === 'strategy_distribution') {
-        try { await assertDistributionWindow(connection, input.command.sourceId, input.command.userId, input.command.accountId, new Date()) }
+        try { await assertDistributionWindow(this.accountClock(connection), connection, input.command.sourceId, input.command.userId, input.command.accountId, new Date()) }
         catch (error) {
           if (error instanceof ExecutionError) throw new UserExecutionCommandError(error.code, 409)
           throw error

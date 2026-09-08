@@ -1,3 +1,4 @@
+import type { AccountClockReader } from '../../trading/index.js'
 import { randomUUID } from 'node:crypto'
 import { assertRiskDecisionWindow } from './mysql-execution-window.js'
 import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise'
@@ -61,7 +62,7 @@ const sourceSql = `SELECT rd.id,rd.trade_decision_id,rd.user_id,CAST(rd.trading_
  WHERE rd.id=?`
 
 export class MysqlExecutionRepository implements ExecutionRepository {
-  constructor(private readonly pool: Pool) {}
+  constructor(private readonly pool: Pool, private readonly accountClock: (connection: PoolConnection) => AccountClockReader) {}
 
   async loadApprovedRiskSource(userId: number, riskDecisionId: string) {
     const [rows] = await this.pool.execute<SourceRow[]>(`${sourceSql} AND rd.user_id=? LIMIT 1`, [riskDecisionId, userId])
@@ -89,7 +90,7 @@ export class MysqlExecutionRepository implements ExecutionRepository {
 
       const revisions = await currentRevisions(connection, row.trade_decision_id)
       assertExpectedRevisions(currentSource.approvedActions, revisions)
-      await assertRiskDecisionWindow(connection, input.riskDecisionId, input.userId, input.accountId, new Date())
+      await assertRiskDecisionWindow(this.accountClock(connection), connection, input.riskDecisionId, input.userId, input.accountId, new Date())
       const policy = await effectivePolicy(connection, input.userId, input.accountId)
       if (policy.platformPolicyVersionId !== currentSource.platformPolicyVersionId
         || policy.accountPolicyVersionId !== currentSource.accountPolicyVersionId

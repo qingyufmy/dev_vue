@@ -1,3 +1,4 @@
+import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import { createMysqlLearningService, createMysqlLearningCompletionService, createLearningHttp } from '../modules/learning/composition.js'
 import { MysqlLearningMembershipReader } from '../modules/commerce/index.js'
 import { createMysqlSettingsModule } from '../modules/settings/composition.js'
@@ -40,7 +41,7 @@ async function main() {
   const auth = createAuthModule(pool, cache, web.auth, createBridgeDeviceRevoker(pool))
   const trading = createTradingApiModule(pool, cache, auth, new RedisBridgeGatewayLeaseStore(cache))
   const { tradeAuth, observerAdminAuth } = trading
-  const userExecution = new UserExecutionCommandService(new MysqlUserExecutionCommandRepository(pool))
+  const userExecution = new UserExecutionCommandService(new MysqlUserExecutionCommandRepository(pool, createTransactionAccountClock))
   const executionDistribution = new ExecutionDistributionService(new MysqlExecutionDistributionRepository(pool))
   const strategies = new StrategyService(new MysqlStrategyCatalog(pool))
   const app = Fastify({ logger: true, bodyLimit: 1024 * 1024, trustProxy: true })
@@ -57,11 +58,11 @@ async function main() {
       new RedisBridgeSessionTicketStore(cache),
     ),
     tradingHttp: trading.tradeHttp,
-    inference: new InferenceService(new MysqlInferenceRepository(pool), strategies),
+    inference: new InferenceService(new MysqlInferenceRepository(pool, createTransactionAccountClock), strategies),
     strategies,
     risk: new RiskService(new MysqlRiskRepository(pool)),
     reviews: new ReviewService(new MysqlReviewRepository(pool)),
-    execution: new ExecutionService(new MysqlExecutionRepository(pool)),
+    execution: new ExecutionService(new MysqlExecutionRepository(pool, createTransactionAccountClock)),
     userExecution,
     executionDistribution,
     tradeHistory: new TradeHistoryService(new MysqlTradeHistoryRepository(pool)),

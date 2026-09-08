@@ -1,3 +1,4 @@
+import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import {
   assertV4RuntimeEnabled, AsyncPollLoop, closeHttpServer, createMysqlPool,
   installProcessLifecycle, loadServerEnvironment, loadV4RuntimeConfig, RoleHealth, startRoleHealthServer,
@@ -22,7 +23,7 @@ async function main() {
   const trading = createTradingReader(pool)
   const scheduler = new AnalysisScheduler(
     new MysqlAnalysisScheduleRepository(pool),
-    new InferenceService(new MysqlInferenceRepository(pool), strategies),
+    new InferenceService(new MysqlInferenceRepository(pool, createTransactionAccountClock), strategies),
     (accountId, userId) => trading.getAccountSnapshot(accountId, userId),
   )
   const recovery = new ModelTaskRecovery(new MysqlModelTaskRecoveryRepository(pool))

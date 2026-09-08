@@ -1,3 +1,4 @@
+import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import { DelayedError, Worker } from 'bullmq'
 import {
   assertV4RuntimeEnabled, closeHttpServer, connectCacheRedis, createCacheRedis, createMysqlPool, installProcessLifecycle,
@@ -22,7 +23,7 @@ async function main() {
   const pool = createMysqlPool(config.mysql)
   const cache = createCacheRedis(config.cacheRedis)
   await Promise.all([pool.query('SELECT 1'), connectCacheRedis(cache)])
-  const repository = new MysqlInferenceRepository(pool)
+  const repository = new MysqlInferenceRepository(pool, createTransactionAccountClock)
   const strategies = new StrategyService(new MysqlStrategyCatalog(pool))
   const profiles = new MysqlRuntimeModelProfileCatalog(pool, loadCredentialKeyring(), {
     allowPrivateEndpoints: config.allowPrivateModelEndpoints,
@@ -41,7 +42,7 @@ async function main() {
       console.error('[worker-trader] model usage settlement failed')
     }),
     `trader:${process.pid}`,
-    new MysqlTraderWindowGuard(pool),
+    new MysqlTraderWindowGuard(pool, createTransactionAccountClock),
   )
   const worker = new Worker<TraderRunJob>(TRADER_QUEUE, async (job, token) => {
     if (job.name !== 'trader.run' || !job.data.traderRunId) throw new Error('trader_job_invalid')

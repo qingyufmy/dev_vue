@@ -1,3 +1,4 @@
+import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import Fastify from 'fastify'
 import { Worker } from 'bullmq'
 import {
@@ -40,7 +41,7 @@ async function main() {
   const transport = new BridgeGatewayCommandTransport(leases, directory, routes)
   const queries = new BridgeGatewayQueryTransport(leases, directory, routes)
   const historyCollector = new TradeHistoryCollector(new MysqlTradeHistoryCollectorRepository(pool), queries)
-  const commands = new BridgeCommandService(new MysqlBridgeCommandRepository(pool))
+  const commands = new BridgeCommandService(new MysqlBridgeCommandRepository(pool, createTransactionAccountClock))
   const gateway = new BridgeGatewayService(
     new RedisBridgeSessionTicketStore(cache),
     routes,
