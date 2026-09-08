@@ -681,3 +681,10 @@ getTradingContext/listTradingAccounts/listObserverChannels接入同源运行校�
 新增165步只读检查与执行状态机，要求旧164步完成，检查规范表结构、行数、日志及快照一致性，旧数据和结构失败不吞掉。DDL确认丢失通过物理状态恢复，completed后允许新回执数据但不放宽结构检查。8项新测试与13项既有提升测试共21项通过。
 
 两轮复核和限制见[写入合同](architecture/trading-context-write-contract-20260908.md)。本批未连接数据库；MySQL冻结计划、受限历史适配及恢复副本165步演练仍待完成，不能将状态机测试当作实际升级证明。
+
+
+## 第七十五批：恢复副本165步升级完成
+
+MySQL适配器与受限历史连接已接入真实164步及嵌套协调链。恢复副本完成165步：真实CREATE确认丢失后独立识别，补日志与最终重入均0 DDL。表数237→238，新回执表0行，旧237表快照和旧164条日志摘要保持一致。307项冻结工具复验通过，14项相关本地测试通过。
+
+详见[合同与hash](architecture/trading-context-write-contract-20260908.md)及[独立重入回执](architecture/context-changes-repeat-20260908.json)。已关闭连接/隧道，当前dev_vue不变。下一步真实命令事务验证、独立写端口与HTTP/前端接线；恢复副本建表不等于当前库升级或全栈完成。

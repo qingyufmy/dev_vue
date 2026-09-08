@@ -85,3 +85,16 @@ MySQL8.4.8实测通过：正常选择账户且UTC毫秒原值一致、重复请�
 8项新状态机测试与已有13项K线提升测试共21项通过，覆盖默认只读、正常/重入、DDL和complete确认丢失、未登记/错误/非空表、未知历史、旧数据/结构失败、completed缺表、快照不一致及后置失败。新测试使用store fixture验证协议，不代表完整MySQL历史适配或165步已执行。
 
 第一轮复核保留旧校验职责，不用新表存在代替历史证明；第二轮明确未知结果和后置失败时不能错误记录完成。实际MySQL适配器还需绑定前批reference DDL与冻结工具，并在受限只读历史连接中仅隐藏已核验的新表。该适配及恢复副本演练是下一批工作，当前数据库未操作。
+
+
+## 第七十五批：恢复副本165步实际升级与完整历史适配
+
+新增受限历史连接，只在两条精确元数据清单中移除已单独核验的trading_context_changes_v4；其它表、列、旧行和日志不删减。实际readAccountRootSnapshot及流式行摘要复用原实现。连接拒绝DDL/DML、多语句、锁变更、FOR UPDATE及直接访问新表；新表的结构、触发器和行数由外层真实连接独立核验。
+
+mysqlContextChangesStore绑定完整新计划、reference规范DDL、307项工具和原164条日志摘要。verifyPrior真实调用原164步K线提升协调器，嵌套旧结构验证继续执行，不以fixture成功替代。建表前/恢复阶段保护原237表完整快照，completed后允许新的回执行，但保留各历史阶段原有数据与schema约束。
+
+恢复副本dev_vue_m1_source_20260907_02完成五阶段：prepare pending/0 DDL；真实CREATE后注入确认丢失/1 DDL；独立inspect reconcile/0 DDL；补日志completed/0 DDL；独立repeat completed/0 DDL。总表数238，回执表0行且规范结构匹配。原表快照hash=1f105861a23ddce6ec4242993c1b200636707116106c046754190b36542ac4f7，原164条日志hash=866958b357ca65185c17ebff52451cd0183ba155ad5987de29da02a297e75ad5。proofHash=2abcfcef045e3d91c95a60d7e52e37f0f19913bc4290f5f4d0ef12ff58ff1c9e。见context-changes-plan/prepare/lost-ddl/inspect-unknown/reconcile/repeat-20260908.json。
+
+14项状态机、受限历史连接与proof绑定测试通过；执行后307项冻结文件再次一致。第一轮复核确认真实旧协调链和原表/日志均保持；第二轮复核确认DDL未知恢复不重放，触发器/结构/未完成时非空表拒绝。连接及SSH隧道已关闭，当前dev_vue未写入。
+
+本批只完成恢复副本表升级，不代表上下文命令真实并发、生产目标锁序或前端恢复已验收。接续工作是实际命令事务验证与新写端口接线，移除旧saveContext入口，HTTP请求键和前端三个消费者共同切换；当前dev_vue仍需专属增量计划。

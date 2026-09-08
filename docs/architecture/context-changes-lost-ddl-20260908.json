@@ -1,0 +1,25 @@
+{
+  "kind": "context-changes-rehearsal/v1",
+  "observedAt": "2026-09-08T12:03:46.562Z",
+  "identity": {
+    "database": "dev_vue_m1_source_20260907_02",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "mode": "--apply-lost-ddl-restored",
+  "result": {
+    "status": "ddl-unknown-injected",
+    "ddlCount": 1
+  },
+  "proofHash": "2abcfcef045e3d91c95a60d7e52e37f0f19913bc4290f5f4d0ef12ff58ff1c9e",
+  "registrySteps": 165,
+  "tools": 307,
+  "tableCount": 238,
+  "priorSnapshotHash": "1f105861a23ddce6ec4242993c1b200636707116106c046754190b36542ac4f7",
+  "priorHistoryHash": "866958b357ca65185c17ebff52451cd0183ba155ad5987de29da02a297e75ad5",
+  "table": {
+    "matches": true,
+    "rows": 0
+  },
+  "currentDevVueWritten": false,
+  "scope": "Restored database only; no application activation, context writes or current dev_vue upgrade."
+}
