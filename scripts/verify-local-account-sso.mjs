@@ -1,18 +1,27 @@
 import { verifyLocalContextCommands } from './lib/local-context-command-checks.mjs'
+import { verifyLocalOwnedContextCommands } from './lib/local-owned-context-command-checks.mjs'
 import assert from 'node:assert/strict'
 import { open, readFile } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import http from 'node:http'
 
 // Requires a private, explicitly provisioned synthetic user; never accepts real credentials on argv.
-const [fixturePath, destination, mode] = process.argv.slice(2)
+const [fixturePath, destination, mode, intentPath] = process.argv.slice(2)
 const contextCommands = mode === '--context-commands'
-assert.ok((contextCommands ? process.argv.length === 5 : process.argv.length === 4 && mode === undefined) && isAbsolute(fixturePath) && isAbsolute(destination) && fixturePath !== destination)
+const ownedCommands = mode === '--owned-accounts'
+assert.ok((ownedCommands ? process.argv.length === 6 && isAbsolute(intentPath) : contextCommands ? process.argv.length === 5 : process.argv.length === 4 && mode === undefined) && isAbsolute(fixturePath) && isAbsolute(destination) && fixturePath !== destination)
 const fixture = JSON.parse(await readFile(fixturePath, 'utf8'))
 assert.equal(fixture.kind, 'local-account-fixture/v1')
 assert.equal(fixture.identity.db, 'dev_vue')
 assert.match(fixture.email, /^v4-local-[a-f0-9-]+@example\.invalid$/)
 assert.ok(Number.isSafeInteger(fixture.userId) && fixture.userId > 0 && fixture.password.length >= 32)
+const intent = ownedCommands ? JSON.parse(await readFile(intentPath, 'utf8')) : null
+if (intent) {
+  assert.equal(intent.kind, 'local-owned-accounts-intent/v1'); assert.equal(intent.db, 'dev_vue')
+  assert.equal(intent.userId, fixture.userId)
+  assert.match(intent.brokerServer, /^V4-LOCAL-[a-f0-9-]{36}$/)
+  assert.deepEqual(intent.logins, ['900000001', '900000002'])
+}
 const output = await open(destination, 'wx', 0o600)
 const sessions = new Map()
 const checks = []
@@ -71,12 +80,25 @@ try {
   phase = 'account-reads'
   for (const path of ['/api/v4/trading-accounts', '/api/v4/observer-channels', '/api/v4/bridge/terminal-profiles']) {
     result = await request(4174, path)
-    assert.equal(result.status, 200); assert.deepEqual(result.body.data.items, [])
-    checks.push({ name: path, status: 200, items: 0 })
+    assert.equal(result.status, 200)
+    if (ownedCommands && path === '/api/v4/trading-accounts') {
+      const items = result.body.data.items
+      assert.equal(items.length, 2)
+      assert.deepEqual(items.map(item => item.login).sort(), intent.logins)
+      for (const item of items) {
+        assert.equal(item.server, intent.brokerServer); assert.equal(item.trade_permission, false)
+        assert.equal(item.bridge_state, 'offline'); assert.equal(item.terminal_profile_id, null)
+      }
+    } else assert.deepEqual(result.body.data.items, [])
+    checks.push({ name: path, status: 200, items: result.body.data.items.length })
   }
   if (contextCommands) {
     phase = 'context-commands'
     contextResult = await verifyLocalContextCommands(request, fixture.userId, checks)
+  }
+  if (ownedCommands) {
+    phase = 'owned-context-commands'
+    contextResult = await verifyLocalOwnedContextCommands(request, fixture.userId, intent, checks)
   }
 } catch {
   failed = true
@@ -96,8 +118,8 @@ try {
       checks.push({ name: `session-revocation-${port}`, logoutStatus: 204, replayStatus: 401 })
     } catch { failed = true; checks.push({ name: `session-revocation-${port}`, failed: true }) }
   }
-  const report = { kind: contextCommands ? 'local-account-context-http/v1' : 'local-account-sso/v1', observedAt: new Date().toISOString(), failed, phase, checks, contextResult,
-    scope: contextCommands ? 'Real local proxies/API/Redis/development MySQL: synthetic user blocked-context commands, replay, concurrency, CSRF and receipt reads. Context revisions and audit receipts retained; own sessions revoked. No positive owned-account/observer-channel, browser, lost MySQL commit ACK or terminal proof.' : 'Real local Vite proxies, API, Redis and development MySQL using an existing synthetic user. Empty account reads only; no positive account/observer, browser, terminal or trading proof. Own sessions revoked; fixture and audit history retained.' }
+  const report = { kind: ownedCommands ? 'local-owned-account-context-http/v1' : contextCommands ? 'local-account-context-http/v1' : 'local-account-sso/v1', observedAt: new Date().toISOString(), failed, phase, checks, contextResult,
+    scope: ownedCommands ? 'Real local HTTP/API/Redis/dev_vue: two synthetic offline owned accounts, switching, replay, conflicts, CSRF and receipts. Context and history retained; own sessions revoked. No observer, browser, lost commit ACK or terminal proof.' : contextCommands ? 'Real local proxies/API/Redis/development MySQL: synthetic user blocked-context commands, replay, concurrency, CSRF and receipt reads. Context revisions and audit receipts retained; own sessions revoked. No positive owned-account/observer-channel, browser, lost MySQL commit ACK or terminal proof.' : 'Real local Vite proxies, API, Redis and development MySQL using an existing synthetic user. Empty account reads only; no positive account/observer, browser, terminal or trading proof. Own sessions revoked; fixture and audit history retained.' }
   await output.writeFile(JSON.stringify(report, null, 2) + '\n'); await output.sync(); await output.close()
   console.log(JSON.stringify({ failed, phase, checks: checks.length }))
   if (failed) process.exitCode = 1

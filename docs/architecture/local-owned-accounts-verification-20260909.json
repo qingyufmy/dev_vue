@@ -1,0 +1,29 @@
+{
+  "kind": "local-owned-accounts-provision/v1",
+  "observedAt": "2026-09-08T18:37:56.222Z",
+  "passed": true,
+  "mode": "--verify",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "checks": [
+    "exact-synthetic-user-and-development-database",
+    "two-accounts-have-current-ownership-and-matching-history-intervals",
+    "public-account-reader-lists-both-offline-accounts-without-trading-permission"
+  ],
+  "commitState": "not_attempted",
+  "accounts": [
+    {
+      "accountId": "4",
+      "login": "900000001"
+    },
+    {
+      "accountId": "5",
+      "login": "900000002"
+    }
+  ],
+  "retained": "Two synthetic accounts, ownership grants and history intervals. Private durable intent retained for exact identification; no rows deleted.",
+  "scope": "Real dev_vue constraints and compiled registration/read capabilities. No terminal profiles, snapshots, positions, commands or observer channels created. Not HTTP/browser switching proof."
+}
