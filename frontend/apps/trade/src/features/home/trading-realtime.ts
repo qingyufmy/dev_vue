@@ -55,7 +55,7 @@ async function connect(session: TradeSessionSnapshot, accountId: string, symbol:
   }
   applyRealtimeState('connecting')
   try { await client.createRealtimeTicket(session.csrf_token) }
-  catch { scheduleReconnect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration); return }
+  catch { scheduleReconnect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged); return }
   if (currentGeneration !== generation) return
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:'
   try { connection = connectRealtime({

@@ -1,5 +1,5 @@
 import { applyAccountSnapshot, applyRealtimeState } from '~/features/trading-context'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AccountSnapshot, SessionSummary } from '@aurum/contracts'
 import { accountSnapshot, clearAccountRuntime, realtimeState } from '../src/features/home/home-runtime'
 
@@ -51,6 +51,47 @@ async function flush() {
 describe('trade home observer realtime adapter', () => {
   let options: any
   let socket: { send: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }
+
+  afterEach(() => { stopTradingRealtime(); vi.useRealTimers() })
+
+  it('keeps analysis refresh notifications after ticket failure and reconnect', async () => {
+    vi.useFakeTimers()
+    mocks.createRealtimeTicket.mockRejectedValueOnce(new Error('temporary_ticket_failure'))
+    const resync = vi.fn(async () => undefined)
+    const analysisChanged = vi.fn()
+    await startTradingRealtime(session, '7', 'XAUUSD', 'M5', null, resync, analysisChanged)
+    expect(mocks.connectRealtime).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1300)
+    expect(resync).toHaveBeenCalledOnce()
+    expect(mocks.connectRealtime).toHaveBeenCalledOnce()
+    await options.onMessage(sourceEvent({ type: 'market_analysis.created',
+      scope: { user_id: '99', trading_account_id: null, terminal_instance_id: null, observer_channel_id: null },
+      resource: { kind: 'market_analysis', id: 'analysis-1' }, data: {} }))
+    expect(analysisChanged).toHaveBeenCalledOnce()
+  })
+
+  it('does not revive an old account while its reconnect snapshot is pending', async () => {
+    vi.useFakeTimers()
+    const oldSnapshot = deferred<void>()
+    const oldAnalysis = vi.fn()
+    const newAnalysis = vi.fn()
+    mocks.createRealtimeTicket.mockRejectedValueOnce(new Error('temporary_ticket_failure'))
+    await startTradingRealtime(session, '7', 'XAUUSD', 'M5', null, () => oldSnapshot.promise, oldAnalysis)
+    await vi.advanceTimersByTimeAsync(1300)
+    await startTradingRealtime(session, '8', 'XAUUSD', 'M5', null, async () => undefined, newAnalysis)
+    oldSnapshot.resolve()
+    await flush()
+    expect(mocks.connectRealtime).toHaveBeenCalledOnce()
+    options.onOpen(socket as never)
+    const { targets } = JSON.parse(socket.send.mock.calls[0]![0] as string)
+    expect(targets.filter((target: any) => target.trading_account_id !== null)
+      .every((target: any) => target.trading_account_id === '8')).toBe(true)
+    await options.onMessage(sourceEvent({ type: 'market_analysis.created',
+      scope: { user_id: '99', trading_account_id: null, terminal_instance_id: null, observer_channel_id: null },
+      resource: { kind: 'market_analysis', id: 'analysis-2' }, data: {} }))
+    expect(oldAnalysis).not.toHaveBeenCalled()
+    expect(newAnalysis).toHaveBeenCalledOnce()
+  })
 
   beforeEach(() => {
     stopTradingRealtime()

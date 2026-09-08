@@ -961,3 +961,13 @@ MysqlObserverManagementRepository 的用户表读取已移除：源所有者在�
 真实MySQL[analysis-strategy-access-mysql-20260909.json](architecture/analysis-strategy-access-mysql-20260909.json)10项通过：平台/自有策略允许，他人/执行/停用/未发布/已删除/不存在策略拒绝，unsigned BIGINT保真和夹具插入回滚。探针在精确开发库连接内创建临时strategies表遮蔽永久表，所有测试写入仅作用于该会话临时表；rollback后计数0，再DROP TEMPORARY并销毁连接。没有永久数据写入、迁移或服务重启，也不证明跨连接锁竞争、HTTP或浏览器流程。
 
 下一步从账户用户流程出发核对剩余依赖与前端恢复，补齐夹具退役和完整浏览器验收；P1与总体重构仍未完成。
+
+## 74. 实时票据重试保留分析刷新（第一百四十四批）
+
+检查账户前端恢复链路发现具体缺陷：trading-realtime 的 createRealtimeTicket 失败分支调用 scheduleReconnect 时漏传 onAnalysisChanged。后续虽能重新取得票据并建立连接，但 market_analysis.created 事件不再触发首页 loadLatestAnalysis，页面会继续显示旧分析，直到其他操作触发刷新。
+
+先增加“票据失败→退避→快照回读→连接恢复→新分析事件”回归，在修复前明确失败（回调0次）；修复仅补传原回调，不改变退避、票据协议或账户作用域。增加账户切换交错验证：旧账户的重连快照尚未完成时启动新账户，旧快照完成后不再建旧连接，新连接只订阅新账户，分析事件只调用新回调。测试退出统一停止连接并恢复真实计时器。
+
+本次20项通过（实时恢复7、上下文命令控制11、恢复组件2），trade类型检查、前端边界检查、diff检查和321冻结输入检查通过。前端登记债务0且无新增/陈旧项；Nuxt server隐式依赖和动态组件扫描盲点仍未关闭。没有数据库操作、服务重启或部署。
+
+证据范围是本地前端测试（模拟HTTP票据、WebSocket和计时器），不代替Chrome完整账户/观摩流程、真实断网恢复或视觉验收。下一步继续账户前端权限失效与浏览器恢复、夹具退役；P1与整体重构仍未完成。
