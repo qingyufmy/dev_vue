@@ -88,4 +88,3 @@ it('reports an unknown result when a completed use case returns an invalid respo
     expect(f.enterObserver).toHaveBeenCalledTimes(1)
   } finally { await f.app.close() }
 })
-
