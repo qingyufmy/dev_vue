@@ -1321,3 +1321,15 @@ useHomeWorkspace 原先收到当前快照/行情的401或403时只清空账户ru
 Auth SSO定向13项、浏览器实时会话生命周期2项通过，脚本语法、diff与321冻结输入检查通过。未重启服务、未迁移结构、未操作真实账户或公网。观摩grant、源/频道、两个自有账户及运营者仍保留，整个合成夹具退役尚未完成。
 
 下一步继续通过各域用例关闭合成观摩授权和源/频道，保留可追溯历史与回执；P1与整体目标仍未完成。
+
+## 79. 合成观摩授权、源和频道退役（第一百四十九批）
+
+新增retire-local-observer-fixture.mjs，先--prepare生成固定三步计划，再--apply：撤销观众31在频道1的授权（revision5→6）、关闭频道1（2→3）、关闭源1（2→3）。通过原始私有意图核对运营者uid/email、合成账户broker/login、源归属、唯一assigned频道及唯一受众；禁止顺带处理其它频道或授权。计划和每步key/body先持久化，所有变更通过ObserverManagementService及当前auth/strategies同事务能力完成，不直接写业务表。
+
+首次执行三步确认，registry9→12。使用同一计划和固定key/body再次执行，三条operation结果与最终实体状态均与首次一致，未重新递增版本或新增业务操作。失败后仅允许原计划重放/查询回执，不重建revision或恢复授权。源、频道、grant撤销记录、运营者及账户历史全部保留；关闭观摩不等于删除或退役账户归属。
+
+Outbox探针升级v2：只排除已dispatched历史，对全部剩余事件仍要求有界、pending/attempts0且精确属于合成观摩操作，保留claim事务内锁定复核。真实认领/发布/确认新增3条退役事件，failed0，独立Redis订阅收到3条；旧9条不再投递。v1历史报告保留，当前工具行为按v2说明。
+
+真实公开trading reader确认合成用户观摩目录为空，数据库未确认Outbox计数0。四项退役复核包含同key/body操作结果、实体版本保全、公开目录与Outbox，报告local-observer-retirement-verified-20260909.json；计划、prepare/apply/replay JSONL及Outbox回执均在architecture目录。27项管理回归、脚本语法、diff和321冻结输入检查通过。
+
+本批关闭的是合成观摩权限与发布入口，未删除账号、归属或历史，未发送终端命令、未重启或部署。两个自有合成账户及源账户归属仍在，尚需决定并实现对应的精确归属退役能力；该能力不能绕过历史区间、revision、绑定与上下文约束。P1及整体目标仍未完成。

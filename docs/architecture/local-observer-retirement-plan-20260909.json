@@ -1,0 +1,76 @@
+{
+  "kind": "local-observer-retirement-plan/v1",
+  "runId": "1bd867f3-3d98-4b0a-94af-29d65ada0e2b",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "actorUserId": 32,
+  "sourceId": "1",
+  "channelId": "1",
+  "viewerUserId": 31,
+  "before": {
+    "source": {
+      "id": "1",
+      "operatorId": 32,
+      "accountId": "6",
+      "displayName": "本地离线观摩源",
+      "notes": "Synthetic local fixture; no terminal or trading data",
+      "strategyId": null,
+      "status": "active",
+      "revision": "2"
+    },
+    "channel": {
+      "id": "1",
+      "displayName": "本地离线观摩频道",
+      "slug": "local-observer-1bd867f3-3d98-4b0a-94af-29d65ada0e2b",
+      "description": "仅供本地账户流程验收，无实时行情",
+      "audience": "assigned",
+      "active": 1,
+      "isDefault": 0,
+      "sortOrder": 999,
+      "revision": "2"
+    },
+    "access": {
+      "userId": 31,
+      "revokedAt": null,
+      "revision": "5"
+    }
+  },
+  "commands": [
+    {
+      "kind": "access.set",
+      "channelId": "1",
+      "userId": 31,
+      "granted": false,
+      "expectedRevision": 5
+    },
+    {
+      "kind": "channel.update",
+      "id": "1",
+      "expectedRevision": 2,
+      "config": {
+        "displayName": "本地离线观摩频道",
+        "sourceId": "1",
+        "slug": "local-observer-1bd867f3-3d98-4b0a-94af-29d65ada0e2b",
+        "description": "仅供本地账户流程验收，无实时行情",
+        "audience": "assigned",
+        "active": false,
+        "sortOrder": 999
+      }
+    },
+    {
+      "kind": "source.update",
+      "id": "1",
+      "expectedRevision": 2,
+      "config": {
+        "displayName": "本地离线观摩源",
+        "notes": "Synthetic local fixture; no terminal or trading data",
+        "tradingAccountId": "6",
+        "analysisStrategyId": null,
+        "status": "disabled"
+      }
+    }
+  ]
+}

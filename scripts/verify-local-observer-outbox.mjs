@@ -36,6 +36,7 @@ try {
     e.status,e.attempts,e.available_at_utc availableAt,e.payload_json payload,
     o.actor_user_id actorUserId,o.action,o.audit_json audit
     FROM outbox_events e LEFT JOIN observer_management_operations o ON o.id=e.aggregate_id
+    WHERE e.status<>'dispatched'
     ORDER BY e.id LIMIT 501`
   const validate = rows => {
     assert.ok(rows.length > 0 && rows.length <= 100)
@@ -65,7 +66,7 @@ try {
   const immutable = rows => rows.map(row => ({ id: row.id, eventId: row.eventId, eventType: row.eventType,
     status: row.status, attempts: row.attempts, payload: parseJson(row.payload), audit: parseJson(row.audit) }))
   const beforeHash = hash(immutable(before))
-  checks.push('entire-outbox-is-bounded-pending-synthetic-observer-events')
+  checks.push('all-undispatched-events-are-bounded-pending-synthetic-observer-events')
   const redisConfig = { host: env.REDIS_HOST, port: Number(env.REDIS_PORT), db: Number(env.REDIS_DB), password: env.REDIS_PASSWORD }
   publisherRedis = createCacheRedis(redisConfig); observerRedis = createCacheRedis(redisConfig)
   await Promise.all([connectCacheRedis(publisherRedis), connectCacheRedis(observerRedis)])
@@ -121,9 +122,9 @@ try {
     assert.equal(row.leaseOwner, null); assert.equal(row.leaseExpiresAt, null); assert.ok(row.dispatchedAt instanceof Date)
   }
   checks.push('all-selected-events-acknowledged-once-and-leases-cleared')
-  await output.writeFile(JSON.stringify({ kind: 'local-observer-outbox-dispatch/v1', observedAt: new Date().toISOString(), passed: true,
+  await output.writeFile(JSON.stringify({ kind: 'local-observer-outbox-dispatch/v2', observedAt: new Date().toISOString(), passed: true,
     identity, checks, batchResult, beforeHash, eventIds: before.map(row => row.eventId), after, redisDeliveries: deliveries.length,
-    scope: 'Real permanent MySQL claim/ack and Redis delivery for the complete bounded synthetic observer batch. Transactional fixture guard precedes repository mutations. No unrelated event, BullMQ task, background dispatcher loop or terminal action.' }, null, 2) + '\n')
+    scope: 'Real permanent MySQL claim/ack and Redis delivery for all undispatched events, required to be the bounded synthetic observer batch. Previously dispatched history is excluded. Transactional fixture guard precedes repository mutations. No unrelated event, BullMQ task, background dispatcher loop or terminal action.' }, null, 2) + '\n')
   console.log(JSON.stringify({ passed: true, checks: checks.length, batchResult, redisDeliveries: deliveries.length }))
 } catch {
   await output.writeFile(JSON.stringify({ passed: false, phase, batchResult, code: 'local_observer_outbox_failed',

@@ -1,0 +1,55 @@
+{
+  "kind": "local-observer-outbox-dispatch/v2",
+  "observedAt": "2026-09-08T20:13:33.064Z",
+  "passed": true,
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "checks": [
+    "all-undispatched-events-are-bounded-pending-synthetic-observer-events",
+    "real-mysql-claim-dispatcher-publisher-and-acknowledgement-complete",
+    "redis-subscriber-received-every-persisted-control-payload",
+    "all-selected-events-acknowledged-once-and-leases-cleared"
+  ],
+  "batchResult": {
+    "claimed": 3,
+    "dispatched": 3,
+    "failed": 0
+  },
+  "beforeHash": "60206994932e4ae34b7ea309aa4b69c55d49e07c4547dbb99782e8531dd092b9",
+  "eventIds": [
+    "672bc2bb-71b6-45de-aa3e-970094a519f7",
+    "1a317b0e-ea78-4d0b-ad18-f6134e810707",
+    "f6a2e31f-7df4-4dc8-b178-76877725ca2b"
+  ],
+  "after": [
+    {
+      "id": "10",
+      "status": "dispatched",
+      "attempts": 1,
+      "leaseOwner": null,
+      "leaseExpiresAt": null,
+      "dispatchedAt": "2026-09-08T20:13:33.060Z"
+    },
+    {
+      "id": "11",
+      "status": "dispatched",
+      "attempts": 1,
+      "leaseOwner": null,
+      "leaseExpiresAt": null,
+      "dispatchedAt": "2026-09-08T20:13:33.062Z"
+    },
+    {
+      "id": "12",
+      "status": "dispatched",
+      "attempts": 1,
+      "leaseOwner": null,
+      "leaseExpiresAt": null,
+      "dispatchedAt": "2026-09-08T20:13:33.062Z"
+    }
+  ],
+  "redisDeliveries": 3,
+  "scope": "Real permanent MySQL claim/ack and Redis delivery for all undispatched events, required to be the bounded synthetic observer batch. Previously dispatched history is excluded. Transactional fixture guard precedes repository mutations. No unrelated event, BullMQ task, background dispatcher loop or terminal action."
+}

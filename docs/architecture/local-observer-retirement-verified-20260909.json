@@ -1,0 +1,16 @@
+{
+  "kind": "local-observer-retirement-verification/v1",
+  "passed": true,
+  "observedAt": "2026-09-08T20:14:15.212Z",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "checks": [
+    "same-key-body-replay-preserves-operation-results",
+    "replay-preserves-entity-revisions",
+    "public-observer-directory-empty",
+    "no-undispatched-outbox-events"
+  ],
+  "scope": "Real compiled public observer reader and read-only outbox count; retains identities and accounts. No browser, terminal or complete fixture retirement proof."
+}
