@@ -506,3 +506,13 @@ loadObserverContextMigration复用完整150步并追加四项checksum，总定�
 独立进程再次执行ddlCount=0，四步均completed。各次回执额外比较原224表完整快照和原150条日志规范摘要，并核对已新增表全部0行；结构匹配由协调器按规范DDL验证。参考证据和旧迁移工具不修改，已新增表及日志保留。当前dev_vue未执行本批升级，应用/Redis/Bridge和浏览器流程没有据此判定完成。本地执行进程完成，数据库连接及SSH隧道已关闭。
 
 职责复核保留trading的唯一业务写入口、默认禁用和空授权初态；异常复核保持跨库计划拒绝、旧日志/快照冻结、未知响应下一进程恢复与独立回执。接下来继续账户/行情投影依赖及旧market_candles同名结构处置，准备当前库专属升级与账户全栈验收。
+
+## 第五十四批：账户行情投影结构与旧K线迁移合同
+
+追加038六表：account_runtime_snapshots、market_quotes、open_position_snapshots、pending_order_snapshots、trading_projection_revisions、trading_projection_provenance_v4。沿用003/020结构及来源约束，初始为空，不回填旧在线/资金/持仓为可信V4事实。注册定义扩展到160步，原154步完整对象保持一致。
+
+核对mysql-trading-repository的投影写入：路由/所有权/会话验证、revision锁、投影、来源和精确状态/预留吸收在原事务内；其它域的直接SQL读取仍需公开端口收口。3项注册/旧SQL语义/依赖顺序测试通过，28项实时投影、预留吸收、时钟保留测试通过；不是真实038执行证据。
+
+[正式增量合同](architecture/account-projection-incremental-contract-20260908.md)明确旧market_candles的独立映射/构建/对账/提升流程。最近副本冻结快照有35,725行K线及3条来源，旧键为source/broker_symbol/timeframe/UTC毫秒，与V4账户键不同；保留全部旧行及V4不直接消费字段，不默认分配账户或猜测closed。列出旧读写消费者、映射歧义、合并冲突、旧历史验证适配及新写入后恢复要求。
+
+两轮复核覆盖职责/同事务、来源可信度、UTC/精度、六表父键顺序和K线旧事实保留。此次未连接数据库，恢复副本仍待154→160，当前库待专属升级。下一步参考MySQL验证六表规范结构及约束，接入其持久化计划和恢复演练，并推进旧K线来源映射调查。
