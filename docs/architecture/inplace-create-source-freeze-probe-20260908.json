@@ -1,0 +1,6 @@
+{
+  "failed": true,
+  "phase": "create-with-foreign-key",
+  "code": "ER_LOCK_WAIT_TIMEOUT",
+  "temporaryDatabaseRemoved": true
+}

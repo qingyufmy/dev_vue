@@ -1,0 +1,26 @@
+{
+  "kind": "current-terminal-route-result/v1",
+  "observedAt": "2026-09-08T14:41:07.268Z",
+  "target": "dev_vue",
+  "mode": "--prepare",
+  "result": {
+    "ddlCount": 0,
+    "steps": [
+      {
+        "id": "inplace_036_01_terminal_account_bindings",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_036_02_bridge_connection_sessions",
+        "status": "pending"
+      }
+    ]
+  },
+  "completedSteps": 148,
+  "targetSteps": 150,
+  "proofHash": "29752b768f630d46e35cae4caa77818bcfef1b3ba2ccdeee20af80c19acec5bf",
+  "protectedTables": 222,
+  "addedTables": [],
+  "runtimeActivated": false,
+  "scope": "Append-only empty route tables; exact prior rows and history reconciled. Client check is observational, not a database-wide write lock."
+}

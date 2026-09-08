@@ -139,3 +139,13 @@
 实际[应用回执](current-account-root-applied-20260908.json)为 applied、ddlCount=1，当前库由147到148步，222张表。旧trading_accounts改名为trading_accounts_legacy_v3（4行）；正式账户3行、设置4行、归属区间274行、授权4行。协调器按当前proof验证全表行摘要、重命名/外键后的DDL以及历史147步结构，再完成日志。随后[重复执行](current-account-root-repeat-20260908.json)返回completed、ddlCount=0，未重复DDL。proofHash为`6b2f763e36c3571d7e76c938401132a16b0fcb564554cb6d7391b27d47a70829`。
 
 47项定向测试通过，覆盖回填保护、回执、DDL锁、根表协调器及MySQL适配器。职责复核：当前入口只准备/协调035，不直接执行任意SQL，不把恢复副本身份传给当前库；异常复核：输出路径执行前排他创建，proof与绑定fsync，已持久化proof不得重新生成覆盖；DDL结果未知沿同proof核对。此次未启用应用消费者，149–165及当前库K线回填仍待完成；下一步接续036终端绑定/连接会话增量表及后续协调器。
+
+## 15. 当前终端路由表升级完成（第九十批）
+
+当前dev_vue已从148升至150步、224表，新增terminal_account_bindings和bridge_connection_sessions，两表均为空；未从旧会话推断在线终端或复制过期路由。见[应用回执](current-terminal-route-applied-20260908.json)及[重复执行回执](current-terminal-route-repeat-20260908.json)：首次DDL2次，重复DDL0次，两个步骤均completed；原222表完整数据/结构与原148步日志一致。
+
+新增当前库专属入口 `upgrade-current-terminal-route-local.mjs`，使用当前根表proof和绑定摘要，prepare检查当前父键类型，并在唯一空参考库执行原036 SQL、读取真实SHOW CREATE，再删除和确认参考库不存在。当前源快照与日志前后相等后，固化[036 proof](current-terminal-route-proof-20260908.json)及[工具/参考绑定](current-terminal-route-proof-20260908.json.current.json)。执行仅调用既有登记协调器，逐步骤验证状态和完整规范结构；输出在动作前排他创建，proof/绑定fsync，未知结果继续沿同proof核对。
+
+锁方案定向复核：MySQL禁止持有LOCK TABLES时CREATE TABLE，见[官方说明](https://dev.mysql.com/doc/refman/8.4/en/lock-tables.html)。本批尝试独立RR行/间隙冻结，真实临时库发现外键CREATE同样被父表事务锁阻塞，见[失败探针](inplace-create-source-freeze-probe-20260908.json)，临时库已清理；未保留不适用的工具实现。036是纯新增空表，不改写旧业务行，采用现有命名锁、每步前开发库其它连接检查、严格旧数据前后对账和逐步日志恢复；这属于观察与变更范围约束，不宣称全库停写锁。检测到其它连接或对账变化即停止，不恢复旧备份覆盖新数据。
+
+29项Vitest协调器/适配器测试与1项Node原生注册表测试通过。注册表文件最初误用Vitest导致“No test suite found”，改用其实际node:test运行器后通过，未修改冻结测试或SQL。当前应用消费者仍未启用；下一步151–154观摩/上下文表，再接155–165及K线回填。

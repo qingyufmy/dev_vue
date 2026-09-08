@@ -772,3 +772,9 @@ HTTP和生产组装已切换到ContextWritePort，移除读取接口、应用服
 当前库专属入口持升级锁/全表写锁，重新核验回填、旧数据、来源/映射回执，生成当前proof及工具绑定；完整协调器持锁预检通过。实际执行035原子重命名1次，当前147→148步、222表，旧账户4行及旧ID保留，正式账户/设置/区间/授权为3/4/274/4。重复执行返回completed、DDL0次。
 
 47项定向测试通过。[应用回执](architecture/current-account-root-applied-20260908.json)、[重复回执](architecture/current-account-root-repeat-20260908.json)和[详细接入记录](architecture/current-dev-vue-upgrade-plan-20260908.md)已归档。当前库149–165及后续K线回填、应用就绪与真实联合验收继续；本批不启用应用消费者。
+
+## 第九十批：当前 dev_vue 终端路由表升级完成
+
+当前库148→150步、222→224表，新增终端账户绑定和连接会话空表；原222表完整对账及148步旧日志保留。当前专属proof来自实际临时参考DDL，参考库已清理；首次DDL2次、重复0次。30项定向测试通过。
+
+见[应用回执](architecture/current-terminal-route-applied-20260908.json)、[重复回执](architecture/current-terminal-route-repeat-20260908.json)及[接入方案第15节](architecture/current-dev-vue-upgrade-plan-20260908.md)。记录CREATE不能沿用RENAME写锁及父表事务锁阻塞的实测结果；当前新增表步骤采用命名锁、其它客户端观察和严格前后对账，不宣称全库停写。下一步151–154观摩/交易上下文表。

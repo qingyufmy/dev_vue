@@ -1,0 +1,37 @@
+{
+  "kind": "current-terminal-route-result/v1",
+  "observedAt": "2026-09-08T14:42:33.795Z",
+  "target": "dev_vue",
+  "mode": "--apply",
+  "result": {
+    "ddlCount": 2,
+    "steps": [
+      {
+        "id": "inplace_036_01_terminal_account_bindings",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_036_02_bridge_connection_sessions",
+        "status": "completed"
+      }
+    ]
+  },
+  "completedSteps": 150,
+  "targetSteps": 150,
+  "proofHash": "29752b768f630d46e35cae4caa77818bcfef1b3ba2ccdeee20af80c19acec5bf",
+  "protectedTables": 222,
+  "addedTables": [
+    {
+      "name": "bridge_connection_sessions",
+      "rows": 0,
+      "schemaSha256": "e1aaf82ed9334287fcda0e5c7bb01924decfab7faea60b6ccb9b89aa90917eed"
+    },
+    {
+      "name": "terminal_account_bindings",
+      "rows": 0,
+      "schemaSha256": "d6cbfddedf81c880a0e615a52362c8f683ae9b32bf5be75e633283ae9c56875f"
+    }
+  ],
+  "runtimeActivated": false,
+  "scope": "Append-only empty route tables; exact prior rows and history reconciled. Client check is observational, not a database-wide write lock."
+}

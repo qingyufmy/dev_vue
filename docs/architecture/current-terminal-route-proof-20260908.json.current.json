@@ -1,0 +1,57 @@
+{
+  "frozen": {
+    "kind": "current-terminal-route-binding/v1",
+    "proofFileSha256": "89dcc2061049bcf4ff87b155d32adb106c7167068488a566f252ab82c2dc9020",
+    "reference": {
+      "database": "dev_vue_route_reference_db7d4667895c0351954d77bc",
+      "removed": true,
+      "mysqlVersion": "8.4.8",
+      "parentDefinitions": [
+        {
+          "table": "users",
+          "id": {
+            "columnType": "int",
+            "charset": null,
+            "collation": null
+          }
+        },
+        {
+          "table": "trading_accounts",
+          "id": {
+            "columnType": "bigint unsigned",
+            "charset": null,
+            "collation": null
+          }
+        },
+        {
+          "table": "terminal_profiles",
+          "id": {
+            "columnType": "varchar(128)",
+            "charset": "ascii",
+            "collation": "ascii_bin"
+          }
+        }
+      ]
+    },
+    "sourceHistoryHash": "eca171c8102e03677e6c82395dba8b529179a213d4d7208cb447780819186bd4",
+    "tools": [
+      {
+        "path": "scripts/upgrade-current-terminal-route-local.mjs",
+        "sha256": "fc623131a652991f77b09a24a0dcb260ff14b3037ca3554c84ee498b6f7a3318"
+      },
+      {
+        "path": "docs/architecture/current-account-root-proof-20260908.json",
+        "sha256": "0c2db8b23ba536124223ab966926ec650b30bcfaae21c5c04e300123fc0cf1e9"
+      },
+      {
+        "path": "docs/architecture/current-account-root-proof-20260908.json.current.json",
+        "sha256": "2495159e6b47b7fa2fa01957944465ccfb865f7e10e8d0e76fb5df037f6ac141"
+      },
+      {
+        "path": "docs/architecture/current-account-root-applied-20260908.json",
+        "sha256": "9b957fd0195544252a09dd7c2c466f0f4c16667f8905d6e30b37a8e9cc790c3f"
+      }
+    ]
+  },
+  "manifestHash": "b7fe432cf74b8ff93d6cec063733f27c9a0d8606cdb43557cb1b2dec96349342"
+}
