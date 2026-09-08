@@ -81,7 +81,7 @@ export async function backfillLegacyCandles(store, plan, { apply = false, batchS
     if (mappings.length || state.status === 'pending') {
       await store.verifyPlan(plan)
       try { await store.applyBatch(plan, state, { mappings, projections, checkpoint: next.checkpoint }) }
-      catch { throw Error('legacy_candle_backfill_commit_unknown') }
+      catch (cause) { throw Error('legacy_candle_backfill_commit_unknown', { cause }) }
       batches++
       state = await inspectLegacyCandleBackfill(store, plan)
       check(state.mappedRows === size && state.status === 'filling', 'batch_not_applied')
@@ -89,7 +89,7 @@ export async function backfillLegacyCandles(store, plan, { apply = false, batchS
   } while (state.mappedRows < plan.inputRows)
   await store.verifyPlan(plan)
   try { await store.markVerified(plan, state) }
-  catch { throw Error('legacy_candle_backfill_verify_unknown') }
+  catch (cause) { throw Error('legacy_candle_backfill_verify_unknown', { cause }) }
   state = await inspectLegacyCandleBackfill(store, plan)
   check(state.status === 'verified', 'verification_not_applied')
   return { ...state, batches }
