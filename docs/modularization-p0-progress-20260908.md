@@ -730,3 +730,9 @@ HTTP和生产组装已切换到ContextWritePort，移除读取接口、应用服
 准备官方MySQL8.4.8 Windows客户端，两程序签名与版本验证通过，下载ZIP已清理，未安装本地数据库服务。新增独立认证加密流模块，8项测试通过；修复初版文件句柄关闭挂起，损坏明文不会留下可供导入的文件。详见[当前库升级接入方案第7节](architecture/current-dev-vue-upgrade-plan-20260908.md)。
 
 真实备份/恢复尚未开始。后续接入Windows ACL、密钥保护、子进程退出校验、DDL保护与SQL作用域审核；当前dev_vue本轮未连接、未写入。
+
+## 第八十三批：本地备份目录权限与进程校验
+
+新增Windows私有目录创建/检查脚本，以及无shell、有限环境、stderr不外传的客户端生命周期工具。18项本地测试通过，含真实Windows ACL与真实子进程失败/超时验证；修复PS7→PS5.1模块路径污染导致ACL命令加载失败。临时测试目录已清理。
+
+当前dev_vue未连接、未写入；完整导出/恢复编排和数据库对账继续，详见[接入方案第8节](architecture/current-dev-vue-upgrade-plan-20260908.md)。

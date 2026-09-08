@@ -67,3 +67,13 @@
 职责复核：不修改冻结Linux备份实现；新模块仅处理流和文件生命周期，Windows ACL、密钥保存、mysqldump退出状态、DDL锁及SQL作用域审查留给本地编排入口。异常复核：不能把未经认证的解密流直接接mysql；进程导出失败不能因流正常结束而算成功。后续必须同时检查子进程退出码与流结果，并先验证SQL作用域再导入独立恢复库。
 
 当前只完成客户端与加密传输基础能力，尚未产生当前库备份或执行恢复。下一步实现本地私有目录/密钥与子进程编排，复用inspectBackupDatabase和inspectBackupSql，实际完成导出→校验→恢复→数据/结构对账。测试通过不代表备份可恢复性已通过。
+
+## 8. Windows目录与客户端生命周期（第八十三批）
+
+新增private-local-backup-directory.ps1：拒绝已有目录覆盖和任一祖先reparse point，创建后关闭ACL继承，仅当前SID及SYSTEM保留可继承FullControl，再独立核验owner和全部规则。实际Windows测试验证正常创建、重复创建拒绝、Everyone授权加入后拒绝、普通继承目录拒绝；临时目录均已删除。针对PowerShell7父进程调用Windows PowerShell5.1时的模块搜索路径冲突，显式从子进程PSHOME导入Security模块，未修改系统配置。
+
+新增local-backup-process.mjs：shell=false、windowsHide、有限环境、静默丢弃provider stderr；同时等待stdin管道、stdout消费者和进程退出。任何环节失败或超时都会终止进程、关闭流，并等待实际结束后返回统一错误。不能因为导出stdout已结束就产生成功备份记录；消费者异常也不能让客户端继续运行。
+
+18项定向测试通过：加密流8项、客户端进程8项、实际Windows ACL2项。进程测试覆盖正常stdin/stdout、输出完成后非零退出、stderr隐私、中断/超时、消费者失败、输入失败、启动失败和输出上限。源码语法与diff检查通过。
+
+本批没有连接数据库，完整备份编排入口仍待接入上述两个工具、已准备客户端以及既有数据库/SQL审查器；DDL锁、当前库导出、独立恢复、完整对账尚未执行。不把工具测试当作备份可恢复证据。
