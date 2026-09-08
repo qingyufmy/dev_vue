@@ -1,0 +1,40 @@
+{
+  "kind": "subscription-foreign-key-source/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "schemaSteps": 145,
+  "databaseWrites": 0,
+  "observedAt": "2026-09-08T02:38:00.388Z",
+  "relations": [
+    {
+      "table": "strategy_subscriptions",
+      "column": "trading_account_id",
+      "parent": "trading_accounts",
+      "total": "5",
+      "orphans": "0"
+    },
+    {
+      "table": "strategy_subscriptions",
+      "column": "user_id",
+      "parent": "users",
+      "total": "5",
+      "orphans": "0"
+    }
+  ],
+  "definitions": [
+    {
+      "name": "strategy_subscriptions",
+      "sql": "CREATE TABLE `strategy_subscriptions` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `trading_account_id` int NOT NULL,\n  `strategy_id` int NOT NULL,\n  `risk_profile_id` int DEFAULT NULL,\n  `symbols_json` text,\n  `execution_enabled` tinyint NOT NULL DEFAULT '0',\n  `memory_mode` varchar(20) NOT NULL DEFAULT 'shared',\n  `conflicting_strategy_id` int DEFAULT NULL,\n  `is_deleted` tinyint NOT NULL DEFAULT '0',\n  `created_at` datetime NOT NULL DEFAULT (now()),\n  `updated_at` datetime NOT NULL DEFAULT (now()),\n  `schedule_enabled` tinyint NOT NULL DEFAULT '0',\n  `schedule_timezone` varchar(64) NOT NULL DEFAULT 'terminal_server',\n  `schedule_weekdays_json` varchar(64) NOT NULL DEFAULT '[1,2,3,4,5]',\n  `schedule_windows_json` text,\n  `outside_window_behavior` varchar(24) NOT NULL DEFAULT 'pause_all',\n  `take_profit_mode` varchar(24) NOT NULL DEFAULT 'ai_recommended',\n  `active_execution_user_key` int GENERATED ALWAYS AS ((case when ((`execution_enabled` = 1) and (`is_deleted` = 0)) then `user_id` else NULL end)) STORED /*!80023 INVISIBLE */,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_subscription_active_execution_user` (`active_execution_user_key`),\n  KEY `idx_ss_user_strategy` (`user_id`,`strategy_id`,`is_deleted`),\n  KEY `idx_ss_account_strategy` (`trading_account_id`,`strategy_id`,`is_deleted`),\n  KEY `idx_ss_account_exec` (`trading_account_id`,`execution_enabled`,`is_deleted`)\n) ENGINE=InnoDB AUTO_INCREMENT=6 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "trading_accounts",
+      "sql": "CREATE TABLE `trading_accounts` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `broker_server` varchar(191) NOT NULL DEFAULT '',\n  `login_account` varchar(50) NOT NULL DEFAULT '',\n  `nickname` varchar(100) DEFAULT '',\n  `margin_mode` varchar(20) DEFAULT NULL,\n  `review_status` varchar(20) NOT NULL DEFAULT 'pending',\n  `observe_status` varchar(20) NOT NULL DEFAULT 'active',\n  `is_deleted` tinyint NOT NULL DEFAULT '0',\n  `created_at` datetime NOT NULL DEFAULT (now()),\n  `updated_at` datetime NOT NULL DEFAULT (now()),\n  `observed_until` datetime DEFAULT NULL,\n  `identity_verified_at` datetime DEFAULT NULL,\n  `first_verified_at` datetime DEFAULT NULL,\n  `anomaly_code` varchar(64) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_trading_account_identity` (`user_id`,`broker_server`,`login_account`),\n  KEY `idx_ta_user` (`user_id`,`is_deleted`)\n) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "users",
+      "sql": "CREATE TABLE `users` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `uid` varchar(32) DEFAULT NULL,\n  `email` varchar(255) DEFAULT NULL,\n  `email_verified` tinyint DEFAULT NULL,\n  `auth_method` varchar(20) DEFAULT NULL,\n  `password` varchar(255) NOT NULL,\n  `nickname` varchar(100) NOT NULL DEFAULT '',\n  `avatar` varchar(500) NOT NULL DEFAULT '',\n  `role` varchar(20) NOT NULL DEFAULT 'user',\n  `plan` varchar(20) NOT NULL DEFAULT 'free',\n  `plan_period` varchar(20) DEFAULT NULL,\n  `plan_expires_at` datetime(3) DEFAULT NULL,\n  `telegram_id` varchar(100) DEFAULT NULL,\n  `telegram_username` varchar(100) DEFAULT NULL,\n  `telegram_name` varchar(100) DEFAULT NULL,\n  `telegram_chat_id` varchar(100) DEFAULT NULL,\n  `telegram_group_status` varchar(50) DEFAULT '',\n  `telegram_bot_started_at` datetime DEFAULT NULL,\n  `telegram_joined_at` datetime DEFAULT NULL,\n  `telegram_last_invite_sent_at` datetime DEFAULT NULL,\n  `referral_code` varchar(50) DEFAULT NULL,\n  `referral_credit` decimal(20,8) NOT NULL DEFAULT '0.00000000',\n  `referred_by` varchar(50) DEFAULT NULL,\n  `last_seen_at` datetime DEFAULT NULL,\n  `bridge_heartbeat` datetime DEFAULT NULL,\n  `created_at` datetime(3) NOT NULL DEFAULT (now(3)),\n  `updated_at` datetime(3) NOT NULL DEFAULT (now(3)),\n  `phone` varchar(20) DEFAULT NULL,\n  `phone_verified` tinyint DEFAULT NULL,\n  `changelog_seen_version` int DEFAULT NULL,\n  `token_version` int NOT NULL DEFAULT '0',\n  `plan_source` varchar(20) DEFAULT NULL,\n  `deleted_at` datetime(3) DEFAULT NULL,\n  `deletion_status` varchar(24) NOT NULL DEFAULT 'active',\n  `last_seen_at_utc` datetime(3) DEFAULT NULL,\n  `profile_revision` bigint unsigned NOT NULL DEFAULT '1',\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `email` (`email`),\n  UNIQUE KEY `uid` (`uid`),\n  UNIQUE KEY `referral_code` (`referral_code`),\n  UNIQUE KEY `idx_users_phone` (`phone`),\n  KEY `idx_users_last_seen` (`last_seen_at`),\n  KEY `idx_users_deletion_status` (`deletion_status`,`deleted_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=31 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+    }
+  ]
+}

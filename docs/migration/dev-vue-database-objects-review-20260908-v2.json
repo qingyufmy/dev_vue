@@ -1,0 +1,17 @@
+{
+  "kind": "database-privileged-object-review/v1",
+  "database": "dev_vue",
+  "server_uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "observed_at_utc": "2026-09-08T02:42:07.025000Z",
+  "privileged_metadata": true,
+  "database_writes": 0,
+  "privilege_changes": 0,
+  "two_reads_equal": true,
+  "objects": {
+    "triggers": [],
+    "views": [],
+    "routines": [],
+    "events": []
+  },
+  "sourceSha256": "618da272d194df08452140b5393df0d9bc77527bc1641cbdae4d56b2d613a3c6"
+}

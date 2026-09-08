@@ -1,0 +1,1721 @@
+{
+  "kind": "subscription-foreign-key-upgrade/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "sql_mode": "IGNORE_SPACE,STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION"
+  },
+  "apply": true,
+  "schemaSteps": 147,
+  "ddlCount": 2,
+  "reconciledAtStart": [],
+  "faults": [],
+  "result": {
+    "apply": true,
+    "steps": [
+      {
+        "id": "inplace_001_01_users_last_seen_at_utc",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_02_users_profile_revision",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_03_bridge_refresh_sessions_credential_version",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_04_bridge_refresh_sessions_installation_id",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_05_bridge_refresh_sessions_profile_id",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_06_bridge_refresh_sessions_generation",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_07_bridge_refresh_sessions_migration_key",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_08_bridge_refresh_sessions_source_fingerprint",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_001_09_bridge_refresh_sessions_source_refresh_session_id",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_01_auth_sessions",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_02_auth_authorization_codes",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_03_terminal_profiles",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_04_bridge_connection_capacity_grants",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_05_data_migration_runs",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_06_data_migration_checkpoints",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_07_data_migration_batches",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_08_data_migration_id_maps",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_002_09_data_migration_row_receipts",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_003_01_trading_accounts_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_003_02_trading_account_ownership_intervals_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_003_03_trading_account_ownerships_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_003_04_user_trading_account_settings_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_004_01_data_migration_source_rows",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_005_01_strategies",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_005_02_strategy_versions",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_005_03_strategy_active_version_fk",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_006_01_strategy_subscriptions_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_006_02_subscription_schedules_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_006_03_subscription_execution_preferences_v4_build",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_007_01_macro_data_sources",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_007_02_macro_feature_sets",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_007_03_economic_calendar_events",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_007_04_macro_model_versions",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_007_05_macro_series",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_007_06_macro_ingestion_runs",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_007_07_macro_pipeline_jobs",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_007_08_macro_research_snapshots",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_007_09_economic_calendar_event_revisions",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_007_10_macro_observations",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_007_11_macro_snapshot_observations",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_008_01_email_verified",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_008_02_phone_verified",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_008_03_auth_method",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_008_04_plan_period",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_008_05_changelog_seen_version",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_009_01_user_referral_accounts",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_010_01_referral_credit_ledger",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_011_01_payment_orders",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_012_01_payment_transactions",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_012_02_payment_matches",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_013_01_memberships",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_014_01_referral_rule_constraints",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_015_01_referral_rule_changes",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_016_01_payment_wallet_addresses",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_017_01_system_settings",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_017_02_system_setting_changes",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_017_03_system_settings_exact_tokens",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_018_01_system_setting_requests",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_019_01_learning_courses",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_019_02_learning_lessons",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_019_03_learning_media_references",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_019_04_learning_progress",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_020_01_learning_progress_changes",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_020_02_learning_request_key_preservation",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_021_01_ai_manual_analysis_cooldowns",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_021_02_outbox_events",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_021_03_global_risk_controls",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_021_04_strategy_memory_libraries_v4",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_021_05_strategy_memory_library_revisions_v4",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_021_06_strategy_memory_libraries_v4",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_021_07_strategy_memory_injection_logs_v4",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_021_08_trade_history_migration_checkpoints_v4",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_021_09_observer_management_registry",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_021_10_observer_management_operations",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_021_11_bridge_v4_pairing_requests",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_022_01_users_plan_expires_at",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_022_02_users_deleted_at",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_022_03_users_created_at",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_022_04_users_updated_at",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_022_05_bridge_refresh_sessions_expires_at",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_022_06_bridge_refresh_sessions_revoked_at",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_022_07_bridge_refresh_sessions_last_used_at",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_022_08_bridge_refresh_sessions_created_at",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_022_09_bridge_refresh_sessions_updated_at",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_022_10_ai_model_profiles_created_at",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_022_11_ai_model_profiles_updated_at",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_022_12_ai_model_profiles_deleted_at",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_022_13_user_model_defaults_created_at",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_022_14_user_model_defaults_updated_at",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_022_15_platform_model_usage_policy_updated_at",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_022_16_ai_model_usage_logs_created_at",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_023_01_ai_model_profiles_provider",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_023_02_ai_model_profiles_model_name",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_023_03_ai_model_profiles_max_tokens",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_023_04_ai_model_profiles_request_timeout_ms",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_023_05_platform_model_usage_policy_daily_requests_per_user",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_023_06_platform_model_usage_policy_daily_tokens_per_user",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_023_07_ai_model_usage_logs_token_count",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_023_08_ai_model_usage_logs_request_bytes",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_023_09_ai_model_usage_logs_response_bytes",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_023_10_ai_model_usage_logs_duration_ms",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_023_11_ai_model_usage_logs_input_tokens",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_023_12_ai_model_usage_logs_output_tokens",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_023_13_ai_model_usage_logs_reasoning_tokens",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_023_14_ai_model_usage_logs_cached_tokens",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_024_01_ai_model_usage_logs_id",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_024_02_trading_accounts_broker_server",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_024_03_users_nickname",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_024_04_users_avatar",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_024_05_users_role",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_024_06_users_plan",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_024_07_users_created_at",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_024_08_users_updated_at",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_024_09_trading_accounts_margin_mode",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_025_01_ai_model_profiles_owner_user_id",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_025_02_ai_model_profiles_scope",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_025_03_ai_model_profiles_provider",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_025_04_ai_model_profiles_model_name",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_025_05_ai_model_profiles_temperature",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_025_06_ai_model_profiles_max_tokens",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_025_07_ai_model_profiles_thinking_enabled",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_025_08_ai_model_profiles_reasoning_effort",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_025_09_ai_model_profiles_status",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_025_10_platform_model_usage_policy_id",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_025_11_platform_model_usage_policy_daily_requests_per_user",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_025_12_platform_model_usage_policy_daily_tokens_per_user",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_025_13_ai_model_usage_logs_credential_source",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_025_14_ai_model_usage_logs_request_phase",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_025_15_ai_model_usage_logs_request_status",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_025_16_ai_model_usage_logs_accounting_status",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_025_17_bridge_refresh_sessions_token_hash",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_026_01_chk_v4_model_profiles_owner",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_026_02_chk_v4_model_policy_singleton",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_027_01_uk_bridge_refresh_migration_key",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_027_02_uk_bridge_refresh_source_migration",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_027_03_idx_bridge_refresh_device",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_027_04_idx_v4_model_profiles_owner",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_027_05_idx_v4_model_usage_quota",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_027_06_idx_v4_model_usage_recovery",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_028_01_fk_v4_bridge_refresh_user",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_028_02_fk_v4_model_default_profile",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_028_03_fk_v4_capabilities_profile",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_028_04_fk_v4_capabilities_verifier",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_028_05_fk_v4_model_usage_profile",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_029_01_usage_strategy_capacity",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_030_01_fk_strategy_subscriptions_account",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_030_02_fk_strategy_subscriptions_user",
+        "status": "applied"
+      }
+    ],
+    "structureComplete": true,
+    "fullNormalizationComplete": false
+  },
+  "protectedTableCount": 221,
+  "protectedRows": [
+    {
+      "name": "admin_position_close_jobs",
+      "rows": 2,
+      "sha256": "55ffadf08ae4934c8589bfacefdaef0d773a6ee0c1dd2bd951846d43fc01e223"
+    },
+    {
+      "name": "admin_position_close_targets",
+      "rows": 4,
+      "sha256": "505728ee9f11825d793a408019dac4cee9fbfca7b4d32340cf86532a7ca5fa28"
+    },
+    {
+      "name": "admin_position_protection_jobs",
+      "rows": 2,
+      "sha256": "5dc1ae1342e764d98f2ce36ea268b914f343bb75b19f5b1e25e0578f432010c0"
+    },
+    {
+      "name": "admin_position_protection_targets",
+      "rows": 3,
+      "sha256": "72a17c52cbf6df07cfc5ee4b3a7157f38d06a115e6aa48f21daaa2608dbb5b73"
+    },
+    {
+      "name": "admin_strategy_pending_cancel_jobs",
+      "rows": 3,
+      "sha256": "ef62d84f77fbf70f09ed183238ad9663c747fa4718483a45e75114f876de371a"
+    },
+    {
+      "name": "admin_strategy_pending_cancel_targets",
+      "rows": 9,
+      "sha256": "fe23f3297bcc650767089ddba65fc23402b6dfcde3efeb102bfcddaad4b56063"
+    },
+    {
+      "name": "admin_strategy_trade_dispatches",
+      "rows": 7,
+      "sha256": "a1cb0c15f370a91245ae070205b52f8551a1a5eb8a3eea252cfe1e342d0d278d"
+    },
+    {
+      "name": "admin_strategy_trade_targets",
+      "rows": 22,
+      "sha256": "13493712740bec5781c74fdd1bef49d961112be2718b16ab7773be95c484064f"
+    },
+    {
+      "name": "ai_configs",
+      "rows": 3,
+      "sha256": "58f770f951bae5824ebc63b7b88cb0732589af2a37b7549f44619472f52e83b0"
+    },
+    {
+      "name": "ai_feature_flags",
+      "rows": 1,
+      "sha256": "f29ffc12f7bb918a805aed1065b6316337f6b04831eeb17d3fc84135ac2d0f48"
+    },
+    {
+      "name": "ai_inference_preferences",
+      "rows": 2,
+      "sha256": "43fc95df8eb2b5dfe20b56ca9ddee5fdaa60f541d9b677d0dd6286e3494927a0"
+    },
+    {
+      "name": "ai_manual_analysis_cooldowns",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "ai_manual_analysis_jobs",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "ai_market_benchmark_cases",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "ai_market_benchmark_sets",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "ai_model_capacity_leases",
+      "rows": 9165,
+      "sha256": "3ff2d8f858bafa66fea7496a341a8a29f5d0f8b17c5afed91b15db674d6a7ff9"
+    },
+    {
+      "name": "ai_model_capacity_policies",
+      "rows": 1,
+      "sha256": "0ff3b8a149939200decff698b7289c6c7467cd41e615cb259280825b8b2b5913"
+    },
+    {
+      "name": "ai_model_capacity_waiters",
+      "rows": 9165,
+      "sha256": "8c48c2a90f54930e8f5ee31edd2a9d7559c2d5611dce2ffb54a1286a624d928c"
+    },
+    {
+      "name": "ai_model_compare_checkpoints",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "ai_model_compare_jobs",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "ai_model_profiles",
+      "rows": 6,
+      "sha256": "824b202bc745fd963aafdb5d6156478293c31c6496ae86afe398f1917dac2b36"
+    },
+    {
+      "name": "ai_model_provider_capabilities",
+      "rows": 5,
+      "sha256": "9626a1ecf3759ab47c7b80292f06da60eb3978723deb5f2dc8ba2a0883684c0b"
+    },
+    {
+      "name": "ai_model_provider_incidents",
+      "rows": 3,
+      "sha256": "0d84beadf8cf5092c76a4b4689744d92b2f6f14e7f4edbd435c8390e760fe289"
+    },
+    {
+      "name": "ai_model_purpose_defaults",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "ai_model_task_attempts",
+      "rows": 9179,
+      "sha256": "436db7a4f4b8b2a5dceb5e5c5dfe853e95da0765dce7a79c52ce7930aa0f31c9"
+    },
+    {
+      "name": "ai_model_task_events",
+      "rows": 121821,
+      "sha256": "1ec537055598ab61e2921600233743ff021a9ea63677ef666668770853f9f239"
+    },
+    {
+      "name": "ai_model_tasks",
+      "rows": 9317,
+      "sha256": "04fa169a65134a9feb1513affe1b5fbe734af443291bfb64b3dbc0788a9fc2cd"
+    },
+    {
+      "name": "ai_model_usage_logs",
+      "rows": 12139,
+      "sha256": "d33c6a13852b8d0de48951610f121ad12d41d7c5dcd73c65c71f259787705ade"
+    },
+    {
+      "name": "ai_observer_channel_assignments",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "ai_observer_channels",
+      "rows": 2,
+      "sha256": "e23d45a34b57a96bf6395851929f60147ce396ed3894ccd472d3c19a3dbc2eee"
+    },
+    {
+      "name": "ai_observer_sources",
+      "rows": 2,
+      "sha256": "b375d7b684955e2a1df2801200202dacc761455a67325f22b5d6964ca3c0ca24"
+    },
+    {
+      "name": "ai_position_management_commands",
+      "rows": 85,
+      "sha256": "46e2f4e6a0afc81ccc2cb0fe718ace4418cc98d66077e7930ab7b316f37ac001"
+    },
+    {
+      "name": "ai_position_management_evaluations",
+      "rows": 4415,
+      "sha256": "876a23350d69b10939a91db5c06a6de3518057d50fe12bdb28d8ba9a8167d9d8"
+    },
+    {
+      "name": "ai_position_management_events",
+      "rows": 1235,
+      "sha256": "d682c4fbe75d53c4429e11a627b11bf7d6011bac6426a7678eef209375eebd6f"
+    },
+    {
+      "name": "ai_position_management_tasks",
+      "rows": 419,
+      "sha256": "0a8a684dfa93853ebadbfed85882ecbe8c21fac7909f184938ef97a9e279988e"
+    },
+    {
+      "name": "ai_signals",
+      "rows": 1764,
+      "sha256": "2f27ba7788dd167ed7588fb4c1c5defa0008a1e975e9b9e34576de07d2232da0"
+    },
+    {
+      "name": "ai_trade_theses",
+      "rows": 444,
+      "sha256": "7b1918131205368fa2332a9b7a9e2d3c238a5cd4c1f45aa74007d20c013f8821"
+    },
+    {
+      "name": "audit_logs",
+      "rows": 1409,
+      "sha256": "6c9b24fc1570ce87b155a61d2ac619a28e8f00e4ffd66f47dc251a8d54ec9665"
+    },
+    {
+      "name": "auth_authorization_codes",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "auth_sessions",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "auto_prompt_types",
+      "rows": 3,
+      "sha256": "d42e436d83d1cfa6554714405e0af3a25742aac27ed497f829f5b40c55a2c6c4"
+    },
+    {
+      "name": "auto_scheduler",
+      "rows": 18,
+      "sha256": "b6aab9ced7ed95b41a40489a433cd65b39d6b823b0859fdb3149cb355d56e104"
+    },
+    {
+      "name": "auto_signal_deliveries",
+      "rows": 1442,
+      "sha256": "f005d97291822701881812c00ee593942fc8d549f6ad5449625a89d11d9c9a59"
+    },
+    {
+      "name": "bridge_connection_capacity_grants",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "bridge_device_pairings",
+      "rows": 1,
+      "sha256": "eeb5801441ffef2196f9e91a8d02bdcbf5376d2c30c576707c3bf573f5038c4c"
+    },
+    {
+      "name": "bridge_refresh_sessions",
+      "rows": 17,
+      "sha256": "7acc4e66db4edcb5c81745295e51969dc0e52ffd68b9e68f3144fcef0b2b9787"
+    },
+    {
+      "name": "bridge_update_events",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "bridge_v3_account_latest",
+      "rows": 6,
+      "sha256": "ab4551479b519495c17a684aa5bef5a5efe741fffa51a2b641bdbb7e89f65e12"
+    },
+    {
+      "name": "bridge_v3_command_events",
+      "rows": 10506,
+      "sha256": "12da33564480ab473d94d71e834583586f6950bbb888070124cb067365840d4c"
+    },
+    {
+      "name": "bridge_v3_command_ledger",
+      "rows": 3525,
+      "sha256": "de68f2b4177208bbb48f98f12768e3124d3be49685deabb0d82300861789d409"
+    },
+    {
+      "name": "bridge_v3_deals",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "bridge_v3_orders_latest",
+      "rows": 2,
+      "sha256": "53d8e9004fda42ab33b3ae7e194b05a617ea184d1f7a2f2a87045525d2cfd7c0"
+    },
+    {
+      "name": "bridge_v3_positions_latest",
+      "rows": 3,
+      "sha256": "6fd6b090d03b9d67c2a30980ae82c0c98c7dbf71db1664f576c36e741fa13911"
+    },
+    {
+      "name": "bridge_v3_stream_revisions",
+      "rows": 243,
+      "sha256": "cd32fe401d865c4d3f892352ca31a97151d46492145b0a54050e10ede7039eaa"
+    },
+    {
+      "name": "bridge_v3_terminal_sessions",
+      "rows": 7,
+      "sha256": "0d8b9b38d0a5708bfdec917438ef3e8a7f634f8748406d6e741e18dc0d97a352"
+    },
+    {
+      "name": "bridge_v4_pairing_requests",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "broadcast_messages",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "chan_structure_anchors",
+      "rows": 6,
+      "sha256": "e2c95f3d4b0d4b62253f1813c8d7b96519b196f4d1df5466a7bafd86b718fd50"
+    },
+    {
+      "name": "close_config",
+      "rows": 4,
+      "sha256": "03f8775ef1d5670d3aceab417e4875b7d9890160e6df019cc79c54858bc7159a"
+    },
+    {
+      "name": "close_signal_tickets",
+      "rows": 30,
+      "sha256": "b42dc40c02a42c702b269e4f1b39e1f0535ec4553a9cdf11e53006c7e37af80e"
+    },
+    {
+      "name": "comment_likes",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "comments",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "course_resources",
+      "rows": 1,
+      "sha256": "20874508f75dcdeeae6fe737d32ee39106e25831fb7eabab6ebe48625aef9130"
+    },
+    {
+      "name": "courses",
+      "rows": 12,
+      "sha256": "b9d817699de0a74c78ef2440bba0cd6e771a07d67bfc4df075990709639ffd0e"
+    },
+    {
+      "name": "credential_migration_runs",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "crypto_watch_list",
+      "rows": 8,
+      "sha256": "62491902c6fab3b1ec640312c7ef16a8d5735f457d7c94c92cb979e4509e3a93"
+    },
+    {
+      "name": "data_migration_batches",
+      "rows": 9,
+      "sha256": "57858a07db918bcf67cb4636e94442a9c3552e0d5b9df9a5cfa5f509ddc165da"
+    },
+    {
+      "name": "data_migration_checkpoints",
+      "rows": 4,
+      "sha256": "0a8bdf4a7fc15bb28c941066b86078d8d54212d27dcfe8b539816346884e97e4"
+    },
+    {
+      "name": "data_migration_id_maps",
+      "rows": 75,
+      "sha256": "389d20c1ae499495c7793ed23720ee476329699d2fd8fae51722c4ea65e082bd"
+    },
+    {
+      "name": "data_migration_row_receipts",
+      "rows": 63,
+      "sha256": "1d1d8451847dd365227b3c953e39992ed308c7449b44c70f2308a21dd4833fbf"
+    },
+    {
+      "name": "data_migration_runs",
+      "rows": 4,
+      "sha256": "97c10c50bd5286d676909921ac974a671e9a201ba60387d59baed18b9569bd34"
+    },
+    {
+      "name": "data_migration_source_rows",
+      "rows": 63,
+      "sha256": "93f131932eefc34d955d71d127e42e5dc81d7553218066b9c4e004e23a0cc102"
+    },
+    {
+      "name": "economic_calendar_event_revisions",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "economic_calendar_events",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "experience_long_term_memories",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "experience_memory_items",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "experience_memory_summaries",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "feedback",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "global_auto_config",
+      "rows": 1,
+      "sha256": "3ec98033829ed35a84addf6b8efac79376ef90172b3b8f6606973775d371d967"
+    },
+    {
+      "name": "global_position_guard_control",
+      "rows": 1,
+      "sha256": "6d359ed84c9ee1c0de16459b776f373d9fb1cae76103ac3fabb6d162fd142c90"
+    },
+    {
+      "name": "global_position_management_control",
+      "rows": 1,
+      "sha256": "c885d75814e64354822a425ed19dcd90d95f5da50dd03c55d4816657f2e5a84c"
+    },
+    {
+      "name": "global_risk_control",
+      "rows": 1,
+      "sha256": "bab40f076e68fae1e371615d22f344944f1c6fd828df6afa65854cbb6d20cb54"
+    },
+    {
+      "name": "global_risk_controls",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "history_range_preferences",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "inference_snapshots",
+      "rows": 789,
+      "sha256": "964f55c1308b0d0571bfb82af98f6866c0a11b401eaaeef39f1e22ace0ce6a32"
+    },
+    {
+      "name": "learning_courses",
+      "rows": 12,
+      "sha256": "92328a6dca28b2b64cef96b9088bd40d5bbb54a6e3039dce1c92afb533c7d483"
+    },
+    {
+      "name": "learning_lessons",
+      "rows": 12,
+      "sha256": "8c2e4653a0ffda8ac7dee1e12d86a10d30b19f87a4b2b6389a60b664eeb80bcd"
+    },
+    {
+      "name": "learning_media_references",
+      "rows": 12,
+      "sha256": "aa526a9507ec037cde3478085dfe00f84f59f56548051ed7bf399f6a6fd6b492"
+    },
+    {
+      "name": "learning_progress",
+      "rows": 5,
+      "sha256": "b979a60855e2d8131583ae543f89a29e617921fe5dc713c80bf0233976a7c8e7"
+    },
+    {
+      "name": "learning_progress_changes",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "macro_data_sources",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "macro_feature_sets",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "macro_ingestion_runs",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "macro_model_versions",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "macro_observations",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "macro_pipeline_jobs",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "macro_research_snapshots",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "macro_series",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "macro_snapshot_observations",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "manual_trade_review_aggregate_cases",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "manual_trade_review_aggregate_sources",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "manual_trade_review_aggregate_versions",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "manual_trade_review_cases",
+      "rows": 3,
+      "sha256": "98d0fa1f07677230f444260a237dcbf60f22090e450131d22920fde06f4d8830"
+    },
+    {
+      "name": "manual_trade_review_counterfactual_points",
+      "rows": 27,
+      "sha256": "9a2f77cae420edfe41ec85e2e0e84011fb8cddb0514f29bfd6d4037071829239"
+    },
+    {
+      "name": "manual_trade_review_jobs",
+      "rows": 3,
+      "sha256": "a6e1b095b5bf846e21afb13c52fc78fa7a38df5fdda9e98f521208a8ef3ff4d7"
+    },
+    {
+      "name": "manual_trade_review_sources",
+      "rows": 3,
+      "sha256": "7c82d4980faf6e476b5fcf63a83aac9f133d880697b9e52e3cc7720fb3a6f41a"
+    },
+    {
+      "name": "manual_trade_review_stage_runs",
+      "rows": 18,
+      "sha256": "212c3ec16c11703234125302b268ec7afaff3a8fcbf98da87c7822930725abf2"
+    },
+    {
+      "name": "manual_trade_review_versions",
+      "rows": 1,
+      "sha256": "752456d4f926fe77fb8616549ba356155dd7695e3facd3cb0508ce2b5196c4d5"
+    },
+    {
+      "name": "market_candles",
+      "rows": 35725,
+      "sha256": "f9c30411b9b1a0a1192fef1eebfcf90188bd9335e78ea6ec2407b53a11e05863"
+    },
+    {
+      "name": "market_clock_samples",
+      "rows": 6183,
+      "sha256": "602f0bfc65061406e671e32c28c9cbecab8d4617c63586ba9ef7b45413b8ad6c"
+    },
+    {
+      "name": "market_data_sources",
+      "rows": 3,
+      "sha256": "0412b7ef3644c6fc3dbe82770293323018189e57a55c63eb7b2f34e6f6bbbe8f"
+    },
+    {
+      "name": "membership_expiry_notifications",
+      "rows": 100,
+      "sha256": "f81896d0730c53f0c4508ecb609b9330c79b23553988c537381ac325025f9d53"
+    },
+    {
+      "name": "memberships",
+      "rows": 21,
+      "sha256": "8e55d11eec1584025814a0ade252e501235f4ae6e124c9f8933e1bb15e1aa9ab"
+    },
+    {
+      "name": "memory_compression_jobs",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "memory_injection_logs",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "mt5_account_bindings",
+      "rows": 3,
+      "sha256": "2d2f33b4d026ea78b2d32df83cb345c99c6f6fc626df0bfe1e757aeb88707552"
+    },
+    {
+      "name": "mt5_account_ownership_history",
+      "rows": 274,
+      "sha256": "c873e702e7b29cfdbeb6165afc193c79223630e094c7754c025e2fb3301a7d00"
+    },
+    {
+      "name": "mt5_account_performance_daily",
+      "rows": 21,
+      "sha256": "c09b77946ced2b96bc09f1e1907d3ead6c19f397b5e8da3df89209fc9022d323"
+    },
+    {
+      "name": "mt5_account_performance_sync_state",
+      "rows": 3,
+      "sha256": "552b900a80446570c3a1b64932f60c4cbdc7d3ce03caf41a599a123c5680a73c"
+    },
+    {
+      "name": "mt5_account_performance_totals",
+      "rows": 3,
+      "sha256": "b3bed769484b181278f4c82f35a4d9daf922cc06745b827fdc3436124b351aab"
+    },
+    {
+      "name": "notification_campaigns",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "notification_deliveries",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "notification_idempotency_keys",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "notifications",
+      "rows": 15,
+      "sha256": "b20cd8c98f42ee8cf8279cd56e50c6c05dd3184be4db87c5d55d60b42f430e41"
+    },
+    {
+      "name": "observer_management_operations",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "observer_management_registry",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "order_intents",
+      "rows": 412,
+      "sha256": "b3dcba9780be7d57e024cd06eba5561cc8ccaa84233495b46e0efa101e00d97f"
+    },
+    {
+      "name": "orders",
+      "rows": 12,
+      "sha256": "302058bf9c38ee6895d52cd9891bd622070e8e350569959bf60f1c458f66c741"
+    },
+    {
+      "name": "outbox_events",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "payment_matches",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "payment_orders",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "payment_side_effects",
+      "rows": 4,
+      "sha256": "b86b8d2753deeabbd17ab591c7ab15a98c2c2ba630f910a73e46d5b0832e1204"
+    },
+    {
+      "name": "payment_transactions",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "payment_wallet_addresses",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "pending_orders",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "period_review_cases",
+      "rows": 25,
+      "sha256": "7c01ba59f83ffe5c8820059f4d112764e4161ba72c0b490ef8872dbc04e12900"
+    },
+    {
+      "name": "period_review_derivation_jobs",
+      "rows": 12,
+      "sha256": "7271304f015d2e7059bfdc75624eb68a84ef3ca09fcc164d294be7a049351baf"
+    },
+    {
+      "name": "period_review_job_events",
+      "rows": 7208,
+      "sha256": "3c0ed347f06f96ff17b7e6fa34e562163a476f3ead6d3d72912580ed1b182b76"
+    },
+    {
+      "name": "period_review_jobs",
+      "rows": 25,
+      "sha256": "146bed298aaeb98b47e8701f4952c361db20c8e4ce2fbd74a6460e161d78beaa"
+    },
+    {
+      "name": "period_review_monthly_checkpoints",
+      "rows": 8,
+      "sha256": "5b84f02b9b491bc980520738eb054bdbf47b34d41cfeede2edb46a058c947ac5"
+    },
+    {
+      "name": "period_review_sources",
+      "rows": 176,
+      "sha256": "4504c5aef023e47dc409242012ee6ee7f6d52ee05996cf8708d4395e48e17fab"
+    },
+    {
+      "name": "period_review_user_states",
+      "rows": 33,
+      "sha256": "3a3ba6717f941d32c0c6f8f8f4efebeffab3cb4548dbbacc1ae2cac3650356b5"
+    },
+    {
+      "name": "period_review_versions",
+      "rows": 33,
+      "sha256": "0b9899f73eee78768e63cf0f8b68cedaf2055a10296b8f466d429fb827e97884"
+    },
+    {
+      "name": "platform_model_usage_policy",
+      "rows": 1,
+      "sha256": "950a2fb2a2fa168d00b7ca61d8eaaccaa07d7938f59da95cc68095e0e062cc11"
+    },
+    {
+      "name": "platform_strategy_experience_items",
+      "rows": 2,
+      "sha256": "94719581ae641d51d63fbf34fc5b25a760bffad042a77b33c8b6a705631d5626"
+    },
+    {
+      "name": "platform_strategy_experience_logs",
+      "rows": 6093,
+      "sha256": "797696bb93d36a89055510f59b6d30c86b26e6f8d1fedb492cfb1298e1aaeb61"
+    },
+    {
+      "name": "platform_strategy_experience_policies",
+      "rows": 2,
+      "sha256": "d62bb385e4d60dd3992ce5ebf29aa81affebfb67d0bc493780c1bd96454e47b9"
+    },
+    {
+      "name": "position_guard_position_states",
+      "rows": 6,
+      "sha256": "fa6630e6b82e3867fc05bdbd55879d4abd93b0b6c605690615bdd03fec88c4ca"
+    },
+    {
+      "name": "position_guard_profile_versions",
+      "rows": 1,
+      "sha256": "e03253981f346d869e2be801fa6bad694d41bc1c85ca31ae2dff75dc8844e0e1"
+    },
+    {
+      "name": "position_guard_profiles",
+      "rows": 1,
+      "sha256": "80ceb5f8a391629cb344ed5e64be8896a4e0a4c252201dcd0f5043b151fd3af5"
+    },
+    {
+      "name": "position_management_account_rollouts",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "post_assets",
+      "rows": 3,
+      "sha256": "486d92f2f8884deaa58bf002d9bd8a0b95bb06aadc37fc777df554de97c22753"
+    },
+    {
+      "name": "post_replies",
+      "rows": 2,
+      "sha256": "d835757f801efdf3ce2f9b400a1dc0f9fcdd56ce67387a1664b5c4392313f619"
+    },
+    {
+      "name": "post_reports",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "post_tags",
+      "rows": 2,
+      "sha256": "192fca61aa303b71863f68258549ee1d4a7392e12d8b8d47289be10b869f8192"
+    },
+    {
+      "name": "posts",
+      "rows": 6,
+      "sha256": "bf371ce4d3c243e9df03ef3f2cdf873c358d018fee28ec379ed9f086dec85dce"
+    },
+    {
+      "name": "progress",
+      "rows": 5,
+      "sha256": "5596a33106885d28de9e1d7d8a4c3dcdb3e3a47d999a6cb3873ce1e19bd4568b"
+    },
+    {
+      "name": "quiz_questions",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "referral_credit_ledger",
+      "rows": 25,
+      "sha256": "09513eaa5e9cc6785d04ffd7435ee09c165d9093fbbb613154ed6ebcf0d6affd"
+    },
+    {
+      "name": "referral_rule_changes",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "referral_rules",
+      "rows": 4,
+      "sha256": "c96a92a7190de624de43c00da762291ced6e975dbc6354d3369313a707b8763d"
+    },
+    {
+      "name": "referrals",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "risk_account_state",
+      "rows": 4,
+      "sha256": "aff6e2319b1c39708f8c35979d29cebf00f5e30956f1693b27ee60c1746ad14c"
+    },
+    {
+      "name": "risk_decisions",
+      "rows": 395,
+      "sha256": "091fdc2af5dcc788393216f7f70f1781e2c9fdad77a4edf9f3ac0b29716aeb93"
+    },
+    {
+      "name": "risk_policy_change_items",
+      "rows": 60,
+      "sha256": "0c9c635c16fb4af57aa093109afe2f230e207e40f2e2258b97d4829208c5bf47"
+    },
+    {
+      "name": "risk_policy_sets",
+      "rows": 3,
+      "sha256": "79e466f9fd686b4c4e3151bc56f4e39dd6e5da39f8a937fb1d0514bd29e8ca60"
+    },
+    {
+      "name": "risk_policy_versions",
+      "rows": 10,
+      "sha256": "2a33f9d9720cdac77bf918756963ebc13633498b49b30e31873f038c4f999fbc"
+    },
+    {
+      "name": "risk_profiles",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "risk_reservations",
+      "rows": 362,
+      "sha256": "86e4099f0791f2e6db2df65d9f1b6c1dfafaa29fe1420d3d9b743c286b83ac4a"
+    },
+    {
+      "name": "risk_rule_rollouts",
+      "rows": 19,
+      "sha256": "a09b08cc14d841f525c8be536100e985f412920396d0b85be703250a83c68492"
+    },
+    {
+      "name": "schema_migrations",
+      "rows": 214,
+      "sha256": "44ba6c4e3266404ce127235fb81b54f503c1bae4f32f876e442ee5cc164dcb44"
+    },
+    {
+      "name": "signal_outcome_deals",
+      "rows": 427,
+      "sha256": "c1319ec87c3accad5c2ef13e8fe1d2a66fe5860a62860a3fe1cce32656542d0f"
+    },
+    {
+      "name": "signal_outcomes",
+      "rows": 334,
+      "sha256": "b4b76bc8b01410c7ea7b6b989fd07ff5a3d9f5f2228db1d5e5ef014dd6fa2976"
+    },
+    {
+      "name": "storage_upload_sessions",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "stored_files",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "strategies",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "strategy_memory_compression_jobs",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "strategy_memory_conflict_bindings",
+      "rows": 1,
+      "sha256": "634bfa705d1bedb2db295280af0eacb863f876bc7be1c9946ad46b0c194fdd17"
+    },
+    {
+      "name": "strategy_memory_conflict_occurrences",
+      "rows": 2,
+      "sha256": "34807fc3f4b1be3369970c6df9943dba2915176fdddf830c7bab4ddbd06ed1c2"
+    },
+    {
+      "name": "strategy_memory_conflicts",
+      "rows": 2,
+      "sha256": "ffc058447c57d64f7f496f9bac29dd28608e0e93aea34f71ed5e309025d26ff9"
+    },
+    {
+      "name": "strategy_memory_consistency_jobs",
+      "rows": 48,
+      "sha256": "cf74bac6cd241763865416a846a0875e73fad427a86446fc2aa82ebdeb076dff"
+    },
+    {
+      "name": "strategy_memory_injection_logs",
+      "rows": 5417,
+      "sha256": "e90b8a7412e92a6cc9fe4ed79112b294cd7c0e8579220132196afdc08f45fbd3"
+    },
+    {
+      "name": "strategy_memory_injection_logs_v4",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "strategy_memory_libraries",
+      "rows": 2,
+      "sha256": "04f3948d26337fb0fb2e5906ec879f727f0324fdb537d23c9f11993fdbd49ddd"
+    },
+    {
+      "name": "strategy_memory_libraries_v4",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "strategy_memory_library_revisions",
+      "rows": 20,
+      "sha256": "b80708b9ae5e8e42afdaae396a39e203e1490799675676dd5af92579f946b5ca"
+    },
+    {
+      "name": "strategy_memory_library_revisions_v4",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "strategy_memory_pending_updates",
+      "rows": 10,
+      "sha256": "c86aa3b608c01a72b5e90be215cdd52dd11704d7fb33d60c156351c305505b8c"
+    },
+    {
+      "name": "strategy_subscriptions",
+      "rows": 5,
+      "sha256": "36ecc396d3d521d27af7486074c39b97ef28395bdb66166271fe02cbdbd2648c"
+    },
+    {
+      "name": "strategy_subscriptions_v4_build",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "strategy_versions",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "subscription_execution_preferences_v4_build",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "subscription_schedules_v4_build",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "system_config",
+      "rows": 75,
+      "sha256": "4392190baf087d5737d17f81c44151bae7f1ede7752bbaf084ea15813119bd61"
+    },
+    {
+      "name": "system_prompts",
+      "rows": 1,
+      "sha256": "fdca057160639b12608d5d6c8c1b834e71ac775ae8798ddffaf9a543343bb8c2"
+    },
+    {
+      "name": "system_setting_changes",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "system_setting_requests",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "system_settings",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "terminal_profiles",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "trade_audit_logs",
+      "rows": 9660,
+      "sha256": "e35ac145d41ab15093299011fafdde746368f3b6f1184fa6778bd693b69eda9f"
+    },
+    {
+      "name": "trade_history_migration_checkpoints_v4",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "trade_review_cases",
+      "rows": 155,
+      "sha256": "7f4b5b9cc93638535b7a4fb9a70b33a0bb1cceae1e866ec52ebc251b0b1e721b"
+    },
+    {
+      "name": "trade_review_jobs",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "trade_review_versions",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "trades",
+      "rows": 2,
+      "sha256": "9867191387dc7083dc5b83c08a37d0ad98dd608db2af245912d48c4a115ea487"
+    },
+    {
+      "name": "trading_account_ownership_intervals_v4_build",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "trading_account_ownerships_v4_build",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "trading_accounts",
+      "rows": 4,
+      "sha256": "a873c7d3d5968ff3304f5946bc315dc98fe0d6ec41d80278477e8c5caea04741"
+    },
+    {
+      "name": "trading_accounts_v4_build",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "user_bridge_settings",
+      "rows": 4,
+      "sha256": "f76e627fd9b61c630cc0e8b9db0a2ba8cdb943f444695401bf511b3f7705302b"
+    },
+    {
+      "name": "user_memory_settings",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "user_model_defaults",
+      "rows": 2,
+      "sha256": "b5ed8a148ce67f7d8b002560e799e108dffee4e36ed0ef9696f487865be5bc2d"
+    },
+    {
+      "name": "user_notices",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "user_position_guard_settings",
+      "rows": 1,
+      "sha256": "c4b05101609ec12574bc692628ef3468abd034a570b5a6d2f0f7d57a96a5df66"
+    },
+    {
+      "name": "user_position_management_settings",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "user_referral_accounts",
+      "rows": 25,
+      "sha256": "17125d8a4fc86b31aba14080a0ea00bd92f030bda11adad15a2740ddad665abe"
+    },
+    {
+      "name": "user_trading_account_settings_v4_build",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "users",
+      "rows": 25,
+      "sha256": "44ac542aa276e2acc9abd5f783b3901485c89f9f1d47897a5358ba6263a857f9"
+    },
+    {
+      "name": "verification_codes",
+      "rows": 17,
+      "sha256": "b316a8f0a4205de8ab6243c1f2b823d79d55cada613b3a24eff664f4acc762e7"
+    },
+    {
+      "name": "video_streams",
+      "rows": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "wallet_keys",
+      "rows": 4,
+      "sha256": "f7d5d8c9696d1136fc2996224a40cd85406e728d1aec3f44fca80cf966e817f8"
+    }
+  ],
+  "protectedDataSchemaCountersUnchanged": true,
+  "numericComparison": "full_decimal_text_and_null",
+  "repeated": true,
+  "currentDevVueWritten": true,
+  "runtimeEnabled": false
+}

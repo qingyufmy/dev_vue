@@ -2,7 +2,7 @@ import { open } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import mysql from 'mysql2/promise'
 import { loadSettingsMigrationEnvironment, settingsMigrationConnectionOptions } from './lib/settings-migration-environment.mjs'
-import { loadUsageStrategyCapacityCoordinator } from './lib/inplace-usage-strategy-capacity-schema.mjs'
+import { loadSubscriptionForeignKeyCoordinator } from './lib/inplace-subscription-foreign-key-schema.mjs'
 import { coordinateInplaceSchema } from './lib/inplace-schema-coordinator.mjs'
 import { withInplaceUpgradeLock, verifyInplaceJournal } from './lib/mysql-inplace-column-store.mjs'
 import { sha256 } from './lib/v4-migration-plan.mjs'
@@ -26,7 +26,7 @@ try {
     await connection.query('START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY')
     try {
       check(await verifyInplaceJournal(connection), 'journal')
-      const plan = await loadUsageStrategyCapacityCoordinator(root)
+      const plan = await loadSubscriptionForeignKeyCoordinator(root)
       check((await coordinateInplaceSchema(plan.store(connection), plan)).structureComplete, 'schema')
       const metadata = async () => {
         const [keys] = await connection.query(`SELECT k.TABLE_NAME table_name,k.CONSTRAINT_NAME constraint_name,k.COLUMN_NAME column_name,
