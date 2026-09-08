@@ -674,3 +674,10 @@ getTradingContext/listTradingAccounts/listObserverChannels接入同源运行校�
 在VM MySQL的独立临时reference库执行041并完成13项真实约束/UTC/回滚检查，保存规范SHOW CREATE、源hash、工具hash和step checksum，见[回执](architecture/context-receipt-schema-reference-20260908-v2.json)。临时库已删除、隧道关闭；当前dev_vue及恢复副本均未写入，165步尚未在业务库执行。
 
 两轮复核与范围见[写入合同](architecture/trading-context-write-contract-20260908.md)。核对前端调用点涉及home/trader/risk，需统一接线请求键和待确认状态。下一步迁移协调器与实际升级证据，然后完成运行及前端恢复；本批真实测试不代替命令并发或浏览器验收。
+
+
+## 第七十四批：回执表增量升级协调器
+
+新增165步只读检查与执行状态机，要求旧164步完成，检查规范表结构、行数、日志及快照一致性，旧数据和结构失败不吞掉。DDL确认丢失通过物理状态恢复，completed后允许新回执数据但不放宽结构检查。8项新测试与13项既有提升测试共21项通过。
+
+两轮复核和限制见[写入合同](architecture/trading-context-write-contract-20260908.md)。本批未连接数据库；MySQL冻结计划、受限历史适配及恢复副本165步演练仍待完成，不能将状态机测试当作实际升级证明。
