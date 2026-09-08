@@ -20,7 +20,7 @@ import {
   tradeHistoryPageResponseSchema, tradeRecordDetailResponseSchema, auditEventDetailResponseSchema, auditEventPageResponseSchema,
 } from '@aurum/contracts'
 import type {
-  AnalysisJobCreate, ApiProblem, AuthLoginRequest, DistributionCloseCommand, ExecutionCommand, ExecutionDistribution,
+  AnalysisJobCreate, ApiProblem, AuthLoginRequest, AuthLoginResponse, SessionResponse, DistributionCloseCommand, ExecutionCommand, ExecutionDistribution,
   AuditActor, AuditCategory, AuditSourceKind, AuditStatus,
   ManualReviewCaseCreateBody, ReviewContent, ReviewKind,
   RiskManualReleaseBody, RiskPolicyPatchBody, StrategyCompileBody, StrategyCreateBody, StrategyKind, StrategyMetadataPatchBody,
@@ -96,8 +96,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
       settingUpdateResponseSchema,'/api/v4/admin/settings/value',
       {method:'PUT',body:JSON.stringify(settingUpdateBodySchema.parse(body)),csrfToken,
         headers:{'Idempotency-Key':settingRequestKeySchema.parse(requestKey)},cache:'no-store'}),
-    getSession: () => send(sessionResponseSchema, '/api/v4/session'),
-    login: (body: AuthLoginRequest) => send(
+    getSession: (): Promise<SessionResponse> => send(sessionResponseSchema, '/api/v4/session'),
+    login: (body: AuthLoginRequest): Promise<AuthLoginResponse> => send(
       authLoginResponseSchema,
       '/api/v4/auth/login',
       { method: 'POST', body: JSON.stringify(body) },

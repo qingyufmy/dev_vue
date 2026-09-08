@@ -23,4 +23,12 @@
 
 域划分对应当前服务端职责，不按 URL 前缀机械划分：例如 `/bridge/connection-capacity` 属 trading，`/trading-accounts/{account_id}/execution-commands` 属 execution。跨域复用保留明确的组件引用，不复制模型，也不把业务模型全部塞入 common。这里只确立 HTTP 合同所有权，不替代数据库表写入所有权或源码依赖验收。
 
-本轮拆分保持聚合合同与上一版本逐字段相等；没有删除8项尚未实现的路由。Schema可编译、生成一致、运行注册对应、生产者/消费者行为分别验证；类型生成与Fastify运行时同源校验仍待接续。
+本轮拆分保持聚合合同与上一版本逐字段相等；没有删除8项尚未实现的路由。Schema可编译、生成一致、运行注册对应、生产者/消费者行为分别验证；Fastify运行时同源校验仍待接续。
+
+## 前端传输类型
+
+运行 `pnpm run generate:api-types`，由固定版本的 openapi-typescript 从聚合产物生成 `frontend/packages/contracts/src/generated/http.ts`。文件只包含类型，不加入浏览器运行代码。`pnpm run verify:api-types` 检查聚合和类型产物均未漂移，已接入根 `typecheck:frontend`。
+
+contracts包公开ApiWireSchemas、ApiPaths、ApiOperations供业务使用；登录请求/响应、授权参数和应用会话的现有公开类型已切换到生成来源，API客户端相应输入/输出使用这些类型。其它域的现有类型与转换仍需逐项迁移，不直接替换经过camelCase转换的页面模型。
+
+生成类型不能表达长度、正则、日期合法性、oneOf排他性或权限；保留现有运行时校验。当前认证Zod解析结果与生成类型具备编译期双向结构检查，但这不证明两套运行时约束完全等价。服务端同源校验、客户端解析迁移及其它业务域仍待接续。

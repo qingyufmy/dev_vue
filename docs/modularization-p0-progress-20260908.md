@@ -112,3 +112,13 @@ openapi-v4.json改为生成产物；新增generate:api-contract和verify:api-gen
 验证：生成器/Schema/注册比较器16项测试通过；真实CLI在聚合文件多一个换行时拒绝，恢复后通过；827个Schema使用位置编译通过；服务端与相关合同738项测试通过；前端合同包51项测试与类型检查通过。未执行数据库迁移或真实服务调用。
 
 域源拆分和聚合漂移检查已落地；前端现有类型仍需从域合同生成并替换，服务端校验尚未同源挂载，完整OpenAPI结构检查、模块边界/所有权与P1–P7保持未完成。
+
+## 第十一批：生成传输类型并接入认证消费者
+
+固定openapi-typescript 7.13.0，新增generate:api-types及verify:api-types，从同一聚合产物生成完整路径、操作和模型类型；类型检查先验证聚合与类型产物均未漂移。依赖锁文件只增加该工具所需17项依赖，不夹带既有Nuxt/Vue依赖快照变更，冻结离线检查通过。
+
+现有AuthLoginRequest/AuthLoginResponse/AuthorizationRequest/SessionResponse/SessionSummary改用生成类型；API客户端登录与会话方法显式采用生成输入/输出，现有应用消费者沿用公开名称。保留运行时Zod校验和其它业务转换，避免以类型替代实际校验或把snake_case传输字段直接替换camelCase页面模型。
+
+验证：新增编译期双向类型兼容及非法身份surface/数值用户ID/身份中心permissions反例；完整前端9个工作区类型检查通过，合同包53项、API客户端22项测试通过。实际CLI拒绝被改动的生成类型，恢复后通过。生成产物无运行时代码，未启动真实服务或访问数据库。
+
+生成类型已进入认证实际调用链；其余域消费者、统一运行时校验、边界门禁、表所有权和P1–P7仍未完成。

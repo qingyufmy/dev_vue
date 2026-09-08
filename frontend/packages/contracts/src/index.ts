@@ -1,5 +1,8 @@
 export { learningCourseSchema, learningListSchema, learningDetailSchema, learningCompletionSchema, type LearningCourse, type LearningDetail } from './learning'
 import { z } from 'zod'
+import type { components } from './generated/http'
+export type { paths as ApiPaths, operations as ApiOperations } from './generated/http'
+export type ApiWireSchemas = components['schemas']
 export { bridgePairingRequestSchema, bridgePairingResponseSchema } from './bridge-pairing'
 
 export const appSurfaceSchema = z.enum(['www', 'trade', 'admin'])
@@ -1450,11 +1453,11 @@ export const browserRealtimeEventSchema = z.union([
 
 export type ApiProblem = z.infer<typeof apiProblemSchema>
 export type AppSurface = z.infer<typeof appSurfaceSchema>
-export type AuthLoginRequest = z.infer<typeof authLoginRequestSchema>
-export type AuthLoginResponse = z.infer<typeof authLoginResponseSchema>
-export type AuthorizationRequest = z.infer<typeof authorizationRequestSchema>
-export type SessionResponse = z.infer<typeof sessionResponseSchema>
-export type SessionSummary = z.infer<typeof sessionSummarySchema>
+export type AuthLoginRequest = ApiWireSchemas['AuthLoginRequest']
+export type AuthLoginResponse = ApiWireSchemas['AuthLoginResponse']
+export type AuthorizationRequest = ApiWireSchemas['AuthorizationRequest']
+export type SessionResponse = ApiWireSchemas['SessionResponse']
+export type SessionSummary = ApiWireSchemas['Session']
 export type TradingContext = z.infer<typeof tradingContextSchema>
 export type ObserverChannel = z.infer<typeof observerChannelSchema>
 export type TradingAccount = z.infer<typeof tradingAccountSchema>
