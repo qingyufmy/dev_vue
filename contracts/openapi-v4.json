@@ -9166,6 +9166,40 @@
       },
       "TradingContextInput": {
         "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "account_id": {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              "mode": {
+                "const": "full"
+              },
+              "observer_channel_id": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "account_id"
+            ]
+          },
+          {
+            "properties": {
+              "account_id": {
+                "type": "null"
+              },
+              "mode": {
+                "const": "observer"
+              },
+              "observer_channel_id": {
+                "$ref": "#/components/schemas/OpaqueId"
+              }
+            },
+            "required": [
+              "observer_channel_id"
+            ]
+          }
+        ],
         "properties": {
           "account_id": {
             "oneOf": [
@@ -9178,7 +9212,9 @@
             ]
           },
           "expected_revision": {
-            "$ref": "#/components/schemas/Revision"
+            "maxLength": 16,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
           },
           "mode": {
             "enum": [
@@ -14131,10 +14167,22 @@
             },
             "description": "Trading context replaced"
           },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
             "$ref": "#/components/responses/Problem"
           },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
           "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         },
@@ -14152,7 +14200,14 @@
             "$ref": "#/components/parameters/CsrfToken"
           },
           {
-            "$ref": "#/components/parameters/ExpectedRevisionQuery"
+            "in": "query",
+            "name": "expected_revision",
+            "required": true,
+            "schema": {
+              "maxLength": 16,
+              "pattern": "^(0|[1-9][0-9]*)$",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -14166,10 +14221,22 @@
             },
             "description": "Observer mode exited"
           },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
             "$ref": "#/components/responses/Problem"
           },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
           "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         },

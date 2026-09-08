@@ -35,7 +35,7 @@ contracts包公开ApiWireSchemas、ApiPaths、ApiOperations供业务使用；登
 
 ## 服务端运行校验
 
-runtime.json显式列出已接入操作，当前为listAuditEvents/getAuditEvent/setLearningCompletion/getTradingContext/listTradingAccounts/listObserverChannels。generate:api-runtime按合同提取参数、JSON请求体、各明确状态码下的JSON/problem响应及引用模型闭包，输出server/src/transport/generated/http-contracts.ts；verify:api-runtime拒绝漂移，已接入服务端类型检查和构建。Ajv和格式库是生产依赖；部署产物不依赖仓库contracts目录。各模块只编译自己选择的操作，登记缺失直接失败。
+runtime.json显式列出已接入操作，当前为listAuditEvents/getAuditEvent/setLearningCompletion/getTradingContext/listTradingAccounts/listObserverChannels/replaceTradingContext/leaveObserverMode。generate:api-runtime按合同提取参数、JSON请求体、各明确状态码下的JSON/problem响应及引用模型闭包，输出server/src/transport/generated/http-contracts.ts；verify:api-runtime拒绝漂移，已接入服务端类型检查和构建。Ajv和格式库是生产依赖；部署产物不依赖仓库contracts目录。各模块只编译自己选择的操作，登记缺失直接失败。
 
 当前适配器支持GET/PUT/POST/PATCH/DELETE的path/query/header、单一application/json请求体及明确状态码的application/json、application/problem+json响应。写请求体须明确禁止未知字段；其它媒体类型、default状态和空响应需先扩展并验证，生成器不会猜测。header使用Fastify提供的小写键，字符串头不做数字转换。路由先认证和CSRF授权，再校验输入，再调用应用用例，最后校验DTO。整数query只接受规范非负十进制字符串并在校验副本上转换；原请求不修改，不删除字段、不填默认值。审计未声明query保持既有忽略语义，学习完成保持既有全部query拒绝规则。
 
@@ -46,4 +46,7 @@ runtime.json显式列出已接入操作，当前为listAuditEvents/getAuditEvent
 当前不是Fastify默认schema编译器挂载：为保留先认证顺序，路由明确调用共享校验器；检查器中“显式Fastify schema数量”不能包含这些显式调用校验器的操作。审计及学习完成错误响应按状态码与媒体类型校验，正文status必须等于HTTP状态；非法错误替换为经过合同校验的固定503，重新生成关联ID，不递归重试或携带原始值。其它域、空响应、统一错误适配器和全量注册覆盖继续推进。
 
 
-账户入口读取已接入上下文、账户列表、观摩列表的参数和成功/错误响应校验。先认证再校验access枚举；未声明query沿用忽略语义，不能覆盖认证userId。AuthError保留401/403；非法输出返回经过校验且不带原值的503。上下文写入、快照、行情、终端与额度尚未接入。
+账户入口读取已接入上下文、账户列表、观摩列表的参数和成功/错误响应校验。先认证再校验access枚举；未声明query沿用忽略语义，不能覆盖认证userId。AuthError保留401/403；非法输出返回经过校验且不带原值的503。快照、行情、终端与额度尚未接入。
+
+
+上下文PUT与观摩退出DELETE已接入运行合同，先assertWrite再校验CSRF格式、严格目标组合和必填revision。版本必须是规范非负十进制字符串且小于Number.MAX_SAFE_INTEGER，为递增保留空间；NULL、空串、指数、小数、重复query拒绝。PUT只允许与mode对应的唯一目标，另一目标可省略或为null。用例完成后DTO校验失败返回trading_context_commit_unknown/503，客户端应重新读取权威上下文，不能据此断言写入失败。现有重复旧revision仍返回409，不构成幂等回执；MySQL提交未知与端到端恢复仍待实施。

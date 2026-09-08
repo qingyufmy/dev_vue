@@ -69,6 +69,18 @@
           },
           "409": {
             "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -85,7 +97,14 @@
             "$ref": "#/components/parameters/CsrfToken"
           },
           {
-            "$ref": "#/components/parameters/ExpectedRevisionQuery"
+            "name": "expected_revision",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^(0|[1-9][0-9]*)$",
+              "maxLength": 16
+            }
           }
         ],
         "responses": {
@@ -103,6 +122,18 @@
             "$ref": "#/components/responses/Problem"
           },
           "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -1437,9 +1468,45 @@
             ]
           },
           "expected_revision": {
-            "$ref": "#/components/schemas/Revision"
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "maxLength": 16
           }
-        }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "account_id"
+            ],
+            "properties": {
+              "mode": {
+                "const": "full"
+              },
+              "account_id": {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              "observer_channel_id": {
+                "type": "null"
+              }
+            }
+          },
+          {
+            "required": [
+              "observer_channel_id"
+            ],
+            "properties": {
+              "mode": {
+                "const": "observer"
+              },
+              "observer_channel_id": {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              "account_id": {
+                "type": "null"
+              }
+            }
+          }
+        ]
       },
       "TradingAccount": {
         "type": "object",

@@ -3372,11 +3372,21 @@ export interface components {
         };
         TradingContextInput: {
             account_id?: components["schemas"]["OpaqueId"] | null;
-            expected_revision: components["schemas"]["Revision"];
+            expected_revision: string;
             /** @enum {string} */
             mode: "full" | "observer";
             observer_channel_id?: components["schemas"]["OpaqueId"] | null;
-        };
+        } & ({
+            account_id: components["schemas"]["OpaqueId"];
+            /** @constant */
+            mode?: "full";
+            observer_channel_id?: null;
+        } | {
+            account_id?: null;
+            /** @constant */
+            mode?: "observer";
+            observer_channel_id: components["schemas"]["OpaqueId"];
+        });
         TradingContextResponse: {
             data: components["schemas"]["TradingContext"];
             meta: components["schemas"]["Meta"];
@@ -6251,14 +6261,18 @@ export interface operations {
                     "application/json": components["schemas"]["TradingContextResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     leaveObserverMode: {
         parameters: {
             query: {
-                expected_revision: components["parameters"]["ExpectedRevisionQuery"];
+                expected_revision: string;
             };
             header: {
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
@@ -6277,8 +6291,12 @@ export interface operations {
                     "application/json": components["schemas"]["TradingContextResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
 }

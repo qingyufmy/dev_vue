@@ -5,12 +5,21 @@ import { TradingAccessError } from '../../domain/trading.js'
 import { createHttpContractValidator, HttpContractError } from '../../../../transport/http-contract.js'
 import { httpRuntimeContracts } from '../../../../transport/generated/http-contracts.js'
 
-export function createTradingReadContract() {
-  const contract = createHttpContractValidator(httpRuntimeContracts, ['getTradingContext', 'listTradingAccounts', 'listObserverChannels'])
+class ContextWriteResultUnknown extends Error {
+  readonly code = 'trading_context_commit_unknown'
+  readonly status = 503
+}
+
+export function createTradingHttpContract() {
+  const contract = createHttpContractValidator(httpRuntimeContracts, ['getTradingContext', 'listTradingAccounts', 'listObserverChannels', 'replaceTradingContext', 'leaveObserverMode'])
   return {
     ...contract,
+    contextWriteResponse<T>(operation: string, value: T): T {
+      try { return contract.response(operation, value) }
+      catch { throw new ContextWriteResultUnknown() }
+    },
     problem(operation: string, error: unknown, request: { id: string; url: string }, reply: FastifyReply) {
-      const known = error instanceof AuthError || error instanceof TradingAccessError || error instanceof HttpContractError
+      const known = error instanceof AuthError || error instanceof TradingAccessError || error instanceof HttpContractError || error instanceof ContextWriteResultUnknown
         ? error : new TradingAccessError('trading_context_invalid', 503)
       const body = { type: `urn:aurum:problem:${known.code}`, title: 'Trading request failed', status: known.status,
         code: known.code, detail: known.code, instance: request.url, correlation_id: request.id, retryable: known.status >= 500 }

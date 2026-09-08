@@ -765,6 +765,82 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         ],
         "type": "object"
       },
+      "TradingContextInput": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "account_id": {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              "mode": {
+                "const": "full"
+              },
+              "observer_channel_id": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "account_id"
+            ]
+          },
+          {
+            "properties": {
+              "account_id": {
+                "type": "null"
+              },
+              "mode": {
+                "const": "observer"
+              },
+              "observer_channel_id": {
+                "$ref": "#/components/schemas/OpaqueId"
+              }
+            },
+            "required": [
+              "observer_channel_id"
+            ]
+          }
+        ],
+        "properties": {
+          "account_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expected_revision": {
+            "maxLength": 16,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "full",
+              "observer"
+            ],
+            "type": "string"
+          },
+          "observer_channel_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "mode",
+          "expected_revision"
+        ],
+        "type": "object"
+      },
       "TradingContextResponse": {
         "properties": {
           "data": {
@@ -1160,6 +1236,127 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
           }
         },
         "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      }
+    },
+    "replaceTradingContext": {
+      "parameters": [
+        {
+          "name": "x-csrf-token",
+          "location": "header",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "maxLength": 256,
+            "minLength": 16,
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/TradingContextResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "404": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "409": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      },
+      "body": {
+        "schema": {
+          "$ref": "#/components/schemas/TradingContextInput"
+        },
+        "required": true
+      }
+    },
+    "leaveObserverMode": {
+      "parameters": [
+        {
+          "name": "x-csrf-token",
+          "location": "header",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "maxLength": 256,
+            "minLength": 16,
+            "type": "string"
+          }
+        },
+        {
+          "name": "expected_revision",
+          "location": "query",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "maxLength": 16,
+            "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/TradingContextResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "404": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "409": {
           "application/problem+json": {
             "$ref": "#/components/schemas/Problem"
           }

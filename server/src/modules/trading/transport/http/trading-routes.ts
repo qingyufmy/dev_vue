@@ -1,4 +1,5 @@
-import { createTradingReadContract } from './trading-read-contract.js'
+import { parseContextRevision } from './trading-context-input.js'
+import { createTradingHttpContract } from './trading-http-contract.js'
 import type { FastifyPluginAsync } from 'fastify'
 import type { ConnectionCapacityService, TradingService } from '../../application/trading-service.js'
 import { TradingAccessError } from '../../domain/trading.js'
@@ -37,7 +38,7 @@ function problem(error: unknown, request: { id: string; url: string }, reply: { 
 }
 
 export const tradingRoutes: FastifyPluginAsync<TradingRoutesOptions> = async (fastify, options) => {
-  const contract = createTradingReadContract()
+  const contract = createTradingHttpContract()
   fastify.get('/trading-context', async (request, reply) => {
     try { const { userId } = await options.auth.authenticate(request); contract.request('getTradingContext', request); return contract.response('getTradingContext', response(request.id, contextDto(await options.service.context(userId)))) }
     catch (error) { return contract.problem('getTradingContext', error, request, reply) }
@@ -45,19 +46,21 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesOptions> = async (fa
   fastify.put<{ Body: { account_id?: string; observer_channel_id?: string; mode: 'full' | 'observer'; expected_revision?: string } }>('/trading-context', async (request, reply) => {
     try {
       const { userId } = await options.auth.assertWrite(request)
-      const expected = request.body.expected_revision === undefined ? null : Number(request.body.expected_revision)
+      contract.request('replaceTradingContext', request)
+      const expected = parseContextRevision(request.body.expected_revision)
       const data = request.body.mode === 'observer'
         ? await options.service.enterObserver(userId, String(request.body.observer_channel_id ?? ''), expected)
         : await options.service.selectAccount(userId, String(request.body.account_id ?? ''), expected)
-      return response(request.id, contextDto(data))
-    } catch (error) { return problem(error, request, reply) }
+      return contract.contextWriteResponse('replaceTradingContext', response(request.id, contextDto(data)))
+    } catch (error) { return contract.problem('replaceTradingContext', error, request, reply) }
   })
   fastify.delete<{ Querystring: { expected_revision?: string } }>('/trading-context/observer', async (request, reply) => {
     try {
       const { userId } = await options.auth.assertWrite(request)
-      const expected = request.query.expected_revision === undefined ? null : Number(request.query.expected_revision)
-      return response(request.id, contextDto(await options.service.leaveObserver(userId, expected)))
-    } catch (error) { return problem(error, request, reply) }
+      contract.request('leaveObserverMode', request)
+      const expected = parseContextRevision(request.query.expected_revision)
+      return contract.contextWriteResponse('leaveObserverMode', response(request.id, contextDto(await options.service.leaveObserver(userId, expected))))
+    } catch (error) { return contract.problem('leaveObserverMode', error, request, reply) }
   })
   fastify.get<{ Querystring: { access?: TradingAccountAccess } }>('/trading-accounts', async (request, reply) => {
     try { const { userId } = await options.auth.authenticate(request); contract.request('listTradingAccounts', request); return contract.response('listTradingAccounts', response(request.id, { items: (await options.service.listAccounts(userId, request.query.access)).map(accountDto) })) }

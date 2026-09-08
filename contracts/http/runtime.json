@@ -5,6 +5,8 @@
     "setLearningCompletion",
     "getTradingContext",
     "listTradingAccounts",
-    "listObserverChannels"
+    "listObserverChannels",
+    "replaceTradingContext",
+    "leaveObserverMode"
   ]
 }
