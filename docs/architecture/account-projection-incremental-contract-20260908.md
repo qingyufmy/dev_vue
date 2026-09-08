@@ -69,3 +69,13 @@ account-projection-coordinator.mjs已实现六步离线协调：验证完整160�
 适配器契约为verifyPlan/history/tableState/verifyProtected/begin/execute/complete及原154步priorStore。MySQL适配必须在同连接锁下检查冻结计划、完整规范DDL、未完成时旧行摘要和完成后旧结构。新协调器执行前后完整复核，started/DDL/completed未知响应立即退出；无日志同名表、未完成表有数据、完成但缺表或漂移均拒绝。
 
 18项新测试直接调用三层原协调代码，底层存储使用替身；覆盖六步顺序、三类响应未知恢复、历史层缺表/漂移/legacy变化、陌生表、DDL期间旧行变化、默认只读和完成后普通业务行。合计67项协调测试通过。此结果不代表154→160实际MySQL演练；下一步为MySQL适配器、持久化计划与固定副本执行入口。
+
+## 第五十七批MySQL适配
+
+mysql-account-projection-migration.mjs通过原观摩适配器复用同连接身份/锁和三层历史；新计划绑定原154步proof、六表参考证据、160步注册摘要、旧228表快照及全部工具清单。准备时核对MySQL版本、20项约束结果和采集/助手hash，文件独占创建并fsync。
+
+rehearse-account-projection-migration-local.mjs仅支持固定恢复副本，提供准备、只读、执行和DDL响应丢失模拟。每次结果额外比较原228表完整快照、原154条日志摘要和新增表0行。适配器10项测试与各历史层共101项通过；实际运行结果见逐批进度及account-projection-registered系列回执，当前dev_vue执行仍须独立准备。
+
+恢复副本实际160步已完成：首次创建账户快照后模拟响应丢失，只读识别reconcile/pending，恢复仅执行剩余五条DDL，再次执行零DDL，六表0行；每次旧228表快照及154条历史摘要一致。[再次执行回执](account-projection-registered-repeat-20260908.json)保留该证据。
+
+重新构建服务端后，[恢复副本账户读取探针](account-readiness-restored-probe-20260908.json)捕获14条SELECT，12条EXPLAIN通过；symbols的UNION和candles两条均因旧market_candles缺symbol/trading_account_id阻止。此探针只覆盖空结果路径，不验证非空投影/来源、授权、事务、Bridge或浏览器。剩余已观察结构缺口集中于旧K线表，不表示未访问分支已经就绪。

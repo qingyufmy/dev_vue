@@ -1,0 +1,24 @@
+{
+  "kind": "account-projection-registered-rehearsal/v1",
+  "observedAt": "2026-09-08T09:49:49.774Z",
+  "target": "dev_vue_m1_source_20260907_02",
+  "mode": "--apply-lost-ddl-restored-only",
+  "result": {
+    "status": "ddl-unknown-injected",
+    "ddlCount": 1
+  },
+  "registrySteps": 160,
+  "proofHash": "cb2a197eceda9b8fd07cc83407dcbae719522a3659a4b1f92727f58275f46506",
+  "protectedTableCount": 228,
+  "protectedSnapshotHash": "079c07843bb5b8253f6c1b7d6cf88aa3653b5e08f270fe919821148f5de2a68b",
+  "priorHistoryHash": "267270baa78420c54ec89a7fa21f95e5c44d4094f261f1d3c8b283a6a7e7a87d",
+  "addedTables": [
+    {
+      "name": "account_runtime_snapshots",
+      "rows": 0,
+      "schemaSha256": "6df92a77561d6592901e84bbe41055ce90fe61c018069c0e2cad67e5b1af35b8"
+    }
+  ],
+  "currentDevVueWritten": false,
+  "scope": "Restored database only; registered additions and history retained. No business facts synthesized."
+}

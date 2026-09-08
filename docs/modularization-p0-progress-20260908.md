@@ -536,3 +536,13 @@ loadObserverContextMigration复用完整150步并追加四项checksum，总定�
 职责复核保持新增六表与历史验证边界，异常复核保留默认只读、未知响应下一进程恢复和严格快照过滤。MySQL适配仍需负责实际同连接锁、冻结计划/工具和规范结构，本测试没有替代这些职责。语法及差异检查通过，未连接或修改数据库。
 
 下一步补齐MySQL适配与持久化计划、执行恢复副本154→160及旧表/日志对账；旧K线候选映射和提升流程继续作为账户样板必需项推进。
+
+## 第五十七批：投影MySQL升级完成及账户读取复核
+
+新增mysql-account-projection-migration.mjs和固定恢复副本演练入口，计划绑定原154步完成证据、六表规范DDL/20项约束、160步checksum、原228表快照及完整工具清单。沿用独占持久化、同连接身份/锁、每次变更前复核及三层历史校验。新增10项适配器测试，与三层适配/协调合计101项通过。
+
+实际恢复库dev_vue_m1_source_20260907_02完成154→160：第一次建account_runtime_snapshots后注入DDL响应丢失；独立只读进程识别该步reconcile、其余五步pending；恢复补记首步并仅执行剩余5条DDL；独立重入ddlCount=0、六步全部completed。每次额外核对旧228表完整快照、旧154条日志摘要及新增表0行，均一致。冻结计划proofHash=cb2a197eceda9b8fd07cc83407dcbae719522a3659a4b1f92727f58275f46506，见[计划](architecture/account-projection-registered-plan-20260908.json)和同前缀prepare/lost-ddl/inspect-unknown/reconcile/repeat回执。
+
+重新构建服务端通过，边界债务110无增减，合同生成及3项运行时合同检查通过。新增固定恢复库只读EXPLAIN探针，14条捕获SQL中12条通过；symbols的UNION与candles两条都由旧market_candles缺少V4列阻止，见[读取报告](architecture/account-readiness-restored-probe-20260908.json)。源码/构建摘要及查询保留，未读取业务行；空结果路径不覆盖非空投影、所有权授权或全链路。
+
+职责/异常复核保持投影唯一业务写入口、空初始事实、旧表/日志完整保留和未知响应恢复。当前dev_vue没有执行本批升级，数据库连接及SSH隧道已关闭。下一步集中推进旧K线source→账户/品种映射、closed/revision依据、原始字段保全及正式名称切换，然后补齐非空账户用例与当前库专属升级。

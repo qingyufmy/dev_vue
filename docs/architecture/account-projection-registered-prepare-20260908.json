@@ -1,0 +1,43 @@
+{
+  "kind": "account-projection-registered-rehearsal/v1",
+  "observedAt": "2026-09-08T09:49:28.338Z",
+  "target": "dev_vue_m1_source_20260907_02",
+  "mode": "--prepare-restored-only",
+  "result": {
+    "ddlCount": 0,
+    "steps": [
+      {
+        "id": "inplace_038_01_account_runtime_snapshots",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_038_02_market_quotes",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_038_03_open_position_snapshots",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_038_04_pending_order_snapshots",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_038_05_trading_projection_revisions",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_038_06_trading_projection_provenance_v4",
+        "status": "pending"
+      }
+    ]
+  },
+  "registrySteps": 160,
+  "proofHash": "cb2a197eceda9b8fd07cc83407dcbae719522a3659a4b1f92727f58275f46506",
+  "protectedTableCount": 228,
+  "protectedSnapshotHash": "079c07843bb5b8253f6c1b7d6cf88aa3653b5e08f270fe919821148f5de2a68b",
+  "priorHistoryHash": "267270baa78420c54ec89a7fa21f95e5c44d4094f261f1d3c8b283a6a7e7a87d",
+  "addedTables": [],
+  "currentDevVueWritten": false,
+  "scope": "Restored database only; registered additions and history retained. No business facts synthesized."
+}
