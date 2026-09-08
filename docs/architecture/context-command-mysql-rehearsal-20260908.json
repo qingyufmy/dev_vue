@@ -1,0 +1,59 @@
+{
+  "kind": "context-command-mysql-rehearsal/v1",
+  "observedAt": "2026-09-08T12:08:55.636Z",
+  "identity": {
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "checks": [
+    {
+      "name": "concurrent-first-write-same-key-one-receipt",
+      "passed": true
+    },
+    {
+      "name": "same-key-different-body-conflict",
+      "passed": true
+    },
+    {
+      "name": "concurrent-first-write-different-keys-one-revision",
+      "passed": true
+    },
+    {
+      "name": "committed-ack-loss-independent-connection-recovery",
+      "passed": true
+    },
+    {
+      "name": "real-receipt-foreign-key-failure-rolls-back-context",
+      "passed": true
+    },
+    {
+      "name": "historical-replay-does-not-restore-old-context",
+      "passed": true
+    },
+    {
+      "name": "inactive-user-cannot-read-or-replay-receipt",
+      "passed": true
+    },
+    {
+      "name": "observer-and-blocked-results-persist-and-roundtrip",
+      "passed": true
+    }
+  ],
+  "hashes": {
+    "server/src/modules/trading/infrastructure/mysql-context-commands.ts": "bc1273fca65a16ffa1fa3aa2a4d8f95920b6afcc75bd5a6f7e18b46817b391ee",
+    "server/src/modules/trading/infrastructure/mysql-context-receipts.ts": "030e458179076cb353e4c83f726feeb55af697fd2f4725d8f8d293a5e8c4d69f",
+    "server/dist-v4/modules/trading/infrastructure/mysql-context-commands.js": "b05ab3782e9030f770b79512a1fc3ff40cc22008ea85cf43d07d03a663f3f100",
+    "server/dist-v4/modules/trading/infrastructure/mysql-context-receipts.js": "f811a12dd02f27ec628445bbb0719fdc5489b30f0a9e2eb62b650d9f1cc6b720"
+  },
+  "sourceHashes": {
+    "contexts": "27affaf437d3c245cf1a3da4a14835f5c6208bd5933d10ba0123da519ea76034",
+    "receipts": "9cb05c6b090c30925b257201fe0f8812598d1e235b20a045245eb2ac44aaef7d"
+  },
+  "counts": {
+    "contexts": 4,
+    "receipts": 6
+  },
+  "referenceDatabaseRemoved": true,
+  "existingDatabaseWrites": 0,
+  "scope": "Real MySQL transaction/idempotency with actual compiled writer and synthetic target resolver; no real target authorization, HTTP/browser or existing database activation."
+}

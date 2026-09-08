@@ -1,3 +1,5 @@
+import type { ContextWritePort } from './application/context-write-port.js'
+import { createMysqlContextWritePort } from './infrastructure/mysql-context-write-port.js'
 import type { BrowserRealtimePublication, BrowserRealtimeSessions } from './application/browser-realtime-ports.js'
 import { BrowserRealtimeSession } from './transport/realtime/browser-realtime-session.js'
 import type { AccountClockReader } from './application/account-clock-reader.js'
@@ -34,6 +36,10 @@ export function createTradingHttp(service: TradingService, capacity: ConnectionC
 
 export function createObserverManagementHttp(service: ObserverManagementService, auth: ObserverManagementRequestAuthenticator): FastifyPluginAsync {
   return async app => { await app.register(observerManagementRoutes, { prefix: '/api/v4/admin/observer', service, auth }) }
+}
+
+export function createTradingContextWriter(pool: Pool, leases: GatewayLeases): ContextWritePort {
+  return createMysqlContextWritePort(pool, leases)
 }
 
 export function createTradingReader(pool: Pool, leases?: GatewayLeases): TradingReadRepository {

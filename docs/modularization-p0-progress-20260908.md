@@ -688,3 +688,15 @@ getTradingContext/listTradingAccounts/listObserverChannels接入同源运行校�
 MySQL适配器与受限历史连接已接入真实164步及嵌套协调链。恢复副本完成165步：真实CREATE确认丢失后独立识别，补日志与最终重入均0 DDL。表数237→238，新回执表0行，旧237表快照和旧164条日志摘要保持一致。307项冻结工具复验通过，14项相关本地测试通过。
 
 详见[合同与hash](architecture/trading-context-write-contract-20260908.md)及[独立重入回执](architecture/context-changes-repeat-20260908.json)。已关闭连接/隧道，当前dev_vue不变。下一步真实命令事务验证、独立写端口与HTTP/前端接线；恢复副本建表不等于当前库升级或全栈完成。
+
+## 第七十六批：真实上下文命令事务证据归档
+
+独立临时MySQL库的8项命令事务检查通过，第二轮两组并发均使用2个不同连接；覆盖同键重放、异体冲突、revision竞争、真实FK回滚、确认丢失恢复及历史回执隔离。当前核对7项文件hash与回执一致，脚本语法通过。临时库清理已记录，现有业务库写入为0，本批没有重跑数据库操作。
+
+见[第二轮回执](architecture/context-command-mysql-rehearsal-20260908-v2.json)与[合同复核](architecture/trading-context-write-contract-20260908.md)。真实目标权限、写端口运行接线及HTTP/前端恢复仍未完成；整体方案继续执行。
+
+## 第七十七批：独立上下文写端口组装
+
+新增生产目标准备与命令事务的组合工厂，公开返回ContextWritePort。历史重放跳过外部目标准备，但重新锁用户并校验摘要；新命令在事务外采集route、事务内复核目标。回执读取故障明确返回503，不能视作不存在。
+
+8项新组合行为测试与既有命令/目标测试共22项通过，完整server类型检查通过，边界110无新增。见[写入合同](architecture/trading-context-write-contract-20260908.md)。组合验证使用SQL fixture，不代替真实权限测试；工厂尚未用于当前HTTP，旧saveContext和三个客户端调用将配套切换，本批未连接或修改数据库。
