@@ -1,0 +1,1 @@
+ALTER TABLE `ai_model_usage_logs` MODIFY COLUMN `strategy_id` BIGINT UNSIGNED NULL DEFAULT NULL;

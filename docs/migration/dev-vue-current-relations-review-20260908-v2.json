@@ -1,0 +1,2450 @@
+{
+  "kind": "current-relation-data-review/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "foreign_key_checks": "1"
+  },
+  "observedAt": "2026-09-08T02:34:08.282Z",
+  "schemaSteps": 145,
+  "databaseWrites": 0,
+  "consistentReadOnlyTransaction": true,
+  "metadataSha256": "aa4e09ad4e231fc4e310bda0a15e4a192df7426d839f00140be5b1da7c290cba",
+  "summary": {
+    "foreignKeys": 104,
+    "checks": 117,
+    "orphanGroups": 0,
+    "checkViolationGroups": 0,
+    "disabledChecks": 0
+  },
+  "foreignKeys": [
+    {
+      "table": "ai_manual_analysis_cooldowns",
+      "name": "fk_ai_manual_cooldowns_user",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "ai_manual_analysis_jobs",
+      "name": "fk_manual_analysis_model_task",
+      "parent": "ai_model_tasks",
+      "columns": [
+        "model_task_id"
+      ],
+      "parentColumns": [
+        "task_id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "ai_market_benchmark_cases",
+      "name": "fk_market_benchmark_case_set",
+      "parent": "ai_market_benchmark_sets",
+      "columns": [
+        "benchmark_set_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "CASCADE",
+      "orphanCount": "0"
+    },
+    {
+      "table": "ai_model_provider_capabilities",
+      "name": "fk_v4_capabilities_profile",
+      "parent": "ai_model_profiles",
+      "columns": [
+        "model_profile_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "ai_model_provider_capabilities",
+      "name": "fk_v4_capabilities_verifier",
+      "parent": "users",
+      "columns": [
+        "verified_by_user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "ai_model_purpose_defaults",
+      "name": "fk_ai_model_purpose_profile",
+      "parent": "ai_model_profiles",
+      "columns": [
+        "model_profile_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "ai_model_task_attempts",
+      "name": "fk_model_attempt_task",
+      "parent": "ai_model_tasks",
+      "columns": [
+        "task_id"
+      ],
+      "parentColumns": [
+        "task_id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "ai_model_task_events",
+      "name": "fk_model_event_task",
+      "parent": "ai_model_tasks",
+      "columns": [
+        "task_id"
+      ],
+      "parentColumns": [
+        "task_id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "name": "fk_v4_model_usage_profile",
+      "parent": "ai_model_profiles",
+      "columns": [
+        "model_profile_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "auth_authorization_codes",
+      "name": "fk_auth_codes_session",
+      "parent": "auth_sessions",
+      "columns": [
+        "auth_session_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "auth_authorization_codes",
+      "name": "fk_auth_codes_user",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "auth_sessions",
+      "name": "fk_auth_sessions_parent",
+      "parent": "auth_sessions",
+      "columns": [
+        "parent_session_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "auth_sessions",
+      "name": "fk_auth_sessions_user",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "bridge_connection_capacity_grants",
+      "name": "fk_bridge_capacity_user",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "bridge_refresh_sessions",
+      "name": "fk_v4_bridge_refresh_user",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "bridge_v4_pairing_requests",
+      "name": "fk_bridge_v4_pair_refresh",
+      "parent": "bridge_refresh_sessions",
+      "columns": [
+        "refresh_session_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "bridge_v4_pairing_requests",
+      "name": "fk_bridge_v4_pair_user",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "data_migration_batches",
+      "name": "fk_data_batch_run",
+      "parent": "data_migration_runs",
+      "columns": [
+        "run_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "data_migration_checkpoints",
+      "name": "fk_data_checkpoint_run",
+      "parent": "data_migration_runs",
+      "columns": [
+        "run_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "data_migration_id_maps",
+      "name": "fk_data_id_map_run",
+      "parent": "data_migration_runs",
+      "columns": [
+        "created_run_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "data_migration_row_receipts",
+      "name": "fk_data_receipt_batch",
+      "parent": "data_migration_batches",
+      "columns": [
+        "run_id",
+        "batch_id"
+      ],
+      "parentColumns": [
+        "run_id",
+        "batch_id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "data_migration_source_rows",
+      "name": "fk_data_source_row_receipt",
+      "parent": "data_migration_row_receipts",
+      "columns": [
+        "run_id",
+        "stream_id",
+        "source_pk_sha256"
+      ],
+      "parentColumns": [
+        "run_id",
+        "stream_id",
+        "source_pk_sha256"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "economic_calendar_event_revisions",
+      "name": "fk_economic_calendar_revision_event",
+      "parent": "economic_calendar_events",
+      "columns": [
+        "event_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "economic_calendar_event_revisions",
+      "name": "fk_economic_calendar_revision_ingestion",
+      "parent": "macro_ingestion_runs",
+      "columns": [
+        "ingestion_run_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "economic_calendar_events",
+      "name": "fk_economic_calendar_source",
+      "parent": "macro_data_sources",
+      "columns": [
+        "source_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "global_risk_controls",
+      "name": "fk_global_risk_actor",
+      "parent": "users",
+      "columns": [
+        "changed_by_user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "learning_courses",
+      "name": "fk_learning_course_run",
+      "parent": "data_migration_runs",
+      "columns": [
+        "migration_run_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "learning_lessons",
+      "name": "fk_learning_lesson_course",
+      "parent": "learning_courses",
+      "columns": [
+        "course_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "learning_lessons",
+      "name": "fk_learning_lesson_run",
+      "parent": "data_migration_runs",
+      "columns": [
+        "migration_run_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "learning_media_references",
+      "name": "fk_learning_media_lesson",
+      "parent": "learning_lessons",
+      "columns": [
+        "lesson_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "learning_media_references",
+      "name": "fk_learning_media_run",
+      "parent": "data_migration_runs",
+      "columns": [
+        "migration_run_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "learning_progress",
+      "name": "fk_learning_progress_lesson",
+      "parent": "learning_lessons",
+      "columns": [
+        "lesson_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "learning_progress",
+      "name": "fk_learning_progress_run",
+      "parent": "data_migration_runs",
+      "columns": [
+        "migration_run_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "learning_progress",
+      "name": "fk_learning_progress_user",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "learning_progress_changes",
+      "name": "fk_learning_change_course",
+      "parent": "learning_courses",
+      "columns": [
+        "course_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "learning_progress_changes",
+      "name": "fk_learning_change_lesson",
+      "parent": "learning_lessons",
+      "columns": [
+        "lesson_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "learning_progress_changes",
+      "name": "fk_learning_change_owner",
+      "parent": "learning_progress",
+      "columns": [
+        "user_id",
+        "lesson_id"
+      ],
+      "parentColumns": [
+        "user_id",
+        "lesson_id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "learning_progress_changes",
+      "name": "fk_learning_change_user",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "macro_data_sources",
+      "name": "fk_macro_data_sources_creator",
+      "parent": "users",
+      "columns": [
+        "created_by_user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "macro_feature_sets",
+      "name": "fk_macro_feature_set_creator",
+      "parent": "users",
+      "columns": [
+        "created_by_user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "macro_ingestion_runs",
+      "name": "fk_macro_ingestion_series",
+      "parent": "macro_series",
+      "columns": [
+        "series_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "macro_ingestion_runs",
+      "name": "fk_macro_ingestion_source",
+      "parent": "macro_data_sources",
+      "columns": [
+        "source_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "macro_model_versions",
+      "name": "fk_macro_model_creator",
+      "parent": "users",
+      "columns": [
+        "created_by_user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "macro_model_versions",
+      "name": "fk_macro_model_feature_set",
+      "parent": "macro_feature_sets",
+      "columns": [
+        "feature_set_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "macro_observations",
+      "name": "fk_macro_observation_ingestion",
+      "parent": "macro_ingestion_runs",
+      "columns": [
+        "ingestion_run_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "macro_observations",
+      "name": "fk_macro_observation_series",
+      "parent": "macro_series",
+      "columns": [
+        "series_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "macro_pipeline_jobs",
+      "name": "fk_macro_pipeline_feature_set",
+      "parent": "macro_feature_sets",
+      "columns": [
+        "feature_set_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "macro_pipeline_jobs",
+      "name": "fk_macro_pipeline_model",
+      "parent": "macro_model_versions",
+      "columns": [
+        "model_version_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "macro_pipeline_jobs",
+      "name": "fk_macro_pipeline_requester",
+      "parent": "users",
+      "columns": [
+        "requested_by_user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "macro_research_snapshots",
+      "name": "fk_macro_snapshot_feature",
+      "parent": "macro_feature_sets",
+      "columns": [
+        "feature_set_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "macro_research_snapshots",
+      "name": "fk_macro_snapshot_model",
+      "parent": "macro_model_versions",
+      "columns": [
+        "model_version_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "macro_research_snapshots",
+      "name": "fk_macro_snapshot_owner",
+      "parent": "users",
+      "columns": [
+        "owner_user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "macro_series",
+      "name": "fk_macro_series_source",
+      "parent": "macro_data_sources",
+      "columns": [
+        "source_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "macro_snapshot_observations",
+      "name": "fk_macro_snapshot_observation_snapshot",
+      "parent": "macro_research_snapshots",
+      "columns": [
+        "snapshot_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "macro_snapshot_observations",
+      "name": "fk_macro_snapshot_observation_value",
+      "parent": "macro_observations",
+      "columns": [
+        "observation_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "memberships",
+      "name": "fk_membership_migration",
+      "parent": "data_migration_runs",
+      "columns": [
+        "migration_run_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "memberships",
+      "name": "fk_membership_user",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "observer_management_operations",
+      "name": "fk_observer_management_operations_actor",
+      "parent": "users",
+      "columns": [
+        "actor_user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "payment_matches",
+      "name": "fk_payment_match_migration",
+      "parent": "data_migration_runs",
+      "columns": [
+        "migration_run_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "payment_matches",
+      "name": "fk_payment_match_owner",
+      "parent": "payment_orders",
+      "columns": [
+        "payment_order_id",
+        "user_id"
+      ],
+      "parentColumns": [
+        "id",
+        "user_id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "payment_matches",
+      "name": "fk_payment_match_transaction",
+      "parent": "payment_transactions",
+      "columns": [
+        "payment_transaction_id",
+        "chain",
+        "asset_contract",
+        "recipient_address"
+      ],
+      "parentColumns": [
+        "id",
+        "chain",
+        "asset_contract",
+        "recipient_address"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "payment_orders",
+      "name": "fk_payment_order_migration",
+      "parent": "data_migration_runs",
+      "columns": [
+        "migration_run_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "payment_orders",
+      "name": "fk_payment_order_user",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "payment_wallet_addresses",
+      "name": "fk_payment_wallet_migration_run",
+      "parent": "data_migration_runs",
+      "columns": [
+        "migration_run_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "referral_credit_ledger",
+      "name": "fk_referral_ledger_account",
+      "parent": "user_referral_accounts",
+      "columns": [
+        "user_id"
+      ],
+      "parentColumns": [
+        "user_id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "referral_credit_ledger",
+      "name": "fk_referral_ledger_run",
+      "parent": "data_migration_runs",
+      "columns": [
+        "migration_run_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "referral_rule_changes",
+      "name": "fk_referral_rule_change_actor",
+      "parent": "users",
+      "columns": [
+        "actor_user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "referral_rule_changes",
+      "name": "fk_referral_rule_change_rule",
+      "parent": "referral_rules",
+      "columns": [
+        "rule_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "strategies",
+      "name": "fk_strategies_active_version",
+      "parent": "strategy_versions",
+      "columns": [
+        "active_version_id",
+        "id"
+      ],
+      "parentColumns": [
+        "id",
+        "strategy_id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "strategies",
+      "name": "fk_strategies_owner",
+      "parent": "users",
+      "columns": [
+        "owner_user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "strategy_memory_injection_logs_v4",
+      "name": "fk_strategy_memory_injection_library",
+      "parent": "strategy_memory_libraries_v4",
+      "columns": [
+        "library_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "strategy_memory_injection_logs_v4",
+      "name": "fk_strategy_memory_injection_revision",
+      "parent": "strategy_memory_library_revisions_v4",
+      "columns": [
+        "library_revision_id",
+        "library_id"
+      ],
+      "parentColumns": [
+        "id",
+        "library_id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "strategy_memory_injection_logs_v4",
+      "name": "fk_strategy_memory_injection_strategy",
+      "parent": "strategies",
+      "columns": [
+        "strategy_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "strategy_memory_injection_logs_v4",
+      "name": "fk_strategy_memory_injection_user",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "strategy_memory_libraries_v4",
+      "name": "fk_strategy_memory_current_revision",
+      "parent": "strategy_memory_library_revisions_v4",
+      "columns": [
+        "current_revision_id",
+        "id"
+      ],
+      "parentColumns": [
+        "id",
+        "library_id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "strategy_memory_libraries_v4",
+      "name": "fk_strategy_memory_owner",
+      "parent": "users",
+      "columns": [
+        "owner_user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "strategy_memory_libraries_v4",
+      "name": "fk_strategy_memory_strategy",
+      "parent": "strategies",
+      "columns": [
+        "strategy_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "strategy_memory_library_revisions_v4",
+      "name": "fk_strategy_memory_revision_actor",
+      "parent": "users",
+      "columns": [
+        "created_by_user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "strategy_memory_library_revisions_v4",
+      "name": "fk_strategy_memory_revision_library",
+      "parent": "strategy_memory_libraries_v4",
+      "columns": [
+        "library_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "strategy_subscriptions_v4_build",
+      "name": "build_sub_0c51ad8469fff6ff093c86f9",
+      "parent": "strategy_versions",
+      "columns": [
+        "analysis_strategy_version_id",
+        "analysis_strategy_id"
+      ],
+      "parentColumns": [
+        "id",
+        "strategy_id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "strategy_subscriptions_v4_build",
+      "name": "build_sub_4fc8ff10102c070027098b11",
+      "parent": "strategies",
+      "columns": [
+        "trader_strategy_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "strategy_subscriptions_v4_build",
+      "name": "build_sub_725f39a146e86dec96dbd0aa",
+      "parent": "trading_accounts_v4_build",
+      "columns": [
+        "trading_account_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "strategy_subscriptions_v4_build",
+      "name": "build_sub_7a251248c43ab0574975e1a3",
+      "parent": "strategies",
+      "columns": [
+        "analysis_strategy_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "strategy_subscriptions_v4_build",
+      "name": "build_sub_9294d57ac7727ef83f7993ac",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "strategy_subscriptions_v4_build",
+      "name": "build_sub_b279ce344487dfeef755f66f",
+      "parent": "strategy_versions",
+      "columns": [
+        "trader_strategy_version_id",
+        "trader_strategy_id"
+      ],
+      "parentColumns": [
+        "id",
+        "strategy_id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "strategy_versions",
+      "name": "fk_strategy_versions_creator",
+      "parent": "users",
+      "columns": [
+        "created_by_user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "strategy_versions",
+      "name": "fk_strategy_versions_strategy",
+      "parent": "strategies",
+      "columns": [
+        "strategy_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "subscription_execution_preferences_v4_build",
+      "name": "build_sub_da412482d076c3afdd229ef8",
+      "parent": "strategy_subscriptions_v4_build",
+      "columns": [
+        "subscription_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "subscription_schedules_v4_build",
+      "name": "build_sub_2b06c113d0f260d265749d3a",
+      "parent": "strategy_subscriptions_v4_build",
+      "columns": [
+        "subscription_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "system_setting_changes",
+      "name": "fk_system_setting_change_actor",
+      "parent": "users",
+      "columns": [
+        "actor_user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "system_setting_changes",
+      "name": "fk_system_setting_change_setting",
+      "parent": "system_settings",
+      "columns": [
+        "setting_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "system_setting_requests",
+      "name": "fk_system_setting_receipt_actor",
+      "parent": "users",
+      "columns": [
+        "actor_user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "system_setting_requests",
+      "name": "fk_system_setting_receipt_change",
+      "parent": "system_setting_changes",
+      "columns": [
+        "setting_id",
+        "revision"
+      ],
+      "parentColumns": [
+        "setting_id",
+        "revision"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "system_settings",
+      "name": "fk_system_setting_run",
+      "parent": "data_migration_runs",
+      "columns": [
+        "migration_run_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "terminal_profiles",
+      "name": "fk_terminal_profiles_user",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "trading_account_ownership_intervals_v4_build",
+      "name": "fk_ownership_intervals_account",
+      "parent": "trading_accounts_v4_build",
+      "columns": [
+        "trading_account_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "trading_account_ownership_intervals_v4_build",
+      "name": "fk_ownership_intervals_user",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "trading_account_ownerships_v4_build",
+      "name": "fk_account_owners_account",
+      "parent": "trading_accounts_v4_build",
+      "columns": [
+        "trading_account_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "trading_account_ownerships_v4_build",
+      "name": "fk_account_owners_interval",
+      "parent": "trading_account_ownership_intervals_v4_build",
+      "columns": [
+        "interval_id",
+        "user_id",
+        "trading_account_id",
+        "role"
+      ],
+      "parentColumns": [
+        "id",
+        "user_id",
+        "trading_account_id",
+        "role"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "trading_account_ownerships_v4_build",
+      "name": "fk_account_owners_user",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "user_model_defaults",
+      "name": "fk_v4_model_default_profile",
+      "parent": "ai_model_profiles",
+      "columns": [
+        "model_profile_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "user_referral_accounts",
+      "name": "fk_user_referral_accounts_user",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "user_trading_account_settings_v4_build",
+      "name": "fk_user_trading_account_settings_account",
+      "parent": "trading_accounts_v4_build",
+      "columns": [
+        "trading_account_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    },
+    {
+      "table": "user_trading_account_settings_v4_build",
+      "name": "fk_user_trading_account_settings_user",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "parentColumns": [
+        "id"
+      ],
+      "updateRule": "NO ACTION",
+      "deleteRule": "NO ACTION",
+      "orphanCount": "0"
+    }
+  ],
+  "checks": [
+    {
+      "table": "ai_model_profiles",
+      "name": "chk_v4_model_profiles_owner",
+      "clause": "(((`scope` = _utf8mb4\\'platform\\') and (`owner_user_id` = 0)) or ((`scope` = _utf8mb4\\'user\\') and (`owner_user_id` > 0)))",
+      "expression": "((((`scope` = _utf8mb4'platform') and (`owner_user_id` = 0)) or ((`scope` = _utf8mb4'user') and (`owner_user_id` > 0))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "bridge_v4_pairing_requests",
+      "name": "chk_bridge_v4_pair_consumed",
+      "clause": "(((`consumed_at_utc` is null) and (`installation_id` is null) and (`refresh_session_id` is null)) or ((`consumed_at_utc` is not null) and (`installation_id` is not null) and (`refresh_session_id` is not null)))",
+      "expression": "((((`consumed_at_utc` is null) and (`installation_id` is null) and (`refresh_session_id` is null)) or ((`consumed_at_utc` is not null) and (`installation_id` is not null) and (`refresh_session_id` is not null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "economic_calendar_event_revisions",
+      "name": "chk_economic_calendar_availability",
+      "clause": "((`available_at_utc` <= `ingested_at_utc`) or (`availability_confidence` in (_utf8mb4\\'retrieval_only\\',_utf8mb4\\'unknown\\')))",
+      "expression": "(((`available_at_utc` <= `ingested_at_utc`) or (`availability_confidence` in (_utf8mb4'retrieval_only',_utf8mb4'unknown'))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "economic_calendar_event_revisions",
+      "name": "chk_economic_calendar_provider_revision",
+      "clause": "((`provider_revision_key` is null) or (char_length(`provider_revision_key`) > 0))",
+      "expression": "(((`provider_revision_key` is null) or (char_length(`provider_revision_key`) > 0)))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "economic_calendar_event_revisions",
+      "name": "chk_economic_calendar_revision_number",
+      "clause": "(`revision_number` > 0)",
+      "expression": "((`revision_number` > 0))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "economic_calendar_events",
+      "name": "chk_economic_calendar_provider_id",
+      "clause": "((`provider_event_id` is null) or (char_length(`provider_event_id`) > 0))",
+      "expression": "(((`provider_event_id` is null) or (char_length(`provider_event_id`) > 0)))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "global_risk_controls",
+      "name": "chk_global_risk_singleton",
+      "clause": "(`id` = 1)",
+      "expression": "((`id` = 1))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "history_range_preferences",
+      "name": "chk_history_range_preference_scope",
+      "clause": "(`scope` in (_utf8mb4\\'all\\',_utf8mb4\\'platform\\'))",
+      "expression": "((`scope` in (_utf8mb4'all',_utf8mb4'platform')))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_courses",
+      "name": "chk_learning_course_access",
+      "clause": "((`access_level` is null) or (cast(`access_level` as char charset binary) in (cast(_utf8mb4\\'free\\' as char charset binary),cast(_utf8mb4\\'logged_in\\' as char charset binary),cast(_utf8mb4\\'plus_pro\\' as char charset binary),cast(_utf8mb4\\'pro_only\\' as char charset binary))))",
+      "expression": "(((`access_level` is null) or (cast(`access_level` as char charset binary) in (cast(_utf8mb4'free' as char charset binary),cast(_utf8mb4'logged_in' as char charset binary),cast(_utf8mb4'plus_pro' as char charset binary),cast(_utf8mb4'pro_only' as char charset binary)))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_courses",
+      "name": "chk_learning_course_hash",
+      "clause": "((`source_sha256` is null) or ((char_length(`source_sha256`) = 64) and (not(regexp_like(`source_sha256`,_utf8mb4\\'[^0-9a-f]\\',_utf8mb4\\'c\\')))))",
+      "expression": "(((`source_sha256` is null) or ((char_length(`source_sha256`) = 64) and (not(regexp_like(`source_sha256`,_utf8mb4'[^0-9a-f]',_utf8mb4'c'))))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_courses",
+      "name": "chk_learning_course_native",
+      "clause": "((cast(`origin` as char charset binary) <> cast(_utf8mb4\\'native\\' as char charset binary)) or ((`created_at_utc` is not null) and (`access_level` is not null) and (`status` is not null)))",
+      "expression": "(((cast(`origin` as char charset binary) <> cast(_utf8mb4'native' as char charset binary)) or ((`created_at_utc` is not null) and (`access_level` is not null) and (`status` is not null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_courses",
+      "name": "chk_learning_course_origin",
+      "clause": "(((cast(`origin` as char charset binary) = cast(_utf8mb4\\'native\\' as char charset binary)) and (`updated_at_utc` is not null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null)) or ((cast(`origin` as char charset binary) = cast(_utf8mb4\\'legacy_import\\' as char charset binary)) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null)))",
+      "expression": "((((cast(`origin` as char charset binary) = cast(_utf8mb4'native' as char charset binary)) and (`updated_at_utc` is not null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null)) or ((cast(`origin` as char charset binary) = cast(_utf8mb4'legacy_import' as char charset binary)) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_courses",
+      "name": "chk_learning_course_revision",
+      "clause": "(`revision` > 0)",
+      "expression": "((`revision` > 0))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_courses",
+      "name": "chk_learning_course_status",
+      "clause": "((`status` is null) or (cast(`status` as char charset binary) in (cast(_utf8mb4\\'draft\\' as char charset binary),cast(_utf8mb4\\'published\\' as char charset binary),cast(_utf8mb4\\'archived\\' as char charset binary))))",
+      "expression": "(((`status` is null) or (cast(`status` as char charset binary) in (cast(_utf8mb4'draft' as char charset binary),cast(_utf8mb4'published' as char charset binary),cast(_utf8mb4'archived' as char charset binary)))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_lessons",
+      "name": "chk_learning_lesson_duration",
+      "clause": "((`duration_ms` is null) or (`duration_ms` >= 0))",
+      "expression": "(((`duration_ms` is null) or (`duration_ms` >= 0)))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_lessons",
+      "name": "chk_learning_lesson_hash",
+      "clause": "((`source_sha256` is null) or ((char_length(`source_sha256`) = 64) and (not(regexp_like(`source_sha256`,_utf8mb4\\'[^0-9a-f]\\',_utf8mb4\\'c\\')))))",
+      "expression": "(((`source_sha256` is null) or ((char_length(`source_sha256`) = 64) and (not(regexp_like(`source_sha256`,_utf8mb4'[^0-9a-f]',_utf8mb4'c'))))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_lessons",
+      "name": "chk_learning_lesson_id",
+      "clause": "((`public_episode_id` is null) or (`public_episode_id` > 0))",
+      "expression": "(((`public_episode_id` is null) or (`public_episode_id` > 0)))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_lessons",
+      "name": "chk_learning_lesson_native",
+      "clause": "((cast(`origin` as char charset binary) <> cast(_utf8mb4\\'native\\' as char charset binary)) or ((`created_at_utc` is not null) and (`content_type` is not null)))",
+      "expression": "(((cast(`origin` as char charset binary) <> cast(_utf8mb4'native' as char charset binary)) or ((`created_at_utc` is not null) and (`content_type` is not null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_lessons",
+      "name": "chk_learning_lesson_origin",
+      "clause": "(((cast(`origin` as char charset binary) = cast(_utf8mb4\\'native\\' as char charset binary)) and (`updated_at_utc` is not null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null)) or ((cast(`origin` as char charset binary) = cast(_utf8mb4\\'legacy_import\\' as char charset binary)) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null)))",
+      "expression": "((((cast(`origin` as char charset binary) = cast(_utf8mb4'native' as char charset binary)) and (`updated_at_utc` is not null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null)) or ((cast(`origin` as char charset binary) = cast(_utf8mb4'legacy_import' as char charset binary)) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_lessons",
+      "name": "chk_learning_lesson_revision",
+      "clause": "(`revision` > 0)",
+      "expression": "((`revision` > 0))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_lessons",
+      "name": "chk_learning_lesson_type",
+      "clause": "((`content_type` is null) or (cast(`content_type` as char charset binary) in (cast(_utf8mb4\\'video\\' as char charset binary),cast(_utf8mb4\\'article\\' as char charset binary))))",
+      "expression": "(((`content_type` is null) or (cast(`content_type` as char charset binary) in (cast(_utf8mb4'video' as char charset binary),cast(_utf8mb4'article' as char charset binary)))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_media_references",
+      "name": "chk_learning_media_hash",
+      "clause": "((`source_sha256` is null) or ((char_length(`source_sha256`) = 64) and (not(regexp_like(`source_sha256`,_utf8mb4\\'[^0-9a-f]\\',_utf8mb4\\'c\\')))))",
+      "expression": "(((`source_sha256` is null) or ((char_length(`source_sha256`) = 64) and (not(regexp_like(`source_sha256`,_utf8mb4'[^0-9a-f]',_utf8mb4'c'))))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_media_references",
+      "name": "chk_learning_media_kind",
+      "clause": "(cast(`source_kind` as char charset binary) in (cast(_utf8mb4\\'youtube_id\\' as char charset binary),cast(_utf8mb4\\'bilibili_id\\' as char charset binary),cast(_utf8mb4\\'cf_stream_id\\' as char charset binary),cast(_utf8mb4\\'local_video_path\\' as char charset binary),cast(_utf8mb4\\'article_url\\' as char charset binary),cast(_utf8mb4\\'article_object_key\\' as char charset binary)))",
+      "expression": "((cast(`source_kind` as char charset binary) in (cast(_utf8mb4'youtube_id' as char charset binary),cast(_utf8mb4'bilibili_id' as char charset binary),cast(_utf8mb4'cf_stream_id' as char charset binary),cast(_utf8mb4'local_video_path' as char charset binary),cast(_utf8mb4'article_url' as char charset binary),cast(_utf8mb4'article_object_key' as char charset binary))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_media_references",
+      "name": "chk_learning_media_locator",
+      "clause": "(length(`locator`) > 0)",
+      "expression": "((length(`locator`) > 0))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_media_references",
+      "name": "chk_learning_media_native",
+      "clause": "((cast(`origin` as char charset binary) <> cast(_utf8mb4\\'native\\' as char charset binary)) or (`created_at_utc` is not null))",
+      "expression": "(((cast(`origin` as char charset binary) <> cast(_utf8mb4'native' as char charset binary)) or (`created_at_utc` is not null)))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_media_references",
+      "name": "chk_learning_media_origin",
+      "clause": "(((cast(`origin` as char charset binary) = cast(_utf8mb4\\'native\\' as char charset binary)) and (`updated_at_utc` is not null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null)) or ((cast(`origin` as char charset binary) = cast(_utf8mb4\\'legacy_import\\' as char charset binary)) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null)))",
+      "expression": "((((cast(`origin` as char charset binary) = cast(_utf8mb4'native' as char charset binary)) and (`updated_at_utc` is not null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null)) or ((cast(`origin` as char charset binary) = cast(_utf8mb4'legacy_import' as char charset binary)) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_media_references",
+      "name": "chk_learning_media_revision",
+      "clause": "(`revision` > 0)",
+      "expression": "((`revision` > 0))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_progress",
+      "name": "chk_learning_progress_completed",
+      "clause": "((`completed` is null) or (`completed` in (0,1)))",
+      "expression": "(((`completed` is null) or (`completed` in (0,1))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_progress",
+      "name": "chk_learning_progress_duration",
+      "clause": "((`reported_duration_ms` is null) or (`reported_duration_ms` >= 0))",
+      "expression": "(((`reported_duration_ms` is null) or (`reported_duration_ms` >= 0)))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_progress",
+      "name": "chk_learning_progress_hash",
+      "clause": "((`source_sha256` is null) or ((char_length(`source_sha256`) = 64) and (not(regexp_like(`source_sha256`,_utf8mb4\\'[^0-9a-f]\\',_utf8mb4\\'c\\')))))",
+      "expression": "(((`source_sha256` is null) or ((char_length(`source_sha256`) = 64) and (not(regexp_like(`source_sha256`,_utf8mb4'[^0-9a-f]',_utf8mb4'c'))))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_progress",
+      "name": "chk_learning_progress_origin",
+      "clause": "(((cast(`origin` as char charset binary) = cast(_utf8mb4\\'native\\' as char charset binary)) and (`updated_at_utc` is not null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null)) or ((cast(`origin` as char charset binary) = cast(_utf8mb4\\'legacy_import\\' as char charset binary)) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null)))",
+      "expression": "((((cast(`origin` as char charset binary) = cast(_utf8mb4'native' as char charset binary)) and (`updated_at_utc` is not null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null)) or ((cast(`origin` as char charset binary) = cast(_utf8mb4'legacy_import' as char charset binary)) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_progress",
+      "name": "chk_learning_progress_quiz",
+      "clause": "((`quiz_passed` is null) or (`quiz_passed` in (0,1)))",
+      "expression": "(((`quiz_passed` is null) or (`quiz_passed` in (0,1))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_progress",
+      "name": "chk_learning_progress_revision",
+      "clause": "(`revision` > 0)",
+      "expression": "((`revision` > 0))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_progress",
+      "name": "chk_learning_progress_watched",
+      "clause": "((`watched_ms` is null) or (`watched_ms` >= 0))",
+      "expression": "(((`watched_ms` is null) or (`watched_ms` >= 0)))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_progress_changes",
+      "name": "chk_learning_change_before",
+      "clause": "((`prior_revision` > 0) or ((`prior_completed` is null) and (`prior_updated_at_utc` is null)))",
+      "expression": "(((`prior_revision` > 0) or ((`prior_completed` is null) and (`prior_updated_at_utc` is null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_progress_changes",
+      "name": "chk_learning_change_completed",
+      "clause": "((`completed` in (0,1)) and ((`prior_completed` is null) or (`prior_completed` in (0,1))))",
+      "expression": "(((`completed` in (0,1)) and ((`prior_completed` is null) or (`prior_completed` in (0,1)))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_progress_changes",
+      "name": "chk_learning_change_hash",
+      "clause": "((char_length(`request_sha256`) = 64) and (not(regexp_like(`request_sha256`,_ascii\\'[^0-9a-f]\\',_utf8mb4\\'c\\'))))",
+      "expression": "(((char_length(`request_sha256`) = 64) and (not(regexp_like(`request_sha256`,_ascii'[^0-9a-f]',_utf8mb4'c')))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_progress_changes",
+      "name": "chk_learning_change_request",
+      "clause": "(regexp_like(`request_id`,_ascii\\'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$\\',_utf8mb4\\'c\\') and (not(regexp_like(`request_id`,_ascii\\'[^0-9a-f-]\\',_utf8mb4\\'c\\'))))",
+      "expression": "((regexp_like(`request_id`,_ascii'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',_utf8mb4'c') and (not(regexp_like(`request_id`,_ascii'[^0-9a-f-]',_utf8mb4'c')))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "learning_progress_changes",
+      "name": "chk_learning_change_revision",
+      "clause": "((`revision` > 0) and (`prior_revision` = (`revision` - 1)))",
+      "expression": "(((`revision` > 0) and (`prior_revision` = (`revision` - 1))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "macro_data_sources",
+      "name": "chk_macro_source_approved_rights",
+      "clause": "((`status` <> _utf8mb4\\'approved\\') or ((`license_reviewed_at_utc` is not null) and (`cache_allowed` = 1) and (`retention_allowed` = 1)))",
+      "expression": "(((`status` <> _utf8mb4'approved') or ((`license_reviewed_at_utc` is not null) and (`cache_allowed` = 1) and (`retention_allowed` = 1))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "macro_feature_sets",
+      "name": "chk_macro_feature_set_version",
+      "clause": "((`version_number` > 0) and (`schema_version` > 0))",
+      "expression": "(((`version_number` > 0) and (`schema_version` > 0)))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "macro_ingestion_runs",
+      "name": "chk_macro_ingestion_window",
+      "clause": "((`requested_from_utc` is null) or (`requested_to_utc` is null) or (`requested_to_utc` >= `requested_from_utc`))",
+      "expression": "(((`requested_from_utc` is null) or (`requested_to_utc` is null) or (`requested_to_utc` >= `requested_from_utc`)))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "macro_model_versions",
+      "name": "chk_macro_model_version",
+      "clause": "(`version_number` > 0)",
+      "expression": "((`version_number` > 0))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "macro_observations",
+      "name": "chk_macro_observation_availability",
+      "clause": "((`available_at_utc` <= `ingested_at_utc`) or (`availability_confidence` in (_utf8mb4\\'retrieval_only\\',_utf8mb4\\'unknown\\')))",
+      "expression": "(((`available_at_utc` <= `ingested_at_utc`) or (`availability_confidence` in (_utf8mb4'retrieval_only',_utf8mb4'unknown'))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "macro_observations",
+      "name": "chk_macro_observation_value",
+      "clause": "((`decimal_value` is null) <> (`text_value` is null))",
+      "expression": "(((`decimal_value` is null) <> (`text_value` is null)))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "macro_research_snapshots",
+      "name": "chk_macro_snapshot_owner",
+      "clause": "(((`owner_scope` = _utf8mb4\\'platform\\') and (`owner_user_id` is null)) or ((`owner_scope` = _utf8mb4\\'user\\') and (`owner_user_id` is not null)))",
+      "expression": "((((`owner_scope` = _utf8mb4'platform') and (`owner_user_id` is null)) or ((`owner_scope` = _utf8mb4'user') and (`owner_user_id` is not null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "macro_research_snapshots",
+      "name": "chk_macro_snapshot_platform_v1",
+      "clause": "((`schema_version` = 0) or ((`owner_scope` = _utf8mb4\\'platform\\') and (`owner_user_id` is null)))",
+      "expression": "(((`schema_version` = 0) or ((`owner_scope` = _utf8mb4'platform') and (`owner_user_id` is null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "macro_research_snapshots",
+      "name": "chk_macro_snapshot_publication",
+      "clause": "((`publication_status` in (_utf8mb4\\'legacy\\',_utf8mb4\\'draft\\')) or ((`schema_version` > 0) and (`business_date` is not null) and (`data_cutoff_at_utc` is not null) and (`feature_set_id` is not null) and (`horizon` is not null) and (`published_at_utc` is not null)))",
+      "expression": "(((`publication_status` in (_utf8mb4'legacy',_utf8mb4'draft')) or ((`schema_version` > 0) and (`business_date` is not null) and (`data_cutoff_at_utc` is not null) and (`feature_set_id` is not null) and (`horizon` is not null) and (`published_at_utc` is not null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "macro_research_snapshots",
+      "name": "chk_macro_snapshot_superseded",
+      "clause": "(((`publication_status` = _utf8mb4\\'superseded\\') and (`superseded_at_utc` is not null)) or (`publication_status` <> _utf8mb4\\'superseded\\'))",
+      "expression": "((((`publication_status` = _utf8mb4'superseded') and (`superseded_at_utc` is not null)) or (`publication_status` <> _utf8mb4'superseded')))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "macro_research_snapshots",
+      "name": "chk_macro_snapshot_timing",
+      "clause": "((`schema_version` = 0) or (`publication_status` in (_utf8mb4\\'legacy\\',_utf8mb4\\'draft\\')) or ((`data_cutoff_at_utc` <= `published_at_utc`) and (`published_at_utc` < `valid_until_utc`)))",
+      "expression": "(((`schema_version` = 0) or (`publication_status` in (_utf8mb4'legacy',_utf8mb4'draft')) or ((`data_cutoff_at_utc` <= `published_at_utc`) and (`published_at_utc` < `valid_until_utc`))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "macro_research_snapshots",
+      "name": "chk_macro_snapshot_validity",
+      "clause": "(`valid_until_utc` > `observed_at_utc`)",
+      "expression": "((`valid_until_utc` > `observed_at_utc`))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "macro_series",
+      "name": "chk_macro_series_freshness",
+      "clause": "(`freshness_limit_seconds` between 60 and 31536000)",
+      "expression": "((`freshness_limit_seconds` between 60 and 31536000))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "memberships",
+      "name": "ck_membership_expiration",
+      "clause": "(((`expiration_kind` = _utf8mb4\\'no_expiry\\') and (`expires_at_utc` is null)) or ((`expiration_kind` = _utf8mb4\\'at_time\\') and (`expires_at_utc` is not null)))",
+      "expression": "((((`expiration_kind` = _utf8mb4'no_expiry') and (`expires_at_utc` is null)) or ((`expiration_kind` = _utf8mb4'at_time') and (`expires_at_utc` is not null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "memberships",
+      "name": "ck_membership_origin",
+      "clause": "(((`origin` = _utf8mb4\\'legacy_import\\') and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null)) or ((`origin` = _utf8mb4\\'native\\') and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null)))",
+      "expression": "((((`origin` = _utf8mb4'legacy_import') and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null)) or ((`origin` = _utf8mb4'native') and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "memberships",
+      "name": "ck_membership_plan",
+      "clause": "(`plan_code` in (_utf8mb4\\'free\\',_utf8mb4\\'plus\\',_utf8mb4\\'pro\\'))",
+      "expression": "((`plan_code` in (_utf8mb4'free',_utf8mb4'plus',_utf8mb4'pro')))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "memberships",
+      "name": "ck_membership_revision",
+      "clause": "(`revision` > 0)",
+      "expression": "((`revision` > 0))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "observer_management_registry",
+      "name": "chk_observer_management_registry_singleton",
+      "clause": "(`id` = 1)",
+      "expression": "((`id` = 1))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_matches",
+      "name": "ck_payment_match_amount",
+      "clause": "(`expected_amount` > 0)",
+      "expression": "((`expected_amount` > 0))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_matches",
+      "name": "ck_payment_match_claim",
+      "clause": "(((`status` = _utf8mb4\\'pending\\') and (`payment_transaction_id` is null)) or ((`status` in (_utf8mb4\\'confirming\\',_utf8mb4\\'confirmed\\')) and (`payment_transaction_id` is not null) and (`required_confirmations` is not null)) or (`status` in (_utf8mb4\\'cancelled\\',_utf8mb4\\'expired\\')))",
+      "expression": "((((`status` = _utf8mb4'pending') and (`payment_transaction_id` is null)) or ((`status` in (_utf8mb4'confirming',_utf8mb4'confirmed')) and (`payment_transaction_id` is not null) and (`required_confirmations` is not null)) or (`status` in (_utf8mb4'cancelled',_utf8mb4'expired'))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_matches",
+      "name": "ck_payment_match_confirmations",
+      "clause": "((`required_confirmations` is null) or (`required_confirmations` > 0))",
+      "expression": "(((`required_confirmations` is null) or (`required_confirmations` > 0)))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_matches",
+      "name": "ck_payment_match_origin",
+      "clause": "(((`origin` = _utf8mb4\\'legacy_import\\') and (`legacy_watch_id` is not null) and (`legacy_watch_id` > 0) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null)) or ((`origin` = _utf8mb4\\'native\\') and (`legacy_watch_id` is null) and (`legacy_confirmations` is null) and (`legacy_wallet_index` is null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null) and (`required_confirmations` is not null) and (`created_at_utc` is not null)))",
+      "expression": "((((`origin` = _utf8mb4'legacy_import') and (`legacy_watch_id` is not null) and (`legacy_watch_id` > 0) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null)) or ((`origin` = _utf8mb4'native') and (`legacy_watch_id` is null) and (`legacy_confirmations` is null) and (`legacy_wallet_index` is null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null) and (`required_confirmations` is not null) and (`created_at_utc` is not null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_matches",
+      "name": "ck_payment_match_revision",
+      "clause": "(`revision` > 0)",
+      "expression": "((`revision` > 0))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_matches",
+      "name": "ck_payment_match_status",
+      "clause": "(`status` in (_utf8mb4\\'pending\\',_utf8mb4\\'confirming\\',_utf8mb4\\'confirmed\\',_utf8mb4\\'cancelled\\',_utf8mb4\\'expired\\'))",
+      "expression": "((`status` in (_utf8mb4'pending',_utf8mb4'confirming',_utf8mb4'confirmed',_utf8mb4'cancelled',_utf8mb4'expired')))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_matches",
+      "name": "ck_payment_match_window",
+      "clause": "(`expires_at_utc` > `window_start_at_utc`)",
+      "expression": "((`expires_at_utc` > `window_start_at_utc`))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_orders",
+      "name": "ck_payment_order_amount",
+      "clause": "((`order_amount` >= 0) and (`referral_credit_applied` >= 0) and (`referral_credit_applied` <= `order_amount`) and ((`legacy_amount_confirmed` is null) or (`legacy_amount_confirmed` >= 0)))",
+      "expression": "(((`order_amount` >= 0) and (`referral_credit_applied` >= 0) and (`referral_credit_applied` <= `order_amount`) and ((`legacy_amount_confirmed` is null) or (`legacy_amount_confirmed` >= 0))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_orders",
+      "name": "ck_payment_order_origin",
+      "clause": "(((`origin` = _utf8mb4\\'legacy_import\\') and (`legacy_order_id` is not null) and (`legacy_order_id` > 0) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null) and (`legacy_amount_confirmed` is not null)) or ((`origin` = _utf8mb4\\'native\\') and (`legacy_order_id` is null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null) and (`legacy_amount_confirmed` is null)))",
+      "expression": "((((`origin` = _utf8mb4'legacy_import') and (`legacy_order_id` is not null) and (`legacy_order_id` > 0) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null) and (`legacy_amount_confirmed` is not null)) or ((`origin` = _utf8mb4'native') and (`legacy_order_id` is null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null) and (`legacy_amount_confirmed` is null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_orders",
+      "name": "ck_payment_order_paid_time",
+      "clause": "((`status` <> _utf8mb4\\'paid\\') or (`paid_at_utc` is not null))",
+      "expression": "(((`status` <> _utf8mb4'paid') or (`paid_at_utc` is not null)))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_orders",
+      "name": "ck_payment_order_revision",
+      "clause": "(`revision` > 0)",
+      "expression": "((`revision` > 0))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_orders",
+      "name": "ck_payment_order_status",
+      "clause": "(`status` in (_utf8mb4\\'pending\\',_utf8mb4\\'paid\\',_utf8mb4\\'cancelled\\',_utf8mb4\\'expired\\'))",
+      "expression": "((`status` in (_utf8mb4'pending',_utf8mb4'paid',_utf8mb4'cancelled',_utf8mb4'expired')))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_transactions",
+      "name": "ck_payment_transaction_amount",
+      "clause": "(`received_amount` > 0)",
+      "expression": "((`received_amount` > 0))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_transactions",
+      "name": "ck_payment_transaction_observation",
+      "clause": "(`last_observed_at_utc` >= `first_observed_at_utc`)",
+      "expression": "((`last_observed_at_utc` >= `first_observed_at_utc`))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_transactions",
+      "name": "ck_payment_transaction_revision",
+      "clause": "(`revision` > 0)",
+      "expression": "((`revision` > 0))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_wallet_addresses",
+      "name": "chk_payment_wallet_address",
+      "clause": "((char_length(`address`) > 0) and (length(`address`) = length(trim(`address`))))",
+      "expression": "(((char_length(`address`) > 0) and (length(`address`) = length(trim(`address`)))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_wallet_addresses",
+      "name": "chk_payment_wallet_chain",
+      "clause": "((`chain` in (_utf8mb4\\'TRON\\',_utf8mb4\\'ETH\\',_utf8mb4\\'BSC\\',_utf8mb4\\'SOL\\')) and (length(`chain`) = (case `chain` when _utf8mb4\\'TRON\\' then 4 else 3 end)))",
+      "expression": "(((`chain` in (_utf8mb4'TRON',_utf8mb4'ETH',_utf8mb4'BSC',_utf8mb4'SOL')) and (length(`chain`) = (case `chain` when _utf8mb4'TRON' then 4 else 3 end))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_wallet_addresses",
+      "name": "chk_payment_wallet_custody",
+      "clause": "(((`custody_reference` is null) and (`custody_evidence_sha256` is null) and (`custody_verified_at_utc` is null)) or ((`custody_reference` is not null) and (char_length(trim(`custody_reference`)) > 0) and (`custody_evidence_sha256` is not null) and (`custody_verified_at_utc` is not null)))",
+      "expression": "((((`custody_reference` is null) and (`custody_evidence_sha256` is null) and (`custody_verified_at_utc` is null)) or ((`custody_reference` is not null) and (char_length(trim(`custody_reference`)) > 0) and (`custody_evidence_sha256` is not null) and (`custody_verified_at_utc` is not null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_wallet_addresses",
+      "name": "chk_payment_wallet_hashes",
+      "clause": "(((`custody_evidence_sha256` is null) or regexp_like(`custody_evidence_sha256`,_utf8mb4\\'^[0-9a-f]{64}$\\',_utf8mb4\\'c\\')) and ((`source_sha256` is null) or regexp_like(`source_sha256`,_utf8mb4\\'^[0-9a-f]{64}$\\',_utf8mb4\\'c\\')))",
+      "expression": "((((`custody_evidence_sha256` is null) or regexp_like(`custody_evidence_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c')) and ((`source_sha256` is null) or regexp_like(`source_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c'))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_wallet_addresses",
+      "name": "chk_payment_wallet_index",
+      "clause": "(`address_index` >= 0)",
+      "expression": "((`address_index` >= 0))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_wallet_addresses",
+      "name": "chk_payment_wallet_origin",
+      "clause": "(((`origin` = _utf8mb4\\'native\\') and (`created_at_utc` is not null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null)) or ((`origin` = _utf8mb4\\'legacy_import\\') and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null)))",
+      "expression": "((((`origin` = _utf8mb4'native') and (`created_at_utc` is not null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null)) or ((`origin` = _utf8mb4'legacy_import') and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "payment_wallet_addresses",
+      "name": "chk_payment_wallet_revision",
+      "clause": "(`revision` > 0)",
+      "expression": "((`revision` > 0))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "platform_model_usage_policy",
+      "name": "chk_v4_model_policy_singleton",
+      "clause": "(`id` = 1)",
+      "expression": "((`id` = 1))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "referral_credit_ledger",
+      "name": "ck_referral_ledger_amount",
+      "clause": "((`event_kind` = _utf8mb4\\'opening\\') or ((`resulting_balance` = (`previous_balance` + `delta`)) and (((`event_kind` = _utf8mb4\\'order_debit\\') and (`delta` < 0) and (`resulting_balance` >= 0)) or ((`event_kind` in (_utf8mb4\\'order_release\\',_utf8mb4\\'commission_credit\\')) and (`delta` > 0)))))",
+      "expression": "(((`event_kind` = _utf8mb4'opening') or ((`resulting_balance` = (`previous_balance` + `delta`)) and (((`event_kind` = _utf8mb4'order_debit') and (`delta` < 0) and (`resulting_balance` >= 0)) or ((`event_kind` in (_utf8mb4'order_release',_utf8mb4'commission_credit')) and (`delta` > 0))))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "referral_credit_ledger",
+      "name": "ck_referral_ledger_kind",
+      "clause": "(`event_kind` in (_utf8mb4\\'opening\\',_utf8mb4\\'order_debit\\',_utf8mb4\\'order_release\\',_utf8mb4\\'commission_credit\\'))",
+      "expression": "((`event_kind` in (_utf8mb4'opening',_utf8mb4'order_debit',_utf8mb4'order_release',_utf8mb4'commission_credit')))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "referral_credit_ledger",
+      "name": "ck_referral_ledger_shape",
+      "clause": "(((`event_kind` = _utf8mb4\\'opening\\') and (`account_revision` = 1) and (`previous_balance` is null) and (`delta` is null) and (`migration_run_id` is not null)) or ((`event_kind` <> _utf8mb4\\'opening\\') and (`account_revision` > 1) and (`previous_balance` is not null) and (`delta` is not null) and (`migration_run_id` is null)))",
+      "expression": "((((`event_kind` = _utf8mb4'opening') and (`account_revision` = 1) and (`previous_balance` is null) and (`delta` is null) and (`migration_run_id` is not null)) or ((`event_kind` <> _utf8mb4'opening') and (`account_revision` > 1) and (`previous_balance` is not null) and (`delta` is not null) and (`migration_run_id` is null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "referral_rule_changes",
+      "name": "chk_referral_rule_change_enabled",
+      "clause": "((`previous_enabled` in (0,1)) and (`enabled` in (0,1)))",
+      "expression": "(((`previous_enabled` in (0,1)) and (`enabled` in (0,1))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "referral_rule_changes",
+      "name": "chk_referral_rule_change_rates",
+      "clause": "((`previous_rate_bps` between 0 and 10000) and (`rate_bps` between 0 and 10000))",
+      "expression": "(((`previous_rate_bps` between 0 and 10000) and (`rate_bps` between 0 and 10000)))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "referral_rule_changes",
+      "name": "chk_referral_rule_change_revision",
+      "clause": "(`rule_revision` > 1)",
+      "expression": "((`rule_revision` > 1))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "referral_rules",
+      "name": "chk_referral_rule_enabled",
+      "clause": "(`enabled` in (0,1))",
+      "expression": "((`enabled` in (0,1)))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "referral_rules",
+      "name": "chk_referral_rule_rate",
+      "clause": "(`rate_bps` between 0 and 10000)",
+      "expression": "((`rate_bps` between 0 and 10000))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "referral_rules",
+      "name": "chk_referral_rule_revision",
+      "clause": "(`revision` > 0)",
+      "expression": "((`revision` > 0))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "strategies",
+      "name": "chk_strategies_owner",
+      "clause": "(((`scope` = _utf8mb4\\'platform\\') and (`owner_user_id` is null)) or ((`scope` = _utf8mb4\\'user\\') and (`owner_user_id` is not null)))",
+      "expression": "((((`scope` = _utf8mb4'platform') and (`owner_user_id` is null)) or ((`scope` = _utf8mb4'user') and (`owner_user_id` is not null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "strategy_subscriptions_v4_build",
+      "name": "build_sub_2be294fb98c34a07474f83ee",
+      "clause": "((`trade_send_enabled` = 0) or (`trader_enabled` = 1))",
+      "expression": "(((`trade_send_enabled` = 0) or (`trader_enabled` = 1)))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "strategy_subscriptions_v4_build",
+      "name": "build_sub_cb36259f8d93625320fd92a1",
+      "clause": "(((`trader_enabled` = 0) and (`trade_send_enabled` = 0)) or ((`trader_enabled` = 1) and (`trader_strategy_id` is not null) and (`trader_strategy_version_id` is not null)))",
+      "expression": "((((`trader_enabled` = 0) and (`trade_send_enabled` = 0)) or ((`trader_enabled` = 1) and (`trader_strategy_id` is not null) and (`trader_strategy_version_id` is not null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "subscription_execution_preferences_v4_build",
+      "name": "build_sub_25781eaa43f7b071cd986a08",
+      "clause": "(`revision` > 0)",
+      "expression": "((`revision` > 0))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "subscription_execution_preferences_v4_build",
+      "name": "build_sub_272b3f339f2798e19fd95c19",
+      "clause": "(`contract_version` = 1)",
+      "expression": "((`contract_version` = 1))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "subscription_schedules_v4_build",
+      "name": "build_sub_51e6c8f8dfde6e942b999fd8",
+      "clause": "(`cadence_seconds` >= 60)",
+      "expression": "((`cadence_seconds` >= 60))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "system_setting_changes",
+      "name": "chk_system_setting_change_hash",
+      "clause": "(regexp_like(`previous_sha256`,_utf8mb4\\'^[0-9a-f]{64}$\\',_utf8mb4\\'c\\') and regexp_like(`current_sha256`,_utf8mb4\\'^[0-9a-f]{64}$\\',_utf8mb4\\'c\\'))",
+      "expression": "((regexp_like(`previous_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c') and regexp_like(`current_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c')))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "system_setting_changes",
+      "name": "chk_system_setting_change_request",
+      "clause": "regexp_like(`request_id`,_utf8mb4\\'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$\\',_utf8mb4\\'c\\')",
+      "expression": "(regexp_like(`request_id`,_utf8mb4'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',_utf8mb4'c'))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "system_setting_changes",
+      "name": "chk_system_setting_change_revision",
+      "clause": "(`revision` > 1)",
+      "expression": "((`revision` > 1))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "system_setting_requests",
+      "name": "chk_system_setting_receipt_hash",
+      "clause": "(regexp_like(`request_sha256`,_utf8mb4\\'^[0-9a-f]{64}$\\',_utf8mb4\\'c\\') and (not(regexp_like(`request_sha256`,_utf8mb4\\'[^0-9a-f]\\',_utf8mb4\\'c\\'))))",
+      "expression": "((regexp_like(`request_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c') and (not(regexp_like(`request_sha256`,_utf8mb4'[^0-9a-f]',_utf8mb4'c')))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "system_setting_requests",
+      "name": "chk_system_setting_receipt_request",
+      "clause": "(regexp_like(`request_id`,_utf8mb4\\'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$\\',_utf8mb4\\'c\\') and (not(regexp_like(`request_id`,_utf8mb4\\'[^0-9a-f-]\\',_utf8mb4\\'c\\'))))",
+      "expression": "((regexp_like(`request_id`,_utf8mb4'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',_utf8mb4'c') and (not(regexp_like(`request_id`,_utf8mb4'[^0-9a-f-]',_utf8mb4'c')))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "system_setting_requests",
+      "name": "chk_system_setting_receipt_revision",
+      "clause": "(`revision` > 1)",
+      "expression": "((`revision` > 1))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "system_settings",
+      "name": "chk_system_setting_array",
+      "clause": "((`value_type` <> _ascii\\'json_array\\') or (`value_text` is null) or (0 <> (case when json_valid(`value_text`) then (json_type(cast(`value_text` as json)) = _utf8mb4\\'ARRAY\\') else false end)))",
+      "expression": "(((`value_type` <> _ascii'json_array') or (`value_text` is null) or (0 <> (case when json_valid(`value_text`) then (json_type(cast(`value_text` as json)) = _utf8mb4'ARRAY') else false end))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "system_settings",
+      "name": "chk_system_setting_boolean",
+      "clause": "((`value_type` <> _ascii\\'boolean\\') or (`value_text` is null) or regexp_like(`value_text`,_utf8mb4\\'^(true|false)$\\',_utf8mb4\\'c\\'))",
+      "expression": "(((`value_type` <> _ascii'boolean') or (`value_text` is null) or regexp_like(`value_text`,_utf8mb4'^(true|false)$',_utf8mb4'c')))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "system_settings",
+      "name": "chk_system_setting_credential",
+      "clause": "((`value_type` <> _ascii\\'credential\\') or (`value_text` is null) or (length(`value_text`) = 0) or (0 <> (case when json_valid(`value_text`) then ((json_type(cast(`value_text` as json)) = _utf8mb4\\'OBJECT\\') and json_contains_path(cast(`value_text` as json),_utf8mb4\\'all\\',_utf8mb4\\'$.v\\',_utf8mb4\\'$.ct\\',_utf8mb4\\'$.iv\\',_utf8mb4\\'$.tag\\')) else false end)))",
+      "expression": "(((`value_type` <> _ascii'credential') or (`value_text` is null) or (length(`value_text`) = 0) or (0 <> (case when json_valid(`value_text`) then ((json_type(cast(`value_text` as json)) = _utf8mb4'OBJECT') and json_contains_path(cast(`value_text` as json),_utf8mb4'all',_utf8mb4'$.v',_utf8mb4'$.ct',_utf8mb4'$.iv',_utf8mb4'$.tag')) else false end))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "system_settings",
+      "name": "chk_system_setting_exact_boolean",
+      "clause": "((`value_type` <> _utf8mb4\\'boolean\\') or (`value_text` is null) or (cast(`value_text` as char charset binary) in (cast(_utf8mb4\\'true\\' as char charset binary),cast(_utf8mb4\\'false\\' as char charset binary))))",
+      "expression": "(((`value_type` <> _utf8mb4'boolean') or (`value_text` is null) or (cast(`value_text` as char charset binary) in (cast(_utf8mb4'true' as char charset binary),cast(_utf8mb4'false' as char charset binary)))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "system_settings",
+      "name": "chk_system_setting_exact_integer",
+      "clause": "((`value_type` <> _utf8mb4\\'integer\\') or (`value_text` is null) or (not(regexp_like(`value_text`,_utf8mb4\\'[^0-9-]\\',_utf8mb4\\'c\\'))))",
+      "expression": "(((`value_type` <> _utf8mb4'integer') or (`value_text` is null) or (not(regexp_like(`value_text`,_utf8mb4'[^0-9-]',_utf8mb4'c')))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "system_settings",
+      "name": "chk_system_setting_exact_tokens",
+      "clause": "((not(regexp_like(`namespace`,_utf8mb4\\'[^a-z0-9_]\\',_utf8mb4\\'c\\'))) and (not(regexp_like(`setting_key`,_utf8mb4\\'[^a-z0-9_]\\',_utf8mb4\\'c\\'))) and (not(regexp_like(`value_type`,_utf8mb4\\'[^a-z_]\\',_utf8mb4\\'c\\'))) and (not(regexp_like(`sensitivity`,_utf8mb4\\'[^a-z]\\',_utf8mb4\\'c\\'))))",
+      "expression": "(((not(regexp_like(`namespace`,_utf8mb4'[^a-z0-9_]',_utf8mb4'c'))) and (not(regexp_like(`setting_key`,_utf8mb4'[^a-z0-9_]',_utf8mb4'c'))) and (not(regexp_like(`value_type`,_utf8mb4'[^a-z_]',_utf8mb4'c'))) and (not(regexp_like(`sensitivity`,_utf8mb4'[^a-z]',_utf8mb4'c')))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "system_settings",
+      "name": "chk_system_setting_hash",
+      "clause": "((`source_sha256` is null) or regexp_like(`source_sha256`,_ascii\\'^[0-9a-f]{64}$\\',_utf8mb4\\'c\\'))",
+      "expression": "(((`source_sha256` is null) or regexp_like(`source_sha256`,_ascii'^[0-9a-f]{64}$',_utf8mb4'c')))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "system_settings",
+      "name": "chk_system_setting_identity",
+      "clause": "(regexp_like(`namespace`,_ascii\\'^[a-z][a-z0-9_]{0,99}$\\',_utf8mb4\\'c\\') and regexp_like(`setting_key`,_ascii\\'^[a-z][a-z0-9_]{0,99}$\\',_utf8mb4\\'c\\'))",
+      "expression": "((regexp_like(`namespace`,_ascii'^[a-z][a-z0-9_]{0,99}$',_utf8mb4'c') and regexp_like(`setting_key`,_ascii'^[a-z][a-z0-9_]{0,99}$',_utf8mb4'c')))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "system_settings",
+      "name": "chk_system_setting_integer",
+      "clause": "((`value_type` <> _ascii\\'integer\\') or (`value_text` is null) or regexp_like(`value_text`,_utf8mb4\\'^(0|-?[1-9][0-9]*)$\\',_utf8mb4\\'c\\'))",
+      "expression": "(((`value_type` <> _ascii'integer') or (`value_text` is null) or regexp_like(`value_text`,_utf8mb4'^(0|-?[1-9][0-9]*)$',_utf8mb4'c')))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "system_settings",
+      "name": "chk_system_setting_origin",
+      "clause": "(((cast(`origin` as char charset binary) = cast(_utf8mb4\\'native\\' as char charset binary)) and (`created_at_utc` is not null) and (`updated_at_utc` is not null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null)) or ((cast(`origin` as char charset binary) = cast(_utf8mb4\\'legacy_import\\' as char charset binary)) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null)))",
+      "expression": "((((cast(`origin` as char charset binary) = cast(_utf8mb4'native' as char charset binary)) and (`created_at_utc` is not null) and (`updated_at_utc` is not null) and (`migration_run_id` is null) and (`source_sha256` is null) and (`imported_at_utc` is null)) or ((cast(`origin` as char charset binary) = cast(_utf8mb4'legacy_import' as char charset binary)) and (`migration_run_id` is not null) and (`source_sha256` is not null) and (`imported_at_utc` is not null))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "system_settings",
+      "name": "chk_system_setting_revision",
+      "clause": "(`revision` > 0)",
+      "expression": "((`revision` > 0))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "system_settings",
+      "name": "chk_system_setting_sensitivity",
+      "clause": "(regexp_like(`sensitivity`,_ascii\\'^(public|restricted|secret)$\\',_utf8mb4\\'c\\') and ((`value_type` <> _ascii\\'credential\\') or (`sensitivity` = _ascii\\'secret\\')))",
+      "expression": "((regexp_like(`sensitivity`,_ascii'^(public|restricted|secret)$',_utf8mb4'c') and ((`value_type` <> _ascii'credential') or (`sensitivity` = _ascii'secret'))))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "system_settings",
+      "name": "chk_system_setting_type",
+      "clause": "regexp_like(`value_type`,_ascii\\'^(string|boolean|integer|enum|json_array|credential)$\\',_utf8mb4\\'c\\')",
+      "expression": "(regexp_like(`value_type`,_ascii'^(string|boolean|integer|enum|json_array|credential)$',_utf8mb4'c'))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "trading_account_ownership_intervals_v4_build",
+      "name": "chk_ownership_intervals_period",
+      "clause": "((`ended_at_utc` is null) or (`ended_at_utc` >= `started_at_utc`))",
+      "expression": "(((`ended_at_utc` is null) or (`ended_at_utc` >= `started_at_utc`)))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "user_trading_account_settings_v4_build",
+      "name": "chk_user_trading_account_settings_connection_paused",
+      "clause": "(`connection_paused` in (0,1))",
+      "expression": "((`connection_paused` in (0,1)))",
+      "enforced": "YES",
+      "violationCount": "0"
+    },
+    {
+      "table": "user_trading_account_settings_v4_build",
+      "name": "chk_user_trading_account_settings_hidden",
+      "clause": "(`hidden` in (0,1))",
+      "expression": "((`hidden` in (0,1)))",
+      "enforced": "YES",
+      "violationCount": "0"
+    }
+  ]
+}

@@ -1,0 +1,1343 @@
+{
+  "kind": "target-foreign-key-signature-review/v1",
+  "schemaSteps": 145,
+  "databaseWrites": 0,
+  "rows": [
+    {
+      "table": "bridge_refresh_sessions",
+      "name": "fk_v4_bridge_refresh_user",
+      "columns": [
+        "user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_v4_bridge_refresh_user"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "user_model_defaults",
+      "name": "fk_v4_model_default_user",
+      "columns": [
+        "user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [],
+      "missingColumns": []
+    },
+    {
+      "table": "user_model_defaults",
+      "name": "fk_v4_model_default_profile",
+      "columns": [
+        "model_profile_id"
+      ],
+      "parent": "ai_model_profiles",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_v4_model_default_profile"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "ai_model_provider_capabilities",
+      "name": "fk_v4_capabilities_profile",
+      "columns": [
+        "model_profile_id"
+      ],
+      "parent": "ai_model_profiles",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_v4_capabilities_profile"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "ai_model_provider_capabilities",
+      "name": "fk_v4_capabilities_verifier",
+      "columns": [
+        "verified_by_user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_v4_capabilities_verifier"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "name": "fk_v4_model_usage_user",
+      "columns": [
+        "user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [],
+      "missingColumns": []
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "name": "fk_v4_model_usage_profile",
+      "columns": [
+        "model_profile_id"
+      ],
+      "parent": "ai_model_profiles",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_v4_model_usage_profile"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "auth_sessions",
+      "name": "fk_auth_sessions_user",
+      "columns": [
+        "user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_002_auth_sso_sessions.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_auth_sessions_user"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "auth_sessions",
+      "name": "fk_auth_sessions_parent",
+      "columns": [
+        "parent_session_id"
+      ],
+      "parent": "auth_sessions",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_002_auth_sso_sessions.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_auth_sessions_parent"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "auth_authorization_codes",
+      "name": "fk_auth_codes_user",
+      "columns": [
+        "user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_002_auth_sso_sessions.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_auth_codes_user"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "auth_authorization_codes",
+      "name": "fk_auth_codes_session",
+      "columns": [
+        "auth_session_id"
+      ],
+      "parent": "auth_sessions",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_002_auth_sso_sessions.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_auth_codes_session"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "terminal_profiles",
+      "name": "fk_terminal_profiles_user",
+      "columns": [
+        "user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_003_trading_context_and_market_projection.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_terminal_profiles_user"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "bridge_connection_capacity_grants",
+      "name": "fk_bridge_capacity_user",
+      "columns": [
+        "user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_003_trading_context_and_market_projection.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_bridge_capacity_user"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "market_candles",
+      "name": "fk_market_candles_account",
+      "columns": [
+        "trading_account_id"
+      ],
+      "parent": "trading_accounts",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_003_trading_context_and_market_projection.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [],
+      "missingColumns": [
+        "trading_account_id"
+      ]
+    },
+    {
+      "table": "strategies",
+      "name": "fk_strategies_owner",
+      "columns": [
+        "owner_user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_strategies_owner"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategies",
+      "name": "fk_strategies_active_version",
+      "columns": [
+        "active_version_id",
+        "id"
+      ],
+      "parent": "strategy_versions",
+      "parentColumns": [
+        "id",
+        "strategy_id"
+      ],
+      "actions": "",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_strategies_active_version"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_versions",
+      "name": "fk_strategy_versions_strategy",
+      "columns": [
+        "strategy_id"
+      ],
+      "parent": "strategies",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_strategy_versions_strategy"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_versions",
+      "name": "fk_strategy_versions_creator",
+      "columns": [
+        "created_by_user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_strategy_versions_creator"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_subscriptions",
+      "name": "fk_strategy_subscriptions_user",
+      "columns": [
+        "user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_subscriptions",
+      "name": "fk_strategy_subscriptions_account",
+      "columns": [
+        "trading_account_id"
+      ],
+      "parent": "trading_accounts",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_subscriptions",
+      "name": "fk_strategy_subscriptions_analysis",
+      "columns": [
+        "analysis_strategy_id"
+      ],
+      "parent": "strategies",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [],
+      "missingColumns": [
+        "analysis_strategy_id"
+      ]
+    },
+    {
+      "table": "strategy_subscriptions",
+      "name": "fk_strategy_subscriptions_analysis_version",
+      "columns": [
+        "analysis_strategy_version_id",
+        "analysis_strategy_id"
+      ],
+      "parent": "strategy_versions",
+      "parentColumns": [
+        "id",
+        "strategy_id"
+      ],
+      "actions": "",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [],
+      "missingColumns": [
+        "analysis_strategy_version_id",
+        "analysis_strategy_id"
+      ]
+    },
+    {
+      "table": "strategy_subscriptions",
+      "name": "fk_strategy_subscriptions_trader",
+      "columns": [
+        "trader_strategy_id"
+      ],
+      "parent": "strategies",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [],
+      "missingColumns": [
+        "trader_strategy_id"
+      ]
+    },
+    {
+      "table": "strategy_subscriptions",
+      "name": "fk_strategy_subscriptions_trader_version",
+      "columns": [
+        "trader_strategy_version_id",
+        "trader_strategy_id"
+      ],
+      "parent": "strategy_versions",
+      "parentColumns": [
+        "id",
+        "strategy_id"
+      ],
+      "actions": "",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [],
+      "missingColumns": [
+        "trader_strategy_version_id",
+        "trader_strategy_id"
+      ]
+    },
+    {
+      "table": "inference_snapshots",
+      "name": "fk_inference_snapshots_user",
+      "columns": [
+        "user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [],
+      "missingColumns": [
+        "user_id"
+      ]
+    },
+    {
+      "table": "inference_snapshots",
+      "name": "fk_inference_snapshots_account",
+      "columns": [
+        "trading_account_id"
+      ],
+      "parent": "trading_accounts",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [],
+      "missingColumns": [
+        "trading_account_id"
+      ]
+    },
+    {
+      "table": "inference_snapshots",
+      "name": "fk_inference_snapshots_strategy",
+      "columns": [
+        "strategy_id"
+      ],
+      "parent": "strategies",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [],
+      "missingColumns": []
+    },
+    {
+      "table": "inference_snapshots",
+      "name": "fk_inference_snapshots_strategy_version",
+      "columns": [
+        "strategy_version_id",
+        "strategy_id"
+      ],
+      "parent": "strategy_versions",
+      "parentColumns": [
+        "id",
+        "strategy_id"
+      ],
+      "actions": "",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [],
+      "missingColumns": [
+        "strategy_version_id"
+      ]
+    },
+    {
+      "table": "ai_model_tasks",
+      "name": "fk_ai_model_tasks_user",
+      "columns": [
+        "user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [],
+      "missingColumns": [
+        "user_id"
+      ]
+    },
+    {
+      "table": "ai_model_tasks",
+      "name": "fk_ai_model_tasks_account",
+      "columns": [
+        "trading_account_id"
+      ],
+      "parent": "trading_accounts",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [],
+      "missingColumns": [
+        "trading_account_id"
+      ]
+    },
+    {
+      "table": "ai_model_tasks",
+      "name": "fk_ai_model_tasks_snapshot",
+      "columns": [
+        "input_snapshot_id"
+      ],
+      "parent": "inference_snapshots",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [],
+      "missingColumns": [
+        "input_snapshot_id"
+      ]
+    },
+    {
+      "table": "ai_manual_analysis_cooldowns",
+      "name": "fk_ai_manual_cooldowns_user",
+      "columns": [
+        "user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_ai_manual_cooldowns_user"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_research_snapshots",
+      "name": "fk_macro_snapshot_owner",
+      "columns": [
+        "owner_user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_005_analysis_scheduler_and_account_fanout.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_macro_snapshot_owner"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_research_snapshots",
+      "name": "fk_macro_snapshot_feature",
+      "columns": [
+        "feature_set_id"
+      ],
+      "parent": "macro_feature_sets",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_macro_snapshot_feature"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_research_snapshots",
+      "name": "fk_macro_snapshot_model",
+      "columns": [
+        "model_version_id"
+      ],
+      "parent": "macro_model_versions",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_macro_snapshot_model"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "global_risk_controls",
+      "name": "fk_global_risk_actor",
+      "columns": [
+        "changed_by_user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260903_007_deterministic_risk_review.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_global_risk_actor"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_memory_libraries_v4",
+      "name": "fk_strategy_memory_strategy",
+      "columns": [
+        "strategy_id"
+      ],
+      "parent": "strategies",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260904_012_review_memory_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_strategy_memory_strategy"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_memory_libraries_v4",
+      "name": "fk_strategy_memory_owner",
+      "columns": [
+        "owner_user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260904_012_review_memory_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_strategy_memory_owner"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_memory_libraries_v4",
+      "name": "fk_strategy_memory_current_revision",
+      "columns": [
+        "current_revision_id",
+        "id"
+      ],
+      "parent": "strategy_memory_library_revisions_v4",
+      "parentColumns": [
+        "id",
+        "library_id"
+      ],
+      "actions": "",
+      "source": "20260904_012_review_memory_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_strategy_memory_current_revision"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_memory_library_revisions_v4",
+      "name": "fk_strategy_memory_revision_library",
+      "columns": [
+        "library_id"
+      ],
+      "parent": "strategy_memory_libraries_v4",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260904_012_review_memory_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_strategy_memory_revision_library"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_memory_library_revisions_v4",
+      "name": "fk_strategy_memory_revision_actor",
+      "columns": [
+        "created_by_user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260904_012_review_memory_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_strategy_memory_revision_actor"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_memory_injection_logs_v4",
+      "name": "fk_strategy_memory_injection_user",
+      "columns": [
+        "user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260904_012_review_memory_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_strategy_memory_injection_user"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_memory_injection_logs_v4",
+      "name": "fk_strategy_memory_injection_strategy",
+      "columns": [
+        "strategy_id"
+      ],
+      "parent": "strategies",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260904_012_review_memory_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_strategy_memory_injection_strategy"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_memory_injection_logs_v4",
+      "name": "fk_strategy_memory_injection_library",
+      "columns": [
+        "library_id"
+      ],
+      "parent": "strategy_memory_libraries_v4",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260904_012_review_memory_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_strategy_memory_injection_library"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_memory_injection_logs_v4",
+      "name": "fk_strategy_memory_injection_revision",
+      "columns": [
+        "library_revision_id",
+        "library_id"
+      ],
+      "parent": "strategy_memory_library_revisions_v4",
+      "parentColumns": [
+        "id",
+        "library_id"
+      ],
+      "actions": "",
+      "source": "20260904_012_review_memory_core.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_strategy_memory_injection_revision"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_data_sources",
+      "name": "fk_macro_data_sources_creator",
+      "columns": [
+        "created_by_user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_macro_data_sources_creator"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_series",
+      "name": "fk_macro_series_source",
+      "columns": [
+        "source_id"
+      ],
+      "parent": "macro_data_sources",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_macro_series_source"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_ingestion_runs",
+      "name": "fk_macro_ingestion_source",
+      "columns": [
+        "source_id"
+      ],
+      "parent": "macro_data_sources",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_macro_ingestion_source"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_ingestion_runs",
+      "name": "fk_macro_ingestion_series",
+      "columns": [
+        "series_id"
+      ],
+      "parent": "macro_series",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_macro_ingestion_series"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_observations",
+      "name": "fk_macro_observation_series",
+      "columns": [
+        "series_id"
+      ],
+      "parent": "macro_series",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_macro_observation_series"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_observations",
+      "name": "fk_macro_observation_ingestion",
+      "columns": [
+        "ingestion_run_id"
+      ],
+      "parent": "macro_ingestion_runs",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_macro_observation_ingestion"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_feature_sets",
+      "name": "fk_macro_feature_set_creator",
+      "columns": [
+        "created_by_user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_macro_feature_set_creator"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_model_versions",
+      "name": "fk_macro_model_feature_set",
+      "columns": [
+        "feature_set_id"
+      ],
+      "parent": "macro_feature_sets",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_macro_model_feature_set"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_model_versions",
+      "name": "fk_macro_model_creator",
+      "columns": [
+        "created_by_user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_macro_model_creator"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_pipeline_jobs",
+      "name": "fk_macro_pipeline_feature_set",
+      "columns": [
+        "feature_set_id"
+      ],
+      "parent": "macro_feature_sets",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_macro_pipeline_feature_set"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_pipeline_jobs",
+      "name": "fk_macro_pipeline_model",
+      "columns": [
+        "model_version_id"
+      ],
+      "parent": "macro_model_versions",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_macro_pipeline_model"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_pipeline_jobs",
+      "name": "fk_macro_pipeline_requester",
+      "columns": [
+        "requested_by_user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_macro_pipeline_requester"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_snapshot_observations",
+      "name": "fk_macro_snapshot_observation_snapshot",
+      "columns": [
+        "snapshot_id"
+      ],
+      "parent": "macro_research_snapshots",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_macro_snapshot_observation_snapshot"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_snapshot_observations",
+      "name": "fk_macro_snapshot_observation_value",
+      "columns": [
+        "observation_id"
+      ],
+      "parent": "macro_observations",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_macro_snapshot_observation_value"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "economic_calendar_events",
+      "name": "fk_economic_calendar_source",
+      "columns": [
+        "source_id"
+      ],
+      "parent": "macro_data_sources",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_017_economic_calendar.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_economic_calendar_source"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "economic_calendar_event_revisions",
+      "name": "fk_economic_calendar_revision_event",
+      "columns": [
+        "event_id"
+      ],
+      "parent": "economic_calendar_events",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_017_economic_calendar.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_economic_calendar_revision_event"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "economic_calendar_event_revisions",
+      "name": "fk_economic_calendar_revision_ingestion",
+      "columns": [
+        "ingestion_run_id"
+      ],
+      "parent": "macro_ingestion_runs",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_017_economic_calendar.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_economic_calendar_revision_ingestion"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "user_referral_accounts",
+      "name": "fk_user_referral_accounts_user",
+      "columns": [
+        "user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_018_user_state_and_referral_accounts.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_user_referral_accounts_user"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "observer_management_operations",
+      "name": "fk_observer_management_operations_actor",
+      "columns": [
+        "actor_user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260905_022_observer_management_ledger.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_observer_management_operations_actor"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "bridge_v4_pairing_requests",
+      "name": "fk_bridge_v4_pair_user",
+      "columns": [
+        "user_id"
+      ],
+      "parent": "users",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260906_024_bridge_pairing_requests.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_bridge_v4_pair_user"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "bridge_v4_pairing_requests",
+      "name": "fk_bridge_v4_pair_refresh",
+      "columns": [
+        "refresh_session_id"
+      ],
+      "parent": "bridge_refresh_sessions",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260906_024_bridge_pairing_requests.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_bridge_v4_pair_refresh"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "data_migration_checkpoints",
+      "name": "fk_data_checkpoint_run",
+      "columns": [
+        "run_id"
+      ],
+      "parent": "data_migration_runs",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260906_025_data_migration_batch_ledger.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_data_checkpoint_run"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "data_migration_batches",
+      "name": "fk_data_batch_run",
+      "columns": [
+        "run_id"
+      ],
+      "parent": "data_migration_runs",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260906_025_data_migration_batch_ledger.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_data_batch_run"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "data_migration_id_maps",
+      "name": "fk_data_id_map_run",
+      "columns": [
+        "created_run_id"
+      ],
+      "parent": "data_migration_runs",
+      "parentColumns": [
+        "id"
+      ],
+      "actions": "",
+      "source": "20260906_025_data_migration_batch_ledger.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_data_id_map_run"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "data_migration_row_receipts",
+      "name": "fk_data_receipt_batch",
+      "columns": [
+        "run_id",
+        "batch_id"
+      ],
+      "parent": "data_migration_batches",
+      "parentColumns": [
+        "run_id",
+        "batch_id"
+      ],
+      "actions": "",
+      "source": "20260906_025_data_migration_batch_ledger.sql",
+      "expectedDelete": "RESTRICT",
+      "expectedUpdate": "RESTRICT",
+      "matching": [
+        "fk_data_receipt_batch"
+      ],
+      "missingColumns": []
+    }
+  ]
+}

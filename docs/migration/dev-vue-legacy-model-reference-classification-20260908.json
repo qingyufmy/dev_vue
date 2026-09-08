@@ -1,0 +1,36 @@
+{
+  "kind": "legacy-model-reference-classification/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "databaseWrites": 0,
+  "observedAt": "2026-09-08T02:25:23.372Z",
+  "groups": [
+    {
+      "table": "user_model_defaults",
+      "rows": [
+        {
+          "category": "legacy_zero",
+          "rows_count": "1"
+        }
+      ]
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "rows": [
+        {
+          "category": "legacy_zero",
+          "rows_count": "11787"
+        }
+      ]
+    }
+  ],
+  "strategy": {
+    "total": "12139",
+    "negative_count": "0",
+    "null_count": "1",
+    "min_id": 1,
+    "max_id": 3
+  }
+}

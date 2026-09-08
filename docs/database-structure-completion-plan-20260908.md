@@ -1,5 +1,9 @@
 # 当前开发库结构优化收口
 
+> 最新状态：阶段198完成用量策略引用容量，当前145步、271337行业务数据保持，现有104FK/117CHECK全库复查无违规。目标外键完整签名核对发现订阅2组关系尚可继续独立核验。详见[阶段198](migration/dev-vue-inplace-stage198-20260908.md)与[目录v9](migration/dev-vue-structure-remaining-work-20260908-v9.json)。
+
+> 最新核验：阶段197完成现有104外键/117CHECK全库数据检查，均无违规；剩余差异已逐项归类，仍有1项独立字段容量升级。当前144步保持。详见[阶段197](migration/dev-vue-inplace-stage197-20260908.md)及[处置清单](migration/dev-vue-remaining-dispositions-20260908.json)。
+
 > 最新状态：阶段196完成5个基础外键和2个自动辅助索引，当前144步、222表、789索引、104外键，271337行业务数据不变。两组孤立用户引用保留，随业务迁移承接。验收：[阶段196](migration/dev-vue-inplace-stage196-20260908.md)、[目录v8](migration/dev-vue-structure-remaining-work-20260908-v8.json)。整体规范化继续推进。
 
 > 最新状态：阶段195完成6个运行索引，当前139步、222表、787索引，271337行业务数据保持。139个既有目标显式索引签名中120匹配、2个保留已有唯一索引、17个依赖根缺列。验收：[阶段195](migration/dev-vue-inplace-stage195-20260908.md)、[目录v7](migration/dev-vue-structure-remaining-work-20260908-v7.json)。全域规范化继续推进。

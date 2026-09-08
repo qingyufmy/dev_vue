@@ -1,0 +1,31 @@
+{
+  "kind": "usage-strategy-capacity-source/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "schemaSteps": 144,
+  "databaseWrites": 0,
+  "definition": "CREATE TABLE `ai_model_usage_logs` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `model_profile_id` int DEFAULT NULL,\n  `credential_source` varchar(32) NOT NULL,\n  `usage` varchar(32) NOT NULL,\n  `request_phase` varchar(16) NOT NULL,\n  `strategy_id` int DEFAULT NULL,\n  `token_count` bigint unsigned NOT NULL DEFAULT '0',\n  `request_status` varchar(16) NOT NULL,\n  `error_code` varchar(128) DEFAULT NULL,\n  `created_at` datetime(3) NOT NULL,\n  `request_bytes` bigint unsigned NOT NULL DEFAULT '0',\n  `response_bytes` bigint unsigned NOT NULL DEFAULT '0',\n  `duration_ms` bigint unsigned NOT NULL DEFAULT '0',\n  `input_tokens` bigint unsigned NOT NULL DEFAULT '0',\n  `output_tokens` bigint unsigned NOT NULL DEFAULT '0',\n  `reasoning_tokens` bigint unsigned NOT NULL DEFAULT '0',\n  `cached_tokens` bigint unsigned NOT NULL DEFAULT '0',\n  `provider_request_id` varchar(191) DEFAULT NULL,\n  `finish_reason` varchar(64) DEFAULT NULL,\n  `incomplete_details_json` text,\n  `accounting_status` varchar(24) NOT NULL DEFAULT 'usage_unknown',\n  PRIMARY KEY (`id`),\n  KEY `idx_usage_logs_user` (`user_id`,`created_at`),\n  KEY `idx_usage_logs_usage` (`usage`,`created_at`),\n  KEY `idx_usage_provider_request` (`provider_request_id`),\n  KEY `idx_v4_model_usage_quota` (`user_id`,`credential_source`,`created_at`,`request_phase`),\n  KEY `idx_v4_model_usage_recovery` (`request_status`,`created_at`,`id`),\n  KEY `fk_v4_model_usage_profile` (`model_profile_id`),\n  CONSTRAINT `fk_v4_model_usage_profile` FOREIGN KEY (`model_profile_id`) REFERENCES `ai_model_profiles` (`id`)\n) ENGINE=InnoDB AUTO_INCREMENT=12140 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+  "data": {
+    "total": "12139",
+    "negative_count": "0",
+    "null_count": "1",
+    "min_id": 1,
+    "max_id": 3
+  },
+  "metadata": {
+    "table_name": "ai_model_usage_logs",
+    "column_name": "strategy_id",
+    "ordinal_position": 7,
+    "column_type": "int",
+    "is_nullable": "YES",
+    "column_default": null,
+    "charset": null,
+    "collation": null,
+    "extra": "",
+    "generation_expression": "",
+    "datetime_precision": null
+  },
+  "relations": []
+}
