@@ -5,6 +5,44 @@ import { createApiClient } from '../../frontend/packages/api-client/src/index.ts
 import { tradingRoutes } from '../src/modules/trading/transport/http/trading-routes.ts'
 import { AuthError } from '../src/modules/auth/index.ts'
 
+it('validates quote and candle contracts, pagination and observer scope through the API client', async () => {
+  const app = Fastify(), stamp = '2026-09-09T00:00:00.123Z'
+  const quoteData = { accountId: '7', symbol: 'XAUUSD', bid: '2000.12345', ask: '2000.22345', last: null, spread: '0.10000', tradeMode: 'full', observedAt: stamp, revision: 1 }
+  const candle = { accountId: '7', symbol: 'XAUUSD', timeframe: 'M1', openTime: stamp, open: '2000.12345', high: '2002', low: '1999', close: '2001', tickVolume: '12', closed: true, revision: 1 }
+  const quote = vi.fn(async () => quoteData), candles = vi.fn(async () => [candle])
+  const authenticate = vi.fn(async () => ({ userId: 42 }))
+  await app.register(tradingRoutes, { prefix: '/api/v4', service: { quote, candles }, capacity: {}, auth: { authenticate }, contextCommands: {} })
+  try {
+    const client = createApiClient({ fetchImpl: async url => {
+      const result = await app.inject(url)
+      expect(result.headers['cache-control']).toBe('no-store')
+      if (result.statusCode === 200 && result.json().data?.bid) expect(result.json().data.bid).toBe('2000.12345')
+      return new Response(result.body, { status: result.statusCode, headers: { 'Content-Type': String(result.headers['content-type']) } })
+    } })
+    expect((await client.getMarketQuote('7', 'XAUUSD', 'observer-1')).data).toMatchObject({ accountId: '7', observedAt: stamp })
+    expect(quote).toHaveBeenLastCalledWith(42, '7', 'XAUUSD', 'observer-1')
+    expect((await client.getMarketCandles('7', 'XAUUSD', 'M1', 500, 'observer-1')).data.items[0]).toMatchObject({ accountId: '7', openTime: stamp })
+    expect(candles).toHaveBeenLastCalledWith(42, '7', 'XAUUSD', 'M1', 500, 'observer-1')
+    quote.mockResolvedValue(null)
+    expect((await client.getMarketQuote('7', 'XAUUSD')).data).toBeNull()
+    candles.mockClear(); quote.mockClear()
+    const base = '/api/v4/market/candles?account_id=7&symbol=XAUUSD&timeframe=M1'
+    for (const size of ['0', '501', '1.5', '1e2', '1&page_size=2']) {
+      const result = await app.inject(base + '&page_size=' + size)
+      expect(result.statusCode).toBe(400)
+      expect(result.json().code).toBe('api_request_invalid')
+    }
+    const missing = await app.inject('/api/v4/market/quotes/XAUUSD')
+    expect(missing.statusCode).toBe(400)
+    expect(quote).not.toHaveBeenCalled(); expect(candles).not.toHaveBeenCalled()
+    authenticate.mockRejectedValueOnce(new AuthError('auth_session_required', 401))
+    expect((await app.inject(base + '&page_size=0')).statusCode).toBe(401)
+    expect(candles).not.toHaveBeenCalled()
+    candles.mockResolvedValue([{ ...candle, openTime: 'secret-invalid-time' }])
+    await expect(client.getMarketCandles('7', 'XAUUSD', 'M1')).rejects.toMatchObject({ status: 503, problem: { code: 'api_response_invalid' } })
+  } finally { await app.close() }
+})
+
 it('validates workspace scope, nullable snapshots and failures across server and client', async () => {
   const app = Fastify()
   const account = { id: '7', platform: 'mt5', login: '100', server: 'demo', currency: 'USD', terminalProfileId: null,

@@ -32,15 +32,6 @@ const orderDto = (value: PendingOrder) => ({ ticket: value.ticket, account_id: v
 const profileDto = (value: TerminalProfileSummary) => ({ id: value.id, display_name: value.displayName, platform: value.platform, installation_id: value.installationId, account_id: value.accountId, connection_state: value.connectionState, last_seen_at: value.lastSeenAt })
 const observerDto = (value: ObserverChannelSummary) => ({ id: value.id, display_name: value.displayName, source_account_id: value.sourceAccountId, active: value.active })
 
-function problem(error: unknown, request: { id: string; url: string }, reply: { code(status: number): { send(body: unknown): unknown } }) {
-  const known = error instanceof TradingAccessError ? error : new TradingAccessError('trading_context_invalid', 503)
-  return reply.code(known.status).send({
-    type: `urn:aurum:problem:${known.code}`, title: 'Trading request failed', status: known.status,
-    code: known.code, detail: known.code, instance: request.url, correlation_id: request.id,
-    retryable: known.status >= 500,
-  })
-}
-
 export const tradingRoutes: FastifyPluginAsync<TradingRoutesOptions> = async (fastify, options) => {
   const contract = createTradingHttpContract()
   fastify.get('/trading-context', async (request, reply) => {
@@ -105,14 +96,17 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesOptions> = async (fa
     catch (error) { return contract.problem('getTradingAccountSnapshot', error, request, reply) }
   })
   fastify.get<{ Params: { symbol: string }; Querystring: { account_id: string; observer_channel_id?: string } }>('/market/quotes/:symbol', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); const data = await options.service.quote(userId, request.query.account_id, request.params.symbol, request.query.observer_channel_id); return response(request.id, data ? quoteDto(data) : null) }
-    catch (error) { return problem(error, request, reply) }
+    reply.header('Cache-Control', 'no-store')
+    try { const { userId } = await options.auth.authenticate(request); contract.request('getMarketQuote', request); const data = await options.service.quote(userId, request.query.account_id, request.params.symbol, request.query.observer_channel_id); return contract.response('getMarketQuote', response(request.id, data ? quoteDto(data) : null)) }
+    catch (error) { return contract.problem('getMarketQuote', error, request, reply) }
   })
   fastify.get<{ Querystring: { account_id: string; symbol: string; timeframe: string; page_size?: string; observer_channel_id?: string } }>('/market/candles', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
     try {
       const { userId } = await options.auth.authenticate(request)
+      contract.request('listMarketCandles', request)
       const items = await options.service.candles(userId, request.query.account_id, request.query.symbol, request.query.timeframe, Number(request.query.page_size ?? 200), request.query.observer_channel_id)
-      return response(request.id, { items: items.map(candleDto) })
-    } catch (error) { return problem(error, request, reply) }
+      return contract.response('listMarketCandles', response(request.id, { items: items.map(candleDto) }))
+    } catch (error) { return contract.problem('listMarketCandles', error, request, reply) }
   })
 }

@@ -11,6 +11,8 @@
     "getTradingContextReceipt",
     "getBridgeConnectionCapacity",
     "listTerminalProfiles",
-    "getTradingAccountSnapshot"
+    "getTradingAccountSnapshot",
+    "getMarketQuote",
+    "listMarketCandles"
   ]
 }

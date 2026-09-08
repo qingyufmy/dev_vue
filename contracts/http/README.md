@@ -35,11 +35,11 @@ contracts包公开ApiWireSchemas、ApiPaths、ApiOperations供业务使用；登
 
 ## 服务端运行校验
 
-runtime.json显式列出已接入操作，当前12项：listAuditEvents/getAuditEvent/setLearningCompletion/getTradingContext/listTradingAccounts/listObserverChannels/replaceTradingContext/leaveObserverMode/getTradingContextReceipt/getBridgeConnectionCapacity/listTerminalProfiles/getTradingAccountSnapshot。generate:api-runtime按合同提取参数、JSON请求体、各明确状态码下的JSON/problem响应及引用模型闭包，输出server/src/transport/generated/http-contracts.ts；verify:api-runtime拒绝漂移，已接入服务端类型检查和构建。Ajv和格式库是生产依赖；部署产物不依赖仓库contracts目录。各模块只编译自己选择的操作，登记缺失直接失败。
+runtime.json显式列出已接入操作，当前14项：listAuditEvents/getAuditEvent/setLearningCompletion/getTradingContext/listTradingAccounts/listObserverChannels/replaceTradingContext/leaveObserverMode/getTradingContextReceipt/getBridgeConnectionCapacity/listTerminalProfiles/getTradingAccountSnapshot/getMarketQuote/listMarketCandles。generate:api-runtime按合同提取参数、JSON请求体、各明确状态码下的JSON/problem响应及引用模型闭包，输出server/src/transport/generated/http-contracts.ts；verify:api-runtime拒绝漂移，已接入服务端类型检查和构建。Ajv和格式库是生产依赖；部署产物不依赖仓库contracts目录。各模块只编译自己选择的操作，登记缺失直接失败。
 
 连接额度与终端档案读取先认证，随后校验请求、成功和400/401/403/503错误响应；非法提供者数据收敛为api_response_invalid，未知错误不暴露内部正文。trading-client-contract.test.mjs用真实API客户端经Fastify inject消费成功/失败响应；独立运行测试避免混用前端Bundler与服务端NodeNext类型图，两侧类型检查仍分别执行。这不是浏览器或真实依赖联合验收。
 
-账户工作区快照getTradingAccountSnapshot也已登记，当前总计12项。请求账户/观摩参数及成功、400/401/403/404/503错误同源校验；处理器先认证，成功和失败均no-store。传输revision为字符串，客户端模型按现有schema转换为数字。路由匹配前的原生错误（例如超长路径414）不属于处理器合同校验覆盖，业务ID语义仍由用例校验。
+账户工作区快照getTradingAccountSnapshot已登记。请求账户/观摩参数及成功、400/401/403/404/503错误同源校验；处理器先认证，成功和失败均no-store。传输revision为字符串，客户端模型按现有schema转换为数字。路由匹配前的原生错误（例如超长路径414）不属于处理器合同校验覆盖，业务ID语义仍由用例校验。
 
 当前适配器支持GET/PUT/POST/PATCH/DELETE的path/query/header、单一application/json请求体及明确状态码的application/json、application/problem+json响应。写请求体须明确禁止未知字段；其它媒体类型、default状态和空响应需先扩展并验证，生成器不会猜测。header使用Fastify提供的小写键，字符串头不做数字转换。路由先认证和CSRF授权，再校验输入，再调用应用用例，最后校验DTO。整数query只接受规范非负十进制字符串并在校验副本上转换；原请求不修改，不删除字段、不填默认值。审计未声明query保持既有忽略语义，学习完成保持既有全部query拒绝规则。
 
@@ -50,7 +50,9 @@ runtime.json显式列出已接入操作，当前12项：listAuditEvents/getAudit
 当前不是Fastify默认schema编译器挂载：为保留先认证顺序，路由明确调用共享校验器；检查器中“显式Fastify schema数量”不能包含这些显式调用校验器的操作。审计及学习完成错误响应按状态码与媒体类型校验，正文status必须等于HTTP状态；非法错误替换为经过合同校验的固定503，重新生成关联ID，不递归重试或携带原始值。其它域、空响应、统一错误适配器和全量注册覆盖继续推进。
 
 
-账户入口读取已接入上下文、账户列表、观摩列表的参数和成功/错误响应校验。先认证再校验access枚举；未声明query沿用忽略语义，不能覆盖认证userId。AuthError保留401/403；非法输出返回经过校验且不带原值的503。快照、行情、终端与额度尚未接入。
+账户入口读取已接入上下文、账户列表、观摩列表的参数和成功/错误响应校验。先认证再校验access枚举；未声明query沿用忽略语义，不能覆盖认证userId。AuthError保留401/403；非法输出返回经过校验且不带原值的503。快照、行情、终端与额度的后续接入范围见上文。
 
 
-上下文PUT与观摩退出DELETE已接入运行合同，先assertWrite再校验CSRF格式、严格目标组合和必填revision。版本必须是规范非负十进制字符串且小于Number.MAX_SAFE_INTEGER，为递增保留空间；NULL、空串、指数、小数、重复query拒绝。PUT只允许与mode对应的唯一目标，另一目标可省略或为null。用例完成后DTO校验失败返回trading_context_commit_unknown/503，客户端必须保留原请求键与正文，查询回执后再读取当前上下文，不能据此断言写入失败。PUT/DELETE现在强制小写UUID格式的Idempotency-Key；同键同体重放历史结果，异体409，新键旧revision仍409。GET /trading-context/commands/{request_id}按当前用户查回执，200/null仅表示未见已提交回执，不证明失败；成功及错误均no-store。运行登记目前9项，本批客户端/Fastify对接使用测试写端口，当前开发库与真实浏览器验收另行完成。
+上下文PUT与观摩退出DELETE已接入运行合同，先assertWrite再校验CSRF格式、严格目标组合和必填revision。版本必须是规范非负十进制字符串且小于Number.MAX_SAFE_INTEGER，为递增保留空间；NULL、空串、指数、小数、重复query拒绝。PUT只允许与mode对应的唯一目标，另一目标可省略或为null。用例完成后DTO校验失败返回trading_context_commit_unknown/503，客户端必须保留原请求键与正文，查询回执后再读取当前上下文，不能据此断言写入失败。PUT/DELETE现在强制小写UUID格式的Idempotency-Key；同键同体重放历史结果，异体409，新键旧revision仍409。GET /trading-context/commands/{request_id}按当前用户查回执，200/null仅表示未见已提交回执，不证明失败；成功及错误均no-store。此阶段运行登记为9项，本批客户端/Fastify对接使用测试写端口，当前开发库与真实浏览器验收另行完成。
+
+报价与 K 线已接入 getMarketQuote/listMarketCandles，请求先认证再校验，成功与失败均 no-store。K 线 page_size 只接受 1–500 的规范整数字符串，缺省仍为 200；空报价保持 null。API 客户端经 Fastify inject 验证账户/观摩参数、UTC 毫秒与精确数字传输，以及非法提供者响应返回 api_response_invalid。该证据不代表实时行情来源或终端时钟已验收。

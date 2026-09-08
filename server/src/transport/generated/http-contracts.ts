@@ -517,6 +517,84 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         ],
         "type": "object"
       },
+      "Candle": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "close": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "closed": {
+            "type": "boolean"
+          },
+          "high": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "low": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "open": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "open_time": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "symbol": {
+            "$ref": "#/components/schemas/Symbol"
+          },
+          "tick_volume": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "timeframe": {
+            "$ref": "#/components/schemas/Timeframe"
+          }
+        },
+        "required": [
+          "account_id",
+          "symbol",
+          "timeframe",
+          "open_time",
+          "open",
+          "high",
+          "low",
+          "close",
+          "tick_volume",
+          "closed",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "CandleListResponse": {
+        "properties": {
+          "data": {
+            "properties": {
+              "items": {
+                "items": {
+                  "$ref": "#/components/schemas/Candle"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "items"
+            ],
+            "type": "object"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ],
+        "type": "object"
+      },
       "ConnectionCapacityResponse": {
         "properties": {
           "data": {
@@ -981,6 +1059,85 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         ],
         "type": "object"
       },
+      "Quote": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "ask": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "bid": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "last": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observed_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "spread": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "symbol": {
+            "$ref": "#/components/schemas/Symbol"
+          },
+          "trade_mode": {
+            "enum": [
+              "full",
+              "long_only",
+              "short_only",
+              "close_only",
+              "disabled",
+              "unknown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "symbol",
+          "bid",
+          "ask",
+          "spread",
+          "observed_at",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "QuoteResponse": {
+        "properties": {
+          "data": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Quote"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ],
+        "type": "object"
+      },
       "Revision": {
         "maxLength": 128,
         "minLength": 1,
@@ -1078,6 +1235,18 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         "maxLength": 64,
         "minLength": 1,
         "pattern": "^[0-9A-Za-z._:-]+$",
+        "type": "string"
+      },
+      "Timeframe": {
+        "enum": [
+          "M1",
+          "M5",
+          "M15",
+          "M30",
+          "H1",
+          "H4",
+          "D1"
+        ],
         "type": "string"
       },
       "TradingAccount": {
@@ -1830,6 +1999,153 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
           "$ref": "#/components/schemas/LearningCompletionRequest"
         },
         "required": true
+      }
+    },
+    "listMarketCandles": {
+      "parameters": [
+        {
+          "name": "account_id",
+          "location": "query",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "$ref": "#/components/schemas/OpaqueId"
+          }
+        },
+        {
+          "name": "symbol",
+          "location": "query",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "$ref": "#/components/schemas/Symbol"
+          }
+        },
+        {
+          "name": "timeframe",
+          "location": "query",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "$ref": "#/components/schemas/Timeframe"
+          }
+        },
+        {
+          "name": "page_size",
+          "location": "query",
+          "required": false,
+          "integerQuery": true,
+          "schema": {
+            "default": 200,
+            "maximum": 500,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        {
+          "name": "observer_channel_id",
+          "location": "query",
+          "required": false,
+          "integerQuery": false,
+          "schema": {
+            "$ref": "#/components/schemas/OpaqueId"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/CandleListResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "404": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      }
+    },
+    "getMarketQuote": {
+      "parameters": [
+        {
+          "name": "account_id",
+          "location": "query",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "$ref": "#/components/schemas/OpaqueId"
+          }
+        },
+        {
+          "name": "symbol",
+          "location": "path",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "$ref": "#/components/schemas/Symbol"
+          }
+        },
+        {
+          "name": "observer_channel_id",
+          "location": "query",
+          "required": false,
+          "integerQuery": false,
+          "schema": {
+            "$ref": "#/components/schemas/OpaqueId"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/QuoteResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "404": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
       }
     },
     "listObserverChannels": {
