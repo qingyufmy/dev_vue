@@ -667,3 +667,10 @@ getTradingContext/listTradingAccounts/listObserverChannels接入同源运行校�
 新增prepareMysqlContextTarget：外部route在事务前采集，事务内锁定当前所有权与区间并复用原repository终端/投影校验；观摩使用authorizeOn同连接复核。退出观摩保留最小账户ID顺序，无账户blocked，候选变化409。route快照不替代交易执行时的实时授权。
 
 6项新测试与既有离线账户、观摩及命令事务共30项通过，完整server类型检查通过，边界110无新增。两轮复核和证据限制见[写入合同](architecture/trading-context-write-contract-20260908.md)。未连接数据库或启用新写入；接下来完成迁移执行与组装，移除旧写入口，接通HTTP和前端幂等恢复。
+
+
+## 第七十三批：回执表真实约束验证
+
+在VM MySQL的独立临时reference库执行041并完成13项真实约束/UTC/回滚检查，保存规范SHOW CREATE、源hash、工具hash和step checksum，见[回执](architecture/context-receipt-schema-reference-20260908-v2.json)。临时库已删除、隧道关闭；当前dev_vue及恢复副本均未写入，165步尚未在业务库执行。
+
+两轮复核与范围见[写入合同](architecture/trading-context-write-contract-20260908.md)。核对前端调用点涉及home/trader/risk，需统一接线请求键和待确认状态。下一步迁移协调器与实际升级证据，然后完成运行及前端恢复；本批真实测试不代替命令并发或浏览器验收。
