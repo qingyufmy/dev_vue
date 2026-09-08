@@ -10,10 +10,7 @@ import {
 } from '../../application/observer-management-ports.js'
 import type { ObserverManagementService } from '../../application/observer-management-service.js'
 
-export interface ObserverManagementRequestAuthenticator {
-  authenticate(request: { headers: Record<string, unknown> }): Promise<{ userId: number; role: string }>
-  assertWrite(request: { headers: Record<string, unknown> }): Promise<{ userId: number; role: string }>
-}
+import type { ObserverManagementRequestAuthenticator } from '../../application/request-authentication.js'
 
 export interface ObserverManagementRoutesOptions {
   service: ObserverManagementService

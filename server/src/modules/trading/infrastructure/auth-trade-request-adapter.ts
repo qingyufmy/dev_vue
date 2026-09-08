@@ -1,5 +1,5 @@
 import type { AuthService } from '../../auth/index.js'
-import type { TradeRequestAuthenticator } from '../transport/http/trading-routes.js'
+import type { TradeRequestAuthenticator } from '../application/request-authentication.js'
 
 function cookieValue(header: unknown, names: string[]) {
   const cookies = new Map(String(header ?? '').split(';').map((item) => {

@@ -10,7 +10,7 @@ import {
   TraderContextBuilder, TraderWorker, MysqlTraderWindowGuard, MysqlTraderPreferencesReader,
 } from '../modules/inference/index.js'
 import { MysqlStrategyCatalog, StrategyService } from '../modules/strategies/index.js'
-import { MysqlTradingRepository } from '../modules/trading/index.js'
+import { createTradingReader } from '../modules/trading/composition.js'
 import { TRADER_QUEUE, type TraderRunJob } from '../queue/task-queues.js'
 
 loadServerEnvironment()
@@ -34,7 +34,7 @@ async function main() {
     repository,
     new InferenceService(repository, strategies),
     strategies,
-    new TraderContextBuilder(repository, new MysqlTradingRepository(pool, new RedisBridgeGatewayLeaseStore(cache)), new MysqlInstrumentSnapshotReader(pool), new MysqlRiskSummaryReader(pool), new MysqlTraderPreferencesReader(pool)),
+    new TraderContextBuilder(repository, createTradingReader(pool, new RedisBridgeGatewayLeaseStore(cache)), new MysqlInstrumentSnapshotReader(pool), new MysqlRiskSummaryReader(pool), new MysqlTraderPreferencesReader(pool)),
     new MysqlTraderModelGatewayResolver(profiles, new MysqlModelUsageLedger(pool), () => {
       usageSettlementFailureRevision += 1
       health.workFailed('model_usage_settlement_failed')

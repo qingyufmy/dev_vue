@@ -23,11 +23,7 @@ import { MysqlRiskRepository, RiskService } from '../modules/risk/index.js'
 import { MysqlReviewRepository, ReviewService } from '../modules/reviews/index.js'
 import { MysqlStrategyCatalog, StrategyService } from '../modules/strategies/index.js'
 import { MysqlTradeHistoryRepository, TradeHistoryService } from '../modules/trade-history/index.js'
-import {
-  AuthTradeRequestAdapter, ConnectionCapacityService, MysqlTradingRepository, RedisConnectionLeaseStore,
-  TradingService, MysqlObserverAccessReader, ObserverPublicationService,
-  ObserverManagementService, MysqlObserverManagementRepository, AuthObserverAdminAdapter,
-} from '../modules/trading/index.js'
+import { createTradingApiModule } from '../modules/trading/composition.js'
 import { registerApiV4Routes } from '../transport/api-v4-route-registrar.js'
 
 loadServerEnvironment()
@@ -42,10 +38,8 @@ async function main() {
   await Promise.all([pool.query('SELECT 1'), connectCacheRedis(cache)])
 
   const auth = createAuthModule(pool, cache, web.auth, createBridgeDeviceRevoker(pool))
-  const tradeAuth = new AuthTradeRequestAdapter(auth)
-  const observerAdminAuth = new AuthObserverAdminAdapter(auth)
-  const observerAccess = new MysqlObserverAccessReader(pool)
-  const tradingRepository = new MysqlTradingRepository(pool, new RedisBridgeGatewayLeaseStore(cache), observerAccess)
+  const trading = createTradingApiModule(pool, cache, auth, new RedisBridgeGatewayLeaseStore(cache))
+  const { tradeAuth, observerAdminAuth } = trading
   const userExecution = new UserExecutionCommandService(new MysqlUserExecutionCommandRepository(pool))
   const executionDistribution = new ExecutionDistributionService(new MysqlExecutionDistributionRepository(pool))
   const strategies = new StrategyService(new MysqlStrategyCatalog(pool))
@@ -62,8 +56,7 @@ async function main() {
       new MysqlBridgeCredentialRepository(pool),
       new RedisBridgeSessionTicketStore(cache),
     ),
-    trading: new TradingService(tradingRepository, new ObserverPublicationService(observerAccess, tradingRepository)),
-    connectionCapacity: new ConnectionCapacityService(tradingRepository, new RedisConnectionLeaseStore(cache)),
+    tradingHttp: trading.tradeHttp,
     inference: new InferenceService(new MysqlInferenceRepository(pool), strategies),
     strategies,
     risk: new RiskService(new MysqlRiskRepository(pool)),
@@ -76,7 +69,7 @@ async function main() {
     tradeAuth,
     settingsHttp: createMysqlSettingsModule(pool, observerAdminAuth).http,
     referralRules: new ReferralRuleManagementService(new MysqlReferralRuleManagement(pool)),
-    observerManagement: new ObserverManagementService(new MysqlObserverManagementRepository(pool)),
+    observerManagementHttp: trading.observerHttp,
     observerAdminAuth,
   }, { tradeOrigin: web.auth.tradeOrigin, adminOrigin: web.auth.adminOrigin })
 

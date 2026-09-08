@@ -3,7 +3,7 @@ import type { Redis } from 'ioredis'
 import type { Pool } from 'mysql2/promise'
 import { CompositeOutboxPublisher, RedisOutboxRealtimePublisher } from '../src/outbox/index.js'
 import type { ClaimedOutboxEvent, OutboxTaskPublisher } from '../src/outbox/index.js'
-import { parseBrowserRealtimeEvent } from '../src/modules/trading/index.js'
+import { parseBrowserRealtimeEvent } from '../src/modules/trading/infrastructure/redis-browser-realtime-subscriber.js'
 
 const occurredAt = '2026-09-04T08:00:00.000Z'
 

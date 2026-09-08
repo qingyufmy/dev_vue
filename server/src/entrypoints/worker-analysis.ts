@@ -11,7 +11,7 @@ import {
   MysqlAnalysisWindowGuard,
 } from '../modules/inference/index.js'
 import { MysqlStrategyCatalog, StrategyService } from '../modules/strategies/index.js'
-import { MysqlTradingRepository } from '../modules/trading/index.js'
+import { createTradingReader } from '../modules/trading/composition.js'
 import { ANALYSIS_QUEUE, type AnalysisRunJob } from '../queue/task-queues.js'
 
 loadServerEnvironment()
@@ -25,7 +25,7 @@ async function main() {
   await Promise.all([pool.query('SELECT 1'), connectCacheRedis(cache)])
   const repository = new MysqlInferenceRepository(pool)
   const strategies = new StrategyService(new MysqlStrategyCatalog(pool))
-  const trading = new MysqlTradingRepository(pool, new RedisBridgeGatewayLeaseStore(cache))
+  const trading = createTradingReader(pool, new RedisBridgeGatewayLeaseStore(cache))
   const profiles = new MysqlRuntimeModelProfileCatalog(pool, loadCredentialKeyring(), {
     allowPrivateEndpoints: config.allowPrivateModelEndpoints,
     maxAttempts: config.modelMaxAttempts,

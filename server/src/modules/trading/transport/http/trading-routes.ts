@@ -4,10 +4,7 @@ import { TradingAccessError } from '../../domain/trading.js'
 import type { AccountSnapshot, MarketCandle, MarketQuote, ObserverChannelSummary, OpenPosition, PendingOrder, TerminalProfileSummary, TradingAccountSummary, TradingContext } from '../../domain/trading.js'
 import type { TradingAccountAccess } from '../../application/trading-ports.js'
 
-export interface TradeRequestAuthenticator {
-  authenticate(request: { headers: Record<string, unknown> }): Promise<{ userId: number }>
-  assertWrite(request: { headers: Record<string, unknown> }): Promise<{ userId: number }>
-}
+import type { TradeRequestAuthenticator } from '../../application/request-authentication.js'
 
 export interface TradingRoutesOptions {
   service: TradingService

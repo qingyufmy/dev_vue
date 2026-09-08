@@ -7,10 +7,12 @@ import { WebSocket } from 'ws'
 import { afterEach, describe, expect, it } from 'vitest'
 import { cookieNameForClient, RealtimeTicketAuthenticator, type AuthRepository, type RealtimeTicketStore } from '../src/modules/auth/index.js'
 import {
-  BrowserRealtimeHub, RedisBrowserRealtimeSubscriber, parseBrowserRealtimeEvent,
+  BrowserRealtimeHub,
   type BrowserRealtimeEvent, type TradingReadRepository, type TradingRealtimeEvent,
 } from '../src/modules/trading/index.js'
+import { RedisBrowserRealtimeSubscriber, parseBrowserRealtimeEvent } from '../src/modules/trading/infrastructure/redis-browser-realtime-subscriber.js'
 import { BrowserRealtimeWebSocketServer } from '../src/transport/browser-realtime-websocket-server.js'
+import { createTradingHttp, createObserverManagementHttp } from '../src/modules/trading/composition.js'
 import { exactTradeHostHook, exactAdminHostHook, registerApiV4Routes, type ApiV4RouteServices } from '../src/transport/api-v4-route-registrar.js'
 import { createAuditModule } from '../src/modules/audit/composition.js'
 import { createAuthHttp } from '../src/modules/auth/composition.js'
@@ -143,6 +145,9 @@ describe('V4 browser realtime runtime', () => {
     // This fixture checks registration only; handlers except audit are not called.
     services.auth = { cookieName: cookieNameForClient } as ApiV4RouteServices['auth']
     services.authHttp = createAuthHttp(services.auth, false)
+    const registrationOnly = new Proxy({}, { get: () => () => { throw new Error('registration_only') } })
+    services.tradingHttp = createTradingHttp(...([registrationOnly, registrationOnly, registrationOnly] as Parameters<typeof createTradingHttp>))
+    services.observerManagementHttp = createObserverManagementHttp(...([registrationOnly, registrationOnly] as Parameters<typeof createObserverManagementHttp>))
     services.settingsHttp = createSettingsHttp({} as Parameters<typeof createSettingsHttp>[0], {
       authenticate: async () => { throw new Error('registration_only') }, assertWrite: async () => { throw new Error('registration_only') },
     })
@@ -163,6 +168,12 @@ describe('V4 browser realtime runtime', () => {
       ['PUT', '/api/v4/admin/observer/default-channel'], ['PUT', '/api/v4/admin/observer/channels/:channel_id/accesses/:user_id'],
       ['GET', '/api/v4/audit/events'], ['GET', '/api/v4/audit/events/:source_kind/:source_id'],
     ] as const) expect(app.hasRoute({ method: route[0], url: route[1] })).toBe(true)
+    const wrongTradeHost = await app.inject({ url: '/api/v4/trading-context', headers: { host: 'admin.example.test' } })
+    expect(wrongTradeHost.statusCode).toBe(421)
+    expect(wrongTradeHost.json().code).toBe('trade_host_required')
+    const wrongObserverHost = await app.inject({ url: '/api/v4/admin/observer/sources', headers: { host: 'trade.example.test' } })
+    expect(wrongObserverHost.statusCode).toBe(421)
+    expect(wrongObserverHost.json().code).toBe('admin_host_required')
     const audit = await app.inject({ url: '/api/v4/audit/events?account_id=42', headers: { host: 'trade.example.test' } })
     expect(audit.statusCode).toBe(403)
     expect(audit.json().code).toBe('audit_account_forbidden')

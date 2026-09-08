@@ -13,10 +13,7 @@ import {
   RedisBridgeSessionTicketStore,
 } from '../modules/bridge/index.js'
 import { createBridgeGatewayRoutes } from '../modules/bridge/composition.js'
-import { createAccountRegistration } from '../modules/trading/composition.js'
-import {
-  BridgeStreamProjector, MysqlTradingRepository, RedisBrowserRealtimePublisher,
-} from '../modules/trading/index.js'
+import { createAccountRegistration, createBridgeTradingModule } from '../modules/trading/composition.js'
 import {
   MysqlTradeHistoryCollectorRepository, TradeHistoryCollector,
 } from '../modules/trade-history/index.js'
@@ -34,11 +31,9 @@ async function main() {
   await Promise.all([pool.query('SELECT 1'), connectCacheRedis(cache)])
 
   const leases = new RedisBridgeGatewayLeaseStore(cache)
-  const trading = new MysqlTradingRepository(pool, leases)
-  const publisher = new RedisBrowserRealtimePublisher(cache, 'aurum:v4:browser-realtime:events', error => {
+  const { capacity, projector } = createBridgeTradingModule(pool, cache, leases, error => {
     console.error('[bridge-gateway] realtime publish failed', safeError(error))
   })
-  const projector = new BridgeStreamProjector(trading, publisher)
   const streams = new BridgeV4StreamIngestor(new BridgeTradeProjectionDecoder(), projector)
   const directory = new InProcessBridgeGatewayDirectory()
   const routes = createBridgeGatewayRoutes(pool, createAccountRegistration)
@@ -50,7 +45,7 @@ async function main() {
     new RedisBridgeSessionTicketStore(cache),
     routes,
     leases,
-    trading,
+    capacity,
     directory,
     transport,
     commands,

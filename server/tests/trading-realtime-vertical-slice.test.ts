@@ -1,9 +1,9 @@
 import { readFile } from 'node:fs/promises'
 import Fastify from 'fastify'
+import { tradingRoutes } from '../src/modules/trading/transport/http/trading-routes.js'
 import { describe, expect, it } from 'vitest'
 import {
   BridgeStreamProjector, BrowserRealtimeHub, BrowserRealtimeSession, ConnectionCapacityService, ObserverPublicationService, TradingAccessError, TradingService,
-  tradingRoutes,
   type AccountSnapshot, type BrowserRealtimeSink, type ConnectionLeaseStore, type MarketCandle, type MarketQuote,
   type OpenPosition, type PendingOrder, type RealtimeResource, type TradingAccountSummary,
   ConnectionCapacityExceededError, type TradingProjectionRepository, type TradingReadRepository, type TradingRealtimeEvent,

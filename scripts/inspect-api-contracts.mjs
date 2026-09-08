@@ -1,4 +1,5 @@
 import Fastify from 'fastify'
+import { createTradingHttp, createObserverManagementHttp } from '../server/dist-v4/modules/trading/composition.js'
 import { readFile } from 'node:fs/promises'
 import { registerApiV4Routes } from '../server/dist-v4/transport/api-v4-route-registrar.js'
 import { cookieNameForClient } from '../server/dist-v4/modules/auth/index.js'
@@ -23,6 +24,8 @@ const services = Object.fromEntries([
   'inference', 'strategies', 'risk', 'reviews', 'execution', 'userExecution', 'executionDistribution',
   'tradeHistory', 'tradeAuth', 'referralRules', 'observerManagement', 'observerAdminAuth',
 ].map(name => [name, stub]))
+services.tradingHttp = createTradingHttp(stub, stub, stub)
+services.observerManagementHttp = createObserverManagementHttp(stub, stub)
 services.auth = { cookieName: cookieNameForClient }
 services.authHttp = createAuthHttp(services.auth, false)
 services.learningHttp = createLearningHttp({ read: stub, completion: stub }, services.auth, { wwwOrigin: 'https://www.example.test', secureCookies: false })

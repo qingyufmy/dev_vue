@@ -1,7 +1,8 @@
 import Fastify from 'fastify'
+import { tradingRoutes } from '../src/modules/trading/transport/http/trading-routes.js'
 import { describe, expect, it, vi } from 'vitest'
 import {
-  TradingService, ObserverPublicationService, ConnectionCapacityService, tradingRoutes,
+  TradingService, ObserverPublicationService, ConnectionCapacityService,
   type ObserverAccessReader, type ObserverAuthorization, type TradingReadRepository,
   type AccountSnapshot, type OpenPosition, type ConnectionLeaseStore,
 } from '../src/modules/trading/index.js'
