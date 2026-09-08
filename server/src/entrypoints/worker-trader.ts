@@ -1,4 +1,5 @@
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
+import { createMysqlTraderContext, createMysqlTraderWindowGuard } from '../modules/inference/composition.js'
 import { DelayedError, Worker } from 'bullmq'
 import {
   assertV4RuntimeEnabled, closeHttpServer, connectCacheRedis, createCacheRedis, createMysqlPool, installProcessLifecycle,
@@ -6,9 +7,9 @@ import {
 } from '../bootstrap/index.js'
 import { RedisBridgeGatewayLeaseStore } from '../modules/bridge/index.js'
 import {
-  InferenceService, loadCredentialKeyring, MysqlInferenceRepository, MysqlInstrumentSnapshotReader,
-  MysqlModelUsageLedger, MysqlRiskSummaryReader, MysqlRuntimeModelProfileCatalog, MysqlTraderModelGatewayResolver,
-  TraderContextBuilder, TraderWorker, MysqlTraderWindowGuard, MysqlTraderPreferencesReader,
+  InferenceService, loadCredentialKeyring, MysqlInferenceRepository,
+  MysqlModelUsageLedger, MysqlRuntimeModelProfileCatalog, MysqlTraderModelGatewayResolver,
+  TraderWorker,
 } from '../modules/inference/index.js'
 import { createSubscriptionPreferencesReader, createMysqlStrategyService } from '../modules/strategies/composition.js'
 import { createTradingReader } from '../modules/trading/composition.js'
@@ -35,14 +36,14 @@ async function main() {
     repository,
     new InferenceService(repository, strategies),
     strategies,
-    new TraderContextBuilder(repository, createTradingReader(pool, new RedisBridgeGatewayLeaseStore(cache)), new MysqlInstrumentSnapshotReader(pool), new MysqlRiskSummaryReader(pool), new MysqlTraderPreferencesReader(pool, createSubscriptionPreferencesReader)),
+    createMysqlTraderContext(pool, repository, createTradingReader(pool, new RedisBridgeGatewayLeaseStore(cache)), createSubscriptionPreferencesReader),
     new MysqlTraderModelGatewayResolver(profiles, new MysqlModelUsageLedger(pool), () => {
       usageSettlementFailureRevision += 1
       health.workFailed('model_usage_settlement_failed')
       console.error('[worker-trader] model usage settlement failed')
     }),
     `trader:${process.pid}`,
-    new MysqlTraderWindowGuard(pool, createTransactionAccountClock),
+    createMysqlTraderWindowGuard(pool, createTransactionAccountClock),
   )
   const worker = new Worker<TraderRunJob>(TRADER_QUEUE, async (job, token) => {
     if (job.name !== 'trader.run' || !job.data.traderRunId) throw new Error('trader_job_invalid')

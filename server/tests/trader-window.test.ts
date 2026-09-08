@@ -1,8 +1,9 @@
+import { createMysqlTraderWindowGuard } from '../src/modules/inference/composition.js'
 import { createSubscriptionPreferencesReader } from '../src/modules/strategies/composition.js'
 import { createTransactionAccountClock } from '../src/modules/trading/composition.js'
 import { describe, expect, it } from 'vitest'
 import type { Pool, PoolConnection } from 'mysql2/promise'
-import { MysqlInferenceRepository, MysqlTraderWindowGuard, type InferenceRepository, type TraderRun } from '../src/modules/inference/index.js'
+import { MysqlInferenceRepository, type InferenceRepository, type TraderRun } from '../src/modules/inference/index.js'
 import { traderWindowAllows } from '../src/modules/inference/infrastructure/mysql-trader-window.js'
 
 const config = { version: 1, timezone: 'terminal_server', enabled: true, weekdays: [1], windows: [{ start: '22:00', end: '02:00' }], outsideBehavior: 'pause_all' }
@@ -28,7 +29,7 @@ describe('trader fan-out window', () => {
           return [outcome === 'missing' ? [] : [{ timezone_offset_minutes: 180, clock_status: 'calibrated' }]]
         },
       } as unknown as PoolConnection
-      const guard = new MysqlTraderWindowGuard({ getConnection: async () => connection } as unknown as Pool, transaction => {
+      const guard = createMysqlTraderWindowGuard({ getConnection: async () => connection } as unknown as Pool, transaction => {
         expect(transaction).toBe(connection)
         expect(active).toBe(true)
         return createTransactionAccountClock(transaction)
@@ -50,7 +51,7 @@ describe('trader fan-out window', () => {
         return [present ? [{ ...subscription, receive_window_json: { enabled: false } }] : []]
       },
     }
-    const guard = new MysqlTraderWindowGuard({ async getConnection() { return connection } } as unknown as Pool, createTransactionAccountClock)
+    const guard = createMysqlTraderWindowGuard({ async getConnection() { return connection } } as unknown as Pool, createTransactionAccountClock)
     const run = { subscriptionId: 'sub', userId: 42, tradingAccountId: '7', subscriptionRevision: 4, strategyId: '20', strategyVersionId: '21' } as TraderRun
     await guard.assertAllowed(run, now)
     present = false

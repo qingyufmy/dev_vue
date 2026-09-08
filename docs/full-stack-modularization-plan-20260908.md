@@ -690,3 +690,12 @@ strategies 业务 index 仅公开 SubscriptionPreferencesReader，移除 SQL 初
 29 项偏好和窗口回归通过；测试经实际 strategies 工厂验证连接与锁定查询，类型检查发现一处旧窗口测试额外参数后已修正。server 类型/构建和 API 生成运行检查通过，精确删除一项具体 SQL 实现公开导出，债务 80→79，无新增或陈旧。本批未连接数据库或启动 Worker，不能作为真实锁竞争证明。
 
 strategies 此类已登记静态债务已清除；订阅的跨域 SQL 与业务全链、其它模块基础设施出口及整体 P0–P7 仍未完成。
+
+
+## 51. 交易上下文读取器与时间窗组装（第一百二十一批）
+
+inference composition 新增 createMysqlTraderContext/createMysqlTraderWindowGuard，组装合约快照、风险摘要、执行偏好读取及时间窗守卫；worker-trader 只获得 TraderContextBuilder 与 TraderWindowGuard 应用能力。业务 index 移除相关三个基础设施文件的导出，连接、账户时钟和偏好工厂仍由入口显式注入。
+
+34 项交易 Worker、推理流程、偏好与时间窗回归最终通过；窗口测试修正旧公开类导入后经实际组装工厂重跑6项通过。server 类型/构建、API 生成运行一致性通过，债务 79→76，无新增或陈旧记录。读取 SQL、同连接时钟/偏好检查、模型调用和账户作用域未变。本批没有外部依赖操作或角色启动。
+
+该改动只收口运行组装和具体实现导出，不处理风险摘要等跨域 SQL 所有权；其它 inference 基础设施出口、账户全流程和 P0–P7 继续。
