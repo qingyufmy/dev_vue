@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { tradingContext } from '~/features/trading-context'
+import { tradingContext, ContextCommandRecovery } from '~/features/trading-context'
 
 import {
   BarChart3,
@@ -174,6 +174,7 @@ const navGroups = [
         </DropdownMenu>
       </header>
 
+      <ContextCommandRecovery />
       <main class="min-h-0 flex-1 overflow-y-auto">
         <RouterView />
       </main>

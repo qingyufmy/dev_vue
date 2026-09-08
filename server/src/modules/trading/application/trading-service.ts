@@ -13,31 +13,6 @@ export class TradingService {
     return { userId, mode: 'blocked', accountId: null, observerChannelId: null, readOnly: true, revision: 0 } satisfies TradingContext
   }
 
-  async selectAccount(userId: number, accountId: string, expectedRevision: number | null) {
-    const account = await this.ownedAccount(userId, accountId)
-    return this.repository.saveContext({
-      userId, mode: 'full', accountId: account.id, observerChannelId: null, readOnly: !account.tradePermission,
-    }, expectedRevision)
-  }
-
-  async enterObserver(userId: number, observerChannelId: string, expectedRevision: number | null) {
-    const channelId = assertOpaqueId(observerChannelId)
-    const allowed = (await this.repository.listObserverChannels(userId)).some((channel) => channel.id === channelId && channel.active)
-    if (!allowed) throw new TradingAccessError('trading_account_forbidden', 403)
-    return this.repository.saveContext({
-      userId, mode: 'observer', accountId: null, observerChannelId: channelId, readOnly: true,
-    }, expectedRevision)
-  }
-
-  async leaveObserver(userId: number, expectedRevision: number | null) {
-    const accounts = await this.repository.listAccounts(userId)
-    const account = accounts[0] ?? null
-    return this.repository.saveContext({
-      userId, mode: account ? 'full' : 'blocked', accountId: account?.id ?? null, observerChannelId: null,
-      readOnly: account ? !account.tradePermission : true,
-    }, expectedRevision)
-  }
-
   listAccounts(userId: number, access: TradingAccountAccess = 'current') {
     if (access !== 'current' && access !== 'history') throw new TradingAccessError('trading_context_invalid', 400)
     return this.repository.listAccounts(userId, access)

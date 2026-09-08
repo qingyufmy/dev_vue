@@ -41,8 +41,6 @@ describe('Stage 11 trade home composition', () => {
     expect(account).toContain('观摩模式')
     expect(account).toContain('退出观摩')
     expect(workspace).toContain('client.listObserverChannels()')
-    expect(workspace).toContain('client.enterObserverMode')
-    expect(workspace).toContain('client.leaveObserverMode')
     expect(realtime).toContain('observer_channel_id: observerChannelId')
     expect(realtime).toContain('const accountTargets = observerChannelId === null ?')
     expect(realtime).toContain("resource_id: 'metrics', after_revision: null")

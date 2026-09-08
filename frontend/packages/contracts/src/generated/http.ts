@@ -1492,8 +1492,31 @@ export interface paths {
         };
         /** Get the current trading context */
         get: operations["getTradingContext"];
-        /** Select one owned trading account or an authorized observer channel */
+        /**
+         * Select one owned trading account or an authorized observer channel
+         * @description The key and original body/revision identify one command. A replay returns its historical context; read the current context after confirmation.
+         */
         put: operations["replaceTradingContext"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/trading-context/commands/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the authenticated user historical context command receipt
+         * @description Null means no committed receipt is visible yet, not proof that the command failed. Never cache this response.
+         */
+        get: operations["getTradingContextReceipt"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -1511,7 +1534,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Exit observer mode and restore the first owned account when available */
+        /**
+         * Exit observer mode and restore the first owned account when available
+         * @description The key and original body/revision identify one command. A replay returns its historical context; read the current context after confirmation.
+         */
         delete: operations["leaveObserverMode"];
         options?: never;
         head?: never;
@@ -3387,6 +3413,20 @@ export interface components {
             mode?: "observer";
             observer_channel_id: components["schemas"]["OpaqueId"];
         });
+        TradingContextReceipt: {
+            /** @enum {string} */
+            action: "select_account" | "enter_observer" | "leave_observer";
+            prior_revision: components["schemas"]["Revision"];
+            recorded_at: components["schemas"]["UtcDateTime"];
+            replayed: boolean;
+            request_id: string;
+            result: components["schemas"]["TradingContext"];
+            target_id: components["schemas"]["OpaqueId"] | null;
+        };
+        TradingContextReceiptResponse: {
+            data: components["schemas"]["TradingContextReceipt"] | null;
+            meta: components["schemas"]["Meta"];
+        };
         TradingContextResponse: {
             data: components["schemas"]["TradingContext"];
             meta: components["schemas"]["Meta"];
@@ -6241,6 +6281,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
+                "Idempotency-Key": string;
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -6269,12 +6310,39 @@ export interface operations {
             503: components["responses"]["Problem"];
         };
     };
+    getTradingContextReceipt: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Historical receipt or no visible receipt */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TradingContextReceiptResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
     leaveObserverMode: {
         parameters: {
             query: {
                 expected_revision: string;
             };
             header: {
+                "Idempotency-Key": string;
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;

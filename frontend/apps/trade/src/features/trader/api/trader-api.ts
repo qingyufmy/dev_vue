@@ -7,7 +7,6 @@ export const traderApi = {
   listAccounts: client.listTradingAccounts,
   listObservers: client.listObserverChannels,
   getWorkspace: client.getTradingWorkspace,
-  selectAccount: client.selectTradingAccount,
   listStrategies: () => client.listStrategies('trader'),
   listDecisions: client.listTradeDecisions,
   getDecision: client.getTradeDecision,

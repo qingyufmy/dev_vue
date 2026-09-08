@@ -9240,6 +9240,80 @@
         ],
         "type": "object"
       },
+      "TradingContextReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "select_account",
+              "enter_observer",
+              "leave_observer"
+            ],
+            "type": "string"
+          },
+          "prior_revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "recorded_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "request_id": {
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/TradingContext"
+          },
+          "target_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "request_id",
+          "action",
+          "target_id",
+          "prior_revision",
+          "result",
+          "recorded_at",
+          "replayed"
+        ],
+        "type": "object"
+      },
+      "TradingContextReceiptResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TradingContextReceipt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ],
+        "type": "object"
+      },
       "TradingContextResponse": {
         "properties": {
           "data": {
@@ -14140,10 +14214,22 @@
         ]
       },
       "put": {
+        "description": "The key and original body/revision identify one command. A replay returns its historical context; read the current context after confirmation.",
         "operationId": "replaceTradingContext",
         "parameters": [
           {
             "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 36,
+              "minLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -14192,8 +14278,56 @@
         ]
       }
     },
+    "/trading-context/commands/{request_id}": {
+      "get": {
+        "description": "Null means no committed receipt is visible yet, not proof that the command failed. Never cache this response.",
+        "operationId": "getTradingContextReceipt",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "request_id",
+            "required": true,
+            "schema": {
+              "maxLength": 36,
+              "minLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradingContextReceiptResponse"
+                }
+              }
+            },
+            "description": "Historical receipt or no visible receipt"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "summary": "Read the authenticated user historical context command receipt",
+        "tags": [
+          "Context"
+        ]
+      }
+    },
     "/trading-context/observer": {
       "delete": {
+        "description": "The key and original body/revision identify one command. A replay returns its historical context; read the current context after confirmation.",
         "operationId": "leaveObserverMode",
         "parameters": [
           {
@@ -14206,6 +14340,17 @@
             "schema": {
               "maxLength": 16,
               "pattern": "^(0|[1-9][0-9]*)$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "maxLength": 36,
+              "minLength": 36,
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
               "type": "string"
             }
           }

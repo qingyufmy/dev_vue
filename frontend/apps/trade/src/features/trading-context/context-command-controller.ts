@@ -156,6 +156,7 @@ export function createContextCommandController(options: {
   }
   return {
     get state() { return { status, busy, intent: intent ? { ...intent } : null } },
+    restore(next: ContextCommandScope) { bind(next) },
     async start(next: ContextCommandScope, action: ContextCommandAction, targetId: string | null, expectedRevision: number) {
       bind(next)
       if (intent || busy) throw new ContextCommandRecoveryError('context_command_pending')

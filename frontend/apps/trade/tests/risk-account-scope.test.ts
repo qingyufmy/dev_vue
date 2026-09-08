@@ -8,7 +8,8 @@ const api = vi.hoisted(() => ({ getContext: vi.fn(), listAccounts: vi.fn(), sele
   getPolicy: vi.fn(), getSummary: vi.fn(), getManualRelease: vi.fn(), listDecisions: vi.fn(), replacePolicy: vi.fn(), createManualRelease: vi.fn() }))
 vi.mock('../src/features/risk/api/risk-api', () => ({ riskApi: api }))
 vi.mock('../src/features/risk/realtime/risk-realtime', () => ({ createRiskRealtime: () => ({ stop() {} }) }))
-vi.mock('~/features/auth', () => ({ useTradeSession: () => ({ session: { value: { user: { id: '7' }, csrf_token: 'csrf' } } }) }))
+const accountSession = ref<any>(null)
+vi.mock('~/features/auth', () => ({ useTradeSession: () => ({ session: accountSession }) }))
 
 const context = (accountId: string | null, revision = 1) => ({ accountId, revision, mode: 'full' as const, readOnly: false })
 function deferred<T>() {
@@ -23,6 +24,7 @@ function open() {
 }
 beforeEach(() => {
   vi.resetAllMocks()
+  accountSession.value = { user: { id: '7' }, csrf_token: 'csrf', authenticated_at: '2026-09-08T12:00:00.000Z' }
   api.getContext.mockResolvedValue({ data: context('a') })
   api.listAccounts.mockResolvedValue({ data: { items: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] } })
   api.getPolicy.mockResolvedValue({ data: { revision: 1 } })
@@ -105,4 +107,33 @@ describe('risk account response scope', () => {
     expect(workspace.policy.value?.revision).toBe(2)
     expect(workspace.savingPolicy.value).toBe(false)
   })
+})
+
+// Page-scope tests inject the public command capability; its real HTTP/recovery behavior is tested separately.
+vi.mock('~/features/trading-context', async importOriginal => ({
+  ...await importOriginal<typeof import('~/features/trading-context')>(),
+  recoverContextCommand: async () => null,
+  runContextCommand: async (session: any, _action: string, target: string | null, revision: number) => api.selectAccount(session.csrf_token, target, revision),
+}))
+
+it('clears risk state on session loss and rejects the previous user late read', async () => {
+  open(); await flushPromises()
+  const late = deferred<{ data: { revision: number } }>()
+  api.getPolicy.mockReturnValueOnce(late.promise)
+  const reading = workspace.refresh()
+  accountSession.value = null
+  expect(workspace.activeAccountId.value).toBeNull()
+  expect(workspace.policy.value).toBeNull()
+  expect(tradingContext.value).toBeNull()
+  late.resolve({ data: { revision: 99 } }); await reading
+  expect(workspace.policy.value).toBeNull()
+})
+
+it('loads the confirmed current account when another accepted switch supersedes the requested target', async () => {
+  open(); await flushPromises()
+  api.selectAccount.mockResolvedValueOnce({ data: context('c', 3) })
+  await workspace.selectAccount('b')
+  expect(workspace.activeAccountId.value).toBe('c')
+  expect(api.getPolicy).toHaveBeenLastCalledWith('c')
+  expect(api.getPolicy).not.toHaveBeenCalledWith('b')
 })

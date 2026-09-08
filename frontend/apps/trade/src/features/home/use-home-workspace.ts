@@ -1,3 +1,4 @@
+import { runContextCommand, recoverContextCommand, contextCommandState } from '~/features/trading-context'
 import { applyAccountSnapshot } from '~/features/trading-context'
 import { observerChannels, tradingAccounts, tradingContext, applyTradingContext, applyTradingAccounts, applyObserverChannels, createRequestScope } from '~/features/trading-context'
 import { ApiClientError, createApiClient } from '@aurum/api-client'
@@ -44,18 +45,23 @@ export function useHomeWorkspace() {
     const current = requests.begin('context')
     loading.value = true; error.value = ''
     try {
+      if (session.value) await recoverContextCommand(session.value)
+      if (!current()) return
       const [contextResponse, accountResponse, observerResponse] = await Promise.all([client.getTradingContext(), client.listTradingAccounts(), client.listObserverChannels(), loadLatestAnalysis(true)])
       if (!current()) return
       applyTradingContext(contextResponse.data); applyTradingAccounts(accountResponse.data.items); applyObserverChannels(observerResponse.data.items)
       const context = contextResponse.data
-      const observer = context.mode === 'observer' ? observerChannels.value.find((item) => item.id === context.observerChannelId) : null
+      let observer = context.mode === 'observer' ? observerChannels.value.find((item) => item.id === context.observerChannelId) : null
       if (context.mode === 'observer' && !observer) throw new Error('当前观摩授权已失效，请退出观摩后重新选择')
-      const selected = observer?.sourceAccountId ?? context.accountId ?? tradingAccounts.value[0]?.id ?? null
+      let selected = observer?.sourceAccountId ?? context.accountId ?? tradingAccounts.value[0]?.id ?? null
       if (!selected) { activeAccountId.value = null; clearAccountRuntime(); return }
       if (context.mode !== 'observer' && selected !== context.accountId && session.value) {
-        const selectedContext = (await client.selectTradingAccount(session.value.csrf_token, selected, context.revision)).data
+        const selectedContext = (await runContextCommand(session.value, 'select_account', selected, context.revision)).data
         if (!current()) return
         applyTradingContext(selectedContext)
+        observer = selectedContext.mode === 'observer' ? observerChannels.value.find(item => item.id === selectedContext.observerChannelId && item.active) : null
+        selected = observer?.sourceAccountId ?? selectedContext.accountId
+        if (!selected) { activeAccountId.value = null; clearAccountRuntime(); return }
       }
       await loadAccount(selected, true, observer?.id ?? null)
     } catch (reason) {
@@ -111,30 +117,33 @@ export function useHomeWorkspace() {
   }
 
   async function selectAccount(accountId: string) {
+    if (contextCommandState.value.busy) return
     if (!session.value || !tradingContext.value || (tradingContext.value.mode === 'full' && accountId === tradingContext.value.accountId)) return
-    const { csrf_token } = session.value
+    const commandSession = session.value
     const revision = tradingContext.value.revision
-    await changeContext(() => client.selectTradingAccount(csrf_token, accountId, revision), accountId, null)
+    await changeContext(() => runContextCommand(commandSession, 'select_account', accountId, revision))
   }
 
   async function selectObserver(observerChannelId: string) {
+    if (contextCommandState.value.busy) return
     if (!session.value || !tradingContext.value) return
     const channel = observerChannels.value.find((item) => item.id === observerChannelId && item.active)
     if (!channel) return
-    const { csrf_token } = session.value
+    const commandSession = session.value
     const revision = tradingContext.value.revision
-    await changeContext(() => client.enterObserverMode(csrf_token, observerChannelId, revision), channel.sourceAccountId, observerChannelId)
+    await changeContext(() => runContextCommand(commandSession, 'enter_observer', observerChannelId, revision))
   }
 
   async function leaveObserver() {
+    if (contextCommandState.value.busy) return
     if (!session.value || !tradingContext.value || tradingContext.value.mode !== 'observer') return
-    const { csrf_token } = session.value
+    const commandSession = session.value
     const revision = tradingContext.value.revision
-    await changeContext(() => client.leaveObserverMode(csrf_token, revision), null, null)
+    await changeContext(() => runContextCommand(commandSession, 'leave_observer', null, revision))
   }
 
   async function changeContext(
-    write: () => ReturnType<typeof client.getTradingContext>, accountId: string | null, observerChannelId: string | null,
+    write: () => ReturnType<typeof runContextCommand>,
   ) {
     stop(); clearAccountRuntime(); activeAccountId.value = null
     const current = requests.begin('context')
@@ -143,8 +152,10 @@ export function useHomeWorkspace() {
       const result = await write()
       if (!current()) return
       applyTradingContext(result.data)
-      const selected = accountId ?? result.data.accountId
-      if (selected) await loadAccount(selected, true, observerChannelId)
+      const observer = result.data.mode === 'observer' ? observerChannels.value.find(item => item.id === result.data.observerChannelId && item.active) : null
+      if (result.data.mode === 'observer' && !observer) throw new Error('当前观摩授权已失效，请重新读取账户')
+      const selected = observer?.sourceAccountId ?? result.data.accountId
+      if (selected) await loadAccount(selected, true, observer?.id ?? null)
     } catch (reason) {
       if (!current()) return
       error.value = reason instanceof Error ? reason.message : '切换失败，请刷新后重试'

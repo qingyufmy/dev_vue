@@ -151,6 +151,14 @@ export const pendingOrderSchema = z.object({
   price: value.price, stopLoss: value.stop_loss, takeProfit: value.take_profit, createdAt: value.created_at, expiresAt: value.expires_at,
   source: value.source, signalId: value.signal_id, revision: value.revision }))
 
+export const contextCommandKeySchema = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/)
+export const tradingContextReceiptSchema = z.object({
+  request_id: contextCommandKeySchema, action: z.enum(['select_account', 'enter_observer', 'leave_observer']),
+  target_id: z.string().nullable(), prior_revision: numericRevisionSchema.refine(Number.isSafeInteger), result: tradingContextSchema,
+  recorded_at: z.iso.datetime({ offset: true }), replayed: z.boolean(),
+}).strict().transform(value => ({ requestId: value.request_id, action: value.action, targetId: value.target_id,
+  priorRevision: value.prior_revision, result: value.result, recordedAt: value.recorded_at, replayed: value.replayed }))
+export const tradingContextReceiptResponseSchema = z.object({ data: tradingContextReceiptSchema.nullable(), meta: responseMetaSchema }).strict()
 export const tradingContextResponseSchema = z.object({ data: tradingContextSchema, meta: responseMetaSchema })
 export const tradingAccountsResponseSchema = z.object({ data: z.object({ items: z.array(tradingAccountSchema) }), meta: responseMetaSchema })
 export const connectionCapacityResponseSchema = z.object({ data: z.object({ included: z.number().int(), purchased: z.number().int(), total: z.number().int(), active: z.number().int(), available: z.number().int() }), meta: responseMetaSchema })

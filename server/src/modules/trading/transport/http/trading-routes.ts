@@ -1,3 +1,5 @@
+import type { ContextWritePort } from '../../application/context-write-port.js'
+import type { ContextWriteReceipt } from '../../domain/context-write.js'
 import { parseContextRevision } from './trading-context-input.js'
 import { createTradingHttpContract } from './trading-http-contract.js'
 import type { FastifyPluginAsync } from 'fastify'
@@ -10,6 +12,7 @@ import type { TradeRequestAuthenticator } from '../../application/request-authen
 
 export interface TradingRoutesOptions {
   service: TradingService
+  contextCommands: ContextWritePort
   capacity: ConnectionCapacityService
   auth: TradeRequestAuthenticator
 }
@@ -19,6 +22,7 @@ function response(requestId: string, data: unknown) {
 }
 
 const contextDto = (value: TradingContext) => ({ user_id: String(value.userId), mode: value.mode, account_id: value.accountId, observer_channel_id: value.observerChannelId, read_only: value.readOnly, revision: String(value.revision) })
+const receiptDto = (value: ContextWriteReceipt) => ({ request_id: value.requestId, action: value.action, target_id: value.targetId, prior_revision: String(value.priorRevision), result: contextDto(value.result), recorded_at: value.recordedAt, replayed: value.replayed })
 const accountDto = (value: TradingAccountSummary) => ({ id: value.id, platform: value.platform, login: value.login, server: value.server, currency: value.currency, terminal_profile_id: value.terminalProfileId, terminal_instance_id: value.terminalInstanceId, bridge_state: value.bridgeState, trade_permission: value.tradePermission, last_seen_at: value.lastSeenAt })
 const snapshotDto = (value: AccountSnapshot) => ({ ...accountDto(value), balance: value.balance, equity: value.equity, margin: value.margin, free_margin: value.freeMargin, floating_profit: value.floatingProfit, leverage: value.leverage, timezone_offset_minutes: value.timezoneOffsetMinutes, clock_status: value.clockStatus, observed_at: value.observedAt, revision: String(value.revision) })
 const quoteDto = (value: MarketQuote) => ({ account_id: value.accountId, symbol: value.symbol, bid: value.bid, ask: value.ask, last: value.last, spread: value.spread, trade_mode: value.tradeMode, observed_at: value.observedAt, revision: String(value.revision) })
@@ -40,6 +44,7 @@ function problem(error: unknown, request: { id: string; url: string }, reply: { 
 export const tradingRoutes: FastifyPluginAsync<TradingRoutesOptions> = async (fastify, options) => {
   const contract = createTradingHttpContract()
   fastify.get('/trading-context', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
     try { const { userId } = await options.auth.authenticate(request); contract.request('getTradingContext', request); return contract.response('getTradingContext', response(request.id, contextDto(await options.service.context(userId)))) }
     catch (error) { return contract.problem('getTradingContext', error, request, reply) }
   })
@@ -48,10 +53,10 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesOptions> = async (fa
       const { userId } = await options.auth.assertWrite(request)
       contract.request('replaceTradingContext', request)
       const expected = parseContextRevision(request.body.expected_revision)
-      const data = request.body.mode === 'observer'
-        ? await options.service.enterObserver(userId, String(request.body.observer_channel_id ?? ''), expected)
-        : await options.service.selectAccount(userId, String(request.body.account_id ?? ''), expected)
-      return contract.contextWriteResponse('replaceTradingContext', response(request.id, contextDto(data)))
+      const receipt = await options.contextCommands.execute({ userId, requestId: String(request.headers['idempotency-key']),
+        action: request.body.mode === 'observer' ? 'enter_observer' : 'select_account',
+        targetId: request.body.mode === 'observer' ? String(request.body.observer_channel_id) : String(request.body.account_id), expectedRevision: expected })
+      return contract.contextWriteResponse('replaceTradingContext', () => response(request.id, contextDto(receipt.result)))
     } catch (error) { return contract.problem('replaceTradingContext', error, request, reply) }
   })
   fastify.delete<{ Querystring: { expected_revision?: string } }>('/trading-context/observer', async (request, reply) => {
@@ -59,8 +64,19 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesOptions> = async (fa
       const { userId } = await options.auth.assertWrite(request)
       contract.request('leaveObserverMode', request)
       const expected = parseContextRevision(request.query.expected_revision)
-      return contract.contextWriteResponse('leaveObserverMode', response(request.id, contextDto(await options.service.leaveObserver(userId, expected))))
+      const receipt = await options.contextCommands.execute({ userId, requestId: String(request.headers['idempotency-key']), action: 'leave_observer', targetId: null, expectedRevision: expected })
+      return contract.contextWriteResponse('leaveObserverMode', () => response(request.id, contextDto(receipt.result)))
     } catch (error) { return contract.problem('leaveObserverMode', error, request, reply) }
+  })
+  fastify.get<{ Params: { request_id: string } }>('/trading-context/commands/:request_id', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    try {
+      const { userId } = await options.auth.authenticate(request)
+      contract.request('getTradingContextReceipt', request)
+      const receipt = await options.contextCommands.receipt(userId, request.params.request_id)
+      if (receipt && (receipt.result.userId !== userId || receipt.requestId !== request.params.request_id)) throw new TradingAccessError('trading_context_receipt_unavailable', 503)
+      return contract.response('getTradingContextReceipt', response(request.id, receipt ? receiptDto(receipt) : null))
+    } catch (error) { return contract.problem('getTradingContextReceipt', error, request, reply) }
   })
   fastify.get<{ Querystring: { access?: TradingAccountAccess } }>('/trading-accounts', async (request, reply) => {
     try { const { userId } = await options.auth.authenticate(request); contract.request('listTradingAccounts', request); return contract.response('listTradingAccounts', response(request.id, { items: (await options.service.listAccounts(userId, request.query.access)).map(accountDto) })) }

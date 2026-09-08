@@ -15,7 +15,7 @@ async function fixture() {
   const authenticate = vi.fn(async () => ({ userId: 42 }))
   const app = Fastify()
   await app.register(tradingRoutes, { prefix: '/api/v4', service: new TradingService(repository as unknown as TradingReadRepository),
-    capacity: {} as ConnectionCapacityService, auth: { authenticate, assertWrite: authenticate } })
+    contextCommands: { async execute() { throw Error('unexpected-write') }, async receipt() { throw Error('unexpected-receipt') } }, capacity: {} as ConnectionCapacityService, auth: { authenticate, assertWrite: authenticate } })
   return { app, repository, authenticate }
 }
 

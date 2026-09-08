@@ -40,6 +40,17 @@ beforeEach(() => {
 })
 afterEach(() => { wrapper?.unmount(); wrapper = undefined })
 
+it('can explicitly activate the displayed fallback account when the authoritative context is blocked', async () => {
+  await flushPromises()
+  mocks.api.getContext.mockResolvedValueOnce({ data: { accountId: null, mode: 'blocked', readOnly: true, revision: 0 } })
+  await state.load()
+  expect(state.activeAccountId.value).toBe('a')
+  mocks.api.selectAccount.mockResolvedValueOnce({ data: { accountId: 'a', mode: 'full', readOnly: false, revision: 1 } })
+  await state.selectAccount('a')
+  expect(mocks.api.selectAccount).toHaveBeenCalledWith('csrf', 'a', 0)
+  expect(state.context.value).toMatchObject({ mode: 'full', accountId: 'a' })
+})
+
 it('keeps the newest refresh when same-account responses finish out of order', async () => {
   await flushPromises()
   const first = deferred<ReturnType<typeof workspace>>(), second = deferred<ReturnType<typeof workspace>>()
@@ -70,3 +81,10 @@ it('clears logout state and rejects both late HTTP data and callbacks from the c
   expect(state.refreshing.value).toBe(false)
   expect(mocks.stop).toHaveBeenCalled()
 })
+
+// Page-scope tests inject the public command capability; its real HTTP/recovery behavior is tested separately.
+vi.mock('~/features/trading-context', async importOriginal => ({
+  ...await importOriginal<typeof import('~/features/trading-context')>(),
+  recoverContextCommand: async () => null,
+  runContextCommand: async (session: any, _action: string, target: string | null, revision: number) => mocks.api.selectAccount(session.csrf_token, target, revision),
+}))

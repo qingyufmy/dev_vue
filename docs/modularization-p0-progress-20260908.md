@@ -706,3 +706,9 @@ MySQL适配器与受限历史连接已接入真实164步及嵌套协调链。恢
 在trading-context中新增共享恢复控制器及公开类型：冻结并保存请求身份、刷新后只读确认、显式同键重试、会话隔离、历史回执与当前上下文分离。存储或回执异常保持待确认，首次明确拒绝与未知后的拒绝分别处理。
 
 11项新行为测试与4项既有投影测试通过，trade类型检查与前端边界检查通过，已检测债务0。控制器仍使用注入端口，未接入HTTP/sessionStorage或home/trader/risk页面；下一步配套切换合同、生产传输与页面并移除旧写入口，不能把该模块测试视为全栈验收。
+
+## 第七十九批：账户命令全栈源码切换
+
+HTTP和生产组装已切换到ContextWritePort，移除读取接口、应用服务和repository上的旧saveContext及旧V4写入器。PUT/DELETE强制原请求键，新增按用户查询历史回执的no-store接口；运行合同9项。home/trader/risk统一使用会话恢复适配，按最新上下文加载，恢复提示支持查询/原请求重试；待确认只读、会话清理和默认账户激活已配套处理。
+
+服务端与消费者91项、trade146项、api-client22项、contracts53项离线测试通过，完整前后端类型检查和相关构建通过。实际注册96合同/88匹配、既有8项缺失不变；307项冻结迁移hash保持。详情见[合同与验证边界](architecture/trading-context-write-contract-20260908.md)和[注册回执](architecture/context-command-api-registration-20260908.json)。当前dev_vue升级、真实权限锁序及实际浏览器验收尚未执行，整体目标继续推进。

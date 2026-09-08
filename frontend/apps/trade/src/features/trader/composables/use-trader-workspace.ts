@@ -1,3 +1,4 @@
+import { runContextCommand, recoverContextCommand, contextCommandState } from '~/features/trading-context'
 import { tradingAccounts, tradingContext, applyTradingContext, applyTradingAccounts, applyObserverChannels, createRequestScope } from '~/features/trading-context'
 import { applyAccountMetrics } from '~/lib/apply-account-metrics'
 import type {
@@ -52,6 +53,8 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
     loading.value = true
     error.value = ''
     try {
+      if (session.value) await recoverContextCommand(session.value)
+      if (!current()) return
       const [contextResponse, accountsResponse, observersResponse, strategiesResponse] = await Promise.all([
         traderApi.getContext(), traderApi.listAccounts(), traderApi.listObservers(), traderApi.listStrategies(),
       ])
@@ -156,6 +159,7 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
   }
 
   async function selectAccount(accountId: string) {
+    if (contextCommandState.value.busy) return
     if (!session.value || !tradingContext.value) return
     const switchingSession = session.value
     queuedAccountId = accountId
@@ -165,18 +169,19 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
     while (queuedAccountId) {
       const nextAccountId = queuedAccountId
       queuedAccountId = null
-      if (nextAccountId === activeAccountId.value && !observerChannelId.value) continue
+      if (nextAccountId === activeAccountId.value && !observerChannelId.value && tradingContext.value.mode === 'full' && tradingContext.value.accountId === nextAccountId) continue
       const currentGeneration = ++generation
       stopRealtime()
       try {
-        const context = await traderApi.selectAccount(session.value.csrf_token, nextAccountId, tradingContext.value.revision)
+        const context = await runContextCommand(session.value, 'select_account', nextAccountId, tradingContext.value.revision)
         if (currentGeneration !== generation) break
         applyTradingContext(context.data)
+        if (context.data.mode !== 'full' || !context.data.accountId) { queuedAccountId = null; await load(); break }
         observerChannelId.value = null
-        activeAccountId.value = nextAccountId
+        activeAccountId.value = context.data.accountId
         detail.value = null
         selectDecision('')
-        if (!queuedAccountId) await loadAccount(nextAccountId, null, currentGeneration)
+        if (!queuedAccountId) await loadAccount(context.data.accountId, null, currentGeneration)
       } catch (reason) {
         if (currentGeneration === generation) {
           const switchError = readableError(reason, '交易账户切换失败')

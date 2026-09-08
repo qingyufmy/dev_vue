@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { contextCommandState } from '~/features/trading-context'
 import type { ExecutionCommand, ExecutionDistribution, OpenPosition, PendingOrder } from '@aurum/contracts'
 import { AlertCircle, Bot, Cable, Eye, HandCoins, Plus, RefreshCw } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
@@ -58,7 +59,7 @@ const selectedResource = computed(() => {
 const realtimeLabel = computed(() => ({
   idle: '未连接', connecting: '连接中', live: '实时同步', recovering: '正在恢复', offline: '快照模式',
 })[workspace.realtime.value])
-const surfaceReadOnly = computed(() => workspace.isObserver.value || workspace.context.value?.readOnly !== false)
+const surfaceReadOnly = computed(() => Boolean(contextCommandState.value.intent) || workspace.isObserver.value || workspace.context.value?.readOnly !== false)
 const readOnly = computed(() => surfaceReadOnly.value || workspace.account.value?.tradePermission !== true)
 const traderStrategies = computed(() => workspace.strategies.value.filter((item) => item.kind === 'trader' && item.status === 'active' && item.activeVersionId))
 const defaultSymbol = computed(() => workspace.symbols.value[0] ?? workspace.positions.value[0]?.symbol ?? workspace.pendingOrders.value[0]?.symbol ?? '')

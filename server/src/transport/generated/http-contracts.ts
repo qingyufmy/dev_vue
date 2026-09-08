@@ -841,6 +841,80 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         ],
         "type": "object"
       },
+      "TradingContextReceipt": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "select_account",
+              "enter_observer",
+              "leave_observer"
+            ],
+            "type": "string"
+          },
+          "prior_revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "recorded_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "replayed": {
+            "type": "boolean"
+          },
+          "request_id": {
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/TradingContext"
+          },
+          "target_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "request_id",
+          "action",
+          "target_id",
+          "prior_revision",
+          "result",
+          "recorded_at",
+          "replayed"
+        ],
+        "type": "object"
+      },
+      "TradingContextReceiptResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TradingContextReceipt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ],
+        "type": "object"
+      },
       "TradingContextResponse": {
         "properties": {
           "data": {
@@ -1259,6 +1333,18 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
             "minLength": 16,
             "type": "string"
           }
+        },
+        {
+          "name": "idempotency-key",
+          "location": "header",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string"
+          }
         }
       ],
       "responses": {
@@ -1305,6 +1391,49 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         "required": true
       }
     },
+    "getTradingContextReceipt": {
+      "parameters": [
+        {
+          "name": "request_id",
+          "location": "path",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/TradingContextReceiptResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      }
+    },
     "leaveObserverMode": {
       "parameters": [
         {
@@ -1326,6 +1455,18 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
           "schema": {
             "maxLength": 16,
             "pattern": "^(0|[1-9][0-9]*)$",
+            "type": "string"
+          }
+        },
+        {
+          "name": "idempotency-key",
+          "location": "header",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
             "type": "string"
           }
         }

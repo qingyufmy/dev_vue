@@ -30,8 +30,8 @@ import { BrowserRealtimeHub } from './transport/realtime/browser-realtime-hub.js
 
 type GatewayLeases = NonNullable<ConstructorParameters<typeof MysqlTradingRepository>[1]>
 
-export function createTradingHttp(service: TradingService, capacity: ConnectionCapacityService, auth: TradeSessionAuthenticator): FastifyPluginAsync {
-  return async app => { await app.register(tradingRoutes, { prefix: '/api/v4', service, capacity, auth }) }
+export function createTradingHttp(service: TradingService, capacity: ConnectionCapacityService, auth: TradeSessionAuthenticator, contextCommands: ContextWritePort): FastifyPluginAsync {
+  return async app => { await app.register(tradingRoutes, { prefix: '/api/v4', service, capacity, auth, contextCommands }) }
 }
 
 export function createObserverManagementHttp(service: ObserverManagementService, auth: ObserverManagementRequestAuthenticator): FastifyPluginAsync {
@@ -63,7 +63,7 @@ export function createTradingApiModule(pool: Pool, cache: Redis, auth: AuthServi
   const tradeAuth = new AuthTradeRequestAdapter(auth)
   const observerAdminAuth = new AuthObserverAdminAdapter(auth)
   return { trading, connectionCapacity, observerManagement, tradeAuth, observerAdminAuth,
-    tradeHttp: createTradingHttp(trading, connectionCapacity, tradeAuth),
+    tradeHttp: createTradingHttp(trading, connectionCapacity, tradeAuth, createTradingContextWriter(pool, leases)),
     observerHttp: createObserverManagementHttp(observerManagement, observerAdminAuth),
   }
 }

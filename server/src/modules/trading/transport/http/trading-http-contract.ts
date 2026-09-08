@@ -11,11 +11,11 @@ class ContextWriteResultUnknown extends Error {
 }
 
 export function createTradingHttpContract() {
-  const contract = createHttpContractValidator(httpRuntimeContracts, ['getTradingContext', 'listTradingAccounts', 'listObserverChannels', 'replaceTradingContext', 'leaveObserverMode'])
+  const contract = createHttpContractValidator(httpRuntimeContracts, ['getTradingContext', 'listTradingAccounts', 'listObserverChannels', 'replaceTradingContext', 'leaveObserverMode', 'getTradingContextReceipt'])
   return {
     ...contract,
-    contextWriteResponse<T>(operation: string, value: T): T {
-      try { return contract.response(operation, value) }
+    contextWriteResponse<T>(operation: string, value: () => T): T {
+      try { return contract.response(operation, value()) }
       catch { throw new ContextWriteResultUnknown() }
     },
     problem(operation: string, error: unknown, request: { id: string; url: string }, reply: FastifyReply) {

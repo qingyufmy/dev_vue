@@ -8,7 +8,6 @@ export type TradingAccountAccess = 'current' | 'history'
 
 export interface TradingReadRepository {
   getContext(userId: number): Promise<TradingContext | null>
-  saveContext(context: Omit<TradingContext, 'revision'>, expectedRevision: number | null): Promise<TradingContext>
   listAccounts(userId: number, access?: TradingAccountAccess): Promise<TradingAccountSummary[]>
   listTerminalProfiles(userId: number): Promise<TerminalProfileSummary[]>
   listObserverChannels(userId: number): Promise<ObserverChannelSummary[]>

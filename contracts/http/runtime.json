@@ -7,6 +7,7 @@
     "listTradingAccounts",
     "listObserverChannels",
     "replaceTradingContext",
-    "leaveObserverMode"
+    "leaveObserverMode",
+    "getTradingContextReceipt"
   ]
 }

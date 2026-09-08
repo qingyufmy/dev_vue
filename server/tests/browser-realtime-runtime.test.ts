@@ -146,7 +146,7 @@ describe('V4 browser realtime runtime', () => {
     services.auth = { cookieName: cookieNameForClient } as ApiV4RouteServices['auth']
     services.authHttp = createAuthHttp(services.auth, false)
     const registrationOnly = new Proxy({}, { get: () => () => { throw new Error('registration_only') } })
-    services.tradingHttp = createTradingHttp(...([registrationOnly, registrationOnly, registrationOnly] as Parameters<typeof createTradingHttp>))
+    services.tradingHttp = createTradingHttp(...([registrationOnly, registrationOnly, registrationOnly, registrationOnly] as Parameters<typeof createTradingHttp>))
     services.observerManagementHttp = createObserverManagementHttp(...([registrationOnly, registrationOnly] as Parameters<typeof createObserverManagementHttp>))
     services.settingsHttp = createSettingsHttp({} as Parameters<typeof createSettingsHttp>[0], {
       authenticate: async () => { throw new Error('registration_only') }, assertWrite: async () => { throw new Error('registration_only') },
@@ -206,7 +206,7 @@ function realtimeEvent(): TradingRealtimeEvent {
 
 function repository(): TradingReadRepository {
   return {
-    async getContext() { return null }, async saveContext() { throw new Error('unused') },
+    async getContext() { return null },
     async listAccounts() { return [] }, async listTerminalProfiles() { return [] }, async listObserverChannels() { return [] },
     async findAccount(accountId) { return accountId === '7' ? account() : null },
     async findOwnedAccount(userId, accountId) { return userId === 42 && accountId === '7' ? account() : null },

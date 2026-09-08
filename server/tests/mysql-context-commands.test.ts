@@ -8,7 +8,7 @@ const command: ContextWriteCommand = { userId: 42, requestId: 'd97382ac-4b49-42d
 type State = { revision: number; receipts: Record<string, Record<string, unknown>> }
 function fixture() {
   let state: State = { revision: 0, receipts: {} }
-  let active = true, receiptFailure = false, lostAck = false
+  let active = true, receiptFailure = false, lostAck = false, rollbackFailure = false
   const connections: Array<{ calls: string[] }> = []
   const pool = { async getConnection() {
     let pending = structuredClone(state)
@@ -30,14 +30,14 @@ function fixture() {
         throw Error('unexpected-sql')
       },
       async commit() { calls.push('commit'); state = structuredClone(pending); if (lostAck) { lostAck = false; throw Error('lost-ack') } },
-      async rollback() { calls.push('rollback'); pending = structuredClone(state) },
+      async rollback() { calls.push('rollback'); if (rollbackFailure) throw Error('rollback-failed'); pending = structuredClone(state) },
       destroy() { calls.push('destroy') }, release() { calls.push('release') },
     }
   } }
   const resolve = vi.fn(async (_connection: PoolConnection, c: ContextWriteCommand) => ({ userId: c.userId,
     mode: 'full' as const, accountId: c.targetId, observerChannelId: null, readOnly: false }))
   return { writer: new MysqlContextCommands(pool as unknown as Pool, resolve), resolve, connections,
-    state: () => state, failReceipt: () => { receiptFailure = true }, loseAck: () => { lostAck = true }, deactivate: () => { active = false } }
+    failRollback: () => { rollbackFailure = true }, state: () => state, failReceipt: () => { receiptFailure = true }, loseAck: () => { lostAck = true }, deactivate: () => { active = false } }
 }
 
 it('commits context and receipt together, then replays without target resolution or another write', async () => {
@@ -119,4 +119,17 @@ it('does not let a target adapter rewrite the approved command', async () => {
   await expect(f.writer.execute(command)).rejects.toMatchObject({ code: 'trading_context_write_failed' })
   expect(command.targetId).toBe('7')
   expect(f.state().revision).toBe(0)
+})
+
+it('destroys a connection after failed rollback and rejects invalid revisions before acquiring it', async () => {
+  const invalid = fixture()
+  for (const expectedRevision of [null, -1, NaN, 1.5, Number.MAX_SAFE_INTEGER]) {
+    await expect(invalid.writer.execute({ ...command, expectedRevision } as ContextWriteCommand)).rejects.toMatchObject({ code: 'trading_context_invalid' })
+  }
+  expect(invalid.connections).toHaveLength(0)
+  const failed = fixture(); failed.failReceipt(); failed.failRollback()
+  await expect(failed.writer.execute(command)).rejects.toMatchObject({ code: 'trading_context_rollback_unknown' })
+  expect(failed.connections[0]!.calls.slice(-2)).toEqual(['rollback', 'destroy'])
+  expect(failed.connections[0]!.calls).not.toContain('release')
+  expect(failed.connections[0]!.calls).not.toContain('commit')
 })

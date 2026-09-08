@@ -1,3 +1,5 @@
+export { default as ContextCommandRecovery } from './ContextCommandRecovery.vue'
+export { contextCommandState, bindContextCommandSession, runContextCommand, recoverContextCommand, retryContextCommand } from './context-command-session'
 export { createContextCommandController, ContextCommandRecoveryError } from './context-command-controller'
 export type { ContextCommandAction, ContextCommandScope, ContextCommandIntent, ContextCommandReceipt, ContextCommandTransport, ContextCommandStorage } from './context-command-controller'
 import { computed, readonly, ref } from 'vue'

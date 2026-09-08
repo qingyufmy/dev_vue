@@ -1,3 +1,4 @@
+import { contextCommandPort } from './helpers/context-command-port.js'
 import { BrowserRealtimeSession } from '../src/modules/trading/transport/realtime/browser-realtime-session.js'
 import { BrowserRealtimeHub } from '../src/modules/trading/transport/realtime/browser-realtime-hub.js'
 import { readFile } from 'node:fs/promises'
@@ -23,11 +24,6 @@ function repository(): TradingReadRepository & TradingProjectionRepository & Tru
   const revisions = new Map<string, number>()
   return {
     async getContext(userId) { return userId === 42 ? context : null },
-    async saveContext(next, expected) {
-      if (expected !== null && expected !== context.revision) throw new TradingAccessError('revision_conflict', 409)
-      context = { ...next, revision: context.revision + 1 } as typeof context
-      return context
-    },
     async listAccounts(userId) { return userId === 42 ? [account] : [] },
     async listTerminalProfiles() { return [{ id: 'profile-1', displayName: '主终端', platform: 'mt5', installationId: 'install-1', accountId: '7', connectionState: 'online', lastSeenAt: '2026-09-03T08:00:00.000Z' }] },
     async listObserverChannels(userId) { return userId === 42 || userId === 99 ? [{ id: 'observer-1', displayName: '黄金观摩', sourceAccountId: '7', active: true }] : [] },
@@ -81,15 +77,18 @@ describe('Stage 11 trading vertical slice', () => {
 
   it('serves normalized snake_case HTTP snapshots through the authenticated trade boundary', async () => {
     const store = repository(); const leases = new MemoryLeases()
+    const commands = contextCommandPort({ initial: { userId: 42, mode: 'full', accountId: '7', observerChannelId: null, readOnly: false, revision: 1 },
+      resolve: async command => ({ userId: 42, mode: command.action === 'enter_observer' ? 'observer' : 'full',
+        accountId: command.action === 'enter_observer' ? null : '7', observerChannelId: command.action === 'enter_observer' ? command.targetId : null, readOnly: command.action === 'enter_observer' }) })
     const app = Fastify({ logger: false })
-    await app.register(tradingRoutes, { prefix: '/api/v4', service: new TradingService(store), capacity: new ConnectionCapacityService({ async getPurchasedCapacity() { return 0 } }, leases), auth: { async authenticate() { return { userId: 42 } }, async assertWrite() { return { userId: 42 } } } })
+    await app.register(tradingRoutes, { prefix: '/api/v4', service: new TradingService(store), contextCommands: commands.port, capacity: new ConnectionCapacityService({ async getPurchasedCapacity() { return 0 } }, leases), auth: { async authenticate() { return { userId: 42 } }, async assertWrite() { return { userId: 42 } } } })
     const result = await app.inject({ method: 'GET', url: '/api/v4/trading-accounts/7/snapshot' })
     expect(result.statusCode).toBe(200)
     expect(result.json().data).toMatchObject({ account: { terminal_profile_id: 'profile-1', bridge_state: 'online' }, snapshot: { free_margin: '9920.00', clock_status: 'calibrated' }, pending_orders: { revision: '4' } })
     expect(JSON.stringify(result.json())).not.toContain('terminalProfileId')
-    const observer = await app.inject({ method: 'PUT', headers: { 'x-csrf-token': 'test-csrf-token-valid' }, url: '/api/v4/trading-context', payload: { mode: 'observer', observer_channel_id: 'observer-1', expected_revision: '1' } })
+    const observer = await app.inject({ method: 'PUT', headers: { 'x-csrf-token': 'test-csrf-token-valid', 'idempotency-key': 'd97382ac-4b49-42db-b1f1-850ec403848a' }, url: '/api/v4/trading-context', payload: { mode: 'observer', observer_channel_id: 'observer-1', expected_revision: '1' } })
     expect(observer.json().data).toMatchObject({ mode: 'observer', observer_channel_id: 'observer-1', read_only: true, revision: '2' })
-    const restored = await app.inject({ method: 'DELETE', headers: { 'x-csrf-token': 'test-csrf-token-valid' }, url: '/api/v4/trading-context/observer?expected_revision=2' })
+    const restored = await app.inject({ method: 'DELETE', headers: { 'x-csrf-token': 'test-csrf-token-valid', 'idempotency-key': 'd97382ac-4b49-42db-b1f1-850ec403848b' }, url: '/api/v4/trading-context/observer?expected_revision=2' })
     expect(restored.json().data).toMatchObject({ mode: 'full', account_id: '7', observer_channel_id: null, revision: '3' })
     await app.close()
   })

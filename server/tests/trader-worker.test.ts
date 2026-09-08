@@ -44,7 +44,7 @@ function tradingRepository(revisions = { account: 8, quote: 9, positions: 12, pe
     async listPositions() { return { revision: revisions.positions, items: [] } },
     async listPendingOrders() { return { revision: revisions.pending, items: [] } },
     async latestRevision(_accountId, resource) { return resource === 'account.metrics' ? revisions.account : resource === 'market.quote' ? revisions.quote : resource === 'positions' ? revisions.positions : revisions.pending },
-    async getContext() { return null }, async saveContext() { throw new Error('unsupported') }, async listAccounts() { return [] }, async listTerminalProfiles() { return [] }, async listObserverChannels() { return [] }, async findAccount() { return null }, async listSymbols() { return [] }, async listCandles() { return [] },
+    async getContext() { return null }, async listAccounts() { return [] }, async listTerminalProfiles() { return [] }, async listObserverChannels() { return [] }, async findAccount() { return null }, async listSymbols() { return [] }, async listCandles() { return [] },
   }
 }
 

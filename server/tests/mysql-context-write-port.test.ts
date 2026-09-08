@@ -8,6 +8,7 @@ const command: ContextWriteCommand = { userId: 42, requestId: 'd97382ac-4b49-42d
 function fixture() {
   let rows: Record<string, Record<string, unknown>> = {}, revision = 0, active = true
   let lostAck = false, prepareFails = false, connectionFails = false, removed = false
+  let observerAllowed = false
   let betweenReads: (() => void) | undefined
   const calls: string[] = []
   let transactions = 0
@@ -17,6 +18,13 @@ function fixture() {
     return null
   }) }
   const target = async (sql: string, _values: unknown[] = []) => {
+    if (sql.includes('FROM observer_channels c')) return [observerAllowed ? [{
+      channel_id: '12', display_name: 'Observation', channel_slug: 'gold', source_id: '13', source_trading_account_id: '7', source_account_id: '7', ownership_revision: '4',
+      channel_active: 1, channel_revision: '3', audience: 'all', source_revision: '2', source_status: 'active', source_configuration_status: 'ready',
+      operator_user_id: 42, operator_deletion_status: 'active', operator_deleted_at: null, account_deleted_at: null,
+      viewer_deletion_status: 'active', viewer_deleted_at: null, viewer_plan: 'free', viewer_plan_expires_at: null, viewer_token_version: 1,
+      access_granted_at_utc: null, access_revoked_at_utc: null, access_revision: null,
+    }] : []]
     if (sql.startsWith('SELECT CAST(a.id AS CHAR) account_id')) {
       calls.push(transactions ? 'locked-target' : 'prepare-target')
       if (!transactions && prepareFails) throw Error('private-driver-details')
@@ -70,6 +78,7 @@ function fixture() {
     failConnection: () => { connectionFails = true }, removeTarget: () => { removed = true },
     deactivate: () => { active = false }, beforeTransaction: (callback: () => void) => { betweenReads = callback },
     removeReceipt: () => { rows = {} },
+    allowObserver: () => { observerAllowed = true },
   }
 }
 
@@ -136,4 +145,15 @@ it('rejects invalid commands without I/O and sanitizes preparation and receipt f
   expect(f.calls).not.toContain('begin')
   f.failConnection()
   await expect(f.port.receipt(42, command.requestId)).rejects.toMatchObject({ message: 'trading_context_receipt_unavailable', status: 503 })
+})
+
+it('uses real observer authorization for both accepted and denied commands without collecting a personal route', async () => {
+  const observe = { ...command, action: 'enter_observer' as const, targetId: '12' }
+  const denied = fixture()
+  await expect(denied.port.execute(observe)).rejects.toMatchObject({ code: 'trading_account_forbidden' })
+  expect(denied.calls).not.toContain('write')
+  const accepted = fixture(); accepted.allowObserver()
+  await expect(accepted.port.execute(observe)).resolves.toMatchObject({ result: { mode: 'observer', accountId: null, observerChannelId: '12', readOnly: true } })
+  expect(accepted.leases.current).not.toHaveBeenCalled()
+  expect(accepted.revision()).toBe(1)
 })

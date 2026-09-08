@@ -83,6 +83,7 @@ describe('observer HTTP resync scope protection', () => {
     mocks.api.getTradingContext.mockReturnValueOnce(pending.promise)
     const home = useHomeWorkspace()
     const loading = home.load()
+    await vi.waitFor(() => expect(mocks.api.getTradingContext).toHaveBeenCalled())
     home.stop()
     applyAccountSnapshot({ id: 'new-account', revision: 9 } as never)
     pending.reject(new Error('old_context_failed'))
@@ -116,6 +117,7 @@ describe('observer HTTP resync scope protection', () => {
     mocks.api.listMarketAnalyses.mockReturnValueOnce(pending.promise)
     const home = useHomeWorkspace()
     const loading = home.load()
+    await vi.waitFor(() => expect(mocks.api.getTradingContext).toHaveBeenCalled())
     home.stop()
     pending.resolve({ data: { items: [{ id: 'old-analysis' }] } })
     await loading
@@ -228,3 +230,10 @@ describe('observer HTTP resync scope protection', () => {
     home.stop()
   })
 })
+
+// Page-scope tests inject the public command capability; its real HTTP/recovery behavior is tested separately.
+vi.mock('~/features/trading-context', async importOriginal => ({
+  ...await importOriginal<typeof import('~/features/trading-context')>(),
+  recoverContextCommand: async () => null,
+  runContextCommand: async (session: any, action: string, target: string | null, revision: number) => action === 'leave_observer' ? mocks.api.leaveObserverMode(session.csrf_token, revision) : action === 'enter_observer' ? mocks.api.enterObserverMode(session.csrf_token, target, revision) : mocks.api.selectTradingAccount(session.csrf_token, target, revision),
+}))

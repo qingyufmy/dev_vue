@@ -1,3 +1,4 @@
+import { contextCommandKeySchema, tradingContextReceiptResponseSchema } from '@aurum/contracts'
 import { settingScopeSchema,settingRequestKeySchema,settingUpdateBodySchema,adminSettingResponseSchema,settingUpdateResponseSchema,type SettingUpdateBody } from '@aurum/contracts'
 import {
   bridgePairingRequestSchema, bridgePairingResponseSchema,
@@ -113,7 +114,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
       '/api/v4/realtime/tickets',
       { method: 'POST', csrfToken },
     ),
-    getTradingContext: () => send(tradingContextResponseSchema, '/api/v4/trading-context'),
+    getTradingContext: () => send(tradingContextResponseSchema, '/api/v4/trading-context', { cache: 'no-store' }),
     listTradingAccounts: (access: 'current' | 'history' = 'current') => send(
       tradingAccountsResponseSchema,
       `/api/v4/trading-accounts${access === 'history' ? '?access=history' : ''}`,
@@ -300,9 +301,10 @@ export function createApiClient(options: ApiClientOptions = {}) {
       '/api/v4/analysis-jobs',
       { method: 'POST', csrfToken, headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify(body) },
     ),
-    selectTradingAccount: (csrfToken: string, accountId: string, expectedRevision: number) => send(tradingContextResponseSchema, '/api/v4/trading-context', { method: 'PUT', csrfToken, body: JSON.stringify({ mode: 'full', account_id: accountId, expected_revision: String(expectedRevision) }) }),
-    enterObserverMode: (csrfToken: string, observerChannelId: string, expectedRevision: number) => send(tradingContextResponseSchema, '/api/v4/trading-context', { method: 'PUT', csrfToken, body: JSON.stringify({ mode: 'observer', observer_channel_id: observerChannelId, expected_revision: String(expectedRevision) }) }),
-    leaveObserverMode: (csrfToken: string, expectedRevision: number) => send(tradingContextResponseSchema, `/api/v4/trading-context/observer?expected_revision=${expectedRevision}`, { method: 'DELETE', csrfToken }),
+    getTradingContextReceipt: (requestId: string) => send(tradingContextReceiptResponseSchema, `/api/v4/trading-context/commands/${contextCommandKeySchema.parse(requestId)}`, { cache: 'no-store' }),
+    selectTradingAccount: (csrfToken: string, accountId: string, expectedRevision: number, requestId: string) => send(tradingContextResponseSchema, '/api/v4/trading-context', { method: 'PUT', csrfToken, headers: { 'Idempotency-Key': contextCommandKeySchema.parse(requestId) }, cache: 'no-store', body: JSON.stringify({ mode: 'full', account_id: accountId, expected_revision: String(expectedRevision) }) }),
+    enterObserverMode: (csrfToken: string, observerChannelId: string, expectedRevision: number, requestId: string) => send(tradingContextResponseSchema, '/api/v4/trading-context', { method: 'PUT', csrfToken, headers: { 'Idempotency-Key': contextCommandKeySchema.parse(requestId) }, cache: 'no-store', body: JSON.stringify({ mode: 'observer', observer_channel_id: observerChannelId, expected_revision: String(expectedRevision) }) }),
+    leaveObserverMode: (csrfToken: string, expectedRevision: number, requestId: string) => send(tradingContextResponseSchema, `/api/v4/trading-context/observer?expected_revision=${expectedRevision}`, { method: 'DELETE', csrfToken, headers: { 'Idempotency-Key': contextCommandKeySchema.parse(requestId) }, cache: 'no-store' }),
     request: <T>(schema: ZodType<T>, path: string, init: RequestOptions = {}) => send(schema, path, init, true),
   }
 }

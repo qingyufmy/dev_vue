@@ -1,0 +1,59 @@
+{
+  "observedAt": "2026-09-08T12:56:37.688Z",
+  "documentedCount": 96,
+  "businessRouteCount": 88,
+  "matchedCount": 88,
+  "missing": [
+    {
+      "method": "GET",
+      "path": "/api/v4/market/calendar-events",
+      "operationId": "listEconomicCalendarEvents"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/market/calendar-events/{event_id}",
+      "operationId": "getEconomicCalendarEvent"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/market/macro-series",
+      "operationId": "listMacroSeriesPoints"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/market/macro-snapshots",
+      "operationId": "listMacroSnapshots"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/market/macro-snapshots/latest",
+      "operationId": "getLatestMacroSnapshot"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/market/macro-snapshots/{snapshot_id}",
+      "operationId": "getMacroSnapshot"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/market/overview",
+      "operationId": "getMacroMarketOverview"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v4/positions",
+      "operationId": "listPositions"
+    }
+  ],
+  "unchangedMissing": true,
+  "inspectorExitCode": 1,
+  "otherDifferences": 0,
+  "frozenMigrationFilesVerified": 307,
+  "hashes": {
+    "contracts/http/domains/trading.json": "487deca475c2f19ccfe37cdf3df9ec5530f90767efa6566a1163b94b97b70d7f",
+    "server/src/modules/trading/transport/http/trading-routes.ts": "f48edfd69b32007ab9128abf792a71cea2dad4fb68fd92db446329e0dc9bb6d4",
+    "server/dist-v4/modules/trading/transport/http/trading-routes.js": "28c886ecf8c8dd7c72c85e1d47797ad29f855a9cf785887cbf7d2662d472ac1c",
+    "scripts/inspect-api-contracts.mjs": "ed9985387527c54c37f3a99e2e0586eb5d38c35e874a94b821b42d737b5f2623"
+  },
+  "scope": "Actual Fastify registration with offline adapters; no request/response equivalence or business readiness claim."
+}

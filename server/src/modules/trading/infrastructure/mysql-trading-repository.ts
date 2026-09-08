@@ -1,4 +1,3 @@
-import { MysqlTradingContextWriter } from './mysql-trading-context-writer.js'
 import { resolveStoredAccountClock } from './mysql-account-clock.js'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import type {
@@ -167,10 +166,6 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
     const allowed = await this.observerAccessReader.authorize(userId, context.observerChannelId, context.accountId ?? undefined)
     if (allowed && (context.accountId === null || allowed.accountId === context.accountId)) return context
     return { ...context, mode: 'blocked' as const, accountId: null, observerChannelId: null, readOnly: true }
-  }
-
-  saveContext(next: Omit<TradingContext, 'revision'>, expectedRevision: number | null) {
-    return new MysqlTradingContextWriter(this.pool, this.observerAccessReader).saveContext(next, expectedRevision)
   }
 
   async listAccounts(userId: number, access: 'current' | 'history' = 'current') {

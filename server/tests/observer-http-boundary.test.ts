@@ -1,3 +1,4 @@
+import { contextCommandPort } from './helpers/context-command-port.js'
 import Fastify from 'fastify'
 import { tradingRoutes } from '../src/modules/trading/transport/http/trading-routes.js'
 import { describe, expect, it, vi } from 'vitest'
@@ -37,9 +38,9 @@ function fixture() {
   return { grant, authorize, access, repository, getSnapshot, positions }
 }
 
-async function appFor(service: TradingService) {
+async function appFor(service: TradingService, contextCommands = contextCommandPort().port) {
   const app = Fastify()
-  await app.register(tradingRoutes, { prefix: '/api/v4', service,
+  await app.register(tradingRoutes, { prefix: '/api/v4', service, contextCommands,
     capacity: new ConnectionCapacityService({ getPurchasedCapacity: async () => 0 }, {} as ConnectionLeaseStore),
     auth: { authenticate: async () => ({ userId: 9 }), assertWrite: async () => ({ userId: 9 }) },
   })
@@ -50,14 +51,14 @@ describe('P4A observer HTTP boundary', () => {
   it('allows an explicit exit with no personal account even when the observer grant is gone', async () => {
     const f = fixture()
     f.repository.listAccounts = vi.fn(async () => [])
-    f.repository.saveContext = vi.fn(async (next, expected) => ({ ...next, revision: Number(expected) + 1 }))
-    f.authorize.mockResolvedValue(null)
-    const app = await appFor(new TradingService(f.repository))
-    const response = await app.inject({ method: 'DELETE', headers: { 'x-csrf-token': 'test-csrf-token-valid' }, url: '/api/v4/trading-context/observer?expected_revision=4' })
+    const commands = contextCommandPort({ initial: { userId: 9, mode: 'observer', accountId: null, observerChannelId: '12', readOnly: true, revision: 4 } })
+    const execute = vi.fn(commands.port.execute)
+    const app = await appFor(new TradingService(f.repository), { ...commands.port, execute })
+    const response = await app.inject({ method: 'DELETE', headers: { 'x-csrf-token': 'test-csrf-token-valid', 'idempotency-key': 'd97382ac-4b49-42db-b1f1-850ec403848a' }, url: '/api/v4/trading-context/observer?expected_revision=4' })
     expect(response.statusCode).toBe(200)
     expect(response.json().data).toMatchObject({ mode: 'blocked', account_id: null, observer_channel_id: null, read_only: true, revision: '5' })
     expect(f.authorize).not.toHaveBeenCalled()
-    expect(f.repository.saveContext).toHaveBeenCalledWith({ userId: 9, mode: 'blocked', accountId: null, observerChannelId: null, readOnly: true }, 4)
+    expect(execute).toHaveBeenCalledWith({ userId: 9, requestId: 'd97382ac-4b49-42db-b1f1-850ec403848a', action: 'leave_observer', targetId: null, expectedRevision: 4 })
     await app.close()
   })
 
@@ -65,9 +66,10 @@ describe('P4A observer HTTP boundary', () => {
     const f = fixture()
     f.repository.listAccounts = vi.fn(async () => [{ id: '2', platform: 'mt4' as const, login: 'x', server: 'demo', currency: 'USD',
       terminalProfileId: null, terminalInstanceId: null, bridgeState: 'offline' as const, tradePermission: false, lastSeenAt: null }])
-    f.repository.saveContext = vi.fn(async next => ({ ...next, revision: 2 }))
-    const app = await appFor(new TradingService(f.repository))
-    const response = await app.inject({ method: 'DELETE', headers: { 'x-csrf-token': 'test-csrf-token-valid' }, url: '/api/v4/trading-context/observer?expected_revision=1' })
+    const commands = contextCommandPort({ initial: { userId: 9, mode: 'observer', accountId: null, observerChannelId: '12', readOnly: true, revision: 1 },
+      resolve: async () => ({ userId: 9, mode: 'full', accountId: '2', observerChannelId: null, readOnly: true }) })
+    const app = await appFor(new TradingService(f.repository), commands.port)
+    const response = await app.inject({ method: 'DELETE', headers: { 'x-csrf-token': 'test-csrf-token-valid', 'idempotency-key': 'd97382ac-4b49-42db-b1f1-850ec403848a' }, url: '/api/v4/trading-context/observer?expected_revision=1' })
     expect(response.statusCode).toBe(200)
     expect(response.json().data).toMatchObject({ mode: 'full', account_id: '2', observer_channel_id: null, read_only: true })
     expect(f.getSnapshot).not.toHaveBeenCalled()

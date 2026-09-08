@@ -1,6 +1,7 @@
+import { runContextCommand, recoverContextCommand, contextCommandState } from '~/features/trading-context'
 import { tradingAccounts, tradingContext, applyTradingContext, applyTradingAccounts } from '~/features/trading-context'
 import type { ManualReleaseState, RiskDecisionDetail, RiskDecisionSummary, RiskPolicy, RiskPolicyPatchBody, RiskSummary, TradingAccount } from '@aurum/contracts'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Ref } from 'vue'
 import { useTradeSession } from '~/features/auth'
 
@@ -34,7 +35,7 @@ export function useRiskWorkspace(selectedDecisionId: Ref<string>, selectDecision
 
   const account = computed<TradingAccount | null>(() => tradingAccounts.value.find((item) => item.id === activeAccountId.value) ?? null)
   const isObserver = computed(() => tradingContext.value?.mode === 'observer')
-  const readOnly = computed(() => isObserver.value || tradingContext.value?.readOnly !== false)
+  const readOnly = computed(() => Boolean(contextCommandState.value.intent) || isObserver.value || tradingContext.value?.readOnly !== false)
 
   async function load() {
     const currentGeneration = ++generation
@@ -42,6 +43,8 @@ export function useRiskWorkspace(selectedDecisionId: Ref<string>, selectDecision
     loading.value = true
     error.value = ''
     try {
+      if (session.value) await recoverContextCommand(session.value)
+      if (currentGeneration !== generation) return
       const [contextResponse, accountsResponse] = await Promise.all([riskApi.getContext(), riskApi.listAccounts()])
       if (currentGeneration !== generation) return
       applyTradingContext(contextResponse.data)
@@ -51,13 +54,16 @@ export function useRiskWorkspace(selectedDecisionId: Ref<string>, selectDecision
         clearRisk()
         return
       }
-      const accountId = contextResponse.data.accountId ?? accountsResponse.data.items[0]?.id ?? null
+      let accountId = contextResponse.data.accountId ?? accountsResponse.data.items[0]?.id ?? null
       activeAccountId.value = accountId
       if (!accountId) { clearRisk(); return }
       if (accountId !== contextResponse.data.accountId && session.value) {
-        const selected = await riskApi.selectAccount(session.value.csrf_token, accountId, contextResponse.data.revision)
+        const selected = await runContextCommand(session.value, 'select_account', accountId, contextResponse.data.revision)
         if (currentGeneration !== generation) return
         applyTradingContext(selected.data)
+        accountId = selected.data.mode === 'full' ? selected.data.accountId : null
+        activeAccountId.value = accountId
+        if (!accountId) { clearRisk(); return }
       }
       await loadAccount(accountId, currentGeneration)
     } catch (reason) {
@@ -97,19 +103,21 @@ export function useRiskWorkspace(selectedDecisionId: Ref<string>, selectDecision
   }
 
   async function selectAccount(accountId: string) {
-    if (!session.value || !tradingContext.value || accountId === activeAccountId.value) return
+    if (contextCommandState.value.busy) return
+    if (!session.value || !tradingContext.value || (accountId === activeAccountId.value && tradingContext.value.mode === 'full' && tradingContext.value.accountId === accountId)) return
     const currentGeneration = ++generation
     stopRealtime()
     switching.value = true
     error.value = ''
     try {
-      const selected = await riskApi.selectAccount(session.value.csrf_token, accountId, tradingContext.value.revision)
+      const selected = await runContextCommand(session.value, 'select_account', accountId, tradingContext.value.revision)
       if (currentGeneration !== generation) return
       applyTradingContext(selected.data)
-      activeAccountId.value = accountId
+      const selectedAccount = selected.data.mode === 'full' ? selected.data.accountId : null
+      activeAccountId.value = selectedAccount
       clearRisk()
       selectDecision('')
-      await loadAccount(accountId, currentGeneration)
+      if (selectedAccount) await loadAccount(selectedAccount, currentGeneration)
     } catch (reason) {
       if (currentGeneration === generation) error.value = readableError(reason, '交易账户切换失败')
     } finally {
@@ -229,6 +237,15 @@ export function useRiskWorkspace(selectedDecisionId: Ref<string>, selectDecision
   function stopRealtime() { realtimeController?.stop(); realtimeController = null }
   function clearRisk() { policy.value = null; summary.value = null; manualRelease.value = null; decisions.value = []; detail.value = null }
 
+  watch(() => JSON.stringify([session.value?.user.id, session.value?.authenticated_at]), () => {
+    generation += 1
+    stopRealtime(); clearRisk()
+    activeAccountId.value = null
+    applyTradingContext(null); applyTradingAccounts([])
+    for (const state of [loading, refreshing, switching, savingPolicy, releasing, detailLoading]) state.value = false
+    for (const message of [error, summaryError, decisionsError, policyError, releaseError, detailError]) message.value = ''
+    if (session.value) void load()
+  }, { flush: 'sync' })
   onMounted(load)
   onBeforeUnmount(() => { generation += 1; stopRealtime() })
 

@@ -62,7 +62,7 @@ describe('createApiClient', () => {
     const client = createApiClient({ fetchImpl })
 
     await client.getMarketQuote('acc/2', 'XAUUSD.m')
-    await client.selectTradingAccount('csrf', 'acc/2', 1)
+    await client.selectTradingAccount('csrf', 'acc/2', 1, 'd97382ac-4b49-42db-b1f1-850ec403848a')
 
     expect(fetchImpl.mock.calls[0]?.[0]).toBe('/api/v4/market/quotes/XAUUSD.m?account_id=acc%2F2')
     const [, request] = fetchImpl.mock.calls[1] ?? []
@@ -78,7 +78,7 @@ describe('createApiClient', () => {
     await client.getTradingWorkspace('source/7', 'observer/1').catch(() => undefined)
     await client.getMarketQuote('source/7', 'XAUUSD', 'observer/1')
     await client.getMarketCandles('source/7', 'XAUUSD', 'M5', 200, 'observer/1').catch(() => undefined)
-    await client.leaveObserverMode('csrf', 4).catch(() => undefined)
+    await client.leaveObserverMode('csrf', 4, 'd97382ac-4b49-42db-b1f1-850ec403848a').catch(() => undefined)
 
     expect(fetchImpl.mock.calls[0]?.[0]).toBe('/api/v4/trading-accounts/source%2F7/snapshot?observer_channel_id=observer%2F1')
     expect(fetchImpl.mock.calls[1]?.[0]).toBe('/api/v4/market/quotes/XAUUSD?account_id=source%2F7&observer_channel_id=observer%2F1')

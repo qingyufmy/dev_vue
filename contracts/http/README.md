@@ -49,4 +49,4 @@ runtime.json显式列出已接入操作，当前为listAuditEvents/getAuditEvent
 账户入口读取已接入上下文、账户列表、观摩列表的参数和成功/错误响应校验。先认证再校验access枚举；未声明query沿用忽略语义，不能覆盖认证userId。AuthError保留401/403；非法输出返回经过校验且不带原值的503。快照、行情、终端与额度尚未接入。
 
 
-上下文PUT与观摩退出DELETE已接入运行合同，先assertWrite再校验CSRF格式、严格目标组合和必填revision。版本必须是规范非负十进制字符串且小于Number.MAX_SAFE_INTEGER，为递增保留空间；NULL、空串、指数、小数、重复query拒绝。PUT只允许与mode对应的唯一目标，另一目标可省略或为null。用例完成后DTO校验失败返回trading_context_commit_unknown/503，客户端应重新读取权威上下文，不能据此断言写入失败。现有重复旧revision仍返回409，不构成幂等回执；MySQL提交未知与端到端恢复仍待实施。
+上下文PUT与观摩退出DELETE已接入运行合同，先assertWrite再校验CSRF格式、严格目标组合和必填revision。版本必须是规范非负十进制字符串且小于Number.MAX_SAFE_INTEGER，为递增保留空间；NULL、空串、指数、小数、重复query拒绝。PUT只允许与mode对应的唯一目标，另一目标可省略或为null。用例完成后DTO校验失败返回trading_context_commit_unknown/503，客户端必须保留原请求键与正文，查询回执后再读取当前上下文，不能据此断言写入失败。PUT/DELETE现在强制小写UUID格式的Idempotency-Key；同键同体重放历史结果，异体409，新键旧revision仍409。GET /trading-context/commands/{request_id}按当前用户查回执，200/null仅表示未见已提交回执，不证明失败；成功及错误均no-store。运行登记目前9项，本批客户端/Fastify对接使用测试写端口，当前开发库与真实浏览器验收另行完成。

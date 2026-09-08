@@ -24,7 +24,7 @@ const services = Object.fromEntries([
   'inference', 'strategies', 'risk', 'reviews', 'execution', 'userExecution', 'executionDistribution',
   'tradeHistory', 'tradeAuth', 'referralRules', 'observerManagement', 'observerAdminAuth',
 ].map(name => [name, stub]))
-services.tradingHttp = createTradingHttp(stub, stub, stub)
+services.tradingHttp = createTradingHttp(stub, stub, stub, stub)
 services.observerManagementHttp = createObserverManagementHttp(stub, stub)
 services.auth = { cookieName: cookieNameForClient }
 services.authHttp = createAuthHttp(services.auth, false)

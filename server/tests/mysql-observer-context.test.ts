@@ -29,41 +29,15 @@ function contextRow(overrides: Row = {}): Row {
 }
 
 class FakeObserverPool {
-  readonly calls: Array<{ client: 'pool' | 'connection'; sql: string; params: unknown[] }> = []
-  readonly transactions: string[] = []
-  readonly inserts: unknown[][] = []
   contextRows: Row[] = [contextRow()]
   observerRows: Row[] = [observerRow()]
-  revisionRows: Row[] = [{ revision: 3 }]
-
-  readonly connection = {
-    execute: async (sql: string, params: unknown[] = []) => this.handle(sql, params, 'connection'),
-    beginTransaction: async () => { this.transactions.push('begin') },
-    commit: async () => { this.transactions.push('commit') },
-    rollback: async () => { this.transactions.push('rollback') },
-    release: () => { this.transactions.push('release') },
-  }
-
-  async execute(sql: string, params: unknown[] = []) {
-    return this.handle(sql, params, 'pool')
-  }
-
-  async getConnection() { return this.connection }
-
   asPool() { return this as unknown as Pool }
-
-  private async handle(sql: string, params: unknown[], client: 'pool' | 'connection') {
+  async execute(sql: string, params: unknown[] = []) {
     const placeholders = (sql.match(/\?/g) ?? []).length
     if (placeholders !== params.length) throw new Error(`fake_sql_params:${placeholders}:${params.length}`)
-    this.calls.push({ client, sql, params })
-    if (sql.includes('INSERT INTO trading_contexts')) {
-      this.inserts.push(params)
-      return [[], []]
-    }
     if (sql.includes('SELECT user_id, mode')) return [this.contextRows, []]
-    if (sql.includes('SELECT revision FROM trading_contexts')) return [this.revisionRows, []]
     if (sql.includes('FROM observer_channels c')) return [this.observerRows, []]
-    return [[], []]
+    throw new Error('unexpected-context-read')
   }
 }
 
@@ -89,34 +63,4 @@ describe('MysqlTradingRepository observer context authorization', () => {
     await expect(repository(missingAuthorization).getContext(9)).resolves.toMatchObject({ mode: 'blocked', accountId: null, observerChannelId: null, readOnly: true })
   })
 
-  it('rechecks observer authorization on the transaction connection before writing', async () => {
-    const pool = new FakeObserverPool()
-    const result = await repository(pool).saveContext({
-      userId: 9, mode: 'observer', accountId: null, observerChannelId: '12', readOnly: true,
-    }, 3)
-    expect(result).toMatchObject({ mode: 'observer', observerChannelId: '12', readOnly: true, revision: 4 })
-    expect(pool.calls.some(call => call.client === 'connection' && call.sql.includes('FOR SHARE'))).toBe(true)
-    expect(pool.inserts).toEqual([[9, 'observer', null, '12', 1, 4]])
-    expect(pool.transactions).toEqual(['begin', 'commit', 'release'])
-  })
-
-  it('rejects a writable observer context before opening a transaction', async () => {
-    const pool = new FakeObserverPool()
-    await expect(repository(pool).saveContext({
-      userId: 9, mode: 'observer', accountId: null, observerChannelId: '12', readOnly: false,
-    }, 3)).rejects.toMatchObject({ code: 'trading_context_invalid' })
-    expect(pool.transactions).toEqual([])
-    expect(pool.inserts).toEqual([])
-  })
-
-  it('rejects an unauthorized observer write and leaves no context row', async () => {
-    const pool = new FakeObserverPool()
-    pool.observerRows = []
-    await expect(repository(pool).saveContext({
-      userId: 9, mode: 'observer', accountId: null, observerChannelId: '12', readOnly: true,
-    }, 3)).rejects.toMatchObject({ code: 'trading_account_forbidden' })
-    expect(pool.inserts).toEqual([])
-    expect(pool.transactions).toEqual(['begin', 'rollback', 'release'])
-    expect(pool.calls.some(call => call.client === 'connection' && call.sql.includes('FOR SHARE'))).toBe(true)
-  })
 })
