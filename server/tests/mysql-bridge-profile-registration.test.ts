@@ -645,8 +645,8 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
     }
   })
 
-  it('fails competing first-account inserts without retrying or overwriting the winner', async () => {
-    for (const [code, status] of [['ER_DUP_ENTRY', 409], ['ER_LOCK_DEADLOCK', 503]] as const) {
+  it('fails duplicate first-account inserts without retrying or overwriting the winner', async () => {
+    for (const [code, status] of [['ER_DUP_ENTRY', 409]] as const) {
       const pool = new FakePool()
       pool.state.accounts = []
       pool.state.ownerships = []
@@ -659,6 +659,19 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
       expect(pool.transactions).toEqual(['begin', 'rollback', 'release'])
     }
   })
+
+  it.each(['INSERT INTO trading_accounts', 'INSERT INTO trading_account_ownership_intervals', 'INSERT INTO bridge_connection_sessions'])(
+    'rechecks first-account registration after a rolled-back deadlock at %s', async statement => {
+      const pool = new FakePool()
+      pool.state.accounts = []; pool.state.ownerships = []
+      pool.failOn = statement; pool.failureCode = 'ER_LOCK_DEADLOCK'
+      await expect(createRoutes(pool.asPool()).authorizeAndOpen(firstInput())).resolves.toMatchObject({ userId: 7 })
+      expect(pool.state.accounts).toHaveLength(1)
+      expect(pool.state.ownerships).toHaveLength(1)
+      expect(pool.state.intervals).toHaveLength(1)
+      expect(pool.state.sessions).toHaveLength(1)
+      expect(pool.transactions).toEqual(['begin', 'rollback', 'release', 'begin', 'commit', 'release'])
+    })
 
   it('maps registration port failures to existing errors and rolls back the same transaction', async () => {
     for (const stage of ['create', 'grant'] as const) {

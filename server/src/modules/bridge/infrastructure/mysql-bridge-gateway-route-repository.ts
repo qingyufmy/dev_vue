@@ -1,3 +1,4 @@
+import { inBridgeRouteTransaction as inTransaction } from './mysql-bridge-route-transaction.js'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import type { BridgeGatewayRouteRepository } from '../application/bridge-gateway-ports.js'
 import { assertTerminalAccountFacts, BridgeGatewayError, type BridgeGatewayRoute } from '../domain/bridge-gateway.js'
@@ -441,23 +442,4 @@ function databaseId(value: unknown): string {
 
 function assertTimestamp(value: string) {
   if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) throw gatewayError('bridge_route_request_invalid', 400)
-}
-
-async function inTransaction<T>(pool: Pool, work: (connection: PoolConnection) => Promise<T>): Promise<T> {
-  let connection: PoolConnection | null = null
-  try {
-    connection = await pool.getConnection()
-    await connection.beginTransaction()
-    const result = await work(connection)
-    await connection.commit()
-    return result
-  } catch (error) {
-    if (connection) {
-      try { await connection.rollback() } catch { /* preserve the original transaction error */ }
-    }
-    if (error instanceof BridgeGatewayError) throw error
-    throw translateStorageError(error)
-  } finally {
-    connection?.release()
-  }
 }
