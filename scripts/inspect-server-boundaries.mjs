@@ -10,6 +10,6 @@ const parsed = ts.parseJsonConfigFileContent(config.config, ts.sys, resolve(root
 const files = sourceFiles(resolve(root, 'server/src'))
 const graph = buildDependencyGraph({ root, files, compilerOptions: parsed.options })
 const findings = serverBoundaryFindings(graph)
-console.log(JSON.stringify({ files: files.length, edges: graph.edges.length, findings }, null, 2))
+console.log(JSON.stringify({ files: files.length, edges: graph.edges.length, localReexports: graph.reexports.length, findings }, null, 2))
 // This strict inspection never blesses existing findings as a passing baseline.
 if (findings.length) process.exitCode = 1

@@ -1,6 +1,7 @@
 import ts from 'typescript'
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs'
 import { resolve, relative, dirname, extname } from 'node:path'
+import { parseLocalReexports } from './local-reexports.mjs'
 
 const slash = value => value.replaceAll('\\', '/')
 const extensions = ['.ts', '.tsx', '.js', '.mjs', '.vue']
@@ -56,9 +57,12 @@ export function parseDependencies(source, file) {
 }
 
 export function buildDependencyGraph({ root, files, compilerOptions = {}, aliases = {} }) {
-  const edges = [], unresolved = []
+  const edges = [], reexports = [], unresolved = []
   for (const file of files) {
-    for (const dependency of parseDependencies(readFileSync(file, 'utf8'), file)) {
+    const source = readFileSync(file, 'utf8')
+    const dependencies = [...parseDependencies(source, file).map(dependency => ({ dependency, synthetic: false })),
+      ...parseLocalReexports(source, file).map(dependency => ({ dependency, synthetic: true }))]
+    for (const { dependency, synthetic } of dependencies) {
       const edge = { source: slash(relative(root, file)), ...dependency }
       if (dependency.specifier === null) { unresolved.push(edge); continue }
       const specifier = dependency.specifier
@@ -74,12 +78,13 @@ export function buildDependencyGraph({ root, files, compilerOptions = {}, aliase
             .find(candidate => existsSync(candidate) && statSync(candidate).isFile())
         }
       }
-      if (target && !slash(target).includes('/node_modules/')) edges.push({ ...edge, target: slash(relative(root, target)) })
+      const destination = synthetic ? reexports : edges
+      if (target && !slash(target).includes('/node_modules/')) destination.push({ ...edge, target: slash(relative(root, target)) })
       else if (specifier.startsWith('.') || Object.keys(aliases).some(key => matchesAlias(specifier, key))) unresolved.push(edge)
-      else edges.push({ ...edge, external: specifier })
+      else destination.push({ ...edge, external: specifier })
     }
   }
-  return { edges, unresolved }
+  return { edges, reexports, unresolved }
 }
 
 export function dependencyCycles(edges) {
@@ -143,6 +148,7 @@ export function serverBoundaryFindings(graph) {
   const add = (edge, rule) => findings.push({ rule, source: edge.source,
     target: edge.target ?? edge.external ?? edge.specifier ?? '<computed>', line: edge.line, kind: edge.kind, typeOnly: Boolean(edge.typeOnly) })
   for (const edge of graph.unresolved) add(edge, 'unresolved-dependency')
+  const exports = [...graph.edges.filter(edge => edge.kind === 'export'), ...(graph.reexports ?? [])]
   for (const edge of graph.edges) {
     const source = moduleInfo(edge.source), target = moduleInfo(edge.target)
     if (source && target && source[1] !== target[1] && target[2] !== 'index.ts') add(edge, 'cross-module-internal')
@@ -154,8 +160,11 @@ export function serverBoundaryFindings(graph) {
       && !edge.external.startsWith('node:') || target && (source[1] !== target[1] ? target[2] !== 'index.ts' : !target[2].startsWith('domain/')))) add(edge, 'domain-dependency')
     if (source?.[2].startsWith('application/') && target && source[1] === target[1]
       && /^(infrastructure|transport)\//.test(target[2])) add(edge, 'application-reverse-dependency')
-    // Follow re-exports transitively: exporting an intermediate barrel must not hide infrastructure.
-    if (source?.[2] === 'index.ts' && edge.kind === 'export') {
+  }
+  // Follow physical and local alias exports, without adding a second physical
+  // dependency edge (which would manufacture changes to cycle evidence).
+  for (const edge of exports) {
+    if (moduleInfo(edge.source)?.[2] === 'index.ts') {
       const pending = [edge.target], seen = new Set()
       while (pending.length) {
         const current = pending.pop()
@@ -164,7 +173,7 @@ export function serverBoundaryFindings(graph) {
         if (/\/(infrastructure|transport)\//.test(current) || current.endsWith('/composition.ts')) {
           add({ ...edge, target: current }, 'public-implementation-export')
         }
-        pending.push(...graph.edges.filter(item => item.source === current && item.kind === 'export').map(item => item.target))
+        pending.push(...exports.filter(item => item.source === current).map(item => item.target))
       }
     }
   }
