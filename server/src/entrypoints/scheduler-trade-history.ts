@@ -2,7 +2,7 @@ import {
   assertV4RuntimeEnabled, AsyncPollLoop, closeHttpServer, createMysqlPool,
   installProcessLifecycle, loadServerEnvironment, loadV4RuntimeConfig, RoleHealth, startRoleHealthServer,
 } from '../bootstrap/index.js'
-import { MysqlTradeHistoryScheduleRepository, TradeHistoryScheduleService } from '../modules/trade-history/index.js'
+import { createMysqlTradeHistoryScheduler } from '../modules/trade-history/composition.js'
 
 loadServerEnvironment()
 
@@ -12,7 +12,7 @@ async function main() {
   const health = new RoleHealth('scheduler-trade-history')
   const pool = createMysqlPool(config.mysql)
   await pool.query('SELECT 1')
-  const scheduler = new TradeHistoryScheduleService(new MysqlTradeHistoryScheduleRepository(pool))
+  const scheduler = createMysqlTradeHistoryScheduler(pool)
   const loop = new AsyncPollLoop(async () => {
     try {
       await scheduler.schedule(config.historyScheduleBatchSize, new Date())

@@ -1,6 +1,4 @@
-import type { BridgeHistoryQueryClient } from '../../bridge/application/bridge-gateway-query-transport.js'
-import type { BridgeGatewayRoute } from '../../bridge/domain/bridge-gateway.js'
-import type { BridgeHistoryResource } from '../../bridge/domain/bridge-query.js'
+import type { BridgeHistoryQueryClient, BridgeGatewayRoute, BridgeHistoryResource } from '../../bridge/index.js'
 import type { TradeHistoryCollectorRepository } from './trade-history-collector-ports.js'
 
 export class TradeHistoryCollector {

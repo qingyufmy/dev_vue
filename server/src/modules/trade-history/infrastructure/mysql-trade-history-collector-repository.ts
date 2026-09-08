@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise'
-import type { BridgeGatewayRoute } from '../../bridge/domain/bridge-gateway.js'
-import type { BridgeHistoryResource, BridgeQueryResponseEnvelope } from '../../bridge/domain/bridge-query.js'
+import type { BridgeGatewayRoute, BridgeHistoryResource, BridgeQueryResponseEnvelope } from '../../bridge/index.js'
 import type { TradeHistoryCollectorRepository } from '../application/trade-history-collector-ports.js'
 import { resolveTradeRecordOwner } from '../application/trade-record-owner.js'
 import type { OwnershipInterval } from '../../trading/index.js'

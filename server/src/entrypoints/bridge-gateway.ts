@@ -16,9 +16,7 @@ import {
 } from '../modules/bridge/index.js'
 import { createBridgeGatewayRoutes } from '../modules/bridge/composition.js'
 import { createAccountRegistration, createBridgeTradingModule } from '../modules/trading/composition.js'
-import {
-  MysqlTradeHistoryCollectorRepository, TradeHistoryCollector,
-} from '../modules/trade-history/index.js'
+import { createMysqlTradeHistoryCollector } from '../modules/trade-history/composition.js'
 import { BRIDGE_DISPATCH_QUEUE, BRIDGE_HISTORY_QUEUE, type BridgeCommandJob, type BridgeHistoryJob } from '../queue/task-queues.js'
 import { BridgeV4WebSocketServer } from '../transport/bridge-v4-websocket-server.js'
 
@@ -41,7 +39,7 @@ async function main() {
   const routes = createBridgeGatewayRoutes(pool, createAccountRegistration)
   const transport = new BridgeGatewayCommandTransport(leases, directory, routes)
   const queries = new BridgeGatewayQueryTransport(leases, directory, routes)
-  const historyCollector = new TradeHistoryCollector(new MysqlTradeHistoryCollectorRepository(pool), queries)
+  const historyCollector = createMysqlTradeHistoryCollector(pool, queries)
   const commands = new BridgeCommandService(new MysqlBridgeCommandRepository(pool, createTransactionAccountClock))
   const gateway = new BridgeGatewayService(
     new RedisBridgeSessionTicketStore(cache),

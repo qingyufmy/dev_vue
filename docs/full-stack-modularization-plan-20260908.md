@@ -647,3 +647,12 @@ trade-history composition 新增 createTradeHistoryHttp/createMysqlTradeHistoryH
 23 项核心 HTTP、金额和归属回归通过，HTTP 测试经真实组装工厂调用；server 类型/构建及 API 生成运行一致性通过，321 项冻结输入不变。精确删除两项具体实现公开导出和一项内部穿透，债务 98→95，无新增或陈旧记录。本批没有连接数据库、启动 API 或运行历史采集。
 
 历史采集/调度的具体实现公开导出、Bridge 类型依赖及其它账户 SQL 继续保留待办；本次不表示整个历史域或 P0–P7 完成。
+
+
+## 46. 历史采集与调度组装（第一百一十六批）
+
+trade-history composition 提供 createMysqlTradeHistoryCollector/createMysqlTradeHistoryScheduler，返回 collect/schedule 最小运行能力；bridge-gateway 与 scheduler-trade-history 入口同步使用。业务 index 不再导出两个 MySQL 适配器，当前该域具体基础设施和 HTTP 导出已移除。采集应用端口/用例/基础设施引用 Bridge 合同时统一经公开 index，不导入内部路径。
+
+28 项采集、币种和归属回归、服务端类型/构建、API 生成运行检查通过，321 个冻结输入一致。删除七项内部类型穿透和两项具体实现导出，债务 95→86，无新增或陈旧记录。构造参数、分页上限、时间窗口、归属重查与持久化事务未改；没有启动角色、访问终端、模型或数据库。
+
+terminal-history-projection 领域层仍有两项 Bridge 内部类型依赖记录；表所有权、其它跨域 SQL 与完整历史功能验收未据此完成，整体 P0–P7 继续。

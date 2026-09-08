@@ -1,5 +1,4 @@
-import type { BridgeGatewayRoute } from '../../bridge/domain/bridge-gateway.js'
-import type { BridgeHistoryResource, BridgeQueryResponseEnvelope } from '../../bridge/domain/bridge-query.js'
+import type { BridgeGatewayRoute, BridgeHistoryResource, BridgeQueryResponseEnvelope } from '../../bridge/index.js'
 
 export interface TradeHistoryCollectionWindow { rangeStartUtcMsc: number; rangeEndUtcMsc: number }
 
