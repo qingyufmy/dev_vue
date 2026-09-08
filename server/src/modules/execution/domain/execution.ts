@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { canonicalJson as encodeCanonicalJson, CanonicalJsonError } from '../../../shared/canonical-json.js'
 import type { JsonObject, TraderAction, TraderExecutableActionKind } from '../../inference/domain/inference.js'
 import type { RiskRuleResult } from '../../risk/domain/risk.js'
 
@@ -338,18 +339,11 @@ function parseTimestamp(value: string) {
 
 /** Canonical JSON is shared by the idempotency and optimistic-state hashes. */
 export function canonicalJson(value: unknown): string {
-  if (value === null) return 'null'
-  if (typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value)
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value)) throw new ExecutionError('execution_action_invalid', 422)
-    return JSON.stringify(value)
+  try { return encodeCanonicalJson(value) }
+  catch (error) {
+    if (error instanceof CanonicalJsonError) throw new ExecutionError('execution_action_invalid', 422)
+    throw error
   }
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
-  if (typeof value === 'object') {
-    const record = value as Record<string, unknown>
-    return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
-  }
-  throw new ExecutionError('execution_action_invalid', 422)
 }
 
 export function sha256Canonical(value: unknown) {

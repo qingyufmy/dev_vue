@@ -11,7 +11,7 @@ import type {
   TerminalProfileSummary, Timeframe, TradingAccountSummary, TradingContext,
 } from '../domain/trading.js'
 import { TradingAccessError } from '../domain/trading.js'
-import { sha256Canonical } from '../../execution/domain/execution.js'
+import { sha256Canonical } from '../../../shared/canonical-json.js'
 import type { ProjectionReservationAbsorber } from '../application/projection-reservation-absorber.js'
 
 interface ContextRow extends RowDataPacket { user_id: number; mode: TradingContext['mode']; trading_account_id: string | null; observer_channel_id: string | null; read_only: number; revision: number }
