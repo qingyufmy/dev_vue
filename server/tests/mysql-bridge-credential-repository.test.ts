@@ -1,6 +1,7 @@
+import { createBridgeCredentialRepository } from '../src/modules/bridge/composition.js'
 import type { Pool } from 'mysql2/promise'
 import { describe, expect, it, vi } from 'vitest'
-import { MysqlBridgeCredentialRepository } from '../src/modules/bridge/index.js'
+
 import type { RotateLegacyCredentialInput } from '../src/modules/bridge/index.js'
 
 const input: RotateLegacyCredentialInput = {
@@ -38,7 +39,7 @@ describe('MysqlBridgeCredentialRepository', () => {
       [[], []],
       [{ insertId: 22, affectedRows: 1 }, []],
     ])
-    const repository = new MysqlBridgeCredentialRepository(fixture.pool)
+    const repository = createBridgeCredentialRepository(fixture.pool)
 
     await expect(repository.rotateFromLegacy(input)).resolves.toEqual({ userId: 7, generation: 1 })
     expect(fixture.connection.beginTransaction).toHaveBeenCalledOnce()
@@ -64,7 +65,7 @@ describe('MysqlBridgeCredentialRepository', () => {
       }], []],
       [{ affectedRows: 1 }, []],
     ])
-    const repository = new MysqlBridgeCredentialRepository(fixture.pool)
+    const repository = createBridgeCredentialRepository(fixture.pool)
     await expect(repository.rotateFromLegacy(input)).resolves.toEqual({ userId: 7, generation: 4 })
     const updateCall = fixture.execute.mock.calls.find(call => /SET token_hash/.test(String(call[0])))
     expect(updateCall?.[1]).toEqual([
@@ -81,7 +82,7 @@ describe('MysqlBridgeCredentialRepository', () => {
       [[], []],
       new Error('simulated_storage_failure'),
     ])
-    const repository = new MysqlBridgeCredentialRepository(fixture.pool)
+    const repository = createBridgeCredentialRepository(fixture.pool)
     await expect(repository.rotateFromLegacy(input)).rejects.toThrow('simulated_storage_failure')
     expect(fixture.connection.rollback).toHaveBeenCalledOnce()
     expect(fixture.connection.commit).not.toHaveBeenCalled()
@@ -101,7 +102,7 @@ describe('MysqlBridgeCredentialRepository', () => {
         migration_key: 'e'.repeat(64),
       }], []],
     ])
-    const repository = new MysqlBridgeCredentialRepository(fixture.pool)
+    const repository = createBridgeCredentialRepository(fixture.pool)
     await expect(repository.rotateFromLegacy(input)).rejects.toMatchObject({
       code: 'bridge_credential_migration_conflict',
       status: 409,
@@ -125,7 +126,7 @@ describe('MysqlBridgeCredentialRepository', () => {
       }], []],
       [{ affectedRows: 1 }, []],
     ])
-    const repository = new MysqlBridgeCredentialRepository(fixture.pool)
+    const repository = createBridgeCredentialRepository(fixture.pool)
     await expect(repository.useDeviceRefresh({
       tokenHash: input.replacementTokenHash,
       installationId: input.installationId,

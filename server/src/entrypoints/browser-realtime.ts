@@ -1,3 +1,4 @@
+import { createBridgeGatewayLeases } from '../modules/bridge/composition.js'
 import { assertAccountPrincipalReadSchemaV2, createAccountPrincipalReader } from '../modules/auth/composition.js'
 import Fastify from 'fastify'
 import {
@@ -5,7 +6,7 @@ import {
   loadServerEnvironment, loadV4BaseRuntimeConfig, loadV4BrowserRealtimeConfig, RoleHealth,
 } from '../bootstrap/index.js'
 import { createRealtimeTicketAuthenticator } from '../modules/auth/composition.js'
-import { RedisBridgeGatewayLeaseStore } from '../modules/bridge/index.js'
+
 import { assertTradingSchemaReady, createBrowserTradingModule } from '../modules/trading/composition.js'
 import { BrowserRealtimeWebSocketServer } from '../transport/browser-realtime-websocket-server.js'
 
@@ -21,7 +22,7 @@ async function main() {
   const eventCache = createCacheRedis(runtime.cacheRedis)
   await Promise.all([assertTradingSchemaReady(pool, assertAccountPrincipalReadSchemaV2), connectCacheRedis(ticketCache), connectCacheRedis(eventCache)])
 
-  const { sessions, events } = createBrowserTradingModule(pool, new RedisBridgeGatewayLeaseStore(ticketCache), eventCache,
+  const { sessions, events } = createBrowserTradingModule(pool, createBridgeGatewayLeases(ticketCache), eventCache,
     () => health.workSucceeded(), code => health.workFailed(code), createAccountPrincipalReader)
   const app = Fastify({ logger: true, bodyLimit: 8 * 1024, trustProxy: true })
   const webSockets = new BrowserRealtimeWebSocketServer(

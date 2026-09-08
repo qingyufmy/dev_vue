@@ -7,58 +7,6 @@
       "finding": {
         "rule": "public-implementation-export",
         "source": "server/src/modules/bridge/index.ts",
-        "target": "server/src/modules/bridge/infrastructure/mysql-bridge-credential-repository.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "bridge",
-      "phase": "P5",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/bridge/index.ts",
-        "target": "server/src/modules/bridge/infrastructure/mysql-bridge-pairing-repository.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "bridge",
-      "phase": "P5",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/bridge/index.ts",
-        "target": "server/src/modules/bridge/infrastructure/redis-bridge-gateway-lease-store.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "bridge",
-      "phase": "P5",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/bridge/index.ts",
-        "target": "server/src/modules/bridge/infrastructure/redis-bridge-session-ticket-store.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "bridge",
-      "phase": "P5",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/bridge/index.ts",
         "target": "server/src/modules/bridge/transport/http/bridge-credential-routes.ts",
         "kind": "export",
         "typeOnly": false

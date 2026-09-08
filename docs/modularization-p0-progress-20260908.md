@@ -1373,3 +1373,8 @@ auth三类主体能力通过公开PrincipalTransactionAbortedError保留明确�
 ## 第一百五十六批：Bridge/execution 公开接收端口
 
 网关注入BridgeCommandReceiver（accepted/result/recover），不依赖具体命令服务；跨域命令类型和校验经execution/index，精确消除8条债务，64→56。66项定向回归、类型/构建/边界/合同/冻结检查通过。移除要求跨域SQL留在旧文件的过期源码断言，并运行已有同事务/回滚行为验证。无外部状态变更，整体仍在进行。
+
+
+## 第一百五十七批：Bridge 存储组装入口
+
+四个具体MySQL/Redis实现退出业务index，由composition工厂返回应用端口，五个运行角色同步替换组装。35项回归、类型/构建/边界/合同/冻结检查通过，精确债务56→52。Bridge剩余两项HTTP transport导出待处理，无实际依赖或服务操作。

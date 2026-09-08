@@ -1103,3 +1103,12 @@ MysqlContextCommands 增加最多三次尝试：仅在 begin 成功、commit 尚
 回归发现bridge-v4-gateway-persistence-boundary中一个旧源码断言仍要求trading repository内含预留吸收SQL，与既有execution absorber拆分冲突。本次移除该过期文件内容断言，保留并运行mysql-trading-offline-accounts既有同连接投影/预留吸收/事件失败回滚行为测试及精确ticket吸收测试，没有把SQL复制回trading以迎合断言。
 
 网关WebSocket、Worker、授权隔离、命令状态机、离线账户及投影吸收共66项回归通过；server类型/构建、56条增量边界门、14项运行合同、diff和321冻结输入检查通过。无数据库连接、服务重启或终端操作。后续继续账户数据生命周期和Bridge剩余边界收口；P1及总体P0–P7尚未完成。
+
+
+## 87. Bridge 具体存储实现退出业务入口（第一百五十七批）
+
+Bridge index移除MysqlBridgeCredentialRepository、MysqlBridgePairingRepository、RedisBridgeSessionTicketStore、RedisBridgeGatewayLeaseStore四项具体实现导出，composition新增明确返回应用端口的创建工厂。API、Bridge gateway、browser realtime、analysis/trader worker五个运行入口使用组装工厂；构造参数和租约/票据配置保持原样。两个原经业务index获取具体实现的测试改为测试对应工厂，其余域内adapter定向测试保持原入口。
+
+边界门确认无新增违规，精确移除四条public-implementation-export，服务端债务56→52；Bridge余两项HTTP transport导出，下一批需按已有API注册方式收口，不能让transport反向引用composition。没有通过新barrel或泛型万能工厂绕过边界。
+
+凭据、一次性会话票据、配对、WebSocket和运行角色组装共35项定向测试通过；类型/构建、52条增量边界、14项运行合同、diff和321冻结输入检查通过。本批为本地源码与模拟验证，未连接数据库、Redis或重启角色。整体模块化及账户生命周期仍未完成。

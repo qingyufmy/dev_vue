@@ -1,3 +1,4 @@
+import { createBridgeGatewayLeases, createBridgeSessionTickets } from '../modules/bridge/composition.js'
 import { createActivePrincipalAccess } from '../modules/auth/composition.js'
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import { createProjectionReservationAbsorber } from '../modules/execution/composition.js'
@@ -10,11 +11,7 @@ import {
 import {
   BridgeCommandService, MysqlBridgeCommandRepository,
 } from '../modules/execution/index.js'
-import {
-  BridgeGatewayCommandTransport, BridgeGatewayService, BridgeTradeProjectionDecoder, BridgeV4StreamIngestor,
-  BridgeGatewayQueryTransport, InProcessBridgeGatewayDirectory, RedisBridgeGatewayLeaseStore,
-  RedisBridgeSessionTicketStore,
-} from '../modules/bridge/index.js'
+import { BridgeGatewayCommandTransport, BridgeGatewayService, BridgeTradeProjectionDecoder, BridgeV4StreamIngestor, BridgeGatewayQueryTransport, InProcessBridgeGatewayDirectory } from '../modules/bridge/index.js'
 import { createBridgeGatewayRoutes } from '../modules/bridge/composition.js'
 import { createAccountRegistration, createBridgeTradingModule } from '../modules/trading/composition.js'
 import { createMysqlTradeHistoryCollector } from '../modules/trade-history/composition.js'
@@ -31,7 +28,7 @@ async function main() {
   const cache = createCacheRedis(config.cacheRedis)
   await Promise.all([pool.query('SELECT 1'), connectCacheRedis(cache)])
 
-  const leases = new RedisBridgeGatewayLeaseStore(cache)
+  const leases = createBridgeGatewayLeases(cache)
   const { capacity, projector } = createBridgeTradingModule(pool, cache, leases, error => {
     console.error('[bridge-gateway] realtime publish failed', safeError(error))
   }, createProjectionReservationAbsorber)
@@ -43,7 +40,7 @@ async function main() {
   const historyCollector = createMysqlTradeHistoryCollector(pool, queries)
   const commands = new BridgeCommandService(new MysqlBridgeCommandRepository(pool, createTransactionAccountClock))
   const gateway = new BridgeGatewayService(
-    new RedisBridgeSessionTicketStore(cache),
+    createBridgeSessionTickets(cache),
     routes,
     leases,
     capacity,

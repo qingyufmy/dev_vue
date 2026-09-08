@@ -1,3 +1,4 @@
+import { createBridgeGatewayLeases } from '../modules/bridge/composition.js'
 import { createAccountPrincipalReader } from '../modules/auth/composition.js'
 import { createMysqlAnalysisModelResolver, loadCredentialKeyring } from '../modules/inference/composition.js'
 import { createMysqlInferenceRepository } from '../modules/inference/composition.js'
@@ -8,7 +9,7 @@ import {
   assertV4RuntimeEnabled, closeHttpServer, connectCacheRedis, createCacheRedis, createMysqlPool, installProcessLifecycle,
   loadServerEnvironment, loadV4RuntimeConfig, RoleHealth, startRoleHealthServer,
 } from '../bootstrap/index.js'
-import { RedisBridgeGatewayLeaseStore } from '../modules/bridge/index.js'
+
 import {
   AnalysisContextBuilder, AnalysisWorker, InferenceService,
 } from '../modules/inference/index.js'
@@ -27,7 +28,7 @@ async function main() {
   await Promise.all([pool.query('SELECT 1'), connectCacheRedis(cache)])
   const repository = createMysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader)
   const strategies = createMysqlStrategyService(pool)
-  const trading = createTradingReader(pool, new RedisBridgeGatewayLeaseStore(cache), createAccountPrincipalReader)
+  const trading = createTradingReader(pool, createBridgeGatewayLeases(cache), createAccountPrincipalReader)
   let usageSettlementFailureRevision = 0
   const processor = new AnalysisWorker(
     repository,

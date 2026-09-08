@@ -1,6 +1,7 @@
+import { createBridgeSessionTickets } from '../src/modules/bridge/composition.js'
 import type { Redis } from 'ioredis'
 import { describe, expect, it } from 'vitest'
-import { RedisBridgeSessionTicketStore } from '../src/modules/bridge/index.js'
+
 
 class MemoryRedis {
   private readonly values = new Map<string, string>()
@@ -21,7 +22,7 @@ class MemoryRedis {
 describe('RedisBridgeSessionTicketStore', () => {
   it('binds and consumes a short session ticket exactly once', async () => {
     const redis = new MemoryRedis() as unknown as Redis
-    const store = new RedisBridgeSessionTicketStore(redis)
+    const store = createBridgeSessionTickets(redis)
     const claims = {
       userId: 7,
       installationId: 'installation-1',
@@ -40,7 +41,7 @@ describe('RedisBridgeSessionTicketStore', () => {
 
   it('rejects malformed tickets before Redis access', async () => {
     const redis = new MemoryRedis() as unknown as Redis
-    const store = new RedisBridgeSessionTicketStore(redis)
+    const store = createBridgeSessionTickets(redis)
     await expect(store.consume('not-a-ticket')).rejects.toMatchObject({
       code: 'bridge_session_token_invalid',
       status: 401,

@@ -1,6 +1,5 @@
 export { BridgeCredentialService } from './application/bridge-credential-service.js'
 export { BridgePairingService } from './application/bridge-pairing-service.js'
-export { MysqlBridgePairingRepository } from './infrastructure/mysql-bridge-pairing-repository.js'
 export { bridgePairingRoutes } from './transport/http/bridge-pairing-routes.js'
 export type {
   BridgeCredentialRepository,
@@ -22,7 +21,4 @@ export * from './application/bridge-gateway-query-transport.js'
 export * from './application/bridge-gateway-session.js'
 export * from './application/bridge-stream-ingestor.js'
 export * from './application/bridge-trade-projection-decoder.js'
-export { MysqlBridgeCredentialRepository } from './infrastructure/mysql-bridge-credential-repository.js'
-export { RedisBridgeSessionTicketStore } from './infrastructure/redis-bridge-session-ticket-store.js'
-export { RedisBridgeGatewayLeaseStore } from './infrastructure/redis-bridge-gateway-lease-store.js'
 export { bridgeCredentialRoutes } from './transport/http/bridge-credential-routes.js'

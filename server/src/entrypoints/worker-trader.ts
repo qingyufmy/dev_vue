@@ -1,3 +1,4 @@
+import { createBridgeGatewayLeases } from '../modules/bridge/composition.js'
 import { createAccountPrincipalReader } from '../modules/auth/composition.js'
 import { createMysqlTraderModelResolver, loadCredentialKeyring } from '../modules/inference/composition.js'
 import { createMysqlInferenceRepository } from '../modules/inference/composition.js'
@@ -8,7 +9,7 @@ import {
   assertV4RuntimeEnabled, closeHttpServer, connectCacheRedis, createCacheRedis, createMysqlPool, installProcessLifecycle,
   loadServerEnvironment, loadV4RuntimeConfig, RoleHealth, startRoleHealthServer,
 } from '../bootstrap/index.js'
-import { RedisBridgeGatewayLeaseStore } from '../modules/bridge/index.js'
+
 import {
   InferenceService,
   TraderWorker,
@@ -33,7 +34,7 @@ async function main() {
     repository,
     new InferenceService(repository, strategies),
     strategies,
-    createMysqlTraderContext(pool, repository, createTradingReader(pool, new RedisBridgeGatewayLeaseStore(cache), createAccountPrincipalReader), createSubscriptionPreferencesReader),
+    createMysqlTraderContext(pool, repository, createTradingReader(pool, createBridgeGatewayLeases(cache), createAccountPrincipalReader), createSubscriptionPreferencesReader),
     createMysqlTraderModelResolver(pool, loadCredentialKeyring(), {
       allowPrivateEndpoints: config.allowPrivateModelEndpoints,
       maxAttempts: config.modelMaxAttempts,

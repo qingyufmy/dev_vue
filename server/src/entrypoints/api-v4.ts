@@ -1,3 +1,4 @@
+import { createBridgeCredentialRepository, createBridgeGatewayLeases, createBridgeSessionTickets, createBridgePairingRepository } from '../modules/bridge/composition.js'
 import { createAnalysisStrategyAccess } from '../modules/strategies/composition.js'
 import { createAdminPrincipalAccess } from '../modules/auth/composition.js'
 import { createAccountPrincipalReader } from '../modules/auth/composition.js'
@@ -15,10 +16,7 @@ import {
 } from '../bootstrap/index.js'
 import { createAuthModule, createAuthHttp, createBrowserRequestAccess, assertAccountPrincipalReadSchemaV2, createActivePrincipalAccess } from '../modules/auth/composition.js'
 import { createBridgeDeviceRevoker } from '../modules/bridge/composition.js'
-import {
-  BridgeCredentialService, MysqlBridgeCredentialRepository, RedisBridgeGatewayLeaseStore, RedisBridgeSessionTicketStore,
-  BridgePairingService, MysqlBridgePairingRepository,
-} from '../modules/bridge/index.js'
+import { BridgeCredentialService, BridgePairingService } from '../modules/bridge/index.js'
 import {
   ExecutionDistributionService, ExecutionService, MysqlExecutionDistributionRepository, MysqlExecutionRepository,
   MysqlUserExecutionCommandRepository, UserExecutionCommandService,
@@ -43,7 +41,7 @@ async function main() {
   await Promise.all([assertTradingSchemaReady(pool, assertAccountPrincipalReadSchemaV2), connectCacheRedis(cache)])
 
   const auth = createAuthModule(pool, cache, web.auth, createBridgeDeviceRevoker(pool))
-  const trading = createTradingApiModule(pool, cache, createBrowserRequestAccess(auth), new RedisBridgeGatewayLeaseStore(cache), createActivePrincipalAccess, createAccountPrincipalReader, createAdminPrincipalAccess, createAnalysisStrategyAccess)
+  const trading = createTradingApiModule(pool, cache, createBrowserRequestAccess(auth), createBridgeGatewayLeases(cache), createActivePrincipalAccess, createAccountPrincipalReader, createAdminPrincipalAccess, createAnalysisStrategyAccess)
   const { tradeAuth, observerAdminAuth } = trading
   const userExecution = new UserExecutionCommandService(new MysqlUserExecutionCommandRepository(pool, createTransactionAccountClock))
   const executionDistribution = new ExecutionDistributionService(new MysqlExecutionDistributionRepository(pool))
@@ -56,10 +54,10 @@ async function main() {
       read: createMysqlLearningService(pool, new MysqlLearningMembershipReader(pool)),
       completion: createMysqlLearningCompletionService(pool, MysqlLearningMembershipReader.forTransaction),
     }, auth, { wwwOrigin: web.auth.wwwOrigin, secureCookies: web.secureCookies }),
-    bridgePairing: new BridgePairingService(new MysqlBridgePairingRepository(pool)),
+    bridgePairing: new BridgePairingService(createBridgePairingRepository(pool)),
     bridgeCredentials: new BridgeCredentialService(
-      new MysqlBridgeCredentialRepository(pool),
-      new RedisBridgeSessionTicketStore(cache),
+      createBridgeCredentialRepository(pool),
+      createBridgeSessionTickets(cache),
     ),
     tradingHttp: trading.tradeHttp,
     inferenceHttp: createInferenceHttp(new InferenceService(createMysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader), strategies), strategies, tradeAuth),
