@@ -117,7 +117,7 @@ export type RealtimeResource = 'runtime.bridge' | 'account.metrics' | 'market.qu
 
 export class TradingAccessError extends Error {
   constructor(
-    readonly code: 'trading_account_not_found' | 'trading_account_forbidden' | 'trading_context_invalid' | 'bridge_capacity_exceeded' | 'revision_conflict' | 'market_candle_limit_invalid' | 'trading_context_commit_unknown' | 'trading_context_rollback_unknown' | 'trading_context_write_failed',
+    readonly code: 'trading_account_not_found' | 'trading_account_forbidden' | 'trading_context_invalid' | 'bridge_capacity_exceeded' | 'revision_conflict' | 'market_candle_limit_invalid' | 'trading_context_commit_unknown' | 'trading_context_rollback_unknown' | 'trading_context_write_failed' | 'trading_context_idempotency_conflict',
     readonly status: number,
   ) {
     super(code)

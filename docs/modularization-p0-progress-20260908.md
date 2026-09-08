@@ -653,3 +653,10 @@ getTradingContext/listTradingAccounts/listObserverChannels接入同源运行校�
 新增领域命令/历史回执类型、确定性指纹输入及独立ContextWritePort；请求键、动作、目标、用户和预期版本全部参与身份。041只新增trading_context_changes_v4，记录幂等键、摘要、前后版本、历史结果和UTC时间，使用唯一键及动作/结果CHECK约束。loadTradingContextChanges保留原164步并追加165步，不修改已执行SQL。
 
 3项命令行为测试和1项注册兼容测试通过；完整server类型检查通过，边界债务110无新增，运行合同仍8项。两轮复核及字段设计见[写入合同](architecture/trading-context-write-contract-20260908.md)。本批没有连接数据库，165步只是注册，尚未执行。新端口未接线，后续继续同事务回执适配、迁移协调与前端待确认恢复。
+
+
+## 第七十一批：上下文与回执的原子写入适配
+
+新增MysqlContextCommands和回执校验，活动用户锁→原回执→上下文CAS→同连接目标解析→上下文/回执写入→回读校验→commit。相同键/正文重放历史结果，异体409；回执失败回滚；commit确认丢失销毁连接并允许后续读取原回执。旧请求历史结果不覆盖后来已变更的上下文。
+
+8项适配器及3项命令测试共11项通过，完整server类型检查通过，存量债务110、运行合同8项不变。两轮复核见[写入合同](architecture/trading-context-write-contract-20260908.md)。这是连接fixture验证；未连接数据库、未执行165步。目标解析器、独立写端口接线、旧写入口移除、HTTP幂等键及前端确认继续待办。
