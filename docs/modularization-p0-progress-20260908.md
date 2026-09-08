@@ -562,3 +562,11 @@ loadObserverContextMigration复用完整150步并追加四项checksum，总定�
 新增有界回填协调器，默认只读；重入验证完整已写前缀和目标payload，不只看last ID或数量。每批最多500行，适配器负责同事务CAS、投影比较、全部映射和检查点；提交未知停止，下次核实真实结果。8项回填行为测试加18项转换测试共26项通过，另2项注册/SQL语义检查通过。两轮复核与适配器要求见[合同](architecture/account-projection-incremental-contract-20260908.md)。
 
 真实规范DDL、外键改名行为、MySQL事务和持久化计划尚待验收；恢复副本仍为已验证160步，本批没有连接数据库。接续参考约束验证、构建表正式协调器及MySQL回填，再推进提升和当前库升级。
+
+## 第六十批：K线真实约束与提升外键参考证据
+
+在独占参考MySQL库建立3个最小父键表和039三表，20项真实约束检查全部通过。覆盖精确价格/UTC、重复目标映射、大legacy ID、检查点边界、各FK和删除限制、价格溢出、二进制品种及账户隔离。随后以合成fixture验证双表原子改名：原始行FK跟随legacy表，目标复合FK跟随V4正式表，两旧映射仍完整关联。
+
+[回执](architecture/legacy-candle-build-reference-20260908.json)绑定规范DDL、改名后FK/定义和工具摘要，proofHash=8cf22f903708e8f3a9a69f16f88249f95160f138a446036ad8962f76e58b789b。普通测试事务回滚，改名fixture删除后六表均空，参考库已删除。恢复副本完整快照及160条历史不变，当前dev_vue未写入，连接和隧道关闭。4项本地注册/参考边界检查与语法/差异检查通过。
+
+两轮复核和证据边界见[合同](architecture/account-projection-incremental-contract-20260908.md)。这不是恢复副本163步或真实旧数据提升完成；继续正式协调器、冻结计划及MySQL事务回填适配。
