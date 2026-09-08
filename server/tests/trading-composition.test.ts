@@ -42,7 +42,7 @@ it('keeps trade and administrator authentication scopes distinct in the API comp
 
 it('gives the Bridge its purchased-capacity port without exposing database assembly to the entrypoint', async () => {
   const execute = vi.fn(async () => [[{ quantity: '3' }], []])
-  const module = createBridgeTradingModule({ execute } as unknown as Pool, {} as Redis, leases, () => {})
+  const module = createBridgeTradingModule({ execute } as unknown as Pool, {} as Redis, leases, () => {}, () => ({ absorb: async () => [] }))
   expect(await module.capacity.getPurchasedCapacity(7)).toBe(3)
   expect(execute).toHaveBeenCalledWith(expect.stringContaining('FROM bridge_connection_capacity_grants'), [7])
 })

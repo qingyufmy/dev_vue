@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { BridgeGatewayRoute } from '../src/modules/bridge/index.js'
 import { type TradingReadRepository } from '../src/modules/trading/index.js'
 import { MysqlTradingRepository } from '../src/modules/trading/infrastructure/mysql-trading-repository.js'
+import { createProjectionReservationAbsorber } from '../src/modules/execution/composition.js'
 
 type Row = Record<string, unknown>
 
@@ -102,6 +103,48 @@ function leaseFor(value: BridgeGatewayRoute | null) {
 }
 
 describe('MysqlTradingRepository P3 offline account read model', () => {
+  it.each([false, true])('commits or rolls back absorption on the projection connection (event failure=%s)', async eventFailure => {
+    const pool = new FakePool()
+    const original = pool.execute.bind(pool)
+    pool.execute = async (sql, params = []) => {
+      if (sql.includes('FROM risk_reservations_v4 r')) return [[{
+        reservation_id: 'reservation-1', reservation_revision: 2, action: 'position.close',
+        params_json: { ticket: '123' }, expected_state_json: null, result_json: {},
+        action_json: { expectedState: { positionsRevision: 1 } }, completed_at_utc: new Date('2026-09-05T07:00:00Z'),
+      }], []]
+      if (sql.includes('UPDATE risk_reservations_v4')) {
+        pool.transactionCalls.push('reservation-update')
+        return [{ affectedRows: 1 }, []] as never
+      }
+      if (sql.includes('INSERT INTO risk_reservation_events_v4')) {
+        pool.transactionCalls.push('reservation-event')
+        if (eventFailure) throw new Error('event-write-failed')
+      }
+      return original(sql, params)
+    }
+    const repository = new MysqlTradingRepository(pool.asPool(), null, undefined, connection => {
+      expect(connection).toBe(pool)
+      expect(pool.calls.some(call => call.sql.includes('INSERT INTO trading_projection_provenance_v4'))).toBe(true)
+      return createProjectionReservationAbsorber(connection)
+    })
+    const write = repository.applyTrustedProjection({ route: route(),
+      projection: { accountId: '42', resource: 'positions', resourceId: 'open', revision: 4, data: [] },
+      tradeStates: [], observedAt: '2026-09-05T08:00:00.000Z',
+    })
+    if (eventFailure) await expect(write).rejects.toThrow('event-write-failed')
+    else await expect(write).resolves.toEqual({ applied: true, absorbedReservationIds: ['reservation-1'] })
+    expect(pool.transactionCalls).toEqual(['begin', 'reservation-update', 'reservation-event', eventFailure ? 'rollback' : 'commit', 'release'])
+  })
+
+  it('rolls back a position projection when the absorption capability is absent', async () => {
+    const pool = new FakePool()
+    await expect(new MysqlTradingRepository(pool.asPool()).applyTrustedProjection({ route: route(),
+      projection: { accountId: '42', resource: 'positions', resourceId: 'open', revision: 4, data: [] },
+      tradeStates: [], observedAt: '2026-09-05T08:00:00.000Z',
+    })).rejects.toThrow('projection_reservation_absorber_unavailable')
+    expect(pool.transactionCalls).toEqual(['begin', 'rollback', 'release'])
+  })
+
   it('keeps account identity visible without a profile and separates history from current access', async () => {
     const pool = new FakePool()
     pool.currentRows = [account({ profile_id: null, terminal_instance_id: null })]
@@ -233,7 +276,7 @@ describe('MysqlTradingRepository P3 offline account read model', () => {
 
   it('writes provenance only for an applied trusted private projection', async () => {
     const pool = new FakePool()
-    const repository = new MysqlTradingRepository(pool.asPool())
+    const repository = new MysqlTradingRepository(pool.asPool(), null, undefined, createProjectionReservationAbsorber)
     const projection = {
       accountId: '42', resource: 'account.metrics' as const, resourceId: 'current' as const, revision: 4,
       data: {

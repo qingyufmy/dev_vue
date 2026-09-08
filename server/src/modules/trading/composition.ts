@@ -18,6 +18,7 @@ import { ObserverManagementService } from './application/observer-management-ser
 import { ObserverPublicationService } from './application/observer-publication-service.js'
 import { BridgeStreamProjector } from './application/bridge-stream-projector.js'
 import type { BridgeProjectionPort } from './application/bridge-projection-port.js'
+import type { ProjectionReservationAbsorber } from './application/projection-reservation-absorber.js'
 import { MysqlAccountRegistration } from './infrastructure/mysql-account-registration.js'
 import { MysqlTradingRepository } from './infrastructure/mysql-trading-repository.js'
 import { MysqlObserverAccessReader } from './infrastructure/mysql-observer-access-reader.js'
@@ -69,11 +70,12 @@ export function createTradingApiModule(pool: Pool, cache: Redis, auth: { trade: 
   }
 }
 
-export function createBridgeTradingModule(pool: Pool, cache: Redis, leases: GatewayLeases, onPublishError: (error: unknown) => void): {
+export function createBridgeTradingModule(pool: Pool, cache: Redis, leases: GatewayLeases, onPublishError: (error: unknown) => void,
+  reservationAbsorber: (connection: PoolConnection) => ProjectionReservationAbsorber): {
   capacity: ConnectionCapacityRepository
   projector: BridgeProjectionPort
 } {
-  const repository = new MysqlTradingRepository(pool, leases)
+  const repository = new MysqlTradingRepository(pool, leases, undefined, reservationAbsorber)
   return { capacity: repository, projector: new BridgeStreamProjector(repository, new RedisBrowserRealtimePublisher(cache, undefined, onPublishError)) }
 }
 

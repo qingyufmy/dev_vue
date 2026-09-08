@@ -1,4 +1,5 @@
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
+import { createProjectionReservationAbsorber } from '../modules/execution/composition.js'
 import Fastify from 'fastify'
 import { Worker } from 'bullmq'
 import {
@@ -34,7 +35,7 @@ async function main() {
   const leases = new RedisBridgeGatewayLeaseStore(cache)
   const { capacity, projector } = createBridgeTradingModule(pool, cache, leases, error => {
     console.error('[bridge-gateway] realtime publish failed', safeError(error))
-  })
+  }, createProjectionReservationAbsorber)
   const streams = new BridgeV4StreamIngestor(new BridgeTradeProjectionDecoder(), projector)
   const directory = new InProcessBridgeGatewayDirectory()
   const routes = createBridgeGatewayRoutes(pool, createAccountRegistration)

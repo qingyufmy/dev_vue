@@ -275,10 +275,10 @@
             "typeOnly": false
           },
           {
-            "source": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
-            "target": "server/src/modules/execution/domain/projection-absorption.ts",
+            "source": "server/src/modules/execution/infrastructure/mysql-projection-reservation-absorber.ts",
+            "target": "server/src/modules/trading/index.ts",
             "kind": "import",
-            "typeOnly": false
+            "typeOnly": true
           }
         ]
       },
@@ -1657,19 +1657,6 @@
         "rule": "cross-module-internal",
         "source": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
         "target": "server/src/modules/execution/domain/execution.ts",
-        "kind": "import",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "trading",
-      "phase": "P1",
-      "reason": "现有跨域内部依赖；随所属域迁移到公开业务端口并由组装入口注入，禁止继续新增。"
-    },
-    {
-      "finding": {
-        "rule": "cross-module-internal",
-        "source": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
-        "target": "server/src/modules/execution/domain/projection-absorption.ts",
         "kind": "import",
         "typeOnly": false
       },

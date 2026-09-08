@@ -1,5 +1,5 @@
 import { resolveStoredAccountClock } from './mysql-account-clock.js'
-import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
+import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise'
 import type {
   BridgeExactTradeState, ConnectionCapacityRepository, TradingProjectionRepository, TradingProjectionWrite, TradingReadRepository,
   TrustedBridgeProjectionRepository, TrustedBridgeProjectionWrite,
@@ -12,7 +12,7 @@ import type {
 } from '../domain/trading.js'
 import { TradingAccessError } from '../domain/trading.js'
 import { sha256Canonical } from '../../execution/domain/execution.js'
-import { projectionProvesCommandResult } from '../../execution/domain/projection-absorption.js'
+import type { ProjectionReservationAbsorber } from '../application/projection-reservation-absorber.js'
 
 interface ContextRow extends RowDataPacket { user_id: number; mode: TradingContext['mode']; trading_account_id: string | null; observer_channel_id: string | null; read_only: number; revision: number }
 interface AccountRow extends RowDataPacket {
@@ -40,11 +40,6 @@ interface ProjectionPayloadRow extends RowDataPacket { payload_json: string | Op
 interface OwnershipProofRow extends RowDataPacket { interval_id: string; ownership_revision: string | number }
 interface CredentialProofRow extends RowDataPacket { id: string | number }
 interface PermissionRow extends ProjectionSourceRow { trade_permission: number }
-interface ReservationProjectionRow extends RowDataPacket {
-  reservation_id: string; reservation_revision: number; command_id: string; action: string
-  params_json: string | Record<string, unknown>; expected_state_json: string | Record<string, unknown> | null; result_json: string | Record<string, unknown> | null
-  action_json: string | Record<string, unknown>; completed_at_utc: Date
-}
 
 interface CurrentProjectionContext {
   row: AccountRow
@@ -150,6 +145,7 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
     private readonly pool: Pool,
     private readonly gatewayLeases: Pick<BridgeGatewayLeaseStore, 'current'> | null = null,
     observerAccessReader?: MysqlObserverAccessReader,
+    private readonly reservationAbsorber?: (connection: PoolConnection) => ProjectionReservationAbsorber,
   ) { this.observerAccessReader = observerAccessReader ?? new MysqlObserverAccessReader(pool) }
 
   private readonly observerAccessReader: MysqlObserverAccessReader
@@ -464,8 +460,11 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
       if (!('tradeStates' in input)) throw new TradingAccessError('trading_context_invalid', 400)
       await replaceExactTradeStates(connection, route.accountId, entityKind, route.terminalInstanceId, route.connectionEpoch,
         input.projection.revision, input.tradeStates, input.observedAt)
-      const absorbedReservationIds = await absorbProjectedReservations(connection, route.accountId, entityKind, input.projection.revision,
-        input.observedAt, input.tradeStates, new Date().toISOString())
+      if (!this.reservationAbsorber) throw new Error('projection_reservation_absorber_unavailable')
+      const absorbedReservationIds = await this.reservationAbsorber(connection).absorb({
+        accountId: route.accountId, entityKind, projectionRevision: input.projection.revision,
+        observedAt: input.observedAt, states: input.tradeStates, now: new Date().toISOString(),
+      })
       return { applied: true, absorbedReservationIds }
     })
   }
@@ -565,40 +564,4 @@ async function replaceExactTradeStates(connection: PoolConnection, accountId: st
       accountId, entityKind, state.ticket, terminalInstanceId, connectionEpoch, revision, stateJson, sha256Canonical(state), observedAt,
     ])
   }
-}
-
-async function absorbProjectedReservations(connection: PoolConnection, accountId: string, entityKind: 'position' | 'pending_order', projectionRevision: number,
-  observedAt: string, states: BridgeExactTradeState[], now: string) {
-  const [rows] = await connection.execute<ReservationProjectionRow[]>(`SELECT r.id reservation_id,r.revision reservation_revision,c.id command_id,c.action,
-      p.params_json,p.expected_state_json,ip.action_json,cr.result_json,cr.completed_at_utc
-    FROM risk_reservations_v4 r
-    INNER JOIN execution_intents i ON i.id=r.execution_intent_id AND i.status='succeeded'
-    INNER JOIN execution_intent_payloads ip ON ip.execution_intent_id=i.id
-    INNER JOIN bridge_commands_v4 c ON c.execution_intent_id=i.id AND c.status='succeeded' AND c.result_sha256 IS NOT NULL
-    INNER JOIN bridge_command_payloads_v4 p ON p.bridge_command_id=c.id
-    INNER JOIN bridge_command_results_v4 cr ON cr.bridge_command_id=c.id AND cr.result_sha256=c.result_sha256 AND cr.conflict=0
-    WHERE r.trading_account_id=? AND r.status='committed' ORDER BY r.id FOR UPDATE`, [accountId])
-  const byTicket = new Map(states.map(state => [state.ticket, state]))
-  const absorbed: string[] = []
-  for (const row of rows) {
-    const params = parsePayload<Record<string, unknown>>(row.params_json)
-    const expectedState = row.expected_state_json ? parsePayload<BridgeExactTradeState>(row.expected_state_json) : null
-    const result = row.result_json ? parsePayload<Record<string, unknown>>(row.result_json) : null
-    const sourceAction = parsePayload<{ expectedState?: Record<string, unknown> }>(row.action_json)
-    const expectedRevision = Number(sourceAction.expectedState?.[entityKind === 'position' ? 'positionsRevision' : 'pendingOrdersRevision'])
-    if (!Number.isSafeInteger(expectedRevision) || projectionRevision <= expectedRevision
-      || Date.parse(observedAt) < new Date(row.completed_at_utc).getTime()) continue
-    if (!projectionProvesCommandResult({ action: row.action, entityKind, params, expectedState, result, states: byTicket })) continue
-    const [update] = await connection.execute<ResultSetHeader>(`UPDATE risk_reservations_v4
-      SET status='absorbed',released_at_utc=?,release_reason='trusted_projection_absorbed',updated_at_utc=?,revision=revision+1
-      WHERE id=? AND status='committed' AND revision=?`, [now, now, row.reservation_id, row.reservation_revision])
-    if (update.affectedRows !== 1) continue
-    await connection.execute(`INSERT INTO risk_reservation_events_v4
-      (risk_reservation_id,event_type,from_status,to_status,reason_code,from_revision,to_revision,occurred_at_utc)
-      VALUES (?,'risk.reservation.absorbed','committed','absorbed','trusted_projection_absorbed',?,?,?)`, [
-      row.reservation_id, row.reservation_revision, row.reservation_revision + 1, now,
-    ])
-    absorbed.push(row.reservation_id)
-  }
-  return absorbed
 }
