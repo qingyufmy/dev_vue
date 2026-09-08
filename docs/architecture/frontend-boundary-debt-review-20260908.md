@@ -1,12 +1,14 @@
 # 前端精确边界债务与声明刷新
 
+第十七批更新：9个共享UI循环已实际消除，并删除对应精确记录。8组variants/类型定义迁到独立文件，SelectContent直接导入滚动按钮；前端339个源文件当前剩2条feature内部引用。四应用构建及全部前端类型检查通过。以下11条描述保留为初始登记基线。
+
 2026-09-08在60fe3476后刷新Nuxt声明，扫描331个源文件、1561条依赖；配置错误0，当前可识别的隐式app依赖0。共11条存量记录，见frontend-boundary-debt.json。隐式边为0不表示全部隐式用法已覆盖。
 
 ## 复核与消除顺序
 
 2条feature内部引用为trade的App.vue及trader/use-trader-workspace.ts读取home/home-runtime。该文件仍转导出共享交易状态，P1按账户/行情投影所有权迁移；不能仅从home/index公开可写状态后算封装完成。
 
-9个UI循环分量为alert/avatar/badge/button/empty/field/select/sidebar/tabs：组件从本目录index导入variants或类型，index又导出组件。登记P0消除，应将不依赖组件的定义放到独立文件，保持公共组件入口及渲染行为。暂存这些循环不代表允许后续组件延续此结构。
+9个UI循环分量为alert/avatar/badge/button/empty/field/select/sidebar/tabs：组件从本目录index导入variants、类型或兄弟组件，index又导出组件。登记P0消除，应将不依赖组件的定义放到独立文件，兄弟组件直接导入，保持公共组件入口及渲染行为。暂存这些循环不代表允许后续组件延续此结构。
 
 每条记录包含source/target/rule、导入种类、类型属性及完整循环内部边，附模块、阶段和处理理由。新增内部引用、类型改运行、循环内部扩张及陈旧例外均拒绝；跨应用与共享包反向依赖不能加入例外。
 

@@ -164,3 +164,11 @@ openapi-v4.json改为生成产物；新增generate:api-contract和verify:api-gen
 新增verify:frontend-boundary-delta，每次先用项目安装的Nuxt CLI prepare，再扫描；准备失败、配置错误及新/陈旧债务均失败。新门接入既有前端边界命令，保留原检查，并进入测试、构建和类型检查流程。
 
 20项检测器测试通过，实际临时内部引用被拒绝，探针已删除；全部前端9个工作区类型检查通过，服务端增量门保持通过。11条前端存量仍需真正消除，Nuxt server/动态组件等覆盖与表所有权仍待完成；P0及P1–P7继续。没有修改UI行为或调用真实依赖。
+
+## 第十七批：消除共享UI循环
+
+按shadcn-vue现有组件结构，将alert/avatar/badge/button/empty/field/sidebar/tabs的variants与类型迁到各自独立文件；公共index保留组件、variants及类型名称的导出，组件内部直接读取定义文件。SelectContent改为直接导入同目录滚动按钮，不再经自身index循环回读。
+
+源声明逐项比较确认8组定义完全一致，10个变更Vue文件的template及其后内容保持；四应用构建、全部前端类型检查与增量门通过。没有重设计UI或进行浏览器视觉验收。
+
+扫描339个前端源文件，9个UI源码循环实际清零，只删除这9条已解决的精确例外；剩2条App/trader读取home共享交易状态的内部引用，按P1状态所有权继续处理。P0其它项及整体方案尚未完成。

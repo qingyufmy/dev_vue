@@ -72,6 +72,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\bridge\prototypes\net48-wi
 - 通用控件优先组合 `frontend/packages/ui` 中已经批准的 shadcn-vue 组件。新增组件先查官方 shadcn-vue 文档并使用其 CLI；禁止引入第二套通用 UI 库，也禁止重复手写已有 Button、Dialog、Drawer、Select、Tabs、Table、Form 等基础控件。
 - 设计、重构或审查页面时必须使用 `ui-ux-pro-max` 形成布局、层级、响应式和可访问性判断；实现阶段仍以项目 shadcn-vue 组件与设计令牌为准，不得让 Skill 生成物绕过组件边界。
 - 共享 UI 包只包含无业务含义的基础组件与令牌。页面、API 调用、Query、Pinia store、路由和业务组件归所属应用；修改共享包先确认实际消费者并定向验证。公共导出、全局令牌、构建配置等跨应用变更需验证四个应用的相关类型、构建或视觉行为，不把每次局部修复扩展成四应用全量测试。
+- 共享UI组件内部不从自身index回读variants、类型或兄弟组件；纯定义放在无组件依赖的variants文件，兄弟组件直接导入具体文件，对外仍通过index公开。CLI新增组件若产生同类循环，必须在验收前消除。
 - 每个应用原生实现自己的账户与设置体验，禁止 iframe 嵌入通用用户中心、跨应用共享整页业务组件或用 `postMessage` 同步身份。
 - 身份中心统一认证，但每个应用只建立自己的 Host-only、Secure、HttpOnly 会话；禁止父域共享 Cookie、浏览器长期 JWT、跨应用复制 Token 或把身份凭据放入 URL/本地存储。
 - 页面首次和重连使用 HTTP 一致快照；真正需要秒级更新的账户指标、报价、当前 K 线、持仓、挂单和任务状态使用统一 realtime client。历史、列表、详情、筛选、配置和全部浏览器写操作走 HTTP，组件不得直接创建 WebSocket 或把 WebSocket 当 RPC。
