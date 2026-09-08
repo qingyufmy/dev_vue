@@ -1,3 +1,4 @@
+import { inRiskTransaction as transaction } from './mysql-risk-transaction.js'
 import { createHash, randomUUID } from 'node:crypto'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import type { TraderDecisionResult } from '../../inference/index.js'
@@ -35,13 +36,6 @@ interface ManualReleaseRow extends RowDataPacket {
   released_rules_json: string | object; baseline_json: string | object; risk_state_revision: number
   breach_fingerprint: string; reason: string; expires_at_utc: Date; created_at_utc: Date
   invalidated_at_utc: Date | null; invalidation_reason: string | null; revision: number; request_sha256: string
-}
-
-async function transaction<T>(pool: Pool, work: (connection: PoolConnection) => Promise<T>) {
-  const connection = await pool.getConnection()
-  try { await connection.beginTransaction(); const value = await work(connection); await connection.commit(); return value }
-  catch (error) { await connection.rollback(); throw error }
-  finally { connection.release() }
 }
 
 export class MysqlRiskRepository implements RiskRepository {

@@ -1266,3 +1266,9 @@ Chrome实际打开localhost:4174/market，现有服务可访问但会话未登�
 抽出risk-state纯类型，主规则和人工解锁共同依赖该文件，消除risk/manual-risk-release类型循环；原业务类型导出保持兼容。存储适配器经inference公开index读取历史决定类型，不穿透内部文件。领域新增RiskDecisionInput/RiskAction，只声明实际评估用到的action/actions、参数和expectedState，独立于推理结果中的confidence/summary/reasoning；未复制完整推理结果类型或添加宽泛any。
 
 原风控评估和动作对象保持不变，JSON结构同形、未转换持久化正文或更改哈希。16项风控和19项用户执行/分发回归共35项通过，类型、构建及冻结321通过。精确删除4条已解决记录，risk登记债务0，全服务端44条。仍需跨域SQL、事务所有权与完整API/数据库/前端验收，不把检测器清零当模块完成。本批无数据库连接或运行重启。
+
+## 107. Risk 事务连接回收（第一百七十七批）
+
+跨域SQL核对发现risk原transaction在commit异常后尝试rollback且始终release，可能将结果未知的连接放回池，rollback异常也会掩盖原状态。抽出inRiskTransaction：成功commit或已确认rollback才release；begin未知、commit未知、rollback失败均destroy。业务RiskError保留，驱动错误脱敏为risk_storage_unavailable；commit/rollback未知分别risk_commit_unknown/risk_rollback_unknown，503且不自动重试。
+
+5项连接生命周期行为配合16项确定性风控共21项通过，类型/构建及44条边界检查通过。未实际注入MySQL断网，证据为mock生命周期测试，未修改规则、迁移或重启。风险写操作的幂等回执、未知结果查询和前端恢复仍需补齐，不能将连接回收修复表述为提交未知已闭环。跨域trade_decisions更新及trading/strategies读锁所有权继续待拆。
