@@ -484,3 +484,9 @@ A 完成后优先推进 B 的源码、合同和本地测试，同时准备 C；B
 ## 25. 当前库 K 线原子提升完成（第九十五批）
 
 当前dev_vue已达164步、237表。market_candles为30226行正式目标K线，market_candles_legacy_v3保留35725行旧记录，35725行ID映射及回填账本保留；全表数据与既有163步日志一致，首次原子RENAME一次、重复执行零写入。见[应用回执](architecture/current-legacy-candle-promotion-applied-20260908.json)及[重复回执](architecture/current-legacy-candle-promotion-repeat-20260908.json)。下一步165上下文回执表，然后进行账户真实API/浏览器联合验收；应用消费者尚未启用，全域模块化仍未完成。
+
+## 26. 当前库账户样板升级前置完成（第九十六批）
+
+当前dev_vue已达165步、238表，新增trading_context_changes_v4为空；原237表及旧164步日志严格对账一致。首次DDL1次、日志写入2次；同proof重复执行均为0。见[应用回执](architecture/current-context-changes-applied-20260908.json)和[重复回执](architecture/current-context-changes-repeat-20260908.json)。本批13项真实MySQL约束验证及19项定向测试通过，完成当前账户根/K线/上下文升级链；这不是全域数据库规范化或账户样板整体验收完成。
+
+下一轮转入第18节步骤2：核验当前库应用连接与实际权限查询，清除账户样板跨模块内部依赖，验证本地HTTP/Redis及浏览器的选账户、观摩进出、权限撤销、刷新与未知结果恢复。保持应用本地、虚拟机仅MySQL；目前没有启用运行消费者或启动交易角色。后续P2–P7与缺失API/扫描盲点继续保留在总范围。

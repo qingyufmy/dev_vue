@@ -1,0 +1,70 @@
+{
+  "kind": "context-receipt-schema-reference/v1",
+  "observedAt": "2026-09-08T15:33:50.520Z",
+  "identity": {
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "toolHash": "21de8f08cc7474d669ef7f8c0970ac7c35548bb7634ae2efa84643cb5731dd6c",
+  "registrySteps": 165,
+  "stepChecksum": "9c6ebdd2085469655abd8ed45d89eb6f6b72f49566f065733d67661a87dee42e",
+  "canonicalDdl": "CREATE TABLE `trading_context_changes_v4` (\n  `user_id` int NOT NULL,\n  `request_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `request_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `action` enum('select_account','enter_observer','leave_observer') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `target_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `prior_revision` bigint unsigned NOT NULL,\n  `revision` bigint unsigned NOT NULL,\n  `result_mode` enum('full','observer','blocked') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `result_account_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `result_observer_channel_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `result_read_only` tinyint unsigned NOT NULL,\n  `recorded_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`user_id`,`request_id`),\n  UNIQUE KEY `uk_context_changes_revision` (`user_id`,`revision`),\n  KEY `idx_context_changes_recorded` (`recorded_at_utc`,`user_id`,`revision`),\n  CONSTRAINT `fk_context_changes_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_context_changes_action_result` CHECK ((((`action` = _utf8mb4'select_account') and (`result_mode` = _utf8mb4'full') and (`result_account_id` = `target_id`)) or ((`action` = _utf8mb4'enter_observer') and (`result_mode` = _utf8mb4'observer') and (`result_observer_channel_id` = `target_id`)) or ((`action` = _utf8mb4'leave_observer') and (`result_mode` in (_utf8mb4'full',_utf8mb4'blocked'))))),\n  CONSTRAINT `chk_context_changes_read_only` CHECK ((`result_read_only` in (0,1))),\n  CONSTRAINT `chk_context_changes_result` CHECK ((((`result_mode` = _utf8mb4'full') and (`result_account_id` is not null) and (`result_observer_channel_id` is null)) or ((`result_mode` = _utf8mb4'observer') and (`result_account_id` is null) and (`result_observer_channel_id` is not null) and (`result_read_only` = 1)) or ((`result_mode` = _utf8mb4'blocked') and (`result_account_id` is null) and (`result_observer_channel_id` is null) and (`result_read_only` = 1)))),\n  CONSTRAINT `chk_context_changes_revision` CHECK (((`prior_revision` < 9007199254740991) and (`revision` = (`prior_revision` + 1)))),\n  CONSTRAINT `chk_context_changes_target` CHECK ((((`action` = _utf8mb4'leave_observer') and (`target_id` is null)) or ((`action` in (_utf8mb4'select_account',_utf8mb4'enter_observer')) and (`target_id` is not null) and (char_length(`target_id`) > 0))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+  "sourceHash": "9cb05c6b090c30925b257201fe0f8812598d1e235b20a045245eb2ac44aaef7d",
+  "checks": [
+    {
+      "name": "valid-write-utc-milliseconds",
+      "passed": true
+    },
+    {
+      "name": "same-user-request-key",
+      "passed": true
+    },
+    {
+      "name": "same-user-result-revision",
+      "passed": true
+    },
+    {
+      "name": "missing-user",
+      "passed": true
+    },
+    {
+      "name": "revision-jump",
+      "passed": true
+    },
+    {
+      "name": "unsafe-revision",
+      "passed": true
+    },
+    {
+      "name": "missing-target",
+      "passed": true
+    },
+    {
+      "name": "wrong-result-account",
+      "passed": true
+    },
+    {
+      "name": "writable-observer",
+      "passed": true
+    },
+    {
+      "name": "mixed-result-scope",
+      "passed": true
+    },
+    {
+      "name": "valid-observer-result",
+      "passed": true
+    },
+    {
+      "name": "valid-exit-to-owned-account",
+      "passed": true
+    },
+    {
+      "name": "receipt-insert-rollback",
+      "passed": true
+    }
+  ],
+  "referenceDatabaseRemoved": true,
+  "existingDatabaseWrites": 0,
+  "scope": "Temporary isolated MySQL schema constraints only; no existing dev_vue upgrade or context-command transaction/concurrency claim."
+}

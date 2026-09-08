@@ -1,0 +1,28 @@
+{
+  "kind": "current-context-changes-result/v1",
+  "observedAt": "2026-09-08T15:38:04.153Z",
+  "identity": {
+    "database": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "mode": "--apply",
+  "result": {
+    "status": "completed",
+    "ddlCount": 0
+  },
+  "journalWrites": 0,
+  "proofHash": "a100083273bb31fcdf5e6a3fda0590a7443a7e77df9f3707eb87e3f3e934a380",
+  "registrySteps": 165,
+  "completedSteps": 165,
+  "tools": 321,
+  "tableCount": 238,
+  "priorSnapshotHash": "bcd5257e4245498bbf0638e2d85dac1670a0c4629b76becf54746a5b3a5adf03",
+  "priorHistoryHash": "816907330b362ef62e7f7d449b46e5abcc7f60b981b106b3b531bda49f06ff8c",
+  "table": {
+    "matches": true,
+    "rows": 0
+  },
+  "currentDevVueWritten": false,
+  "runtimeActivated": false,
+  "scope": "Current database append-only empty receipt table; prior rows and history reconciled. Other-client observation is not a database-wide write lock. No runtime activation."
+}

@@ -808,3 +808,9 @@ HTTP和生产组装已切换到ContextWritePort，移除读取接口、应用服
 当前dev_vue为164步、237表：正式market_candles为30226行，legacy表保留35725行旧K线，35725行映射和回填账本保留。持有全表WRITE锁并独立观察锁拥有者后执行单条原子RENAME，全表数据与旧163步日志对账一致；重复apply零DDL、零写入。
 
 当前适配器绑定本次回填重复回执和311项工具摘要，旧SQL及已执行工具冻结不变；42项定向测试通过。见[应用回执](architecture/current-legacy-candle-promotion-applied-20260908.json)、[重复回执](architecture/current-legacy-candle-promotion-repeat-20260908.json)及[接入方案第20节](architecture/current-dev-vue-upgrade-plan-20260908.md)。下一步165回执表，之后完成账户真实API/浏览器联合验收，应用运行尚未启用。
+
+## 第九十六批：当前账户样板数据库升级前置完成
+
+当前dev_vue为165步、238表，新增上下文回执表为空，原237表及旧164步日志对账一致；首次DDL1次/日志2次，重复执行均0。当前临时参考13项真实MySQL约束通过并清理，19项定向测试通过；当前proof绑定321项工具/输入摘要，旧SQL及已执行工具冻结不变。
+
+见[应用回执](architecture/current-context-changes-applied-20260908.json)、[重复回执](architecture/current-context-changes-repeat-20260908.json)及[接入方案第21节](architecture/current-dev-vue-upgrade-plan-20260908.md)。下一步转入账户实际权限、HTTP/Redis和浏览器联合验收以及账户边界债务清理；本批完成账户升级前置，不代表全域数据库或前后端模块化完成。
