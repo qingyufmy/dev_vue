@@ -5,7 +5,7 @@ import { isAbsolute, resolve } from 'node:path'
 import { parse } from 'dotenv'
 import { createMysqlPool } from '../server/dist-v4/bootstrap/runtime-resources.js'
 import { createAccountRegistration, createTransactionTradingReader } from '../server/dist-v4/modules/trading/composition.js'
-import { createAccountPrincipalReader } from '../server/dist-v4/modules/auth/composition.js'
+import { createActivePrincipalAccess, createAccountPrincipalReader } from '../server/dist-v4/modules/auth/composition.js'
 
 // The durable intent identifies both accounts even if COMMIT acknowledgement is lost.
 // --verify never retries a write. Keep the intent outside the repository with the private user fixture.
@@ -48,7 +48,7 @@ try {
   const [users] = await connection.execute("SELECT id FROM users WHERE id=? AND email=? AND deletion_status='active' AND deleted_at IS NULL FOR UPDATE", [fixture.userId, fixture.email])
   assert.equal(users.length, 1)
   checks.push('exact-synthetic-user-and-development-database')
-  const registration = createAccountRegistration(connection)
+  const registration = createAccountRegistration(connection, createActivePrincipalAccess(connection))
   phase = 'account-registration'
   if (mode === '--create') {
     const [owners] = await connection.execute('SELECT trading_account_id FROM trading_account_ownerships WHERE user_id=? AND revoked_at_utc IS NULL LIMIT 1', [fixture.userId])

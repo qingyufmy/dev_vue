@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import type { PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
+import type { ActivePrincipalAccess } from '../../auth/index.js'
 import type { AccountRegistration } from '../application/account-registration.js'
 
 interface AccountRow extends RowDataPacket { id: string | number; currency: string }
 interface OwnershipRow extends RowDataPacket { ownership_revision: string | number; interval_id?: string }
 
 export class MysqlAccountRegistration implements AccountRegistration {
-  constructor(private readonly connection: PoolConnection) {}
+  constructor(private readonly connection: PoolConnection, private readonly principals: ActivePrincipalAccess) {}
 
   async lockAccount(input: Parameters<AccountRegistration['lockAccount']>[0]): ReturnType<AccountRegistration['lockAccount']> {
     const [rows] = await this.connection.execute<AccountRow[]>(`SELECT CAST(a.id AS CHAR) id,a.platform,a.broker_server,a.account_login,a.currency
@@ -27,12 +28,13 @@ export class MysqlAccountRegistration implements AccountRegistration {
         AND oi.user_id=o.user_id AND oi.trading_account_id=o.trading_account_id AND oi.role='owner'
         AND oi.ended_at_utc IS NULL AND oi.started_at_utc=o.granted_at_utc
         AND oi.started_at_utc<=UTC_TIMESTAMP(3)
-      INNER JOIN users u ON u.id=o.user_id AND u.deletion_status='active' AND u.deleted_at IS NULL
       WHERE a.id=? AND a.deleted_at_utc IS NULL
       LIMIT 1 FOR UPDATE`, [input.userId, input.accountId])
     if (rows.length !== 1) return null
     const revision = String(rows[0]!.ownership_revision)
-    return /^[1-9][0-9]{0,19}$/.test(revision) ? revision : null
+    if (!/^[1-9][0-9]{0,19}$/.test(revision)) return null
+    // Retain account -> ownership -> principal UPDATE locks in the caller transaction.
+    return await this.principals.isActive(input.userId, 'update') ? revision : null
   }
 
   async createAccount(input: Parameters<AccountRegistration['createAccount']>[0]): ReturnType<AccountRegistration['createAccount']> {

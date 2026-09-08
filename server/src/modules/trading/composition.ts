@@ -96,8 +96,8 @@ export function createBrowserTradingModule(pool: Pool, leases: GatewayLeases, ev
   return { hub, events, sessions: createBrowserRealtimeSessions(hub) }
 }
 
-export function createAccountRegistration(connection: PoolConnection): AccountRegistration {
-  return new MysqlAccountRegistration(connection)
+export function createAccountRegistration(connection: PoolConnection, principals: ActivePrincipalAccess): AccountRegistration {
+  return new MysqlAccountRegistration(connection, principals)
 }
 
 export function createTransactionAccountClock(connection: PoolConnection): AccountClockReader {

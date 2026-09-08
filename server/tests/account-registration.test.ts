@@ -3,13 +3,14 @@ import { describe, expect, it, vi } from 'vitest'
 import { createAccountRegistration } from '../src/modules/trading/composition.js'
 
 const input = { platform: 'mt5' as const, brokerServer: 'Broker-Demo', login: '10001', currency: 'USD', registeredAt: '2026-09-08T00:00:00.000Z' }
-function fixture(results: unknown[]) {
+function fixture(results: unknown[], active = true) {
   const execute = vi.fn(async (..._args: unknown[]) => {
     if (!results.length) throw new Error('unexpected_query')
     return [results.shift(), []]
   })
   // No pool/commit capability is provided: the external transaction owns them.
-  return { execute, registration: createAccountRegistration({ execute } as unknown as PoolConnection) }
+  const isActive = vi.fn(async (_userId: number, _lock: string) => active)
+  return { execute, isActive, registration: createAccountRegistration({ execute } as unknown as PoolConnection, { isActive }) }
 }
 
 describe('transaction-bound account registration (SQL double)', () => {
@@ -20,6 +21,8 @@ describe('transaction-bound account registration (SQL double)', () => {
     await expect(f.registration.lockCurrentOwnership({ userId: 7, accountId: id })).resolves.toBe(id)
     expect(f.execute.mock.calls[0]![1]).toEqual([input.platform, input.brokerServer, input.login])
     expect(f.execute.mock.calls[1]![1]).toEqual([7, id])
+    expect(f.isActive).toHaveBeenCalledWith(7, 'update')
+    expect(f.execute.mock.invocationCallOrder[1]).toBeLessThan(f.isActive.mock.invocationCallOrder[0]!)
   })
 
   it('does not grant ownership proof for missing, ambiguous or malformed revision rows', async () => {
@@ -27,8 +30,18 @@ describe('transaction-bound account registration (SQL double)', () => {
       [{ ownership_revision: '0' }], [{ ownership_revision: '-1' }], [{ ownership_revision: '1.5' }], [{ ownership_revision: null }]]) {
       const f = fixture([rows])
       await expect(f.registration.lockCurrentOwnership({ userId: 7, accountId: '42' })).resolves.toBeNull()
+      expect(f.isActive).not.toHaveBeenCalled()
     }
     await expect(fixture([[]]).registration.lockAccount(input)).resolves.toBeNull()
+  })
+
+  it('rejects inactive principals after locking ownership and propagates unavailable identity checks', async () => {
+    const inactive = fixture([[{ ownership_revision: '3' }]], false)
+    await expect(inactive.registration.lockCurrentOwnership({ userId: 7, accountId: '42' })).resolves.toBeNull()
+    expect(inactive.isActive).toHaveBeenCalledWith(7, 'update')
+    const unavailable = fixture([[{ ownership_revision: '3' }]])
+    unavailable.isActive.mockRejectedValueOnce(new Error('auth_principal_unavailable'))
+    await expect(unavailable.registration.lockCurrentOwnership({ userId: 7, accountId: '42' })).rejects.toThrow('auth_principal_unavailable')
   })
 
   it('preserves unsigned BIGINT identity and the original ownership provenance', async () => {

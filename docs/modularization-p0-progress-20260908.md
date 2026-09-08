@@ -1217,3 +1217,15 @@ API 和 realtime 均更新到本批构建：API Node 42252/PowerShell 33680，�
 本次执行脚本语法检查、OutboxDispatcher 两项定向回归（发布先于确认；失败终次进入有界延迟与 dead 状态）、321 个冻结输入一致性检查，均通过。两项回归使用内存替身，与已有真实 MySQL/Redis 回执分开记录。探针与回执未修改执行内容，保留原始证据；未改变业务源码、数据库结构或运行配置。
 
 下一工作包已定位 MysqlAccountRegistration.lockCurrentOwnership 对 auth.users 的跨域连接。需先核对 Bridge 注册/恢复事务及锁顺序，再注入 auth 的公开 ActivePrincipalAccess，更新当前运行组装及夹具调用，保护失效主体拒绝和同事务语义。账户浏览器完整流程、精确退役与 P1 退出仍未完成，整体目标继续推进。
+
+## 70. 账户注册通过 auth 公开能力校验主体（第一百四十批）
+
+MysqlAccountRegistration.lockCurrentOwnership 不再连接 auth.users：先按现有账户/归属/区间条件锁定归属并校验 revision，再调用注入的 ActivePrincipalAccess.isActive(userId, 'update')。返回失效主体时拒绝归属证明，身份存储失败向外抛出并由 Bridge 事务拥有者回滚。Bridge 运行入口显式将同一个 PoolConnection 绑定到 auth 和 trading；没有新增连接、独立提交或默认允许能力。新账户分支仍沿用原 Bridge 凭据授权，不改变注册权限。
+
+本次核对 authorizeAndOpen 与 assertCurrentRouteBase 调用链：账户先锁，归属及主体随后获取更新锁，凭据、档案、绑定/会话在后。针对账户已存在的注册/恢复路径增加实际组装 SQL 替身的顺序断言，避免将用户锁改为共享锁再升级。当前测试不是跨连接死锁证明，其他既有跨域用户表读取仍需逐项收口。
+
+更新两个当前合成账户/观摩工具的组装参数及模块 README。定向回归 32 项通过（账户注册 6、Bridge 注册/重连 26），包含失效主体、身份能力异常、无效归属不读取主体、BIGINT 原值及注册/重连原行为。服务端类型检查和构建通过，API 14 个运行合同一致，边界登记 64 条无新增或陈旧项，321 个冻结输入不变；未改冻结工具或迁移。
+
+使用本批编译产物执行 owned-accounts --verify，真实开发库三项只读检查通过，报告 [local-owned-account-principal-verified-20260909.json](architecture/local-owned-account-principal-verified-20260909.json)：精确夹具身份、两个账户的当前归属/历史区间、公开列表离线且无交易权限。commitState=not_attempted，未新增数据或迁移，未重启角色；此证据不代表运行中的 Bridge 已使用新构建，也不是终端或浏览器验收。
+
+本批完成已批准账户数据所有权工作包中的一处明确耦合。下一步继续清点 Bridge 凭据、观摩管理等剩余跨域 SQL，并推进账户前端恢复与夹具退役；P1 和总体重构未完成。

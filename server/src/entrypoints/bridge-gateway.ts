@@ -1,3 +1,4 @@
+import { createActivePrincipalAccess } from '../modules/auth/composition.js'
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import { createProjectionReservationAbsorber } from '../modules/execution/composition.js'
 import Fastify from 'fastify'
@@ -36,7 +37,7 @@ async function main() {
   }, createProjectionReservationAbsorber)
   const streams = new BridgeV4StreamIngestor(new BridgeTradeProjectionDecoder(), projector)
   const directory = new InProcessBridgeGatewayDirectory()
-  const routes = createBridgeGatewayRoutes(pool, createAccountRegistration)
+  const routes = createBridgeGatewayRoutes(pool, connection => createAccountRegistration(connection, createActivePrincipalAccess(connection)))
   const transport = new BridgeGatewayCommandTransport(leases, directory, routes)
   const queries = new BridgeGatewayQueryTransport(leases, directory, routes)
   const historyCollector = createMysqlTradeHistoryCollector(pool, queries)

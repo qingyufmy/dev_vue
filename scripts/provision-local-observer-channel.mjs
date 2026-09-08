@@ -6,7 +6,7 @@ import bcrypt from 'bcryptjs'
 import { parse } from 'dotenv'
 import { createMysqlPool } from '../server/dist-v4/bootstrap/runtime-resources.js'
 import { createAccountRegistration, createTransactionTradingReader } from '../server/dist-v4/modules/trading/composition.js'
-import { createAccountPrincipalReader } from '../server/dist-v4/modules/auth/composition.js'
+import { createActivePrincipalAccess, createAccountPrincipalReader } from '../server/dist-v4/modules/auth/composition.js'
 import { ObserverManagementService } from '../server/dist-v4/modules/trading/application/observer-management-service.js'
 import { MysqlObserverManagementRepository } from '../server/dist-v4/modules/trading/infrastructure/mysql-observer-management-repository.js'
 
@@ -47,7 +47,7 @@ try {
   await connection.beginTransaction()
   const [viewers] = await connection.execute("SELECT id FROM users WHERE id=? AND email=? AND role='user' AND deletion_status='active' AND deleted_at IS NULL FOR SHARE", [fixture.userId, fixture.email])
   assert.equal(viewers.length, 1)
-  const registration = createAccountRegistration(connection)
+  const registration = createAccountRegistration(connection, createActivePrincipalAccess(connection))
   if (resume) {
     const [actors] = await connection.execute("SELECT id FROM users WHERE uid=? AND email=? AND role='admin' AND deletion_status='active' AND deleted_at IS NULL FOR SHARE", [runId.replaceAll('-', ''), intent.actorEmail])
     assert.equal(actors.length, 1); actorUserId = actors[0].id

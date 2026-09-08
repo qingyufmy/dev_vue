@@ -1,3 +1,4 @@
+import { createActivePrincipalAccess } from '../src/modules/auth/composition.js'
 import type { Pool } from 'mysql2/promise'
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
@@ -9,7 +10,7 @@ import { MysqlBridgeCredentialRepository } from '../src/modules/bridge/infrastru
 import { RedisBridgeSessionTicketStore } from '../src/modules/bridge/infrastructure/redis-bridge-session-ticket-store.js'
 import type { Redis } from 'ioredis'
 
-const createRoutes = (pool: Pool) => createBridgeGatewayRoutes(pool, createAccountRegistration)
+const createRoutes = (pool: Pool) => createBridgeGatewayRoutes(pool, connection => createAccountRegistration(connection, createActivePrincipalAccess(connection)))
 
 const NOW = '2026-09-06T00:00:00.000Z'
 const LATER = '2026-09-06T00:01:00.000Z'
@@ -210,6 +211,11 @@ class FakePool {
         && row.brokerServer === server && row.login === login && row.deletedAt === null)
         .map(row => ({ id: row.id, platform: row.platform, broker_server: row.brokerServer, account_login: row.login, currency: row.currency }))
       return [rows as T, []]
+    }
+
+    if (sql.startsWith('SELECT id FROM users WHERE id=?')) {
+      const user = this.current.credentials.find(row => row.userId === Number(params[0]))
+      return [(user?.deletionStatus === 'active' && user.deletedAt === null ? [{ id: user.userId }] : []) as T, []]
     }
 
     if (sql.includes('SELECT CAST(a.ownership_revision AS CHAR)')) {
@@ -662,7 +668,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
         pool.state.ownerships = []
         const before = structuredClone(pool.state)
         const repository = createBridgeGatewayRoutes(pool.asPool(), connection => {
-          const registration = createAccountRegistration(connection)
+          const registration = createAccountRegistration(connection, createActivePrincipalAccess(connection))
           return {
             lockAccount: registration.lockAccount.bind(registration),
             lockCurrentOwnership: registration.lockCurrentOwnership.bind(registration),
@@ -693,7 +699,10 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
     expect(names.findIndex(sql => sql.includes('SELECT CAST(a.id AS CHAR) id')))
       .toBeLessThan(names.findIndex(sql => sql.includes('SELECT CAST(a.ownership_revision AS CHAR)')))
     expect(names.findIndex(sql => sql.includes('SELECT CAST(a.ownership_revision AS CHAR)')))
+      .toBeLessThan(names.findIndex(sql => sql.startsWith('SELECT id FROM users WHERE id=?')))
+    expect(names.findIndex(sql => sql.startsWith('SELECT id FROM users WHERE id=?')))
       .toBeLessThan(names.findIndex(sql => sql.includes('SELECT s.user_id,s.generation')))
+    expect(names.find(sql => sql.startsWith('SELECT id FROM users WHERE id=?'))).toContain('FOR UPDATE')
     expect(names.every(sql => !/SELECT\s+\*/i.test(sql))).toBe(true)
     const credentialSql = names.find(sql => sql.includes('SELECT s.user_id,s.generation')) ?? ''
     expect(credentialSql).toMatch(/s\.credential_version=4/)
@@ -703,6 +712,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
     expect(ownershipSql).toMatch(/o\.role='owner'/)
     expect(ownershipSql).toMatch(/oi\.ended_at_utc IS NULL/)
     expect(ownershipSql).toMatch(/o\.revision=a\.ownership_revision/)
+    expect(ownershipSql).not.toMatch(/JOIN users/)
     // A shared user/owner lock followed by the credential's update lock
     // would introduce a needless lock-upgrade race across two connections.
     expect(ownershipSql).toContain('FOR UPDATE')
