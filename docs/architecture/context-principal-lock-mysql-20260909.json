@@ -1,0 +1,18 @@
+{
+  "kind": "context-principal-lock-mysql/v1",
+  "observedAt": "2026-09-08T17:57:10.467Z",
+  "passed": true,
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00",
+    "connectionId": "551"
+  },
+  "checks": [
+    "separate-connections",
+    "receipt-shared-lock-blocks-user-update",
+    "rollback-releases-lock"
+  ],
+  "committedMutations": 0,
+  "scope": "Compiled receipt reader and auth shared lock on the verified synthetic user. Two no-op UPDATE attempts are rolled back; no user status change, context write, terminal or browser activity. Proves lock contention, not a complete account revocation workflow."
+}

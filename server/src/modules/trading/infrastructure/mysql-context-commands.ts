@@ -62,9 +62,22 @@ export class MysqlContextCommands implements ContextWritePort {
   async receipt(userId: number, requestId: string): Promise<ContextWriteReceipt | null> {
     normalizeContextWrite({ userId, requestId, action: 'leave_observer', targetId: null, expectedRevision: 0 })
     const connection = await this.pool.getConnection()
+    let started = false, destroyed = false
     try {
-      if (!await this.principalAccess(connection).isActive(userId, 'none')) throw new TradingAccessError('trading_account_forbidden', 403)
+      await connection.beginTransaction(); started = true
+      // Keep authorization stable through the receipt read without owning auth's SQL.
+      if (!await this.principalAccess(connection).isActive(userId, 'share')) throw new TradingAccessError('trading_account_forbidden', 403)
       return (await readContextReceipt(connection, userId, requestId))?.receipt ?? null
-    } finally { connection.release() }
+    } catch (error) {
+      if (!started) { connection.destroy(); destroyed = true }
+      if (error instanceof TradingAccessError) throw error
+      throw new TradingAccessError('trading_context_receipt_unavailable', 503)
+    } finally {
+      try { if (started) await connection.rollback() }
+      catch {
+        connection.destroy(); destroyed = true
+        throw new TradingAccessError('trading_context_receipt_unavailable', 503)
+      } finally { if (!destroyed) connection.release() }
+    }
   }
 }

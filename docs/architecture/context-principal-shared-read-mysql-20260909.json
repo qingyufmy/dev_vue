@@ -1,0 +1,19 @@
+{
+  "kind": "context-principal-mysql/v1",
+  "observedAt": "2026-09-08T17:57:10.641Z",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "passed": true,
+  "checks": [
+    "commit-and-replay-with-same-connection-principal-lock",
+    "changed-body-and-stale-revision-rejected",
+    "mysql-receipt-duplicate-rolls-back-context",
+    "revoked-user-cannot-replay-or-read-receipt"
+  ],
+  "permanentBusinessWrites": 0,
+  "temporaryTables": 3,
+  "scope": "Compiled auth principal adapter and context commands in real MySQL private temporary InnoDB fixtures. Resolver is synthetic. Does not prove full schema/FKs/CHECKs, lock contention, lost commit acknowledgement, positive observer routing or browser behavior."
+}

@@ -35,3 +35,6 @@ AuthService通过自身所需的BridgeDeviceRevoker端口触发设备撤销；�
 ## 事务内有效用户查询
 
 业务 index 仅导出 ActivePrincipalAccess 类型；createActivePrincipalAccess 仅从 composition 创建绑定调用方连接的实现。isActive(userId, lock) 使用明确 none/update 模式读取删除状态；update 保留 FOR UPDATE 用户行锁，适配器不提交、不回滚、不释放连接。无效 ID 或模式直接拒绝，驱动错误脱敏。该能力不表示交易账户或观摩授权通过。
+
+
+账户回执授权：ActivePrincipalAccess 支持 none/share/update，share/update 必须绑定调用者事务。独立回执查询先在同连接获取 auth 用户共享锁，读取完后由 trading rollback；写命令保持用户排他锁。auth 不管理交易事务，trading 回执 SQL 不再读取 users。真实双连接锁验证入口 scripts/verify-context-principal-lock-mysql.mjs，使用私有合成用户文件和新建报告绝对路径；只执行并回滚无值变化 UPDATE。其它跨域 SQL 不据此视为完成。

@@ -755,3 +755,16 @@ verify-local-account-sso.mjs 新增显式 --context-commands 模式，默认登�
 证据：architecture/local-account-context-http-20260909.json。合成用户上下文 revision 0→3，三个命令审计回执与上下文保留，未修改账户/归属/交易事实。测试是实际 blocked 上下文命令；不证明选中真实拥有账户、进入观摩频道、浏览器恢复、MySQL commit ACK 丢失或终端执行。另有当前 API 基础 smoke 回执 architecture/local-account-api-current-20260909.json。脚本语法与321个冻结输入检查通过，无应用源码或结构迁移变更。
 
 数据依赖核对：MysqlContextCommands 拥有 trading_contexts/trading_context_changes_v4 的同事务写入，先经 auth ActivePrincipalAccess 锁定用户；mysql-context-receipts 的 users EXISTS 与 mysql-context-target 的 users/账户归属联查仍有物理跨域 SQL。下一步继续按所有者能力及一致性要求收口，不把公开入口移除等同 SQL 所有权完成。账户/观摩正向夹具和浏览器联调继续保留为 P1 缺口。
+
+
+## 58. 回执授权 SQL 归属与真实共享锁验证（第一百二十八批）
+
+trading 的回执 SELECT 移除 users EXISTS，认证域 ActivePrincipalAccess 新增 share 锁模式。写命令沿用用户排他锁；独立回执读取由 trading 开启短事务，auth 在同连接取得用户共享锁，完成读取后 rollback 释放。用户停用更新因此不能插入授权与回执读取之间。事务开启或清理失败销毁连接，返回稳定 receipt_unavailable；预读事务结束后才采集外部 route，不把网络调用放入事务。
+
+定向复核：职责层面只移动用户状态 SQL 的所有权，不公开 auth repository，不修改历史回执格式；一致性层面保留用户→上下文/回执锁序，独立读取使用共享锁并在释放前完成读取。新增事务带来一次 begin/rollback 往返，后续容量验收需测量；不通过去锁减少开销。本批落实已有 P1 同事务能力方案，无新增迁移或数据模型。
+
+29 项 auth/context/HTTP 合同回归、server 类型/构建及 API 生成运行检查通过，321 个冻结输入一致。既有 MySQL 临时表脚本4项检查通过（architecture/context-principal-shared-read-mysql-20260909.json）。新增双连接脚本 verify-context-principal-lock-mysql.mjs 在核实过的合成用户上验证持锁时另一个无值变化 UPDATE 等待超时，释放后 UPDATE 可执行；两次更新均回滚、无提交，3项检查通过（architecture/context-principal-lock-mysql-20260909.json）。这不代表完整停用用户流程验收。
+
+本地 API 更新为本批工作区构建，3010 Node PID 43184；真实代理/API/Redis/MySQL 14项回归通过（architecture/local-account-context-shared-read-http-20260909.json），合成用户上下文 revision 3→6，新增三个命令回执保留，新会话撤销。未启动 Worker/终端交易，无 DDL。运行 PID 为本次证据，后续须核对实际进程。
+
+本批消除一处物理跨域 users 回执查询；静态登记仍64条，扫描器未覆盖 SQL 归属，不能因此改写债务数量。mysql-context-target、观察权限等仍有用户与归属联查，账户/观摩正向夹具及浏览器恢复仍待完成；整体 P1/P0–P7 未完成。

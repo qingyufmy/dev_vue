@@ -15,13 +15,13 @@ export function assertContextResult(command: ContextWriteCommand, result: Tradin
         : result.mode === 'observer')) throw new TradingAccessError('trading_context_write_failed', 503)
 }
 
+// Caller holds the active-principal row lock on this transaction until the receipt read completes.
 export async function readContextReceipt(connection: PoolConnection, userId: number, requestId: string): Promise<{ receipt: ContextWriteReceipt; hash: string } | null> {
   const [rows] = await connection.execute<RowDataPacket[]>(`SELECT user_id,request_id,request_sha256,action,target_id,
     CAST(prior_revision AS CHAR) prior_revision,CAST(revision AS CHAR) revision,result_mode,result_account_id,
     result_observer_channel_id,result_read_only,
     CONCAT(LEFT(DATE_FORMAT(recorded_at_utc,'%Y-%m-%dT%H:%i:%s.%f'),23),'Z') recorded_at
-    FROM trading_context_changes_v4 WHERE user_id=? AND request_id=?
-    AND EXISTS (SELECT 1 FROM users u WHERE u.id=trading_context_changes_v4.user_id AND u.deletion_status='active' AND u.deleted_at IS NULL)`, [userId, requestId])
+    FROM trading_context_changes_v4 WHERE user_id=? AND request_id=?`, [userId, requestId])
   if (!rows.length) return null
   if (rows.length !== 1) throw new TradingAccessError('trading_context_write_failed', 503)
   try {

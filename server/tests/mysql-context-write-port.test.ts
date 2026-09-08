@@ -43,11 +43,17 @@ function fixture() {
       let pending = structuredClone(rows), nextRevision = revision, transaction = false
       return {
         async beginTransaction() {
-          calls.push('begin'); betweenReads?.(); betweenReads = undefined
+          calls.push('begin')
           pending = structuredClone(rows); nextRevision = revision; transaction = true; transactions++
         },
         async execute(sql: string, values: unknown[]) {
-          if (sql.startsWith('SELECT id FROM users')) return [active ? [{ id: 42 }] : []]
+          if (sql.startsWith('SELECT id FROM users')) {
+            if (sql.endsWith('FOR UPDATE')) {
+              betweenReads?.(); betweenReads = undefined
+              pending = structuredClone(rows); nextRevision = revision
+            }
+            return [active ? [{ id: 42 }] : []]
+          }
           if (sql.includes('FROM trading_context_changes_v4')) {
             calls.push('read-receipt')
             const row = pending[String(values[1])]
@@ -86,8 +92,9 @@ function fixture() {
 it('composes the real target and transaction writer without holding a transaction during route collection', async () => {
   const f = fixture()
   await expect(f.port.execute(command)).resolves.toMatchObject({ replayed: false, result: { accountId: '7', revision: 1, readOnly: true } })
-  expect(f.calls.indexOf('route')).toBeLessThan(f.calls.indexOf('begin'))
-  expect(f.calls.indexOf('locked-target')).toBeGreaterThan(f.calls.indexOf('begin'))
+  expect(f.calls.indexOf('route')).toBeLessThan(f.calls.lastIndexOf('begin'))
+  expect(f.calls.indexOf('rollback')).toBeLessThan(f.calls.indexOf('route'))
+  expect(f.calls.indexOf('locked-target')).toBeGreaterThan(f.calls.lastIndexOf('begin'))
   expect(f.leases.current).toHaveBeenCalledTimes(1)
   expect(f.revision()).toBe(1)
 })
@@ -143,7 +150,9 @@ it('rejects invalid commands without I/O and sanitizes preparation and receipt f
   expect(f.calls).toEqual([])
   f.failPreparation()
   await expect(f.port.execute(command)).rejects.toMatchObject({ message: 'trading_context_write_failed', status: 503 })
-  expect(f.calls).not.toContain('begin')
+  expect(f.calls.filter(call => call === 'begin')).toHaveLength(1)
+  expect(f.calls.indexOf('rollback')).toBeLessThan(f.calls.indexOf('prepare-target'))
+  expect(f.calls).not.toContain('write')
   f.failConnection()
   await expect(f.port.receipt(42, command.requestId)).rejects.toMatchObject({ message: 'trading_context_receipt_unavailable', status: 503 })
 })

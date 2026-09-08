@@ -69,3 +69,6 @@ mysql-context-receipts 中原有 EXISTS users 条件仍保留，使回执与有�
 
 
 上下文/auth 联合真实 MySQL 探针：先构建 server，再运行 node scripts/verify-context-principal-mysql.mjs <新绝对路径回执>。脚本只在独立连接建立三张同名临时 InnoDB 表，执行实际 auth 适配器与 MysqlContextCommands；验证提交、重放、冲突、真实重复键导致双写回滚及用户撤销拒绝。全部目标先遮蔽再 DML，结束销毁连接。目标解析为合成实现，临时表不含完整业务 FK/CHECK，不覆盖多连接锁竞争、提交确认丢失或浏览器/终端流程。
+
+
+账户回执授权：ActivePrincipalAccess 支持 none/share/update，share/update 必须绑定调用者事务。独立回执查询先在同连接获取 auth 用户共享锁，读取完后由 trading rollback；写命令保持用户排他锁。auth 不管理交易事务，trading 回执 SQL 不再读取 users。真实双连接锁验证入口 scripts/verify-context-principal-lock-mysql.mjs，使用私有合成用户文件和新建报告绝对路径；只执行并回滚无值变化 UPDATE。其它跨域 SQL 不据此视为完成。

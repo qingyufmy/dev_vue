@@ -9,15 +9,16 @@ const command: ContextWriteCommand = { userId: 42, requestId: 'd97382ac-4b49-42d
 type State = { revision: number; receipts: Record<string, Record<string, unknown>> }
 function fixture() {
   let state: State = { revision: 0, receipts: {} }
+  let beginFailure = false
   let active = true, receiptFailure = false, lostAck = false, rollbackFailure = false
   const connections: Array<{ calls: string[] }> = []
   const pool = { async getConnection() {
     let pending = structuredClone(state)
     const calls: string[] = []; connections.push({ calls })
     return {
-      async beginTransaction() { calls.push('begin'); pending = structuredClone(state) },
+      async beginTransaction() { calls.push('begin'); if (beginFailure) throw Error('private-begin-error'); pending = structuredClone(state) },
       async execute(sql: string, params: unknown[]) {
-        if (sql.startsWith('SELECT id FROM users')) { calls.push(sql.includes('FOR UPDATE') ? 'user-lock' : 'user-read'); return [active ? [{ id: 42 }] : []] }
+        if (sql.startsWith('SELECT id FROM users')) { calls.push(sql.includes('FOR UPDATE') ? 'user-lock' : sql.includes('FOR SHARE') ? 'user-share' : 'user-read'); return [active ? [{ id: 42 }] : []] }
         if (sql.includes('FROM trading_context_changes_v4')) { calls.push('receipt-read'); return [active && pending.receipts[String(params[1])] ? [pending.receipts[String(params[1])]] : []] }
         if (sql.includes('FROM trading_contexts')) { calls.push('context-lock'); return [pending.revision ? [{ revision: String(pending.revision) }] : []] }
         if (sql.includes('INSERT INTO trading_contexts')) { calls.push('context-write'); pending.revision = Number(params[5]); return [{ affectedRows: 1 }] }
@@ -38,6 +39,7 @@ function fixture() {
   const resolve = vi.fn(async (_connection: PoolConnection, c: ContextWriteCommand) => ({ userId: c.userId,
     mode: 'full' as const, accountId: c.targetId, observerChannelId: null, readOnly: false }))
   return { writer: new MysqlContextCommands(pool as unknown as Pool, resolve, createActivePrincipalAccess), resolve, connections,
+    failBegin: () => { beginFailure = true },
     failRollback: () => { rollbackFailure = true }, state: () => state, failReceipt: () => { receiptFailure = true }, loseAck: () => { lostAck = true }, deactivate: () => { active = false } }
 }
 
@@ -133,4 +135,23 @@ it('destroys a connection after failed rollback and rejects invalid revisions be
   expect(failed.connections[0]!.calls.slice(-2)).toEqual(['rollback', 'destroy'])
   expect(failed.connections[0]!.calls).not.toContain('release')
   expect(failed.connections[0]!.calls).not.toContain('commit')
+})
+
+
+it('keeps receipt authorization locked until read-only rollback and destroys uncertain cleanup', async () => {
+  const f = fixture()
+  await f.writer.execute(command)
+  expect(await f.writer.receipt(42, command.requestId)).toMatchObject({ result: { revision: 1 } })
+  expect(f.connections[1]!.calls).toEqual(['begin', 'user-share', 'receipt-read', 'rollback', 'release'])
+  f.failRollback()
+  await expect(f.writer.receipt(42, command.requestId)).rejects.toMatchObject({ code: 'trading_context_receipt_unavailable', status: 503 })
+  expect(f.connections[2]!.calls.slice(-2)).toEqual(['rollback', 'destroy'])
+  expect(f.connections[2]!.calls).not.toContain('release')
+})
+
+
+it('destroys a receipt connection if beginning its authorization transaction fails', async () => {
+  const f = fixture(); f.failBegin()
+  await expect(f.writer.receipt(42, command.requestId)).rejects.toMatchObject({ code: 'trading_context_receipt_unavailable', status: 503 })
+  expect(f.connections[0]!.calls).toEqual(['begin', 'destroy'])
 })

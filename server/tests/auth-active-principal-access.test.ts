@@ -7,6 +7,8 @@ it('uses only the supplied connection and preserves explicit locking mode and us
   const access = createActivePrincipalAccess({ execute } as unknown as PoolConnection)
   expect(await access.isActive(42, 'update')).toBe(true)
   expect(execute).toHaveBeenLastCalledWith("SELECT id FROM users WHERE id=? AND deletion_status='active' AND deleted_at IS NULL FOR UPDATE", [42])
+  expect(await access.isActive(42, 'share')).toBe(true)
+  expect(execute).toHaveBeenLastCalledWith("SELECT id FROM users WHERE id=? AND deletion_status='active' AND deleted_at IS NULL FOR SHARE", [42])
   expect(await access.isActive(7, 'none')).toBe(true)
   expect(execute).toHaveBeenLastCalledWith("SELECT id FROM users WHERE id=? AND deletion_status='active' AND deleted_at IS NULL", [7])
   execute.mockResolvedValueOnce([[]])
