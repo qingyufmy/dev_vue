@@ -14,6 +14,10 @@ Bridge 消费端与 trading 提供端各自定义最小结构合同，由入口�
 
 剩余风险：当前测试使用有事务状态的 SQL double，不是 MySQL 真实并发与回滚证据；账户创建后的读取与跨域锁查询仍有未收口内容。验收不能将三张表写入归位等同于账户模块或数据库迁移完成。
 
+第二十一批设计补充：将按精确身份锁定账户及锁定当前有效归属的查询纳入同一交易账户端口，供登记、连接激活和心跳重查复用。第一轮复核确认交易账户身份与归属条件属于trading，Bridge只消费最小账户/归属revision，不取得SQL或连接控制能力。第二轮复核要求原BINARY身份比较、软删除、当前归属区间、有效用户、revision和FOR UPDATE原样保留；锁序仍在Bridge编排处确定。即时isAuthorized的完整会话证明查询包含多域事实，继续保留并明确为未收口投影，不伪装成已完成。
+
+第二十一批实施与验证：lockAccount/lockCurrentOwnership已由trading实现，登记、激活和心跳均通过绑定当前连接的端口使用。两条查询规范化空白后与迁移前完全相同；31项定向测试、完整服务端类型检查及构建通过，边界143条无新增。跨域[会话证明投影](bridge-session-proof-read-model.md)已声明来源、精确作用域、锁序与索引验证缺口，未把文档登记视为真实依赖验收。
+
 实施记录：trading/application声明AccountRegistration，Bridge声明最小消费端口；两个composition由bridge-gateway入口组装，Bridge仓储构造器不保留默认实现。原首次登记SQL文件已移除，三张账户表写入位于trading/infrastructure/mysql-account-registration.ts。Bridge业务index不再导出具体路由仓储，删除对应1条真实消除的依赖例外。
 
 验证：26项路由登记事务测试与3项账户登记适配器测试通过；原失败回滚、冲突及归属隔离通过新的组装路径，新增登记/归属端口两种失败原因的映射回滚、异常影响行数及字符串BIGINT验证。完整服务端类型检查与构建通过，239文件边界扫描无新增，存量143条；SQL清单确认三表仅由trading写入。未连接真实依赖，未执行首次登记或迁移。

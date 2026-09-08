@@ -664,6 +664,8 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
         const repository = createBridgeGatewayRoutes(pool.asPool(), connection => {
           const registration = createAccountRegistration(connection)
           return {
+            lockAccount: registration.lockAccount.bind(registration),
+            lockCurrentOwnership: registration.lockCurrentOwnership.bind(registration),
             createAccount: stage === 'create' ? async () => ({ ok: false as const, reason }) : registration.createAccount.bind(registration),
             grantFirstOwnership: stage === 'grant' ? async () => ({ ok: false as const, reason }) : registration.grantFirstOwnership.bind(registration),
           }

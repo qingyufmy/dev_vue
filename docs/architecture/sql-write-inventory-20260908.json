@@ -711,7 +711,7 @@
       "evidence": [
         {
           "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
-          "line": 117,
+          "line": 103,
           "writer": "bridge",
           "operation": "INSERT",
           "table": "bridge_connection_sessions",
@@ -720,7 +720,7 @@
         },
         {
           "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
-          "line": 157,
+          "line": 143,
           "writer": "bridge",
           "operation": "UPDATE",
           "table": "bridge_connection_sessions",
@@ -729,7 +729,7 @@
         },
         {
           "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
-          "line": 164,
+          "line": 150,
           "writer": "bridge",
           "operation": "UPDATE",
           "table": "bridge_connection_sessions",
@@ -738,7 +738,7 @@
         },
         {
           "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
-          "line": 185,
+          "line": 171,
           "writer": "bridge",
           "operation": "UPDATE",
           "table": "bridge_connection_sessions",
@@ -747,7 +747,7 @@
         },
         {
           "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
-          "line": 214,
+          "line": 200,
           "writer": "bridge",
           "operation": "UPDATE",
           "table": "bridge_connection_sessions",
@@ -2759,7 +2759,7 @@
       "evidence": [
         {
           "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
-          "line": 409,
+          "line": 369,
           "writer": "bridge",
           "operation": "UPDATE",
           "table": "terminal_account_bindings",
@@ -2768,7 +2768,7 @@
         },
         {
           "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
-          "line": 412,
+          "line": 372,
           "writer": "bridge",
           "operation": "INSERT",
           "table": "terminal_account_bindings",
@@ -2819,7 +2819,7 @@
       "evidence": [
         {
           "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
-          "line": 361,
+          "line": 321,
           "writer": "bridge",
           "operation": "UPDATE",
           "table": "terminal_profiles",
@@ -2828,7 +2828,7 @@
         },
         {
           "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
-          "line": 370,
+          "line": 330,
           "writer": "bridge",
           "operation": "INSERT",
           "table": "terminal_profiles",
@@ -2951,7 +2951,7 @@
       "evidence": [
         {
           "file": "server/src/modules/trading/infrastructure/mysql-account-registration.ts",
-          "line": 22,
+          "line": 52,
           "writer": "trading",
           "operation": "INSERT",
           "table": "trading_account_ownership_intervals",
@@ -2968,7 +2968,7 @@
       "evidence": [
         {
           "file": "server/src/modules/trading/infrastructure/mysql-account-registration.ts",
-          "line": 27,
+          "line": 57,
           "writer": "trading",
           "operation": "INSERT",
           "table": "trading_account_ownerships",
@@ -2985,7 +2985,7 @@
       "evidence": [
         {
           "file": "server/src/modules/trading/infrastructure/mysql-account-registration.ts",
-          "line": 9,
+          "line": 39,
           "writer": "trading",
           "operation": "INSERT",
           "table": "trading_accounts",

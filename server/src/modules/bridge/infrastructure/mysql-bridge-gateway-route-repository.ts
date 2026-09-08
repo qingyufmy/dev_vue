@@ -4,16 +4,8 @@ import { assertTerminalAccountFacts, BridgeGatewayError, type BridgeGatewayRoute
 import type { BridgeAccountRegistration } from '../application/bridge-account-registration.js'
 import {
   assertAuthorizeContext, assertFrozenRouteProof, boundedText, deviceId, epoch, gatewayError, hasFrozenRouteProof,
-  ownershipRevision, profileDisplayName, routeId, translateStorageError,
+  profileDisplayName, routeId, translateStorageError,
 } from './mysql-bridge-route-authorization.js'
-
-interface AccountRow extends RowDataPacket {
-  id: string | number
-  platform: 'mt4' | 'mt5' | string
-  broker_server?: string
-  account_login?: string
-  currency: string
-}
 
 interface CredentialRow extends RowDataPacket {
   user_id: number | string
@@ -26,11 +18,6 @@ interface ProfileRow extends RowDataPacket {
   platform: 'mt4' | 'mt5' | string
   installation_id: string
   deleted_at_utc: Date | string | null
-}
-
-interface OwnershipRow extends RowDataPacket {
-  ownership_revision: string | number
-  interval_id?: string
 }
 
 interface EpochRow extends RowDataPacket { connection_epoch_v4: string | number | null }
@@ -47,7 +34,6 @@ interface SessionProofRow extends RowDataPacket {
   ownership_revision: string | number
 }
 
-const ACCOUNT_COLUMNS = `CAST(a.id AS CHAR) id,a.platform,a.broker_server,a.account_login,a.currency`
 const PROFILE_COLUMNS = 'p.id,p.user_id,p.platform,p.installation_id,p.deleted_at_utc'
 const BINDING_COLUMNS = 'b.terminal_profile_id,CAST(b.trading_account_id AS CHAR) trading_account_id,b.terminal_instance_id,b.unbound_at_utc'
 
@@ -70,8 +56,8 @@ export class MysqlBridgeGatewayRouteRepository implements BridgeGatewayRouteRepo
     const facts = assertTerminalAccountFacts(context.terminal, Date.parse(context.connectedAt))
     return inTransaction(this.pool, async connection => {
       const registration = this.accountRegistrationForTransaction(connection)
-      const account = await selectAccount(connection, context.terminal.platform, context.terminal.route.account_ref.broker_server,
-        context.terminal.route.account_ref.login)
+      const account = await registration.lockAccount({ platform: context.terminal.platform,
+        brokerServer: context.terminal.route.account_ref.broker_server, login: context.terminal.route.account_ref.login })
       if (!account && !facts) throw gatewayError('bridge_route_account_not_found', 403)
       if (account && facts && account.currency !== facts.currency) {
         throw gatewayError('bridge_session_account_currency_mismatch', 409)
@@ -87,7 +73,7 @@ export class MysqlBridgeGatewayRouteRepository implements BridgeGatewayRouteRepo
         accountId = created.accountId
       }
 
-      const ownership = account ? await selectCurrentOwnership(connection, context.claims.userId, accountId) : '1'
+      const ownership = account ? await registration.lockCurrentOwnership({ userId: context.claims.userId, accountId }) : '1'
       if (!ownership) throw gatewayError('bridge_route_binding_invalid', 403)
 
       // Keep the same account -> owner -> credential -> profile -> binding /
@@ -146,7 +132,7 @@ export class MysqlBridgeGatewayRouteRepository implements BridgeGatewayRouteRepo
     assertGatewayRoute(route)
     assertTimestamp(activatedAt)
     return inTransaction(this.pool, async connection => {
-      if (!await assertCurrentRouteBase(connection, route)) {
+      if (!await assertCurrentRouteBase(connection, route, this.accountRegistrationForTransaction(connection))) {
         throw gatewayError('bridge_session_open_missing', 409)
       }
       const pending = await selectSessionProof(connection, route, 'pending', true)
@@ -177,7 +163,7 @@ export class MysqlBridgeGatewayRouteRepository implements BridgeGatewayRouteRepo
     assertGatewayRoute(route)
     assertTimestamp(seenAt)
     return inTransaction(this.pool, async connection => {
-      if (!await assertCurrentRouteBase(connection, route)) return false
+      if (!await assertCurrentRouteBase(connection, route, this.accountRegistrationForTransaction(connection))) return false
       const current = await selectSessionProof(connection, route, 'active', true)
       if (!current) return false
       const latest = await latestEpoch(connection, route.userId, route.terminalProfileId)
@@ -248,32 +234,6 @@ async function assertCurrentCredential(
 
 type QueryExecutor = Pick<Pool, 'execute'>
 
-async function selectAccount(connection: QueryExecutor, platform: string, brokerServer: string, login: string) {
-  const [rows] = await connection.execute<AccountRow[]>(`SELECT ${ACCOUNT_COLUMNS}
-    FROM trading_accounts a
-    WHERE a.platform=? AND BINARY a.broker_server=BINARY ? AND BINARY a.account_login=BINARY ?
-      AND a.deleted_at_utc IS NULL
-    LIMIT 1 FOR UPDATE`, [platform, brokerServer, login])
-  return rows[0] ?? null
-}
-
-async function selectCurrentOwnership(connection: QueryExecutor, userId: number, accountId: string): Promise<string | null> {
-  const [rows] = await connection.execute<OwnershipRow[]>(`SELECT CAST(a.ownership_revision AS CHAR) ownership_revision,o.interval_id
-    FROM trading_accounts a
-    INNER JOIN trading_account_ownerships o ON o.trading_account_id=a.id AND o.user_id=?
-      AND o.role='owner' AND o.revoked_at_utc IS NULL AND o.revision=a.ownership_revision
-    INNER JOIN trading_account_ownership_intervals oi ON oi.id=o.interval_id
-      AND oi.user_id=o.user_id AND oi.trading_account_id=o.trading_account_id AND oi.role='owner'
-      AND oi.ended_at_utc IS NULL AND oi.started_at_utc=o.granted_at_utc
-      AND oi.started_at_utc<=UTC_TIMESTAMP(3)
-    INNER JOIN users u ON u.id=o.user_id AND u.deletion_status='active' AND u.deleted_at IS NULL
-    WHERE a.id=? AND a.deleted_at_utc IS NULL
-    LIMIT 1 FOR UPDATE`, [userId, accountId])
-  if (rows.length !== 1) return null
-  const revision = String(rows[0]!.ownership_revision)
-  return ownershipRevision(revision) ? revision : null
-}
-
 type ProvenRoute = BridgeGatewayRoute & Required<{
   installationId: string
   credentialGeneration: number
@@ -286,11 +246,11 @@ type ProvenRoute = BridgeGatewayRoute & Required<{
  * below then verifies the exact pending/active session without making a
  * session row the first lock in the transaction.
  */
-async function assertCurrentRouteBase(connection: QueryExecutor, route: ProvenRoute): Promise<boolean> {
-  const account = await selectAccount(connection, route.platform, route.brokerServer, route.login)
+async function assertCurrentRouteBase(connection: QueryExecutor, route: ProvenRoute, registration: BridgeAccountRegistration): Promise<boolean> {
+  const account = await registration.lockAccount({ platform: route.platform, brokerServer: route.brokerServer, login: route.login })
   if (!account || databaseId(account.id) !== route.accountId) return false
 
-  const currentOwnership = await selectCurrentOwnership(connection, route.userId, route.accountId)
+  const currentOwnership = await registration.lockCurrentOwnership({ userId: route.userId, accountId: route.accountId })
   if (currentOwnership !== route.ownershipRevision) return false
 
   try {

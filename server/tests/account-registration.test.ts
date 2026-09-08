@@ -13,6 +13,24 @@ function fixture(results: unknown[]) {
 }
 
 describe('transaction-bound account registration (SQL double)', () => {
+  it('returns only account identity/currency and preserves large ownership revisions', async () => {
+    const id = '18446744073709551615'
+    const f = fixture([[{ id, currency: 'USD', internalDetail: 'not-a-public-field' }], [{ ownership_revision: id }]])
+    await expect(f.registration.lockAccount(input)).resolves.toEqual({ id, currency: 'USD' })
+    await expect(f.registration.lockCurrentOwnership({ userId: 7, accountId: id })).resolves.toBe(id)
+    expect(f.execute.mock.calls[0]![1]).toEqual([input.platform, input.brokerServer, input.login])
+    expect(f.execute.mock.calls[1]![1]).toEqual([7, id])
+  })
+
+  it('does not grant ownership proof for missing, ambiguous or malformed revision rows', async () => {
+    for (const rows of [[], [{ ownership_revision: '1' }, { ownership_revision: '1' }],
+      [{ ownership_revision: '0' }], [{ ownership_revision: '-1' }], [{ ownership_revision: '1.5' }], [{ ownership_revision: null }]]) {
+      const f = fixture([rows])
+      await expect(f.registration.lockCurrentOwnership({ userId: 7, accountId: '42' })).resolves.toBeNull()
+    }
+    await expect(fixture([[]]).registration.lockAccount(input)).resolves.toBeNull()
+  })
+
   it('preserves unsigned BIGINT identity and the original ownership provenance', async () => {
     const id = '18446744073709551615'
     const f = fixture([{ affectedRows: 1 }, [{ id }], { affectedRows: 1 }, { affectedRows: 1 }])
