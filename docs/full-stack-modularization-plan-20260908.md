@@ -949,3 +949,15 @@ MysqlObserverManagementRepository 的用户表读取已移除：源所有者在�
 扩展只读身份探针为v2，保留原v1回执。真实开发库[local-observer-identities-20260909.json](architecture/local-observer-identities-20260909.json)四项通过：精确数据库/合成管理员、管理员与普通用户权限区分、源运营者及受众的同连接活动主体检查、管理列表权限分支。commitState=not_attempted，共享锁事务回滚；未写数据、未重启服务。本次真实验证不覆盖管理写操作或浏览器流程，写事务失败分支证据来自定向SQL替身回归。
 
 下一步收口观摩策略可用性读取，再推进完整账户浏览器恢复与夹具退役。P1及整体重构仍未完成。
+
+## 73. 观摩策略可用性归属 strategies（第一百四十三批）
+
+新增 strategies 公开 AnalysisStrategyAccess.canUse 与同连接组装工厂。可用条件保持活动analysis策略、未删除、active_version_id非空、平台作用域或调用用户所有；以FOR SHARE保护调用者事务，不读取用户身份，不公开SQL实现。BIGINT ID保留字符串，非法及超出unsigned BIGINT的值直接拒绝。此能力只承接既有可用性条件，不宣称验证了版本内容完整或交易执行授权。
+
+观摩管理通过运行入口注入该工厂，仅在创建/修改源需要验证策略时调用，使用源的不可变operator，不改为代操作管理员。管理错误仍为observer_analysis_strategy_not_available/409，存储异常由外层管理事务回滚并映射503；没有独立提交。API及当前夹具工具更新组装；此repository已没有users或strategies SQL，其他repository仍待清点。
+
+定向回归34项通过（策略能力3、观摩管理27、组装4），覆盖输入拒绝、BIGINT、存储异常、同连接共享锁、不可变运营者及拒绝后的回滚。server类型与构建通过，14个运行合同一致，64条边界债务无新增/陈旧项，321个冻结输入不变。脚本语法与diff检查通过。
+
+真实MySQL[analysis-strategy-access-mysql-20260909.json](architecture/analysis-strategy-access-mysql-20260909.json)10项通过：平台/自有策略允许，他人/执行/停用/未发布/已删除/不存在策略拒绝，unsigned BIGINT保真和夹具插入回滚。探针在精确开发库连接内创建临时strategies表遮蔽永久表，所有测试写入仅作用于该会话临时表；rollback后计数0，再DROP TEMPORARY并销毁连接。没有永久数据写入、迁移或服务重启，也不证明跨连接锁竞争、HTTP或浏览器流程。
+
+下一步从账户用户流程出发核对剩余依赖与前端恢复，补齐夹具退役和完整浏览器验收；P1与总体重构仍未完成。

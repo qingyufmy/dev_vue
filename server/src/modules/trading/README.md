@@ -6,7 +6,7 @@
 
 `index.ts`公开业务类型、应用服务与协议。MySQL账户/观摩repository、Redis发布订阅/连接租约和认证适配器已不通过业务入口导出。`composition.ts`仅供bootstrap/entrypoints使用：
 
-- `createTradingApiModule`组装账户/观摩服务、连接额度和HTTP插件，接收独立的trade/admin认证端口。会话Cookie解析和CSRF归auth实现，由API入口注入；trading不依赖AuthService或持久会话结构。观摩管理另外注入auth `AdminPrincipalAccess`工厂：列表使用当前身份读取，写事务在registry之后、幂等回执之前通过同连接共享锁检查当前管理员，权限失效不能重放旧操作。源所有者与受众经同事务的`ActivePrincipalAccess`共享锁检查，管理repository不再读取users；trading保留归属区间、频道与授权规则，策略表读取仍待收口。这些能力不代替HTTP认证或CSRF。
+- `createTradingApiModule`组装账户/观摩服务、连接额度和HTTP插件，接收独立的trade/admin认证端口。会话Cookie解析和CSRF归auth实现，由API入口注入；trading不依赖AuthService或持久会话结构。观摩管理另外注入auth `AdminPrincipalAccess`工厂：列表使用当前身份读取，写事务在registry之后、幂等回执之前通过同连接共享锁检查当前管理员，权限失效不能重放旧操作。源所有者与受众经同事务的`ActivePrincipalAccess`共享锁检查，管理repository不再读取users；trading保留归属区间、频道与授权规则，策略可用性由strategies公开能力提供。这些能力不代替HTTP认证或CSRF。
 - `createTradingReader`向分析/交易员/调度角色提供现有查询能力，不公开具体MySQL类。
 - `createBridgeTradingModule`提供连接额度能力与BridgeProjectionPort投影能力；Bridge仅通过公开输入合同调用，不依赖BridgeStreamProjector具体类。保留原投影事务，提交后再发布实时事件；具体类不再从业务index导出。
 
@@ -18,6 +18,8 @@
 认证请求端口在application/request-authentication.ts声明，不再由infrastructure反向引用HTTP文件。API总注册器使用结构化认证端口，不依赖具体适配器类。
 
 ## 数据与依赖
+
+观摩管理的分析策略可用性由strategies `AnalysisStrategyAccess`负责，运行入口传入同事务工厂；按源的不可变operator检查，而非代操作管理员。管理repository不再查询users或strategies，保留本域账户/归属、观摩配置、回执与outbox写入。已有其他repository的跨域SQL仍须逐项验收。
 
 账户身份、归属区间和用户账户设置的当前库增量升级按账户根方案执行。账户切换仍使用revision并在事务内验证所有者/观摩权限；Bridge投影仍核对账户、归属、凭据、档案、epoch及revision。
 

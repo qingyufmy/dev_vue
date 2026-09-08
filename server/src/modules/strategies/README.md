@@ -1,5 +1,7 @@
 # Strategies
 
+`AnalysisStrategyAccess.canUse`提供同事务的分析策略可用性检查：活动、未删除、有active_version_id，且为平台策略或当前用户所有。`createAnalysisStrategyAccess`绑定调用者连接并使用FOR SHARE，不提交事务、不查询auth身份；此能力不证明版本内容完整或授权策略执行。观摩管理消费公开端口并保留自己的409错误与管理事务。验证入口为mysql-analysis-strategy-access.test.ts及verify-analysis-strategy-access-mysql.mjs，后者仅使用会话临时表。
+
 
 ## 目录与 HTTP 组装
 

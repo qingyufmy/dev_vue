@@ -1,0 +1,23 @@
+{
+  "kind": "analysis-strategy-access-mysql/v1",
+  "passed": true,
+  "observedAt": "2026-09-08T19:50:44.358Z",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "checks": [
+    "platform-analysis",
+    "owned-analysis",
+    "other-user-denied",
+    "execution-denied",
+    "disabled-denied",
+    "unpublished-denied",
+    "deleted-denied",
+    "unsigned-bigint-preserved",
+    "missing-denied",
+    "fixture-inserts-rolled-back"
+  ],
+  "scope": "Real MySQL predicates using a session-local temporary strategies table and compiled capability. No permanent table writes, schema migration, runtime restart, HTTP/browser or cross-connection lock proof."
+}

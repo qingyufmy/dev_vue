@@ -1,3 +1,4 @@
+import { createAnalysisStrategyAccess } from '../src/modules/strategies/composition.js'
 import { createAdminPrincipalAccess } from '../src/modules/auth/composition.js'
 import { createAccountPrincipalReader } from '../src/modules/auth/composition.js'
 import { createActivePrincipalAccess } from '../src/modules/auth/composition.js'
@@ -22,7 +23,7 @@ it('accepts capability-only authenticators and propagates session and CSRF rejec
     authenticate: vi.fn(async () => ({ userId: 9, role: 'admin' })),
     assertWrite: vi.fn(async () => ({ userId: 9, role: 'admin' })),
   }
-  const module = createTradingApiModule({} as Pool, {} as Redis, { trade, admin }, leases, createActivePrincipalAccess, createAccountPrincipalReader, createAdminPrincipalAccess)
+  const module = createTradingApiModule({} as Pool, {} as Redis, { trade, admin }, leases, createActivePrincipalAccess, createAccountPrincipalReader, createAdminPrincipalAccess, createAnalysisStrategyAccess)
   const request = { headers: {} }
   await expect(module.tradeAuth.authenticate(request)).rejects.toBe(denied)
   await expect(module.tradeAuth.assertWrite(request)).rejects.toBe(csrfDenied)
@@ -34,7 +35,7 @@ it('keeps trade and administrator authentication scopes distinct in the API comp
   const resolveSession = vi.fn(async (_cookie: unknown, client: string) => ({ user: { id: 7, role: client === 'admin-web' ? 'admin' : 'user' }, session: { id: 'session' } }))
   const assertCsrf = vi.fn()
   const auth = { cookieName: (client: string) => client + '-session', resolveSession, assertCsrf } as unknown as AuthService
-  const module = createTradingApiModule({} as Pool, {} as Redis, createBrowserRequestAccess(auth), leases, createActivePrincipalAccess, createAccountPrincipalReader, createAdminPrincipalAccess)
+  const module = createTradingApiModule({} as Pool, {} as Redis, createBrowserRequestAccess(auth), leases, createActivePrincipalAccess, createAccountPrincipalReader, createAdminPrincipalAccess, createAnalysisStrategyAccess)
   const headers = { cookie: 'trade-web-session=trade-secret; admin-web-session=admin-secret', 'x-csrf-token': 'csrf', origin: 'https://admin.example.test' }
   expect(await module.tradeAuth.authenticate({ headers })).toEqual({ userId: 7, role: 'user' })
   expect(resolveSession).toHaveBeenLastCalledWith('trade-secret', 'trade-web')

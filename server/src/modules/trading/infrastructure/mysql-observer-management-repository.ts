@@ -1,3 +1,4 @@
+import type { AnalysisStrategyAccess } from '../../strategies/index.js'
 import type { AdminPrincipalAccess, ActivePrincipalAccess } from '../../auth/index.js'
 import { randomUUID } from 'node:crypto'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
@@ -131,6 +132,7 @@ export class MysqlObserverManagementRepository implements ObserverManagementRepo
     private readonly pool: Pool,
     private readonly administrators: (executor: Pick<PoolConnection, 'execute'>) => AdminPrincipalAccess,
     private readonly principalAccess: (connection: PoolConnection) => ActivePrincipalAccess,
+    private readonly strategyAccess: (connection: PoolConnection) => AnalysisStrategyAccess,
   ) {}
 
   async list(actorUserId: number, input: ObserverManagementList): Promise<ObserverManagementPage> {
@@ -164,7 +166,7 @@ export class MysqlObserverManagementRepository implements ObserverManagementRepo
         return parseResult(receipt.result_json)
       }
 
-      const effect = await executeCommand(this.principalAccess(connection), connection, input.actorUserId, input.command, registry.revision)
+      const effect = await executeCommand(this.strategyAccess(connection), this.principalAccess(connection), connection, input.actorUserId, input.command, registry.revision)
       // Entity revisions are persisted as BIGINT values but exposed as safe
       // JavaScript integers.  Validate the command result before bumping the
       // global registry or writing its receipt/event so an invalid projection
@@ -215,10 +217,10 @@ export class MysqlObserverManagementRepository implements ObserverManagementRepo
   }
 }
 
-async function executeCommand(principals: ActivePrincipalAccess, executor: PoolConnection, actorUserId: number, command: ObserverManagementCommand, registryRevision: number): Promise<CommandEffect> {
+async function executeCommand(strategies: AnalysisStrategyAccess, principals: ActivePrincipalAccess, executor: PoolConnection, actorUserId: number, command: ObserverManagementCommand, registryRevision: number): Promise<CommandEffect> {
   switch (command.kind) {
-    case 'source.create': return createSource(principals, executor, actorUserId, command.config)
-    case 'source.update': return updateSource(principals, executor, actorUserId, command.id, command.expectedRevision, command.config)
+    case 'source.create': return createSource(strategies, principals, executor, actorUserId, command.config)
+    case 'source.update': return updateSource(strategies, principals, executor, actorUserId, command.id, command.expectedRevision, command.config)
     case 'channel.create': return createChannel(executor, actorUserId, command.config)
     case 'channel.update': return updateChannel(principals, executor, actorUserId, command.id, command.expectedRevision, command.config)
     case 'channel.default': return setDefaultChannel(principals, executor, command.channelId, command.expectedRevision, registryRevision)
@@ -226,11 +228,11 @@ async function executeCommand(principals: ActivePrincipalAccess, executor: PoolC
   }
 }
 
-async function createSource(principals: ActivePrincipalAccess, executor: PoolConnection, actorUserId: number, config: ObserverSourceConfig): Promise<CommandEffect> {
+async function createSource(strategies: AnalysisStrategyAccess, principals: ActivePrincipalAccess, executor: PoolConnection, actorUserId: number, config: ObserverSourceConfig): Promise<CommandEffect> {
   validateSourceConfig(config)
   if (config.status !== 'disabled') throw managementError('observer_source_activation_requires_update', 409)
   if (config.tradingAccountId) await assertOwnedAccount(principals, executor, actorUserId, config.tradingAccountId)
-  if (config.analysisStrategyId) await assertAnalysisStrategy(executor, actorUserId, config.analysisStrategyId)
+  if (config.analysisStrategyId) await assertAnalysisStrategy(strategies, actorUserId, config.analysisStrategyId)
 
   // Creation is intentionally a safe two-step operation.  A newly-created
   // source cannot publish until an explicit source.update has passed the full
@@ -246,6 +248,7 @@ async function createSource(principals: ActivePrincipalAccess, executor: PoolCon
 }
 
 async function updateSource(
+  strategies: AnalysisStrategyAccess,
   principals: ActivePrincipalAccess,
   executor: PoolConnection,
   _actorUserId: number,
@@ -269,7 +272,7 @@ async function updateSource(
     await assertOwnedAccount(principals, executor, operatorUserId, config.tradingAccountId)
   }
   if (config.analysisStrategyId && (config.status === 'active' || config.analysisStrategyId !== previousStrategy)) {
-    await assertAnalysisStrategy(executor, operatorUserId, config.analysisStrategyId)
+    await assertAnalysisStrategy(strategies, operatorUserId, config.analysisStrategyId)
   }
   if (config.status === 'active' && !config.tradingAccountId) throw managementError('observer_source_not_ready', 409)
 
@@ -519,11 +522,8 @@ async function assertOwnedAccount(principals: ActivePrincipalAccess, executor: E
   if (rows.length !== 1 || !await principals.isActive(userId, 'share')) throw managementError('observer_account_not_owned', 403)
 }
 
-async function assertAnalysisStrategy(executor: Executor, userId: number, strategyId: string) {
-  const [rows] = await executor.execute<RowDataPacket[]>(`SELECT s.id,s.kind,s.scope,s.owner_user_id,s.status,s.active_version_id
-    FROM strategies s WHERE s.id=? AND s.kind='analysis' AND s.status='active' AND s.active_version_id IS NOT NULL
-      AND s.deleted_at_utc IS NULL AND (s.scope='platform' OR s.owner_user_id=?) LIMIT 1 FOR SHARE`, [strategyId, userId])
-  if (rows.length !== 1) throw managementError('observer_analysis_strategy_not_available', 409)
+async function assertAnalysisStrategy(strategies: AnalysisStrategyAccess, userId: number, strategyId: string) {
+  if (!await strategies.canUse(userId, strategyId)) throw managementError('observer_analysis_strategy_not_available', 409)
 }
 
 async function assertActiveUser(principals: ActivePrincipalAccess, userId: number, code: string) {

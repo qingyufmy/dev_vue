@@ -1,4 +1,5 @@
 import type { Pool, PoolConnection } from 'mysql2/promise'
+export { createMysqlAnalysisStrategyAccess as createAnalysisStrategyAccess } from './infrastructure/mysql-analysis-strategy-access.js'
 import type { SubscriptionPreferencesReader } from './application/subscription-preferences-reader.js'
 import { readSubscriptionExecutionPreferences } from './infrastructure/mysql-subscription-execution-preferences.js'
 import type { FastifyPluginAsync } from 'fastify'

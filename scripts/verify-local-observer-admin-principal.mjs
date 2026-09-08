@@ -1,3 +1,4 @@
+import { createAnalysisStrategyAccess } from '../server/dist-v4/modules/strategies/composition.js'
 import assert from 'node:assert/strict'
 import { open, readFile } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
@@ -42,7 +43,7 @@ try {
   await connection.rollback()
   connection.release(); connection = undefined
   checks.push('same-connection-shared-lock-admin-accepted-viewer-rejected')
-  const management = new MysqlObserverManagementRepository(pool, createAdminPrincipalAccess, createActivePrincipalAccess)
+  const management = new MysqlObserverManagementRepository(pool, createAdminPrincipalAccess, createActivePrincipalAccess, createAnalysisStrategyAccess)
   const page = await management.list(fixture.actorUserId, { kind: 'sources', afterId: null, limit: 100 })
   assert.ok(page.items.length > 0)
   await assert.rejects(management.list(fixture.viewerUserId, { kind: 'sources', afterId: null, limit: 100 }),
