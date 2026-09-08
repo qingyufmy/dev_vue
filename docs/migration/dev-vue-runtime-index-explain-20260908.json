@@ -1,0 +1,106 @@
+{
+  "kind": "runtime-index-explain/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "schemaSteps": 139,
+  "databaseWrites": 0,
+  "observedAt": "2026-09-08T02:17:01.489Z",
+  "sessionTimezone": "+00:00",
+  "explains": [
+    {
+      "name": "quota",
+      "sql": "SELECT COUNT(*) requests,COALESCE(SUM(token_count),0) tokens FROM ai_model_usage_logs WHERE user_id=? AND credential_source='platform_shared' AND (request_phase='request' OR request_phase IS NULL) AND created_at>=CURRENT_DATE()",
+      "plan": {
+        "query_block": {
+          "select_id": 1,
+          "cost_info": {
+            "query_cost": "0.71"
+          },
+          "table": {
+            "table_name": "ai_model_usage_logs",
+            "access_type": "range",
+            "possible_keys": [
+              "idx_usage_logs_user",
+              "idx_v4_model_usage_quota"
+            ],
+            "key": "idx_usage_logs_user",
+            "used_key_parts": [
+              "user_id",
+              "created_at"
+            ],
+            "key_length": "11",
+            "rows_examined_per_scan": 1,
+            "rows_produced_per_join": 0,
+            "filtered": "5.00",
+            "index_condition": "((`dev_vue`.`ai_model_usage_logs`.`user_id` = 1) and (`dev_vue`.`ai_model_usage_logs`.`created_at` >= <cache>(curdate())))",
+            "cost_info": {
+              "read_cost": "0.70",
+              "eval_cost": "0.01",
+              "prefix_cost": "0.71",
+              "data_read_per_join": "106"
+            },
+            "used_columns": [
+              "user_id",
+              "credential_source",
+              "request_phase",
+              "token_count",
+              "created_at"
+            ],
+            "attached_condition": "((`dev_vue`.`ai_model_usage_logs`.`credential_source` = 'platform_shared') and (`dev_vue`.`ai_model_usage_logs`.`request_phase` = 'request'))"
+          }
+        }
+      }
+    },
+    {
+      "name": "recovery",
+      "sql": "SELECT id FROM ai_model_usage_logs WHERE request_status='reserved' AND created_at<? ORDER BY id LIMIT 100",
+      "plan": {
+        "query_block": {
+          "select_id": 1,
+          "cost_info": {
+            "query_cost": "2.21"
+          },
+          "ordering_operation": {
+            "using_filesort": true,
+            "cost_info": {
+              "sort_cost": "1.00"
+            },
+            "table": {
+              "table_name": "ai_model_usage_logs",
+              "access_type": "range",
+              "possible_keys": [
+                "idx_v4_model_usage_recovery"
+              ],
+              "key": "idx_v4_model_usage_recovery",
+              "used_key_parts": [
+                "request_status",
+                "created_at"
+              ],
+              "key_length": "73",
+              "rows_examined_per_scan": 1,
+              "rows_produced_per_join": 1,
+              "filtered": "100.00",
+              "using_index": true,
+              "cost_info": {
+                "read_cost": "1.11",
+                "eval_cost": "0.10",
+                "prefix_cost": "1.21",
+                "data_read_per_join": "2K"
+              },
+              "used_columns": [
+                "id",
+                "request_status",
+                "created_at"
+              ],
+              "attached_condition": "((`dev_vue`.`ai_model_usage_logs`.`request_status` = 'reserved') and (`dev_vue`.`ai_model_usage_logs`.`created_at` < TIMESTAMP'2026-09-08 00:00:00'))"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "quotaUserSelection": "minimum_positive_usage_user_joined_to_users",
+  "comparisonScope": "Post-upgrade access path only; source preflight used a legacy user 0 and is not a comparable performance baseline."
+}

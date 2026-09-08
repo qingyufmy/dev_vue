@@ -1,0 +1,3005 @@
+{
+  "kind": "target-index-signature-review/v1",
+  "observedAt": "2026-09-08T02:15:48.262Z",
+  "schemaSteps": 139,
+  "databaseWrites": 0,
+  "scope": "Explicit target index declarations on existing same-name tables; direction, prefix, type, visibility and uniqueness compared. Does not assess query performance or implicit FK indexes.",
+  "unparsed": [],
+  "summary": {
+    "exact_index_signature": 120,
+    "retained_unique_index": 2,
+    "deferred_missing_columns": 17
+  },
+  "rows": [
+    {
+      "table": "users",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "users",
+      "name": "uk_v4_users_uid",
+      "unique": true,
+      "columns": [
+        {
+          "name": "uid",
+          "direction": "ASC"
+        }
+      ],
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uid"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "users",
+      "name": "idx_v4_users_email",
+      "unique": false,
+      "columns": [
+        {
+          "name": "email",
+          "direction": "ASC"
+        }
+      ],
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "status": "retained_unique_index",
+      "matchingNames": [
+        "email"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "users",
+      "name": "idx_v4_users_phone",
+      "unique": false,
+      "columns": [
+        {
+          "name": "phone",
+          "direction": "ASC"
+        }
+      ],
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "status": "retained_unique_index",
+      "matchingNames": [
+        "idx_users_phone"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "bridge_refresh_sessions",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "bridge_refresh_sessions",
+      "name": "uk_bridge_refresh_token",
+      "unique": true,
+      "columns": [
+        {
+          "name": "token_hash",
+          "direction": "ASC"
+        }
+      ],
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_bridge_refresh_token"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "bridge_refresh_sessions",
+      "name": "idx_bridge_refresh_user",
+      "unique": false,
+      "columns": [
+        {
+          "name": "user_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "revoked_at",
+          "direction": "ASC"
+        },
+        {
+          "name": "expires_at",
+          "direction": "ASC"
+        }
+      ],
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_bridge_refresh_user"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "bridge_refresh_sessions",
+      "name": "idx_bridge_refresh_expiry",
+      "unique": false,
+      "columns": [
+        {
+          "name": "expires_at",
+          "direction": "ASC"
+        }
+      ],
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_bridge_refresh_expiry"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "bridge_refresh_sessions",
+      "name": "uk_bridge_refresh_migration_key",
+      "unique": true,
+      "columns": [
+        {
+          "name": "migration_key",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_001_bridge_v4_device_sessions.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_bridge_refresh_migration_key"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "bridge_refresh_sessions",
+      "name": "uk_bridge_refresh_source_migration",
+      "unique": true,
+      "columns": [
+        {
+          "name": "source_refresh_session_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_001_bridge_v4_device_sessions.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_bridge_refresh_source_migration"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "bridge_refresh_sessions",
+      "name": "idx_bridge_refresh_device",
+      "unique": false,
+      "columns": [
+        {
+          "name": "user_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "installation_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "profile_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "credential_version",
+          "direction": "ASC"
+        },
+        {
+          "name": "revoked_at",
+          "direction": "ASC"
+        },
+        {
+          "name": "expires_at",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_001_bridge_v4_device_sessions.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_bridge_refresh_device"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "ai_model_profiles",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "ai_model_profiles",
+      "name": "idx_v4_model_profiles_owner",
+      "unique": false,
+      "columns": [
+        {
+          "name": "owner_user_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "scope",
+          "direction": "ASC"
+        },
+        {
+          "name": "status",
+          "direction": "ASC"
+        },
+        {
+          "name": "deleted_at",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_v4_model_profiles_owner"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "user_model_defaults",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "user_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "ai_model_provider_capabilities",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "model_profile_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "platform_model_usage_policy",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "name": "idx_v4_model_usage_quota",
+      "unique": false,
+      "columns": [
+        {
+          "name": "user_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "credential_source",
+          "direction": "ASC"
+        },
+        {
+          "name": "created_at",
+          "direction": "ASC"
+        },
+        {
+          "name": "request_phase",
+          "direction": "ASC"
+        }
+      ],
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_v4_model_usage_quota"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "name": "idx_v4_model_usage_recovery",
+      "unique": false,
+      "columns": [
+        {
+          "name": "request_status",
+          "direction": "ASC"
+        },
+        {
+          "name": "created_at",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_v4_model_usage_recovery"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "auth_sessions",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_002_auth_sso_sessions.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "auth_sessions",
+      "name": "uk_auth_sessions_hash",
+      "unique": true,
+      "columns": [
+        {
+          "name": "session_hash",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_002_auth_sso_sessions.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_auth_sessions_hash"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "auth_sessions",
+      "name": "idx_auth_sessions_user_active",
+      "unique": false,
+      "columns": [
+        {
+          "name": "user_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "revoked_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "absolute_expires_at_utc",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_002_auth_sso_sessions.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_auth_sessions_user_active"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "auth_sessions",
+      "name": "idx_auth_sessions_parent",
+      "unique": false,
+      "columns": [
+        {
+          "name": "parent_session_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_002_auth_sso_sessions.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_auth_sessions_parent"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "auth_sessions",
+      "name": "idx_auth_sessions_expiry",
+      "unique": false,
+      "columns": [
+        {
+          "name": "absolute_expires_at_utc",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_002_auth_sso_sessions.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_auth_sessions_expiry"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "auth_authorization_codes",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_002_auth_sso_sessions.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "auth_authorization_codes",
+      "name": "uk_auth_codes_hash",
+      "unique": true,
+      "columns": [
+        {
+          "name": "code_hash",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_002_auth_sso_sessions.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_auth_codes_hash"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "auth_authorization_codes",
+      "name": "idx_auth_codes_expiry",
+      "unique": false,
+      "columns": [
+        {
+          "name": "expires_at_utc",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_002_auth_sso_sessions.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_auth_codes_expiry"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "auth_authorization_codes",
+      "name": "idx_auth_codes_session",
+      "unique": false,
+      "columns": [
+        {
+          "name": "auth_session_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_002_auth_sso_sessions.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_auth_codes_session"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "trading_accounts",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_003_trading_context_and_market_projection.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "trading_accounts",
+      "name": "uk_trading_account_identity",
+      "unique": true,
+      "columns": [
+        {
+          "name": "platform",
+          "direction": "ASC"
+        },
+        {
+          "name": "broker_server",
+          "direction": "ASC"
+        },
+        {
+          "name": "account_login",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_003_trading_context_and_market_projection.sql",
+      "status": "deferred_missing_columns",
+      "matchingNames": [],
+      "missingColumns": [
+        "platform",
+        "account_login"
+      ]
+    },
+    {
+      "table": "trading_accounts",
+      "name": "idx_trading_accounts_active",
+      "unique": false,
+      "columns": [
+        {
+          "name": "deleted_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_003_trading_context_and_market_projection.sql",
+      "status": "deferred_missing_columns",
+      "matchingNames": [],
+      "missingColumns": [
+        "deleted_at_utc"
+      ]
+    },
+    {
+      "table": "terminal_profiles",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_003_trading_context_and_market_projection.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "terminal_profiles",
+      "name": "idx_terminal_profiles_user",
+      "unique": false,
+      "columns": [
+        {
+          "name": "user_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "deleted_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "updated_at_utc",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_003_trading_context_and_market_projection.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_terminal_profiles_user"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "terminal_profiles",
+      "name": "uk_terminal_profile_install",
+      "unique": true,
+      "columns": [
+        {
+          "name": "user_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "installation_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_003_trading_context_and_market_projection.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_terminal_profile_install"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "bridge_connection_capacity_grants",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_003_trading_context_and_market_projection.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "bridge_connection_capacity_grants",
+      "name": "uk_bridge_capacity_source",
+      "unique": true,
+      "columns": [
+        {
+          "name": "source_type",
+          "direction": "ASC"
+        },
+        {
+          "name": "source_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_003_trading_context_and_market_projection.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_bridge_capacity_source"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "bridge_connection_capacity_grants",
+      "name": "idx_bridge_capacity_active",
+      "unique": false,
+      "columns": [
+        {
+          "name": "user_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "revoked_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "starts_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "expires_at_utc",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_003_trading_context_and_market_projection.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_bridge_capacity_active"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "market_candles",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "trading_account_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "symbol",
+          "direction": "ASC"
+        },
+        {
+          "name": "timeframe",
+          "direction": "ASC"
+        },
+        {
+          "name": "open_time_utc",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_003_trading_context_and_market_projection.sql",
+      "status": "deferred_missing_columns",
+      "matchingNames": [],
+      "missingColumns": [
+        "trading_account_id",
+        "symbol",
+        "open_time_utc"
+      ]
+    },
+    {
+      "table": "market_candles",
+      "name": "idx_market_candles_tail",
+      "unique": false,
+      "columns": [
+        {
+          "name": "trading_account_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "symbol",
+          "direction": "ASC"
+        },
+        {
+          "name": "timeframe",
+          "direction": "ASC"
+        },
+        {
+          "name": "open_time_utc",
+          "direction": "DESC"
+        }
+      ],
+      "source": "20260903_003_trading_context_and_market_projection.sql",
+      "status": "deferred_missing_columns",
+      "matchingNames": [],
+      "missingColumns": [
+        "trading_account_id",
+        "symbol",
+        "open_time_utc"
+      ]
+    },
+    {
+      "table": "strategies",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategies",
+      "name": "uk_strategies_legacy",
+      "unique": true,
+      "columns": [
+        {
+          "name": "legacy_source_table",
+          "direction": "ASC"
+        },
+        {
+          "name": "legacy_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_strategies_legacy"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategies",
+      "name": "idx_strategies_catalog",
+      "unique": false,
+      "columns": [
+        {
+          "name": "kind",
+          "direction": "ASC"
+        },
+        {
+          "name": "status",
+          "direction": "ASC"
+        },
+        {
+          "name": "scope",
+          "direction": "ASC"
+        },
+        {
+          "name": "owner_user_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "deleted_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_strategies_catalog"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_versions",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_versions",
+      "name": "uk_strategy_versions_identity",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        },
+        {
+          "name": "strategy_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_strategy_versions_identity"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_versions",
+      "name": "uk_strategy_versions_number",
+      "unique": true,
+      "columns": [
+        {
+          "name": "strategy_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "version_number",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_strategy_versions_number"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_versions",
+      "name": "uk_strategy_versions_legacy",
+      "unique": true,
+      "columns": [
+        {
+          "name": "legacy_source_table",
+          "direction": "ASC"
+        },
+        {
+          "name": "legacy_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_strategy_versions_legacy"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_versions",
+      "name": "idx_strategy_versions_created",
+      "unique": false,
+      "columns": [
+        {
+          "name": "strategy_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "created_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_strategy_versions_created"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_subscriptions",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_subscriptions",
+      "name": "uk_strategy_subscription_identity",
+      "unique": true,
+      "columns": [
+        {
+          "name": "user_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "trading_account_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "analysis_strategy_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "standard_symbol",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "deferred_missing_columns",
+      "matchingNames": [],
+      "missingColumns": [
+        "analysis_strategy_id",
+        "standard_symbol"
+      ]
+    },
+    {
+      "table": "strategy_subscriptions",
+      "name": "uk_strategy_subscription_execution_slot",
+      "unique": true,
+      "columns": [
+        {
+          "name": "active_execution_key",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "deferred_missing_columns",
+      "matchingNames": [],
+      "missingColumns": [
+        "active_execution_key"
+      ]
+    },
+    {
+      "table": "strategy_subscriptions",
+      "name": "uk_strategy_subscription_legacy",
+      "unique": true,
+      "columns": [
+        {
+          "name": "legacy_source_table",
+          "direction": "ASC"
+        },
+        {
+          "name": "legacy_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "deferred_missing_columns",
+      "matchingNames": [],
+      "missingColumns": [
+        "legacy_source_table",
+        "legacy_id"
+      ]
+    },
+    {
+      "table": "strategy_subscriptions",
+      "name": "idx_strategy_subscriptions_analysis",
+      "unique": false,
+      "columns": [
+        {
+          "name": "user_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "analysis_strategy_version_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "standard_symbol",
+          "direction": "ASC"
+        },
+        {
+          "name": "status",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "deferred_missing_columns",
+      "matchingNames": [],
+      "missingColumns": [
+        "analysis_strategy_version_id",
+        "standard_symbol",
+        "status"
+      ]
+    },
+    {
+      "table": "strategy_subscriptions",
+      "name": "idx_strategy_subscriptions_account",
+      "unique": false,
+      "columns": [
+        {
+          "name": "trading_account_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "status",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "deferred_missing_columns",
+      "matchingNames": [],
+      "missingColumns": [
+        "status"
+      ]
+    },
+    {
+      "table": "inference_snapshots",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "inference_snapshots",
+      "name": "idx_inference_snapshot_payload_hash",
+      "unique": false,
+      "columns": [
+        {
+          "name": "purpose",
+          "direction": "ASC"
+        },
+        {
+          "name": "user_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "payload_sha256",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "deferred_missing_columns",
+      "matchingNames": [],
+      "missingColumns": [
+        "purpose",
+        "user_id",
+        "payload_sha256"
+      ]
+    },
+    {
+      "table": "inference_snapshots",
+      "name": "idx_inference_snapshots_user",
+      "unique": false,
+      "columns": [
+        {
+          "name": "user_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "purpose",
+          "direction": "ASC"
+        },
+        {
+          "name": "created_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "deferred_missing_columns",
+      "matchingNames": [],
+      "missingColumns": [
+        "user_id",
+        "purpose",
+        "created_at_utc"
+      ]
+    },
+    {
+      "table": "inference_snapshots",
+      "name": "idx_inference_snapshots_account",
+      "unique": false,
+      "columns": [
+        {
+          "name": "trading_account_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "purpose",
+          "direction": "ASC"
+        },
+        {
+          "name": "created_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "deferred_missing_columns",
+      "matchingNames": [],
+      "missingColumns": [
+        "trading_account_id",
+        "purpose",
+        "created_at_utc"
+      ]
+    },
+    {
+      "table": "ai_model_tasks",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "deferred_missing_columns",
+      "matchingNames": [],
+      "missingColumns": [
+        "id"
+      ]
+    },
+    {
+      "table": "ai_model_tasks",
+      "name": "idx_ai_model_tasks_worker",
+      "unique": false,
+      "columns": [
+        {
+          "name": "purpose",
+          "direction": "ASC"
+        },
+        {
+          "name": "status",
+          "direction": "ASC"
+        },
+        {
+          "name": "created_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "deferred_missing_columns",
+      "matchingNames": [],
+      "missingColumns": [
+        "purpose",
+        "created_at_utc",
+        "id"
+      ]
+    },
+    {
+      "table": "ai_model_tasks",
+      "name": "idx_ai_model_tasks_user",
+      "unique": false,
+      "columns": [
+        {
+          "name": "user_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "created_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "deferred_missing_columns",
+      "matchingNames": [],
+      "missingColumns": [
+        "user_id",
+        "created_at_utc",
+        "id"
+      ]
+    },
+    {
+      "table": "ai_model_tasks",
+      "name": "idx_ai_model_tasks_lease",
+      "unique": false,
+      "columns": [
+        {
+          "name": "status",
+          "direction": "ASC"
+        },
+        {
+          "name": "lease_expires_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_005_analysis_scheduler_and_account_fanout.sql",
+      "status": "deferred_missing_columns",
+      "matchingNames": [],
+      "missingColumns": [
+        "lease_expires_at_utc",
+        "id"
+      ]
+    },
+    {
+      "table": "ai_model_tasks",
+      "name": "idx_ai_model_tasks_account_lease",
+      "unique": false,
+      "columns": [
+        {
+          "name": "trading_account_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "purpose",
+          "direction": "ASC"
+        },
+        {
+          "name": "status",
+          "direction": "ASC"
+        },
+        {
+          "name": "lease_expires_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_006_account_trader_worker.sql",
+      "status": "deferred_missing_columns",
+      "matchingNames": [],
+      "missingColumns": [
+        "trading_account_id",
+        "purpose",
+        "lease_expires_at_utc",
+        "id"
+      ]
+    },
+    {
+      "table": "ai_manual_analysis_cooldowns",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "user_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "outbox_events",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "outbox_events",
+      "name": "uk_outbox_event_id",
+      "unique": true,
+      "columns": [
+        {
+          "name": "event_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_outbox_event_id"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "outbox_events",
+      "name": "idx_outbox_dispatch",
+      "unique": false,
+      "columns": [
+        {
+          "name": "status",
+          "direction": "ASC"
+        },
+        {
+          "name": "available_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_outbox_dispatch"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_research_snapshots",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_005_analysis_scheduler_and_account_fanout.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_research_snapshots",
+      "name": "idx_macro_snapshot_user",
+      "unique": false,
+      "columns": [
+        {
+          "name": "owner_user_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "valid_until_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "observed_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_005_analysis_scheduler_and_account_fanout.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_macro_snapshot_user"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_research_snapshots",
+      "name": "idx_macro_snapshot_platform",
+      "unique": false,
+      "columns": [
+        {
+          "name": "owner_scope",
+          "direction": "ASC"
+        },
+        {
+          "name": "valid_until_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "observed_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_005_analysis_scheduler_and_account_fanout.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_macro_snapshot_platform"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_research_snapshots",
+      "name": "uk_macro_snapshot_active_publication",
+      "unique": true,
+      "columns": [
+        {
+          "name": "active_publication_key",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_macro_snapshot_active_publication"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_research_snapshots",
+      "name": "idx_macro_snapshot_latest",
+      "unique": false,
+      "columns": [
+        {
+          "name": "publication_status",
+          "direction": "ASC"
+        },
+        {
+          "name": "published_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_macro_snapshot_latest"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_research_snapshots",
+      "name": "idx_macro_snapshot_feature",
+      "unique": false,
+      "columns": [
+        {
+          "name": "feature_set_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "data_cutoff_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_macro_snapshot_feature"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "global_risk_controls",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260903_007_deterministic_risk_review.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_memory_libraries_v4",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260904_012_review_memory_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_memory_libraries_v4",
+      "name": "uk_strategy_memory_strategy",
+      "unique": true,
+      "columns": [
+        {
+          "name": "strategy_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260904_012_review_memory_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_strategy_memory_strategy"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_memory_libraries_v4",
+      "name": "uk_strategy_memory_legacy",
+      "unique": true,
+      "columns": [
+        {
+          "name": "legacy_source_table",
+          "direction": "ASC"
+        },
+        {
+          "name": "legacy_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260904_012_review_memory_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_strategy_memory_legacy"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_memory_libraries_v4",
+      "name": "idx_strategy_memory_owner",
+      "unique": false,
+      "columns": [
+        {
+          "name": "owner_user_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "updated_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260904_012_review_memory_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_strategy_memory_owner"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_memory_library_revisions_v4",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260904_012_review_memory_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_memory_library_revisions_v4",
+      "name": "uk_strategy_memory_revision_identity",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        },
+        {
+          "name": "library_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260904_012_review_memory_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_strategy_memory_revision_identity"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_memory_library_revisions_v4",
+      "name": "uk_strategy_memory_revision_number",
+      "unique": true,
+      "columns": [
+        {
+          "name": "library_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "version_number",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260904_012_review_memory_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_strategy_memory_revision_number"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_memory_injection_logs_v4",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260904_012_review_memory_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_memory_injection_logs_v4",
+      "name": "uk_strategy_memory_injection",
+      "unique": true,
+      "columns": [
+        {
+          "name": "runtime_kind",
+          "direction": "ASC"
+        },
+        {
+          "name": "runtime_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "library_revision_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260904_012_review_memory_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_strategy_memory_injection"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "strategy_memory_injection_logs_v4",
+      "name": "idx_strategy_memory_injection_strategy",
+      "unique": false,
+      "columns": [
+        {
+          "name": "strategy_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "occurred_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260904_012_review_memory_core.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_strategy_memory_injection_strategy"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "trade_history_migration_checkpoints_v4",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "source_table",
+          "direction": "ASC"
+        },
+        {
+          "name": "source_partition",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260904_013_authoritative_trade_history.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_data_sources",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_data_sources",
+      "name": "uk_macro_data_sources_key",
+      "unique": true,
+      "columns": [
+        {
+          "name": "source_key",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_macro_data_sources_key"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_data_sources",
+      "name": "idx_macro_data_sources_status",
+      "unique": false,
+      "columns": [
+        {
+          "name": "status",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_macro_data_sources_status"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_series",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_series",
+      "name": "uk_macro_series_code",
+      "unique": true,
+      "columns": [
+        {
+          "name": "series_code",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_macro_series_code"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_series",
+      "name": "uk_macro_series_provider_key",
+      "unique": true,
+      "columns": [
+        {
+          "name": "source_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "provider_series_key",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_macro_series_provider_key"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_series",
+      "name": "idx_macro_series_source_status",
+      "unique": false,
+      "columns": [
+        {
+          "name": "source_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "status",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_macro_series_source_status"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_ingestion_runs",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_ingestion_runs",
+      "name": "uk_macro_ingestion_idempotency",
+      "unique": true,
+      "columns": [
+        {
+          "name": "source_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "idempotency_key",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_macro_ingestion_idempotency"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_ingestion_runs",
+      "name": "idx_macro_ingestion_claim",
+      "unique": false,
+      "columns": [
+        {
+          "name": "status",
+          "direction": "ASC"
+        },
+        {
+          "name": "lease_expires_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "created_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_macro_ingestion_claim"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_ingestion_runs",
+      "name": "idx_macro_ingestion_series",
+      "unique": false,
+      "columns": [
+        {
+          "name": "series_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "created_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_macro_ingestion_series"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_observations",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_observations",
+      "name": "uk_macro_observation_version",
+      "unique": true,
+      "columns": [
+        {
+          "name": "series_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "observation_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "available_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "content_sha256",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_macro_observation_version"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_observations",
+      "name": "idx_macro_observations_point_in_time",
+      "unique": false,
+      "columns": [
+        {
+          "name": "series_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "available_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "observation_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_macro_observations_point_in_time"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_observations",
+      "name": "idx_macro_observations_ingestion",
+      "unique": false,
+      "columns": [
+        {
+          "name": "ingestion_run_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_015_macro_sources_and_observations.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_macro_observations_ingestion"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_feature_sets",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_feature_sets",
+      "name": "uk_macro_feature_set_version",
+      "unique": true,
+      "columns": [
+        {
+          "name": "feature_key",
+          "direction": "ASC"
+        },
+        {
+          "name": "version_number",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_macro_feature_set_version"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_feature_sets",
+      "name": "idx_macro_feature_set_status",
+      "unique": false,
+      "columns": [
+        {
+          "name": "status",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_macro_feature_set_status"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_model_versions",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_model_versions",
+      "name": "uk_macro_model_version",
+      "unique": true,
+      "columns": [
+        {
+          "name": "model_key",
+          "direction": "ASC"
+        },
+        {
+          "name": "version_number",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_macro_model_version"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_model_versions",
+      "name": "idx_macro_model_lifecycle",
+      "unique": false,
+      "columns": [
+        {
+          "name": "lifecycle_status",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_macro_model_lifecycle"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_pipeline_jobs",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_pipeline_jobs",
+      "name": "uk_macro_pipeline_job_idempotency",
+      "unique": true,
+      "columns": [
+        {
+          "name": "job_kind",
+          "direction": "ASC"
+        },
+        {
+          "name": "idempotency_key",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_macro_pipeline_job_idempotency"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_pipeline_jobs",
+      "name": "idx_macro_pipeline_job_claim",
+      "unique": false,
+      "columns": [
+        {
+          "name": "status",
+          "direction": "ASC"
+        },
+        {
+          "name": "lease_expires_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "created_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_macro_pipeline_job_claim"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_snapshot_observations",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "snapshot_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "observation_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_snapshot_observations",
+      "name": "idx_macro_snapshot_observation_reverse",
+      "unique": false,
+      "columns": [
+        {
+          "name": "observation_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "snapshot_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_macro_snapshot_observation_reverse"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "macro_snapshot_observations",
+      "name": "idx_macro_snapshot_factor",
+      "unique": false,
+      "columns": [
+        {
+          "name": "snapshot_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "factor_code",
+          "direction": "ASC"
+        },
+        {
+          "name": "observation_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_016_macro_snapshot_research.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_macro_snapshot_factor"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "economic_calendar_events",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_017_economic_calendar.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "economic_calendar_events",
+      "name": "uk_economic_calendar_provider_event",
+      "unique": true,
+      "columns": [
+        {
+          "name": "source_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "provider_event_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_017_economic_calendar.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_economic_calendar_provider_event"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "economic_calendar_events",
+      "name": "idx_economic_calendar_schedule",
+      "unique": false,
+      "columns": [
+        {
+          "name": "scheduled_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_017_economic_calendar.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_economic_calendar_schedule"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "economic_calendar_events",
+      "name": "idx_economic_calendar_filter",
+      "unique": false,
+      "columns": [
+        {
+          "name": "importance",
+          "direction": "ASC"
+        },
+        {
+          "name": "country_code",
+          "direction": "ASC"
+        },
+        {
+          "name": "scheduled_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_017_economic_calendar.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_economic_calendar_filter"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "economic_calendar_event_revisions",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_017_economic_calendar.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "economic_calendar_event_revisions",
+      "name": "uk_economic_calendar_revision",
+      "unique": true,
+      "columns": [
+        {
+          "name": "event_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "revision_number",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_017_economic_calendar.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_economic_calendar_revision"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "economic_calendar_event_revisions",
+      "name": "uk_economic_calendar_provider_revision",
+      "unique": true,
+      "columns": [
+        {
+          "name": "event_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "provider_revision_key",
+          "direction": "ASC"
+        },
+        {
+          "name": "content_sha256",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_017_economic_calendar.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_economic_calendar_provider_revision"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "economic_calendar_event_revisions",
+      "name": "uk_economic_calendar_revision_content",
+      "unique": true,
+      "columns": [
+        {
+          "name": "event_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "content_sha256",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_017_economic_calendar.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_economic_calendar_revision_content"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "economic_calendar_event_revisions",
+      "name": "idx_economic_calendar_available",
+      "unique": false,
+      "columns": [
+        {
+          "name": "event_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "available_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_017_economic_calendar.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_economic_calendar_available"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "economic_calendar_event_revisions",
+      "name": "idx_economic_calendar_ingestion",
+      "unique": false,
+      "columns": [
+        {
+          "name": "ingestion_run_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_017_economic_calendar.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_economic_calendar_ingestion"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "user_referral_accounts",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "user_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_018_user_state_and_referral_accounts.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "user_referral_accounts",
+      "name": "idx_user_referral_accounts_referral_code",
+      "unique": false,
+      "columns": [
+        {
+          "name": "referral_code",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_018_user_state_and_referral_accounts.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_user_referral_accounts_referral_code"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "observer_management_registry",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_022_observer_management_ledger.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "observer_management_operations",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_022_observer_management_ledger.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "observer_management_operations",
+      "name": "uk_observer_management_operations_actor_key",
+      "unique": true,
+      "columns": [
+        {
+          "name": "actor_user_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "idempotency_key",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_022_observer_management_ledger.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_observer_management_operations_actor_key"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "observer_management_operations",
+      "name": "idx_observer_management_operations_created",
+      "unique": false,
+      "columns": [
+        {
+          "name": "created_at_utc",
+          "direction": "ASC"
+        },
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260905_022_observer_management_ledger.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_observer_management_operations_created"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "bridge_v4_pairing_requests",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260906_024_bridge_pairing_requests.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "bridge_v4_pairing_requests",
+      "name": "uk_bridge_v4_pair_request",
+      "unique": true,
+      "columns": [
+        {
+          "name": "user_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "request_key",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260906_024_bridge_pairing_requests.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_bridge_v4_pair_request"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "bridge_v4_pairing_requests",
+      "name": "uk_bridge_v4_pair_code",
+      "unique": true,
+      "columns": [
+        {
+          "name": "code_hash",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260906_024_bridge_pairing_requests.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_bridge_v4_pair_code"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "bridge_v4_pairing_requests",
+      "name": "uk_bridge_v4_pair_profile",
+      "unique": true,
+      "columns": [
+        {
+          "name": "profile_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260906_024_bridge_pairing_requests.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_bridge_v4_pair_profile"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "bridge_v4_pairing_requests",
+      "name": "idx_bridge_v4_pair_user_time",
+      "unique": false,
+      "columns": [
+        {
+          "name": "user_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "created_at_utc",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260906_024_bridge_pairing_requests.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_bridge_v4_pair_user_time"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "bridge_v4_pairing_requests",
+      "name": "idx_bridge_v4_pair_expiry",
+      "unique": false,
+      "columns": [
+        {
+          "name": "expires_at_utc",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260906_024_bridge_pairing_requests.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "idx_bridge_v4_pair_expiry"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "data_migration_runs",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260906_025_data_migration_batch_ledger.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "data_migration_checkpoints",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "run_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "stream_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260906_025_data_migration_batch_ledger.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "data_migration_batches",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "run_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "batch_id",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260906_025_data_migration_batch_ledger.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "data_migration_batches",
+      "name": "uk_data_batch_sequence",
+      "unique": true,
+      "columns": [
+        {
+          "name": "run_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "stream_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "sequence_number",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260906_025_data_migration_batch_ledger.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "uk_data_batch_sequence"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "data_migration_id_maps",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "logical_source_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "entity_kind",
+          "direction": "ASC"
+        },
+        {
+          "name": "source_table",
+          "direction": "ASC"
+        },
+        {
+          "name": "source_pk_sha256",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260906_025_data_migration_batch_ledger.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    },
+    {
+      "table": "data_migration_row_receipts",
+      "name": "PRIMARY",
+      "unique": true,
+      "columns": [
+        {
+          "name": "run_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "stream_id",
+          "direction": "ASC"
+        },
+        {
+          "name": "source_pk_sha256",
+          "direction": "ASC"
+        }
+      ],
+      "source": "20260906_025_data_migration_batch_ledger.sql",
+      "status": "exact_index_signature",
+      "matchingNames": [
+        "PRIMARY"
+      ],
+      "missingColumns": []
+    }
+  ]
+}

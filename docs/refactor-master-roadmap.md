@@ -1,5 +1,7 @@
 # 全量重构主路线图
 
+> 最新状态：阶段195完成6个运行索引，当前139步、222表、787索引，271337行业务数据保持。139个既有目标显式索引签名中120匹配、2个保留已有唯一索引、17个依赖根缺列。验收：[阶段195](migration/dev-vue-inplace-stage195-20260908.md)、[目录v7](migration/dev-vue-structure-remaining-work-20260908-v7.json)。全域规范化继续推进。
+
 > 最新状态：阶段194已完成模型归属和额度单例CHECK，当前133步、222表、117个CHECK，271337行业务数据不变。约束真实拒绝、中断恢复和重复执行通过；全域规范化仍在推进。验收：[阶段194](migration/dev-vue-inplace-stage194-20260908.md)、[目录v6](migration/dev-vue-structure-remaining-work-20260908-v6.json)。
 
 > 最新状态：阶段193已完成17项默认值/摘要排序调整，dev_vue累计131步、222表、271337行业务数据保持。剩余11项类型、1项可空性、6项默认、36项排序差异；6张同名表缺列、69张根依赖缺表仍待处置。特权对象目录已补查。当前证据：[阶段193](migration/dev-vue-inplace-stage193-20260908.md)与[目录v5](migration/dev-vue-structure-remaining-work-20260908-v5.json)。以下阶段数字为历史记录，数据库全域规范化继续推进。

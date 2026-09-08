@@ -6,7 +6,7 @@ import { loadSettingsMigrationEnvironment, settingsMigrationConnectionOptions } 
 import { loadMigrationPlan, sha256 } from './lib/v4-migration-plan.mjs'
 import { plannedColumns, matrixRows } from './lib/v4-upgrade-review.mjs'
 import { reviewTableDependencies } from './lib/inplace-table-dependencies.mjs'
-import { loadModelCheckCoordinator } from './lib/inplace-model-check-schema.mjs'
+import { loadRuntimeIndexCoordinator } from './lib/inplace-runtime-index-schema.mjs'
 import { coordinateInplaceSchema } from './lib/inplace-schema-coordinator.mjs'
 import { withInplaceUpgradeLock, verifyInplaceJournal } from './lib/mysql-inplace-column-store.mjs'
 import { databaseTypeToken, defaultDifference } from './lib/database-structure-comparison.mjs'
@@ -31,14 +31,14 @@ try {
     await connection.query('START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY')
     try {
       check(await verifyInplaceJournal(connection), 'journal')
-      const coordinator = await loadModelCheckCoordinator(root)
+      const coordinator = await loadRuntimeIndexCoordinator(root)
       const schema = await coordinateInplaceSchema(coordinator.store(connection), coordinator)
-      check(schema.structureComplete && schema.steps.length === 133, 'schema_steps')
+      check(schema.structureComplete && schema.steps.length === 139, 'schema_steps')
       const collect = async () => {
         const query = async sql => (await connection.query(sql))[0]
         const tables = await query('SELECT TABLE_NAME table_name,TABLE_TYPE table_type,ENGINE engine,TABLE_COLLATION collation FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME')
         const columns = await query('SELECT TABLE_NAME table_name,COLUMN_NAME column_name,ORDINAL_POSITION ordinal_position,COLUMN_TYPE column_type,IS_NULLABLE is_nullable,COLUMN_DEFAULT column_default,CHARACTER_SET_NAME charset,COLLATION_NAME collation,EXTRA extra,GENERATION_EXPRESSION generation_expression,DATETIME_PRECISION datetime_precision FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,ORDINAL_POSITION')
-        const indexes = await query('SELECT TABLE_NAME table_name,INDEX_NAME index_name,NON_UNIQUE non_unique,SEQ_IN_INDEX seq_in_index,COLUMN_NAME column_name,SUB_PART sub_part,INDEX_TYPE index_type,IS_VISIBLE is_visible,EXPRESSION expression FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,INDEX_NAME,SEQ_IN_INDEX')
+        const indexes = await query('SELECT TABLE_NAME table_name,INDEX_NAME index_name,NON_UNIQUE non_unique,SEQ_IN_INDEX seq_in_index,COLUMN_NAME column_name,COLLATION direction,SUB_PART sub_part,INDEX_TYPE index_type,IS_VISIBLE is_visible,EXPRESSION expression FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,INDEX_NAME,SEQ_IN_INDEX')
         const relations = await query('SELECT TABLE_NAME table_name,CONSTRAINT_NAME constraint_name,COLUMN_NAME column_name,ORDINAL_POSITION ordinal_position,REFERENCED_TABLE_NAME referenced_table_name,REFERENCED_COLUMN_NAME referenced_column_name FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME,CONSTRAINT_NAME,ORDINAL_POSITION')
         const checks = await query('SELECT t.TABLE_NAME table_name,c.CONSTRAINT_NAME constraint_name,c.CHECK_CLAUSE check_clause,t.ENFORCED enforced FROM information_schema.CHECK_CONSTRAINTS c JOIN information_schema.TABLE_CONSTRAINTS t ON t.CONSTRAINT_SCHEMA=c.CONSTRAINT_SCHEMA AND t.CONSTRAINT_NAME=c.CONSTRAINT_NAME WHERE c.CONSTRAINT_SCHEMA=DATABASE() ORDER BY t.TABLE_NAME,c.CONSTRAINT_NAME')
         const foreignKeys = await query('SELECT TABLE_NAME table_name,CONSTRAINT_NAME constraint_name,REFERENCED_TABLE_NAME referenced_table_name,UPDATE_RULE update_rule,DELETE_RULE delete_rule FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() ORDER BY TABLE_NAME,CONSTRAINT_NAME')

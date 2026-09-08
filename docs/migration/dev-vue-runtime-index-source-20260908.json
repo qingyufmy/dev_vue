@@ -1,0 +1,118 @@
+{
+  "kind": "runtime-index-source/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "schemaSteps": 133,
+  "databaseWrites": 0,
+  "observedAt": "2026-09-08T02:11:28.003Z",
+  "definitions": [
+    {
+      "name": "bridge_refresh_sessions",
+      "sql": "CREATE TABLE `bridge_refresh_sessions` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `token_hash` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `expires_at` datetime(3) NOT NULL,\n  `revoked_at` datetime(3) DEFAULT NULL,\n  `last_used_at` datetime(3) DEFAULT NULL,\n  `user_agent` varchar(255) DEFAULT NULL,\n  `last_ip` varchar(64) DEFAULT NULL,\n  `created_at` datetime(3) NOT NULL,\n  `updated_at` datetime(3) NOT NULL,\n  `credential_version` tinyint unsigned NOT NULL DEFAULT '3',\n  `installation_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `profile_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `generation` int unsigned NOT NULL DEFAULT '1',\n  `migration_key` char(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `source_fingerprint` char(71) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `source_refresh_session_id` bigint DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_bridge_refresh_token` (`token_hash`),\n  KEY `idx_bridge_refresh_user` (`user_id`,`revoked_at`,`expires_at`),\n  KEY `idx_bridge_refresh_expiry` (`expires_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=24 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "ai_model_profiles",
+      "sql": "CREATE TABLE `ai_model_profiles` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `owner_user_id` int NOT NULL,\n  `scope` enum('user','platform') NOT NULL,\n  `provider` varchar(64) NOT NULL,\n  `model_name` varchar(191) NOT NULL,\n  `api_base_url` varchar(512) DEFAULT NULL,\n  `api_key_encrypted` text,\n  `key_version` varchar(32) DEFAULT NULL,\n  `temperature` decimal(3,2) DEFAULT NULL,\n  `max_tokens` int unsigned DEFAULT NULL,\n  `thinking_enabled` tinyint NOT NULL DEFAULT '0',\n  `reasoning_effort` varchar(16) DEFAULT NULL,\n  `request_timeout_ms` int unsigned DEFAULT NULL,\n  `is_default` tinyint NOT NULL DEFAULT '0',\n  `status` varchar(16) NOT NULL DEFAULT 'inactive',\n  `created_at` datetime(3) NOT NULL,\n  `updated_at` datetime(3) NOT NULL,\n  `deleted_at` datetime(3) DEFAULT NULL,\n  `active_default_owner_key` int GENERATED ALWAYS AS ((case when ((`is_default` = 1) and (`status` = _utf8mb4'active') and (`deleted_at` is null)) then `owner_user_id` else NULL end)) STORED /*!80023 INVISIBLE */,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_model_active_default_owner` (`active_default_owner_key`),\n  KEY `idx_model_profiles_owner` (`owner_user_id`,`deleted_at`),\n  KEY `idx_model_profiles_scope` (`scope`,`status`,`deleted_at`),\n  CONSTRAINT `chk_v4_model_profiles_owner` CHECK ((((`scope` = _utf8mb4'platform') and (`owner_user_id` = 0)) or ((`scope` = _utf8mb4'user') and (`owner_user_id` > 0))))\n) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+    },
+    {
+      "name": "ai_model_usage_logs",
+      "sql": "CREATE TABLE `ai_model_usage_logs` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `model_profile_id` int DEFAULT NULL,\n  `credential_source` varchar(32) NOT NULL,\n  `usage` varchar(32) NOT NULL,\n  `request_phase` varchar(16) NOT NULL,\n  `strategy_id` int DEFAULT NULL,\n  `token_count` bigint unsigned NOT NULL DEFAULT '0',\n  `request_status` varchar(16) NOT NULL,\n  `error_code` varchar(128) DEFAULT NULL,\n  `created_at` datetime(3) NOT NULL,\n  `request_bytes` bigint unsigned NOT NULL DEFAULT '0',\n  `response_bytes` bigint unsigned NOT NULL DEFAULT '0',\n  `duration_ms` bigint unsigned NOT NULL DEFAULT '0',\n  `input_tokens` bigint unsigned NOT NULL DEFAULT '0',\n  `output_tokens` bigint unsigned NOT NULL DEFAULT '0',\n  `reasoning_tokens` bigint unsigned NOT NULL DEFAULT '0',\n  `cached_tokens` bigint unsigned NOT NULL DEFAULT '0',\n  `provider_request_id` varchar(191) DEFAULT NULL,\n  `finish_reason` varchar(64) DEFAULT NULL,\n  `incomplete_details_json` text,\n  `accounting_status` varchar(24) NOT NULL DEFAULT 'usage_unknown',\n  PRIMARY KEY (`id`),\n  KEY `idx_usage_logs_user` (`user_id`,`created_at`),\n  KEY `idx_usage_logs_usage` (`usage`,`created_at`),\n  KEY `idx_usage_provider_request` (`provider_request_id`)\n) ENGINE=InnoDB AUTO_INCREMENT=12140 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+    }
+  ],
+  "duplicates": [
+    {
+      "column": "migration_key",
+      "duplicate_groups": "0"
+    },
+    {
+      "column": "source_refresh_session_id",
+      "duplicate_groups": "0"
+    }
+  ],
+  "explains": [
+    {
+      "name": "quota",
+      "sql": "SELECT COUNT(*) requests,COALESCE(SUM(token_count),0) tokens FROM ai_model_usage_logs WHERE user_id=? AND credential_source='platform_shared' AND (request_phase='request' OR request_phase IS NULL) AND created_at>=CURRENT_DATE()",
+      "plan": {
+        "query_block": {
+          "select_id": 1,
+          "cost_info": {
+            "query_cost": "0.71"
+          },
+          "table": {
+            "table_name": "ai_model_usage_logs",
+            "access_type": "range",
+            "possible_keys": [
+              "idx_usage_logs_user"
+            ],
+            "key": "idx_usage_logs_user",
+            "used_key_parts": [
+              "user_id",
+              "created_at"
+            ],
+            "key_length": "11",
+            "rows_examined_per_scan": 1,
+            "rows_produced_per_join": 0,
+            "filtered": "5.00",
+            "index_condition": "((`dev_vue`.`ai_model_usage_logs`.`user_id` = 0) and (`dev_vue`.`ai_model_usage_logs`.`created_at` >= <cache>(curdate())))",
+            "cost_info": {
+              "read_cost": "0.70",
+              "eval_cost": "0.01",
+              "prefix_cost": "0.71",
+              "data_read_per_join": "106"
+            },
+            "used_columns": [
+              "user_id",
+              "credential_source",
+              "request_phase",
+              "token_count",
+              "created_at"
+            ],
+            "attached_condition": "((`dev_vue`.`ai_model_usage_logs`.`credential_source` = 'platform_shared') and (`dev_vue`.`ai_model_usage_logs`.`request_phase` = 'request'))"
+          }
+        }
+      }
+    },
+    {
+      "name": "recovery",
+      "sql": "SELECT id FROM ai_model_usage_logs WHERE request_status='reserved' AND created_at<? ORDER BY id LIMIT 100",
+      "plan": {
+        "query_block": {
+          "select_id": 1,
+          "cost_info": {
+            "query_cost": "1268.35"
+          },
+          "ordering_operation": {
+            "using_filesort": false,
+            "table": {
+              "table_name": "ai_model_usage_logs",
+              "access_type": "index",
+              "key": "PRIMARY",
+              "used_key_parts": [
+                "id"
+              ],
+              "key_length": "8",
+              "rows_examined_per_scan": 100,
+              "rows_produced_per_join": 403,
+              "filtered": "3.33",
+              "cost_info": {
+                "read_cost": "1227.95",
+                "eval_cost": "40.40",
+                "prefix_cost": "1268.35",
+                "data_read_per_join": "839K"
+              },
+              "used_columns": [
+                "id",
+                "request_status",
+                "created_at"
+              ],
+              "attached_condition": "((`dev_vue`.`ai_model_usage_logs`.`request_status` = 'reserved') and (`dev_vue`.`ai_model_usage_logs`.`created_at` < TIMESTAMP'2026-09-08 00:00:00'))"
+            }
+          }
+        }
+      }
+    }
+  ]
+}
