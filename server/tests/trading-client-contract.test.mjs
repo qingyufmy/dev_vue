@@ -3,6 +3,42 @@ import Fastify from 'fastify'
 import { expect, it, vi } from 'vitest'
 import { createApiClient } from '../../frontend/packages/api-client/src/index.ts'
 import { tradingRoutes } from '../src/modules/trading/transport/http/trading-routes.ts'
+import { AuthError } from '../src/modules/auth/index.ts'
+
+it('validates workspace scope, nullable snapshots and failures across server and client', async () => {
+  const app = Fastify()
+  const account = { id: '7', platform: 'mt5', login: '100', server: 'demo', currency: 'USD', terminalProfileId: null,
+    terminalInstanceId: null, bridgeState: 'offline', tradePermission: false, lastSeenAt: null }
+  const workspace = vi.fn(async () => ({ account, snapshot: null, symbols: ['XAUUSD'], positions: { revision: 0, items: [] }, pendingOrders: { revision: 0, items: [] } }))
+  const authenticate = vi.fn(async () => ({ userId: 42 }))
+  await app.register(tradingRoutes, { prefix: '/api/v4', service: { workspace }, capacity: {}, auth: { authenticate }, contextCommands: {} })
+  try {
+    const client = createApiClient({ fetchImpl: async url => {
+      const result = await app.inject(url)
+      expect(result.headers['cache-control']).toBe('no-store')
+      if (result.statusCode === 200) expect(result.json().data.positions.revision).toBe('0')
+      return new Response(result.body, { status: result.statusCode, headers: { 'Content-Type': String(result.headers['content-type']) } })
+    } })
+    expect((await client.getTradingWorkspace('7', 'observer-1')).data).toMatchObject({ account: { id: '7' }, snapshot: null, positions: { revision: 0, items: [] } })
+    expect(workspace).toHaveBeenLastCalledWith(42, '7', 'observer-1')
+    workspace.mockClear()
+    for (const url of ['/api/v4/trading-accounts/7/snapshot?observer_channel_id=', '/api/v4/trading-accounts/7/snapshot?observer_channel_id=a&observer_channel_id=b']) {
+      const result = await app.inject(url)
+      expect(result.statusCode).toBe(400)
+      expect(result.json().code).toBe('api_request_invalid')
+      expect(result.headers['cache-control']).toBe('no-store')
+    }
+    expect(workspace).not.toHaveBeenCalled()
+    authenticate.mockRejectedValueOnce(new AuthError('auth_session_required', 401))
+    const denied = await app.inject('/api/v4/trading-accounts/7/snapshot?observer_channel_id=')
+    expect(denied.statusCode).toBe(401)
+    expect(workspace).not.toHaveBeenCalled()
+    workspace.mockResolvedValue({ account: { ...account, id: '', server: 'secret invalid account' }, snapshot: null, symbols: [], positions: { revision: 0, items: [] }, pendingOrders: { revision: 0, items: [] } })
+    await expect(client.getTradingWorkspace('7')).rejects.toMatchObject({ status: 503, problem: { code: 'api_response_invalid' } })
+    const invalid = await app.inject('/api/v4/trading-accounts/7/snapshot')
+    expect(invalid.body).not.toContain('secret invalid account')
+  } finally { await app.close() }
+})
 
 it('serves connection reads through the actual API client with authenticated scope', async () => {
   const app = Fastify()

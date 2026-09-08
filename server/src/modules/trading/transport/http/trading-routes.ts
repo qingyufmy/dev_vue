@@ -95,11 +95,14 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesOptions> = async (fa
     catch (error) { return contract.problem('listObserverChannels', error, request, reply) }
   })
   fastify.get<{ Params: { account_id: string }; Querystring: { observer_channel_id?: string } }>('/trading-accounts/:account_id/snapshot', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
     try {
-      const { userId } = await options.auth.authenticate(request); const data = await options.service.workspace(userId, request.params.account_id, request.query.observer_channel_id)
-      return response(request.id, { account: accountDto(data.account), snapshot: data.snapshot ? snapshotDto(data.snapshot) : null, symbols: data.symbols, positions: { revision: String(data.positions.revision), items: data.positions.items.map(positionDto) }, pending_orders: { revision: String(data.pendingOrders.revision), items: data.pendingOrders.items.map(orderDto) } })
+      const { userId } = await options.auth.authenticate(request)
+      contract.request('getTradingAccountSnapshot', request)
+      const data = await options.service.workspace(userId, request.params.account_id, request.query.observer_channel_id)
+      return contract.response('getTradingAccountSnapshot', response(request.id, { account: accountDto(data.account), snapshot: data.snapshot ? snapshotDto(data.snapshot) : null, symbols: data.symbols, positions: { revision: String(data.positions.revision), items: data.positions.items.map(positionDto) }, pending_orders: { revision: String(data.pendingOrders.revision), items: data.pendingOrders.items.map(orderDto) } }))
     }
-    catch (error) { return problem(error, request, reply) }
+    catch (error) { return contract.problem('getTradingAccountSnapshot', error, request, reply) }
   })
   fastify.get<{ Params: { symbol: string }; Querystring: { account_id: string; observer_channel_id?: string } }>('/market/quotes/:symbol', async (request, reply) => {
     try { const { userId } = await options.auth.authenticate(request); const data = await options.service.quote(userId, request.query.account_id, request.params.symbol, request.query.observer_channel_id); return response(request.id, data ? quoteDto(data) : null) }

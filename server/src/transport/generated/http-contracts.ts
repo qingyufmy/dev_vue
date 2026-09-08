@@ -4,6 +4,145 @@ import type { HttpRuntimeContracts } from '../http-contract.js'
 export const httpRuntimeContracts: HttpRuntimeContracts = {
   "components": {
     "schemas": {
+      "AccountSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "balance": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "bridge_state": {
+            "enum": [
+              "online",
+              "offline",
+              "paused",
+              "replaced",
+              "unauthorized"
+            ],
+            "type": "string"
+          },
+          "clock_status": {
+            "enum": [
+              "calibrated",
+              "observer_bootstrap",
+              "stale",
+              "unavailable"
+            ],
+            "type": "string"
+          },
+          "currency": {
+            "maxLength": 12,
+            "minLength": 3,
+            "type": "string"
+          },
+          "equity": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "floating_profit": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "free_margin": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "last_seen_at": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UtcDateTime"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "leverage": {
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "login": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "margin": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "observed_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "platform": {
+            "enum": [
+              "mt4",
+              "mt5"
+            ],
+            "type": "string"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "server": {
+            "maxLength": 191,
+            "type": "string"
+          },
+          "terminal_instance_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "terminal_profile_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "timezone_offset_minutes": {
+            "maximum": 840,
+            "minimum": -840,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "trade_permission": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "platform",
+          "login",
+          "server",
+          "currency",
+          "terminal_profile_id",
+          "terminal_instance_id",
+          "bridge_state",
+          "trade_permission",
+          "last_seen_at",
+          "balance",
+          "equity",
+          "margin",
+          "free_margin",
+          "floating_profit",
+          "leverage",
+          "timezone_offset_minutes",
+          "clock_status",
+          "observed_at",
+          "revision"
+        ],
+        "type": "object"
+      },
       "AuditActor": {
         "enum": [
           "ai",
@@ -423,6 +562,10 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         ],
         "type": "object"
       },
+      "Decimal": {
+        "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
+        "type": "string"
+      },
       "FieldProblem": {
         "additionalProperties": false,
         "properties": {
@@ -586,6 +729,200 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         "minLength": 1,
         "type": "string"
       },
+      "PendingOrder": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "expires_at": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UtcDateTime"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "price": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "signal_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "enum": [
+              "manual",
+              "signal",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "stop_loss": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "symbol": {
+            "$ref": "#/components/schemas/Symbol"
+          },
+          "take_profit": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ticket": {
+            "$ref": "#/components/schemas/Ticket"
+          },
+          "type": {
+            "enum": [
+              "buy_limit",
+              "sell_limit",
+              "buy_stop",
+              "sell_stop",
+              "buy_stop_limit",
+              "sell_stop_limit"
+            ],
+            "type": "string"
+          },
+          "volume": {
+            "$ref": "#/components/schemas/Decimal"
+          }
+        },
+        "required": [
+          "ticket",
+          "account_id",
+          "symbol",
+          "type",
+          "volume",
+          "price",
+          "stop_loss",
+          "take_profit",
+          "created_at",
+          "expires_at",
+          "source",
+          "signal_id",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "Position": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "current_price": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "floating_profit": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "open_price": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "opened_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "side": {
+            "enum": [
+              "buy",
+              "sell"
+            ],
+            "type": "string"
+          },
+          "signal_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "enum": [
+              "manual",
+              "signal",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          "stop_loss": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "symbol": {
+            "$ref": "#/components/schemas/Symbol"
+          },
+          "take_profit": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ticket": {
+            "$ref": "#/components/schemas/Ticket"
+          },
+          "volume": {
+            "$ref": "#/components/schemas/Decimal"
+          }
+        },
+        "required": [
+          "ticket",
+          "account_id",
+          "symbol",
+          "side",
+          "volume",
+          "open_price",
+          "current_price",
+          "stop_loss",
+          "take_profit",
+          "floating_profit",
+          "opened_at",
+          "source",
+          "revision"
+        ],
+        "type": "object"
+      },
       "Problem": {
         "additionalProperties": false,
         "properties": {
@@ -647,6 +984,12 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
       "Revision": {
         "maxLength": 128,
         "minLength": 1,
+        "type": "string"
+      },
+      "Symbol": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9._-]+$",
         "type": "string"
       },
       "TerminalProfileListResponse": {
@@ -730,6 +1073,12 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
           "meta"
         ],
         "type": "object"
+      },
+      "Ticket": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[0-9A-Za-z._:-]+$",
+        "type": "string"
       },
       "TradingAccount": {
         "additionalProperties": false,
@@ -1046,6 +1395,86 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         "properties": {
           "data": {
             "$ref": "#/components/schemas/TradingContext"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ],
+        "type": "object"
+      },
+      "TradingWorkspaceResponse": {
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "account": {
+                "$ref": "#/components/schemas/TradingAccount"
+              },
+              "pending_orders": {
+                "properties": {
+                  "items": {
+                    "items": {
+                      "$ref": "#/components/schemas/PendingOrder"
+                    },
+                    "type": "array"
+                  },
+                  "revision": {
+                    "$ref": "#/components/schemas/Revision"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "items"
+                ],
+                "type": "object"
+              },
+              "positions": {
+                "properties": {
+                  "items": {
+                    "items": {
+                      "$ref": "#/components/schemas/Position"
+                    },
+                    "type": "array"
+                  },
+                  "revision": {
+                    "$ref": "#/components/schemas/Revision"
+                  }
+                },
+                "required": [
+                  "revision",
+                  "items"
+                ],
+                "type": "object"
+              },
+              "snapshot": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/AccountSnapshot"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "symbols": {
+                "items": {
+                  "$ref": "#/components/schemas/Symbol"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "account",
+              "snapshot",
+              "symbols",
+              "positions",
+              "pending_orders"
+            ],
+            "type": "object"
           },
           "meta": {
             "$ref": "#/components/schemas/Meta"
@@ -1467,6 +1896,60 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
           }
         },
         "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      }
+    },
+    "getTradingAccountSnapshot": {
+      "parameters": [
+        {
+          "name": "account_id",
+          "location": "path",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "$ref": "#/components/schemas/OpaqueId"
+          }
+        },
+        {
+          "name": "observer_channel_id",
+          "location": "query",
+          "required": false,
+          "integerQuery": false,
+          "schema": {
+            "$ref": "#/components/schemas/OpaqueId"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/TradingWorkspaceResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "404": {
           "application/problem+json": {
             "$ref": "#/components/schemas/Problem"
           }

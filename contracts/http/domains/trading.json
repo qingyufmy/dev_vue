@@ -833,6 +833,9 @@
           },
           "503": {
             "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }

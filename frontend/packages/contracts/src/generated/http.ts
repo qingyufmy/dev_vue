@@ -6255,6 +6255,7 @@ export interface operations {
                     "application/json": components["schemas"]["TradingWorkspaceResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];

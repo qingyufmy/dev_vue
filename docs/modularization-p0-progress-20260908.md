@@ -882,3 +882,9 @@ trading不再导入Bridge租约存储和路由类型，只依赖AccountLiveRoute
 getBridgeConnectionCapacity/listTerminalProfiles补标准错误声明与运行校验，运行登记11项，32项定向测试及两侧独立类型/server构建通过。真实API客户端消费Fastify注入响应，不等于浏览器或MySQL/Redis端到端验收。冻结321项不变，债务104。
 
 跨端TS测试首次引入两种模块解析模式导致server类型失败，改为独立.mjs运行测试；原测试发现规则不包含.mjs，补充明确后实际运行验证。客户端错误断言按既有ApiClientError.problem.code修正，不修改客户端错误合同。两侧编译配置保持，生成文件由工具更新。见总方案第37节。
+
+## 第一百零八批：账户工作区读取同源校验
+
+快照接口登记请求、响应和错误校验，添加no-store；运行合同12项。26项定向测试、server/client类型及server构建通过，债务104、冻结321项不变。实际客户端测试区分传输字符串revision与本地数字模型，观摩参数与身份传入正确。
+
+测试核对发现OpaqueId机械schema仅限制长度，词法仍由业务assertOpaqueId处理；超长路径由路由器返回414，不能将其表述为处理器400。最终负例使用合同明确约束的空/重复观摩参数，保留业务与路由限制。未修改编译/业务权限来迎合测试；总方案第38节记录范围。
