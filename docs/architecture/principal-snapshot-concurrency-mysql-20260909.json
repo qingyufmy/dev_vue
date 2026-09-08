@@ -1,0 +1,23 @@
+{
+  "kind": "principal-snapshot-concurrency-mysql/v1",
+  "observedAt": "2026-09-08T18:21:36.411Z",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00",
+    "connectionId": "562"
+  },
+  "passed": true,
+  "checks": [
+    "same-snapshot-retains-prior-version-after-other-connection-commit",
+    "new-snapshot-observes-advanced-version",
+    "shared-principal-facts-block-concurrent-update",
+    "shared-lock-released-by-caller-rollback"
+  ],
+  "versionAdvance": "confirmed",
+  "priorVersion": 0,
+  "finalVersion": 1,
+  "committedFixtureUpdates": 1,
+  "retained": "Synthetic user identity revision is advanced, never restored backwards. Any prior fixture sessions are invalidated.",
+  "scope": "Compiled auth facts reader and observer snapshot helper using two real MySQL connections. Only the verified private synthetic user version is changed; no channel/account/trading data changes. Does not prove a positive permanent observer channel or browser flow."
+}

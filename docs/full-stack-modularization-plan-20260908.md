@@ -825,3 +825,14 @@ API、浏览器实时、分析/交易Worker、分析调度及账户命令组装�
 当前库V2只读回执architecture/current-trading-principal-reads-20260909.json：7个活动用户、3个账户、3个合法归属组合、18个拒绝组合，1条上下文，观摩频道0；真实数据未写入。临时表不证明完整FK/约束或跨连接并发快照，空频道不证明真实观摩入口与浏览器恢复。多主体share在频道归属锁后读取、外层viewer锁仍优先；死锁失败必须回滚且不得在此局部重试，跨连接并发验收仍待完成。
 
 本批观摩reader已不直接读取用户表，但其它trading SQL与其余业务域仍有跨域事实读取。静态登记64条未变，扫描器不覆盖SQL归属；P1整体与P0–P7仍未完成。未重启API/实时网关，本批编译探针不代表运行角色已更新。
+
+
+## 64. 主体事实跨连接快照与当前 API 验证（第一百三十四批）
+
+新增verify-principal-snapshot-concurrency-mysql.mjs，需私有合成用户文件、新报告绝对路径和显式--advance-fixture-version。验证开发库身份和合成用户后，以两条真实连接执行：只读RR快照读取旧tokenVersion，另一连接CAS推进并提交，旧快照仍返回旧值，新快照读取新值；AccountPrincipalReader share阻止并发无值变化UPDATE，外层rollback后锁释放。4项通过，回执architecture/principal-snapshot-concurrency-mysql-20260909.json。
+
+本次合成用户token_version 0→1且保留，不回退安全版本；原合成用户会话随版本失效。仅一个测试用户字段有已提交变化，两个锁探针UPDATE无值变化且回滚，无账户、频道或交易事实改动。脚本在commit结果不明时记录attempted并拒绝自动重放，不把不确定提交标记成未发生。
+
+本地API更新到a0db0d4b应用构建，可见PowerShell34548、Node43764、3010端口；本地Redis与当前开发MySQL保持。真实HTTP14项（含新登录、上下文命令及自建会话撤销）通过，API基础8项通过，分别见architecture/local-account-principal-wiring-http-20260909.json及local-account-principal-wiring-api-20260909.json。321个冻结输入不变。
+
+本批证明主体事实与快照在真实连接间的版本隔离及共享锁，不证明完整频道/归属跨表并发变更、正向永久观摩频道或浏览器切换。浏览器实时角色未启动或更新，当前运行角色验证限API。整体P1与P0–P7未完成；下一步继续正向观摩夹具与浏览器用户流程。

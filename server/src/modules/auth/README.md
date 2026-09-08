@@ -47,3 +47,6 @@ AuthService通过自身所需的BridgeDeviceRevoker端口触发设备撤销；�
 
 
 观摩消费者现已通过运行组装注入AccountPrincipalReader：普通快照none、写事务share；auth负责主体字段与停用过滤，trading保留频道策略、会员到期/授权TTL及明确grant规则。消费者组装与真实临时表证据见总体方案第63节。
+
+
+真实并发验证脚本verify-principal-snapshot-concurrency-mysql.mjs使用显式--advance-fixture-version，只允许已核验私有合成用户。它推进一次身份版本且不回退，验证跨连接旧/新快照和共享锁；运行后旧测试会话失效。该脚本不能用于真实用户或视为只读探针。
