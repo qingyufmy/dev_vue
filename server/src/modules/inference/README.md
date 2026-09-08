@@ -9,3 +9,6 @@ TradingAnalysisMarketSource 留在本域基础设施，不从业务 index 导出
 
 
 交易 Worker 通过 createMysqlTraderContext 创建上下文应用能力，由模块内部组装合约、风险摘要、执行偏好读取器；createMysqlTraderWindowGuard 返回应用时间窗端口。具体读取器和守卫不从业务 index 导出。SQL 跨域所有权仍待逐项处理，不能把构造器迁移视为数据所有权完成。
+
+
+分析 Worker 使用 createMysqlAnalysisWindowGuard/createMysqlMacroSnapshotReader 获得应用能力，业务 index 不公开具体类。时钟回调保留账户和用户范围，宏观证据哈希、版本、时效及缺失拒绝规则保持。定向入口为 analysis-window-guard、macro-evidence-context、inference-pipeline-vertical-slice。

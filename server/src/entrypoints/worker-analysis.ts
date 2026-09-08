@@ -1,5 +1,5 @@
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
-import { createAnalysisMarketSource } from '../modules/inference/composition.js'
+import { createAnalysisMarketSource, createMysqlAnalysisWindowGuard, createMysqlMacroSnapshotReader } from '../modules/inference/composition.js'
 import { Worker } from 'bullmq'
 import {
   assertV4RuntimeEnabled, closeHttpServer, connectCacheRedis, createCacheRedis, createMysqlPool, installProcessLifecycle,
@@ -8,9 +8,8 @@ import {
 import { RedisBridgeGatewayLeaseStore } from '../modules/bridge/index.js'
 import {
   AnalysisContextBuilder, AnalysisWorker, InferenceService, loadCredentialKeyring,
-  MysqlAnalysisModelGatewayResolver, MysqlInferenceRepository, MysqlMacroSnapshotReader, MysqlModelUsageLedger,
+  MysqlAnalysisModelGatewayResolver, MysqlInferenceRepository, MysqlModelUsageLedger,
   MysqlRuntimeModelProfileCatalog,
-  MysqlAnalysisWindowGuard,
 } from '../modules/inference/index.js'
 import { createSubscriptionPreferencesReader, createMysqlStrategyService } from '../modules/strategies/composition.js'
 import { createTradingReader } from '../modules/trading/composition.js'
@@ -38,14 +37,14 @@ async function main() {
     repository,
     new InferenceService(repository, strategies),
     strategies,
-    new AnalysisContextBuilder(createAnalysisMarketSource(trading), new MysqlMacroSnapshotReader(pool)),
+    new AnalysisContextBuilder(createAnalysisMarketSource(trading), createMysqlMacroSnapshotReader(pool)),
     new MysqlAnalysisModelGatewayResolver(profiles, new MysqlModelUsageLedger(pool), () => {
       usageSettlementFailureRevision += 1
       health.workFailed('model_usage_settlement_failed')
       console.error('[worker-analysis] model usage settlement failed')
     }),
     `analysis:${process.pid}`,
-    new MysqlAnalysisWindowGuard(pool, (accountId, userId) => trading.getAccountSnapshot(accountId, userId)),
+    createMysqlAnalysisWindowGuard(pool, (accountId, userId) => trading.getAccountSnapshot(accountId, userId)),
   )
   const worker = new Worker<AnalysisRunJob>(ANALYSIS_QUEUE, async job => {
     if (job.name !== 'analysis.run' || !job.data.analysisId) throw new Error('analysis_job_invalid')

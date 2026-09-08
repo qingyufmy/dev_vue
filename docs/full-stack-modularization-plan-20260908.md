@@ -699,3 +699,12 @@ inference composition 新增 createMysqlTraderContext/createMysqlTraderWindowGua
 34 项交易 Worker、推理流程、偏好与时间窗回归最终通过；窗口测试修正旧公开类导入后经实际组装工厂重跑6项通过。server 类型/构建、API 生成运行一致性通过，债务 79→76，无新增或陈旧记录。读取 SQL、同连接时钟/偏好检查、模型调用和账户作用域未变。本批没有外部依赖操作或角色启动。
 
 该改动只收口运行组装和具体实现导出，不处理风险摘要等跨域 SQL 所有权；其它 inference 基础设施出口、账户全流程和 P0–P7 继续。
+
+
+## 52. 分析时间窗与宏观读取组装（第一百二十二批）
+
+inference composition 新增 createMysqlAnalysisWindowGuard/createMysqlMacroSnapshotReader，分别返回 AnalysisWindowGuard/MacroSnapshotReader 应用能力。worker-analysis 改用工厂，业务 index 移除两项 MySQL 具体实现导出；时钟读取仍按账户与用户显式传入，时间窗和宏观证据规则不变。
+
+15 项分析窗口、宏观证据及推理流程回归通过，窗口/宏观测试经实际工厂验证；server 类型/构建及 API 生成运行一致性通过，321 项冻结输入不变。精确删除两项实现导出，债务 76→74，无新增或陈旧记录。本批没有启动分析 Worker、查询数据库或调用模型。
+
+宏观读取及窗口 SQL 所有权、其余 inference 出口、完整账户与推理用户流程仍需继续，整体 P0–P7 未完成。

@@ -1,7 +1,8 @@
+import { createMysqlMacroSnapshotReader } from '../src/modules/inference/composition.js'
 import { describe, expect, it } from 'vitest'
 import type { Pool } from 'mysql2/promise'
 import {
-  AnalysisContextBuilder, InferenceError, MysqlMacroSnapshotReader, contentHash, macroEvidencePlan,
+  AnalysisContextBuilder, InferenceError, contentHash, macroEvidencePlan,
   type AnalysisRun, type JsonObject, type MacroSnapshotReader,
 } from '../src/modules/inference/index.js'
 import type { StrategyVersion } from '../src/modules/strategies/index.js'
@@ -62,7 +63,7 @@ describe('M1 macro evidence context', () => {
       },
     } as unknown as Pool
 
-    const result = await new MysqlMacroSnapshotReader(pool).latest({ now: now.toISOString(), acceptedSchemaVersions: [1], maxAgeSeconds: 172800 })
+    const result = await createMysqlMacroSnapshotReader(pool).latest({ now: now.toISOString(), acceptedSchemaVersions: [1], maxAgeSeconds: 172800 })
     const executedQuery = query as { sql: string; values: unknown[] } | null
     expect(executedQuery?.sql).toContain("owner_scope='platform' AND owner_user_id IS NULL")
     expect(executedQuery?.sql).toContain("publication_status='published'")
@@ -79,16 +80,16 @@ describe('M1 macro evidence context', () => {
       freshness_status: 'fresh', health_status: 'healthy', horizon: 'medium_term',
     }
     const hashMismatch = { async execute() { return [[{ ...base, content_sha256: '0'.repeat(64), payload_json: { analysis_evidence: {} } }], []] } } as unknown as Pool
-    await expect(new MysqlMacroSnapshotReader(hashMismatch).latest({ now: now.toISOString(), acceptedSchemaVersions: [1], maxAgeSeconds: 172800 }))
+    await expect(createMysqlMacroSnapshotReader(hashMismatch).latest({ now: now.toISOString(), acceptedSchemaVersions: [1], maxAgeSeconds: 172800 }))
       .rejects.toEqual(expect.objectContaining<Partial<InferenceError>>({ code: 'macro_snapshot_hash_mismatch' }))
 
     const payload = { display: { summary: 'only for UI' } }
     const missingEvidence = { async execute() { return [[{ ...base, content_sha256: contentHash(payload), payload_json: payload }], []] } } as unknown as Pool
-    await expect(new MysqlMacroSnapshotReader(missingEvidence).latest({ now: now.toISOString(), acceptedSchemaVersions: [1], maxAgeSeconds: 172800 }))
+    await expect(createMysqlMacroSnapshotReader(missingEvidence).latest({ now: now.toISOString(), acceptedSchemaVersions: [1], maxAgeSeconds: 172800 }))
       .rejects.toEqual(expect.objectContaining<Partial<InferenceError>>({ code: 'macro_snapshot_evidence_invalid' }))
 
     const invalidJson = { async execute() { return [[{ ...base, content_sha256: '0'.repeat(64), payload_json: '{broken' }], []] } } as unknown as Pool
-    await expect(new MysqlMacroSnapshotReader(invalidJson).latest({ now: now.toISOString(), acceptedSchemaVersions: [1], maxAgeSeconds: 172800 }))
+    await expect(createMysqlMacroSnapshotReader(invalidJson).latest({ now: now.toISOString(), acceptedSchemaVersions: [1], maxAgeSeconds: 172800 }))
       .rejects.toEqual(expect.objectContaining<Partial<InferenceError>>({ code: 'macro_snapshot_payload_invalid' }))
   })
 })
