@@ -1,6 +1,6 @@
 import type { Redis } from 'ioredis'
 import type { BrowserRealtimePublisher, TradingRealtimeEvent } from '../application/trading-ports.js'
-import { BROWSER_REALTIME_EVENT_CHANNEL } from './redis-browser-realtime-subscriber.js'
+import { BROWSER_REALTIME_EVENT_CHANNEL } from '../application/browser-realtime-protocol.js'
 
 export class RedisBrowserRealtimePublisher implements BrowserRealtimePublisher {
   constructor(

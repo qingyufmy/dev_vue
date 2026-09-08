@@ -18,4 +18,4 @@ missing、NULL、空字符串和文本不能互相兜底；ID和revision保留�
 
 mysql-setting-reader/writer、setting-management/http、admin-setting-read、setting-menu/value-policy及browser-realtime-runtime为当前定向验证入口；类型检查和构建包含增量边界门。SQL实现、值规则及事务未在本次封装中改写，未执行真实配置写入。
 
-当前扫描器只登记index的实现导出，原management第二入口没有完整计入债务；已移除该入口，但其它模块第二入口的扫描覆盖仍需补齐。模块封装通过不代表所有配置管理功能、API运行校验、数据迁移或真实数据库验收完成。
+原management第二入口没有计入旧版index实现导出债务。第二十五批已补上模块外消费者访问第二入口/内部文件的检查，并禁止同模块反向读取composition；这些规则不允许加入豁免。该改进仍不等于完整符号级导出分析。模块封装通过不代表所有配置管理功能、API运行校验、数据迁移或真实数据库验收完成。

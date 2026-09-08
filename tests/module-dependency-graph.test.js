@@ -58,6 +58,32 @@ describe('module dependency analysis', () => {
       { source: 'server/src/modules/a/infrastructure/mysql.ts', target: 'server/src/modules/a/application/ports.ts' },
     ] })).toEqual([])
   })
+  it('rejects second entry points and nested internals from consumers outside business modules', () => {
+    const findings = serverBoundaryFindings({ unresolved: [], edges: [
+      { source: 'server/src/transport/routes.ts', target: 'server/src/modules/a/management.ts', kind: 'import' },
+      { source: 'server/src/outbox/publisher.ts', target: 'server/src/modules/a/application/ports.ts', kind: 'type-import', typeOnly: true },
+      { source: 'server/src/bootstrap/setup.ts', target: 'server/src/modules/a/infrastructure/mysql.ts', kind: 'dynamic' },
+    ] })
+    expect(findings).toHaveLength(3)
+    expect(findings.every(finding => finding.rule === 'module-entry-access')).toBe(true)
+    expect(findings.find(finding => finding.kind === 'type-import').typeOnly).toBe(true)
+  })
+  it('allows global public port use and assembly imports without making private helpers public entries', () => {
+    expect(serverBoundaryFindings({ unresolved: [], edges: [
+      { source: 'server/src/transport/routes.ts', target: 'server/src/modules/a/index.ts', kind: 'import' },
+      { source: 'server/src/bootstrap/setup.ts', target: 'server/src/modules/a/composition.ts', kind: 'import' },
+      { source: 'server/src/entrypoints/api.ts', target: 'server/src/modules/a/composition.ts', kind: 'import' },
+      { source: 'server/src/modules/a/application/use.ts', target: 'server/src/modules/a/helpers.ts', kind: 'import' },
+    ] })).toEqual([])
+  })
+  it('rejects composition backdoors within the same module as well as global transport', () => {
+    for (const source of ['server/src/modules/a/application/use.ts', 'server/src/modules/a/infrastructure/repo.ts',
+      'server/src/modules/a/index.ts', 'server/src/transport/routes.ts']) {
+      expect(serverBoundaryFindings({ unresolved: [], edges: [
+        { source, target: 'server/src/modules/a/composition.ts', kind: 'import', typeOnly: true },
+      ] })).toEqual([expect.objectContaining({ rule: 'composition-access', source })])
+    }
+  })
   it('rejects reverse dependencies, external domain frameworks and unauthorized composition', () => {
     const findings = serverBoundaryFindings({ unresolved: [], edges: [
       { source: 'server/src/modules/a/application/use.ts', target: 'server/src/modules/a/infrastructure/mysql.ts' },

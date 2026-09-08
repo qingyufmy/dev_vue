@@ -146,8 +146,10 @@ export function serverBoundaryFindings(graph) {
   for (const edge of graph.edges) {
     const source = moduleInfo(edge.source), target = moduleInfo(edge.target)
     if (source && target && source[1] !== target[1] && target[2] !== 'index.ts') add(edge, 'cross-module-internal')
-    if (target?.[2] === 'composition.ts' && !/^server\/src\/(bootstrap|entrypoints)\//.test(edge.source)
-      && source?.[1] !== target[1]) add(edge, 'composition-access')
+    // Global transport/outbox/bootstrap files are consumers too. They must not
+    // bypass index via a second root barrel (management.ts) or a nested file.
+    if (!source && target && !['index.ts', 'composition.ts'].includes(target[2])) add(edge, 'module-entry-access')
+    if (target?.[2] === 'composition.ts' && !/^server\/src\/(bootstrap|entrypoints)\//.test(edge.source)) add(edge, 'composition-access')
     if (source?.[2].startsWith('domain/') && (edge.external
       && !edge.external.startsWith('node:') || target && (source[1] !== target[1] ? target[2] !== 'index.ts' : !target[2].startsWith('domain/')))) add(edge, 'domain-dependency')
     if (source?.[2].startsWith('application/') && target && source[1] === target[1]

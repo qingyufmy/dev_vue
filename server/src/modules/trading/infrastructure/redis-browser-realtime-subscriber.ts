@@ -2,8 +2,8 @@ import type { Redis } from 'ioredis'
 import type { BrowserRealtimeEvent, BrowserRealtimeEventType, BrowserRealtimeResource } from '../application/trading-ports.js'
 import type { BrowserRealtimeHub } from '../transport/realtime/browser-realtime-hub.js'
 import { OBSERVER_CONTROL_CHANNEL, observerInvalidation } from '../application/observer-invalidation.js'
+import { BROWSER_REALTIME_EVENT_CHANNEL } from '../application/browser-realtime-protocol.js'
 
-export const BROWSER_REALTIME_EVENT_CHANNEL = 'aurum:v4:browser-realtime:events'
 const MAX_EVENT_BYTES = 64 * 1024
 const EVENT_RESOURCES = new Map<BrowserRealtimeEventType, BrowserRealtimeResource>([
   ['runtime.bridge.changed', 'runtime.bridge'],

@@ -1,8 +1,6 @@
 import type { Redis } from 'ioredis'
 import type { Pool, RowDataPacket } from 'mysql2/promise'
-import type { BrowserRealtimeEvent } from '../../modules/trading/application/trading-ports.js'
-import { OBSERVER_CONTROL_CHANNEL, observerInvalidation } from '../../modules/trading/application/observer-invalidation.js'
-import { BROWSER_REALTIME_EVENT_CHANNEL } from '../../modules/trading/infrastructure/redis-browser-realtime-subscriber.js'
+import { BROWSER_REALTIME_EVENT_CHANNEL, OBSERVER_CONTROL_CHANNEL, observerInvalidation, type BrowserRealtimeEvent } from '../../modules/trading/index.js'
 import type { ClaimedOutboxEvent, OutboxTaskPublisher } from '../application/outbox-ports.js'
 
 interface AnalysisRow extends RowDataPacket {

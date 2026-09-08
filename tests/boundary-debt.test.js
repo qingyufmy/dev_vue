@@ -5,6 +5,11 @@ const edge = { rule: 'cross-module-internal', source: 'server/src/modules/a/appl
 const baseline = findings => ({ version: 1, entries: findings.map(finding => ({ finding, count: 1, owner: 'a', phase: 'P1', reason: 'Move to public application port' })) })
 
 describe('exact server boundary debt', () => {
+  it('does not allow private entry or composition access to be added as grandfathered debt', () => {
+    for (const rule of ['module-entry-access', 'composition-access']) {
+      expect(() => compareBoundaryDebt([], baseline([{ ...edge, rule }]))).toThrow('invalid_boundary_debt_entry')
+    }
+  })
   it('separates frontend debt from server debt and never permits cross-application exceptions', () => {
     const finding = { ...edge, rule: 'feature-internal', source: 'frontend/apps/trade/src/App.vue', target: 'frontend/apps/trade/src/features/home/private.ts' }
     expect(compareBoundaryDebt([finding], baseline([finding]), 'frontend').passed).toBe(true)

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "scope": "server/src source candidates; not database or ownership verification",
-  "files": 241,
+  "files": 242,
   "limitations": [
     "Literal SQL candidates may be unused; writers describe source directories, not approved owners.",
     "Dynamic targets, CTEs, multi-table shapes and indirect execute/query calls require manual review.",
@@ -3817,7 +3817,7 @@
     },
     {
       "file": "server/src/outbox/infrastructure/redis-outbox-realtime-publisher.ts",
-      "line": 293,
+      "line": 291,
       "writer": "@outbox",
       "method": "execute"
     }
