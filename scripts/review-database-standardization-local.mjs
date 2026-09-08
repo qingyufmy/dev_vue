@@ -6,10 +6,10 @@ import { loadSettingsMigrationEnvironment, settingsMigrationConnectionOptions } 
 import { loadMigrationPlan, sha256 } from './lib/v4-migration-plan.mjs'
 import { plannedColumns, matrixRows } from './lib/v4-upgrade-review.mjs'
 import { reviewTableDependencies } from './lib/inplace-table-dependencies.mjs'
-import { loadModelCapacityCoordinator } from './lib/inplace-model-capacity-schema.mjs'
+import { loadColumnConstraintsCoordinator } from './lib/inplace-column-constraints-schema.mjs'
 import { coordinateInplaceSchema } from './lib/inplace-schema-coordinator.mjs'
 import { withInplaceUpgradeLock, verifyInplaceJournal } from './lib/mysql-inplace-column-store.mjs'
-import { databaseTypeToken } from './lib/database-structure-comparison.mjs'
+import { databaseTypeToken, defaultDifference } from './lib/database-structure-comparison.mjs'
 
 const root = new URL('../', import.meta.url)
 const check = (condition, code) => { if (!condition) throw Error(`standardization_review_${code}`) }
@@ -31,9 +31,9 @@ try {
     await connection.query('START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY')
     try {
       check(await verifyInplaceJournal(connection), 'journal')
-      const coordinator = await loadModelCapacityCoordinator(root)
+      const coordinator = await loadColumnConstraintsCoordinator(root)
       const schema = await coordinateInplaceSchema(coordinator.store(connection), coordinator)
-      check(schema.structureComplete && schema.steps.length === 105, 'schema_steps')
+      check(schema.structureComplete && schema.steps.length === 114, 'schema_steps')
       const collect = async () => {
         const query = async sql => (await connection.query(sql))[0]
         const tables = await query('SELECT TABLE_NAME table_name,TABLE_TYPE table_type,ENGINE engine,TABLE_COLLATION collation FROM information_schema.TABLES WHERE TABLE_SCHEMA=DATABASE() ORDER BY TABLE_NAME')
@@ -74,6 +74,8 @@ try {
         const actual = first.columns.find(row => row.table_name === table && row.column_name === column)
         return { table, column, planned, actual: actual ?? null,
           nullabilityDifference: actual ? actual.is_nullable !== (/\bNOT NULL\b/i.test(planned.declaration) ? 'NO' : 'YES') : null,
+          defaultComparison: actual ? defaultDifference(actual, planned.declaration) : null,
+          collationDifference: actual?.collation ? actual.collation !== (/\bCOLLATE\s+(\w+)/i.exec(planned.declaration)?.[1] ?? planned.tableDefaults.collation) : null,
           status: !observed.has(table) ? 'table_missing' : !actual ? 'column_missing'
             : databaseTypeToken(planned.declaration) !== databaseTypeToken(actual.column_type) ? 'type_difference' : 'type_token_matches_review_semantics' }
       }))
@@ -90,7 +92,10 @@ try {
           missingPlannedTables: dependencies.summary.newTables, dependencyCandidates: dependencies.summary.candidates,
           dependencyBlocked: dependencies.summary.blocked, existingTargetColumnGaps: existingTargetGaps.length,
           targetTypeDifferences: targetFields.filter(row => row.status === 'type_difference').length,
-          targetNullabilityDifferences: targetFields.filter(row => row.nullabilityDifference === true).length },
+          targetNullabilityDifferences: targetFields.filter(row => row.nullabilityDifference === true).length,
+          targetDefaultDifferences: targetFields.filter(row => row.defaultComparison?.status === 'different').length,
+          targetDefaultsRequiringReview: targetFields.filter(row => row.defaultComparison?.status === 'requires_review').length,
+          targetCollationDifferences: targetFields.filter(row => row.collationDifference === true).length },
         sourceCoverage, existingTargetGaps, targetFields, dependencies, ...first }
     } finally { await connection.rollback() }
   })

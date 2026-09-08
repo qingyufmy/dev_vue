@@ -1,0 +1,9 @@
+# 既有列约束与容量升级
+
+当前105步库重新读取20个差异字段。用户25行在nickname/avatar/role/plan/created_at/updated_at均非NULL；用量日志12,139个ID均正数且没有入站外键；4个账户的broker_server最长18字符，margin_mode均有值。
+
+本批9项：users上述6列改NOT NULL，保留原默认及毫秒精度；ai_model_usage_logs.id改BIGINT UNSIGNED，保留主键值、自增水位和AUTO_INCREMENT；trading_accounts.broker_server由100扩容191，保留唯一键、排序规则及默认；margin_mode改NULL DEFAULT NULL，旧netting/hedging原值不动，未来未知模式不再通过默认值伪造netting。
+
+第一轮复审：前8项不重映射ID、不改用户资料和权限；保证金模式默认NULL与已批准019目标一致，表达未知而非默认授予某种交易能力。账户根ID、订阅、推理快照、模型任务仍须独立映射，不能用本批局部调整声称已完成账户切换。显式插入NULL的旧用户写入口将被约束拒绝；V4认证读取仍兼容，后续注册/资料写入按目标必填合同实现。
+
+第二轮复审：正式执行前重新检查6列NULL和日志ID非正数，严格SQL模式，检查入站外键仍为空。经纪商名称扩容保留现有唯一索引且不改比较语义，真实副本建表检验索引字节限制。9条ALTER各自完成后注入异常并reconcile；重复0DDL。全库逐列完整值、其它DDL、自增值核对，不删除/填补任何用户或账户行。所有执行限定dev_vue及既有恢复副本，权限恢复；不启动应用、Redis、Bridge或部署公网。
