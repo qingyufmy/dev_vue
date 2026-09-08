@@ -30,3 +30,15 @@
 5. 完成 P0 后进入账户业务样板，数据库、API 与前端同步推进。
 
 本批未启动服务、连接真实依赖或执行数据库迁移。此前方案及审查文件保留为设计历史，其中“类型检查失败”描述的是实施前基线，以本记录为修复后的状态。
+
+## 第二批：依赖图精度与 Nuxt 自动导入
+
+已区分 type-only、混合和运行导入；支持 import-equals，解析失败直接报错。新增模块级强连通分量检查：即使不同文件之间没有闭环，跨模块依赖环也会报告完整来源证据。
+
+[后端 v2 扫描](migration/server-module-boundaries-20260908-v2.json)显示 bridge/execution/inference/risk/trading 形成模块级循环分量，其中存在运行导入边；risk 两个领域文件的源文件循环仅包含类型反向边，不再把它描述为运行循环。这里的 runtime 指静态运行导入图，不代表已经启动或观察到实际运行故障。
+
+新增 Nuxt app 自动依赖检查：读取重新 prepare 后的 imports/components 声明，解析 Vue 模板编译结果和脚本作用域，显式导入、参数遮蔽和属性名不会被错误算作自动导入；局部声明缺失或目标不存在直接失败。复用了已安装 Vue 的 compiler-sfc，没有新增依赖或修改 UI。
+
+本轮 `pnpm --filter @aurum/www exec nuxt prepare` 成功；15 项检测器测试与语法检查通过。[前端 v2 扫描](migration/frontend-module-boundaries-20260908-v2.json)仍为25条内部路径引用和9个源文件循环分量；自动边为0，经核实主站 learning composable 使用显式导入。该结果不表示没有其它架构债务。
+
+剩余：Nuxt server 自动导入、动态组件表达式、声明新鲜度的自动保证仍需补齐；当前人工先 prepare 再 inspect。精确例外与完整模块/表写入所有权清单尚未创建，verify 门禁和 API 合同编译方案尚未收口，P0 保持进行中。

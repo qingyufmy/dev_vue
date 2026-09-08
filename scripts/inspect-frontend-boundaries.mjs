@@ -2,6 +2,7 @@ import ts from 'typescript'
 import { resolve } from 'node:path'
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
 import { sourceFiles, buildDependencyGraph, frontendBoundaryFindings } from './lib/module-dependency-graph.mjs'
+import { nuxtAutoImportRegistry, implicitVueDependencies, implicitScriptDependencies, loadVueCompiler } from './lib/nuxt-auto-import-graph.mjs'
 
 const root = resolve(import.meta.dirname, '..')
 const packagesRoot = resolve(root, 'frontend/packages')
@@ -13,7 +14,7 @@ for (const name of readdirSync(packagesRoot)) {
     if (typeof target === 'string' && !subpath.includes('*')) aliases[manifest.name + subpath.slice(1)] = resolve(packageRoot, target)
   }
 }
-const graph = { edges: [], unresolved: [] }, configErrors = []
+const graph = { edges: [], unresolved: [] }, configErrors = [], implicitEdges = []
 let count = 0
 for (const category of ['apps', 'packages']) {
   for (const name of readdirSync(resolve(root, 'frontend', category))) {
@@ -38,9 +39,19 @@ for (const category of ['apps', 'packages']) {
     count += files.length
     const result = buildDependencyGraph({ root, files, compilerOptions, aliases: localAliases })
     graph.edges.push(...result.edges); graph.unresolved.push(...result.unresolved)
+    if (category === 'apps' && name === 'www') {
+      const registry = nuxtAutoImportRegistry({ root, projectRoot }), compiler = loadVueCompiler(projectRoot)
+      for (const file of files.filter(file => file.startsWith(resolve(projectRoot, 'app') + '/') || file.startsWith(resolve(projectRoot, 'app') + '\\'))) {
+        const source = readFileSync(file, 'utf8')
+        const dependencies = file.endsWith('.vue') ? implicitVueDependencies(source, file, registry, compiler) : implicitScriptDependencies(source, registry)
+        for (const dependency of dependencies) implicitEdges.push({ source: file.slice(root.length + 1).replaceAll('\\', '/'),
+          target: dependency.target, specifier: dependency.name, kind: dependency.kind, typeOnly: false })
+      }
+    }
   }
 }
+graph.edges.push(...implicitEdges)
 const findings = frontendBoundaryFindings(graph)
 console.log(JSON.stringify({ files: count, edges: graph.edges.length, configErrors, findings,
-  limitation: 'Explicit script imports only; Vue/Nuxt template auto-import ownership is not yet checked.' }, null, 2))
+  implicitEdges, limitation: 'Nuxt app auto-imports require freshly prepared declarations; server auto-imports and dynamic component expressions still require review.' }, null, 2))
 if (findings.length || configErrors.length) process.exitCode = 1

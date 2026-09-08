@@ -23,15 +23,29 @@ export function parseDependencies(source, file) {
     })) : [{ text: source, offset: 0 }]
   return scripts.flatMap(({ text, offset }) => {
     const result = []
-    const ast = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
-    const add = (node, value, kind) => result.push({
+    const ast = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, /\.[jt]sx$/.test(file) ? ts.ScriptKind.TSX : ts.ScriptKind.TS)
+    if (ast.parseDiagnostics.length) throw new Error(`${file}: ${ts.flattenDiagnosticMessageText(ast.parseDiagnostics[0].messageText, '\n')}`)
+    const add = (node, value, kind, typeOnly = false) => result.push({
       specifier: value && ts.isStringLiteralLike(value) ? value.text : null,
-      kind, line: offset + ast.getLineAndCharacterOfPosition(node.getStart(ast)).line + 1,
+      kind, typeOnly, line: offset + ast.getLineAndCharacterOfPosition(node.getStart(ast)).line + 1,
     })
     const visit = node => {
-      if (ts.isImportDeclaration(node)) add(node, node.moduleSpecifier, 'import')
-      if (ts.isExportDeclaration(node) && node.moduleSpecifier) add(node, node.moduleSpecifier, 'export')
-      if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) add(node, node.argument.literal, 'type-import')
+      if (ts.isImportDeclaration(node)) {
+        const clause = node.importClause, bindings = clause?.namedBindings
+        const typeOnly = Boolean(clause?.isTypeOnly || !clause?.name && bindings && ts.isNamedImports(bindings)
+          && bindings.elements.length && bindings.elements.every(element => element.isTypeOnly))
+        add(node, node.moduleSpecifier, 'import', typeOnly)
+      }
+      if (ts.isExportDeclaration(node) && node.moduleSpecifier) {
+        const clause = node.exportClause
+        const typeOnly = Boolean(node.isTypeOnly || clause && ts.isNamedExports(clause)
+          && clause.elements.length && clause.elements.every(element => element.isTypeOnly))
+        add(node, node.moduleSpecifier, 'export', typeOnly)
+      }
+      if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+        add(node, node.moduleReference.expression, 'import', node.isTypeOnly)
+      }
+      if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) add(node, node.argument.literal, 'type-import', true)
       if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword
         || ts.isIdentifier(node.expression) && node.expression.text === 'require')) add(node, node.arguments[0], 'dynamic')
       ts.forEachChild(node, visit)
@@ -97,6 +111,31 @@ export function dependencyCycles(edges) {
 
 const moduleInfo = file => /^server\/src\/modules\/([^/]+)\/(.+)$/.exec(file ?? '')
 
+export function moduleCycles(edges, ownerOf) {
+  const projected = edges.flatMap(edge => {
+    const source = ownerOf(edge.source), target = ownerOf(edge.target)
+    return source && target && source !== target ? [{ ...edge, source, target }] : []
+  })
+  return dependencyCycles(projected).map(members => ({ members,
+    runtime: dependencyCycles(projected.filter(edge => !edge.typeOnly))
+      .some(cycle => cycle.every(member => members.includes(member))),
+    edges: edges.filter(edge => members.includes(ownerOf(edge.source)) && members.includes(ownerOf(edge.target))
+      && ownerOf(edge.source) !== ownerOf(edge.target)),
+  }))
+}
+
+function cycleFindings(edges, ownerOf) {
+  return [
+    ...dependencyCycles(edges).map(cycle => ({ rule: 'source-cycle', source: cycle[0], target: cycle.join(' -> '),
+      runtime: dependencyCycles(edges.filter(edge => !edge.typeOnly)).some(runtime => runtime.every(file => cycle.includes(file))),
+    })),
+    ...moduleCycles(edges, ownerOf).map(cycle => ({ rule: 'module-cycle', source: cycle.members[0],
+      target: cycle.members.join(' -> '), runtime: cycle.runtime,
+      evidence: cycle.edges.map(edge => ({ source: edge.source, target: edge.target, line: edge.line, typeOnly: Boolean(edge.typeOnly) })),
+    })),
+  ]
+}
+
 export function serverBoundaryFindings(graph) {
   const findings = []
   const add = (edge, rule) => findings.push({ rule, source: edge.source,
@@ -125,7 +164,7 @@ export function serverBoundaryFindings(graph) {
       }
     }
   }
-  for (const cycle of dependencyCycles(graph.edges)) findings.push({ rule: 'source-cycle', source: cycle[0], target: cycle.join(' -> ') })
+  findings.push(...cycleFindings(graph.edges, file => moduleInfo(file)?.[1]))
   return findings.sort((a, b) => `${a.source}|${a.rule}|${a.target}`.localeCompare(`${b.source}|${b.rule}|${b.target}`))
 }
 
@@ -142,6 +181,6 @@ export function frontendBoundaryFindings(graph) {
     if (edge.source.startsWith('frontend/packages/') && targetApp) add('shared-package-to-application')
     if (targetFeature && sourceFeature?.[1] !== targetFeature[1] && targetFeature[2] !== 'index.ts') add('feature-internal')
   }
-  for (const cycle of dependencyCycles(graph.edges)) findings.push({ rule: 'source-cycle', source: cycle[0], target: cycle.join(' -> ') })
+  findings.push(...cycleFindings(graph.edges, file => featureOf(file)?.[1]))
   return findings.sort((a, b) => `${a.source}|${a.rule}|${a.target}`.localeCompare(`${b.source}|${b.rule}|${b.target}`))
 }

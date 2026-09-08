@@ -18,6 +18,20 @@ describe('module dependency analysis', () => {
     const source = `<template>import x from 'bad'</template>\n<script>import './a'</script>\n<script setup lang="ts">import type { B } from './b'</script>`
     expect(parseDependencies(source, 'view.vue').map(edge => [edge.specifier, edge.line])).toEqual([['./a', 2], ['./b', 3]])
   })
+  it('distinguishes erased type dependencies from mixed/runtime imports and rejects malformed syntax', () => {
+    const edges = parseDependencies(`import type { A } from './a'; import { type B } from './b';
+      import { type C, value } from './c'; export type { D } from './d';
+      import E = require('./e'); const cast = <number>42`, 'source.ts')
+    expect(edges.map(edge => edge.typeOnly)).toEqual([true, true, false, true, false])
+    expect(() => parseDependencies(`import {`, 'bad.ts')).toThrow('bad.ts')
+  })
+  it('finds module cycles even when different files do not form a source cycle', () => {
+    const findings = serverBoundaryFindings({ unresolved: [], edges: [
+      { source: 'server/src/modules/a/application/x.ts', target: 'server/src/modules/b/index.ts', typeOnly: true },
+      { source: 'server/src/modules/b/application/y.ts', target: 'server/src/modules/a/index.ts', typeOnly: false },
+    ] })
+    expect(findings).toEqual([expect.objectContaining({ rule: 'module-cycle', target: 'a -> b', runtime: false })])
+  })
   it('resolves .js to TypeScript, aliases and Vue and reports missing local dependencies', () => {
     const root = mkdtempSync(join(tmpdir(), 'aurum-boundaries-'))
     try {
