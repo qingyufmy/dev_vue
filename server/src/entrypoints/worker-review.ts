@@ -6,7 +6,7 @@ import {
 import {
   HttpJsonObjectModelGateway, loadCredentialKeyring, MysqlModelUsageLedger, MysqlRuntimeModelProfileCatalog,
 } from '../modules/inference/index.js'
-import { MysqlReviewRepository, ReviewWorker } from '../modules/reviews/index.js'
+import { createMysqlReviewWorker } from '../modules/reviews/composition.js'
 import { REVIEW_QUEUE, type ReviewRunJob } from '../queue/task-queues.js'
 
 loadServerEnvironment()
@@ -15,12 +15,11 @@ async function main() {
   const config = loadV4RuntimeConfig(); assertV4RuntimeEnabled(config)
   const health = new RoleHealth('worker-review'); const pool = createMysqlPool(config.mysql)
   await pool.query('SELECT 1')
-  const repository = new MysqlReviewRepository(pool)
   const usage = new MysqlModelUsageLedger(pool)
   const profiles = new MysqlRuntimeModelProfileCatalog(pool, loadCredentialKeyring(), {
     allowPrivateEndpoints: config.allowPrivateModelEndpoints, maxAttempts: config.modelMaxAttempts, defaultTimeoutMs: config.modelDefaultTimeoutMs,
   })
-  const processor = new ReviewWorker(repository, {
+  const processor = createMysqlReviewWorker(pool, {
     resolve: async claim => new HttpJsonObjectModelGateway(
       await profiles.resolveForFrozenReview({ userId: claim.userId, strategyId: claim.strategyId, usage: claim.kind === 'manual' ? 'manual' : 'auto' }),
       usage, fetch, () => health.workFailed('review_model_usage_settlement_failed'),

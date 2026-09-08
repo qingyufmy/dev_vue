@@ -21,7 +21,7 @@ import {
 } from '../modules/execution/index.js'
 import { InferenceService, MysqlInferenceRepository } from '../modules/inference/index.js'
 import { MysqlRiskRepository, RiskService } from '../modules/risk/index.js'
-import { MysqlReviewRepository, ReviewService } from '../modules/reviews/index.js'
+import { createMysqlReviewHttp } from '../modules/reviews/composition.js'
 import { MysqlStrategyCatalog, StrategyService } from '../modules/strategies/index.js'
 import { createMysqlTradeHistoryHttp } from '../modules/trade-history/composition.js'
 import { assertTradingSchemaReady, createTradingApiModule } from '../modules/trading/composition.js'
@@ -61,7 +61,7 @@ async function main() {
     inference: new InferenceService(new MysqlInferenceRepository(pool, createTransactionAccountClock), strategies),
     strategies,
     risk: new RiskService(new MysqlRiskRepository(pool)),
-    reviews: new ReviewService(new MysqlReviewRepository(pool)),
+    reviewsHttp: createMysqlReviewHttp(pool, tradeAuth),
     execution: new ExecutionService(new MysqlExecutionRepository(pool, createTransactionAccountClock)),
     userExecution,
     executionDistribution,

@@ -954,32 +954,6 @@
     },
     {
       "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/reviews/index.ts",
-        "target": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "reviews",
-      "phase": "P5",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/reviews/index.ts",
-        "target": "server/src/modules/reviews/transport/http/review-routes.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "reviews",
-      "phase": "P5",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
         "rule": "source-cycle",
         "source": "server/src/modules/risk/domain/manual-risk-release.ts",
         "target": "server/src/modules/risk/domain/manual-risk-release.ts -> server/src/modules/risk/domain/risk.ts",

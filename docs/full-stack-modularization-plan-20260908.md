@@ -663,3 +663,12 @@ terminal-history-projection 领域层仍有两项 Bridge 内部类型依赖记�
 terminal-history-projection 使用本域 TerminalHistoryPageKind（orders/mt4_closed_trades/deals），不再引用 BridgeHistoryResource 或 Bridge 内部类型。采集基础设施用穷尽 Record 映射三种 Bridge 资源；从存储证据重建成交时直接使用本域 deals。线上 Bridge 请求/响应名称、原始证据及哈希、金额与归属计算保持不变。
 
 28 项历史采集/币种/归属回归、server 类型/构建和 API 生成运行检查通过，321 个冻结输入不变。精确删除领域反向依赖及对应内部穿透两项，债务 86→84，无新增或陈旧记录。历史域目前没有登记的此类静态边界债务，但原始数据规范化、SQL 所有权与真实完整流程仍需单独验收；不得据此宣布整个历史域完成。本批无数据库操作、角色启动或终端访问。
+
+
+## 48. 复盘 HTTP 与 Worker 组装（第一百一十八批）
+
+reviews 新增受限 composition：createReviewHttp/createMysqlReviewHttp 组装固定 /api/v4 路由与读取/写入用例；createMysqlReviewWorker 组装 repository、模型端口和 workerId，只返回 process 能力。API 总注册器接收插件并保持 trade Host 隔离，worker-review 入口仍负责模型解析、队列与进程生命周期。业务 index 移除 MySQL 和 HTTP 具体实现导出。
+
+16 项复盘内容/策略记忆、Worker 及锁定投影回归，server 类型/构建与 API 生成运行校验通过，321 个冻结输入不变。精确移除两项公开具体实现记录，债务 84→82，无新增或陈旧。没有更改租约、模型调用/额度、SQL 或复盘生成行为，也未启动 Worker、访问数据库或调用模型。
+
+本批为源码及定向回归证据，HTTP 实际运行和完整复盘业务链路仍需验收；静态边界清除不等于 reviews 全域或 P0–P7 完成。
