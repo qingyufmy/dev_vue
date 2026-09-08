@@ -578,3 +578,11 @@ loadObserverContextMigration复用完整150步并追加四项checksum，总定�
 新增19项协调及10项适配测试，连同相关旧层共117项通过。恢复副本已实际160→163：首DDL响应丢失、独立只读识别、恢复仅2条DDL、独立重入0DDL。三表均空，原234表快照和160条日志一致。见[冻结计划](architecture/legacy-candle-build-registered-plan-20260908.json)，proofHash=0ee8913abb31631524306a3504d6ce283a54290e67a1944906c3a53aca37f4db，及同前缀五阶段回执。
 
 两轮职责/异常复核见[合同](architecture/account-projection-incremental-contract-20260908.md)。旧源冻结文件不变，当前dev_vue未写入，连接与SSH隧道关闭。下一步实际MySQL事务回填、逐行映射及摘要对账，然后实现正式名称提升与历史校验适配。
+
+## 第六十二批：K线MySQL事务适配与锁定源读取
+
+新增mysql-legacy-candle-source与mysql-legacy-candle-backfill。源读取重建既有账户映射，同时核对V4目标真实身份；写事务以REPEATABLE-READ/FOR SHARE保护来源，数值主键分页和完整计数防漏读。回填适配在一个事务内完成检查点锁/计划比对、重复目标内容核对、缺失投影与全部旧映射插入、CAS推进，最终锁定全量内容后标verified。未知提交只交给下一轮实际状态核对。
+
+8项新SQL适配行为、4项源读取测试及已有转换/协调共38项通过，覆盖整批回滚、已提交确认丢失、锁/源/目标身份变化、前缀和payload漂移、大ID与空输入。详细合同和两轮复核见[合同](architecture/account-projection-incremental-contract-20260908.md)。本批为源码/SQL替身证据，未连接数据库，恢复副本最近已验证163步且构建区为空。
+
+下一步绑定固定恢复副本持久化计划、真实源重建和完整历史guard，执行35725行回填及提交未知恢复；之后正式名称提升与当前库专属升级。
