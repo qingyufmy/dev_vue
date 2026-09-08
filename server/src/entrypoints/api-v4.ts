@@ -22,7 +22,7 @@ import {
 import { InferenceService, MysqlInferenceRepository } from '../modules/inference/index.js'
 import { MysqlRiskRepository, RiskService } from '../modules/risk/index.js'
 import { createMysqlReviewHttp } from '../modules/reviews/composition.js'
-import { MysqlStrategyCatalog, StrategyService } from '../modules/strategies/index.js'
+import { createMysqlStrategyService, createStrategyHttp } from '../modules/strategies/composition.js'
 import { createMysqlTradeHistoryHttp } from '../modules/trade-history/composition.js'
 import { assertTradingSchemaReady, createTradingApiModule } from '../modules/trading/composition.js'
 import { registerApiV4Routes } from '../transport/api-v4-route-registrar.js'
@@ -43,7 +43,7 @@ async function main() {
   const { tradeAuth, observerAdminAuth } = trading
   const userExecution = new UserExecutionCommandService(new MysqlUserExecutionCommandRepository(pool, createTransactionAccountClock))
   const executionDistribution = new ExecutionDistributionService(new MysqlExecutionDistributionRepository(pool))
-  const strategies = new StrategyService(new MysqlStrategyCatalog(pool))
+  const strategies = createMysqlStrategyService(pool)
   const app = Fastify({ logger: true, bodyLimit: 1024 * 1024, trustProxy: true })
   await registerApiV4Routes(app, {
     auth,
@@ -60,6 +60,7 @@ async function main() {
     tradingHttp: trading.tradeHttp,
     inference: new InferenceService(new MysqlInferenceRepository(pool, createTransactionAccountClock), strategies),
     strategies,
+    strategiesHttp: createStrategyHttp(strategies, tradeAuth),
     risk: new RiskService(new MysqlRiskRepository(pool)),
     reviewsHttp: createMysqlReviewHttp(pool, tradeAuth),
     execution: new ExecutionService(new MysqlExecutionRepository(pool, createTransactionAccountClock)),

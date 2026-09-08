@@ -8,7 +8,7 @@ import {
   MysqlInferenceRepository, MysqlModelTaskRecoveryRepository,
   MysqlModelUsageLedger,
 } from '../modules/inference/index.js'
-import { MysqlStrategyCatalog, StrategyService } from '../modules/strategies/index.js'
+import { createMysqlStrategyService } from '../modules/strategies/composition.js'
 import { createTradingReader } from '../modules/trading/composition.js'
 
 loadServerEnvironment()
@@ -19,7 +19,7 @@ async function main() {
   const health = new RoleHealth('scheduler-analysis')
   const pool = createMysqlPool(config.mysql)
   await pool.query('SELECT 1')
-  const strategies = new StrategyService(new MysqlStrategyCatalog(pool))
+  const strategies = createMysqlStrategyService(pool)
   const trading = createTradingReader(pool)
   const scheduler = new AnalysisScheduler(
     new MysqlAnalysisScheduleRepository(pool),

@@ -672,3 +672,12 @@ reviews 新增受限 composition：createReviewHttp/createMysqlReviewHttp 组装
 16 项复盘内容/策略记忆、Worker 及锁定投影回归，server 类型/构建与 API 生成运行校验通过，321 个冻结输入不变。精确移除两项公开具体实现记录，债务 84→82，无新增或陈旧。没有更改租约、模型调用/额度、SQL 或复盘生成行为，也未启动 Worker、访问数据库或调用模型。
 
 本批为源码及定向回归证据，HTTP 实际运行和完整复盘业务链路仍需验收；静态边界清除不等于 reviews 全域或 P0–P7 完成。
+
+
+## 49. 策略目录与 HTTP 组装（第一百一十九批）
+
+strategies composition 新增 createMysqlStrategyService/createStrategyHttp，负责具体目录适配器和固定 /api/v4 路由。API、worker-analysis、worker-trader、scheduler-analysis 改由工厂创建服务；业务 index 移除目录和 HTTP 实现导出。API 总注册器保留供 inference HTTP 使用的 StrategyService 业务能力，策略路由本身接收预组装插件。
+
+30 项策略管理、行情计划及入场方法回归通过，管理 HTTP 测试使用组装工厂；server 类型/构建及 API 生成运行检查通过。初次检查发现旧测试路由导出和 inference 所需服务参数遗漏，补齐后通过。精确删除两项具体实现导出，债务 82→80，无新增或陈旧记录。业务规则、SQL、版本和订阅更新行为未变，没有启动角色或连接外部依赖。
+
+订阅执行偏好 SQL 函数仍通过公开入口被 inference 消费，需按同事务能力继续收口；本次不是 strategies 或整体 P0–P7 完成。

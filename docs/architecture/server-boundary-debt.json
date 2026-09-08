@@ -1047,33 +1047,7 @@
       "finding": {
         "rule": "public-implementation-export",
         "source": "server/src/modules/strategies/index.ts",
-        "target": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "strategies",
-      "phase": "P3",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/strategies/index.ts",
         "target": "server/src/modules/strategies/infrastructure/mysql-subscription-execution-preferences.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "strategies",
-      "phase": "P3",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/strategies/index.ts",
-        "target": "server/src/modules/strategies/transport/http/strategy-routes.ts",
         "kind": "export",
         "typeOnly": false
       },

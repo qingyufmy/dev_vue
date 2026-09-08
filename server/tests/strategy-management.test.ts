@@ -1,7 +1,8 @@
+import { createStrategyHttp } from '../src/modules/strategies/composition.js'
 import Fastify from 'fastify'
 import { describe, expect, it } from 'vitest'
 import {
-  compileStrategy, StrategyService, strategyRoutes,
+  compileStrategy, StrategyService,
   type CreateStrategyInput, type CreateStrategySubscriptionInput, type CreateStrategyVersionInput,
   type PublishStrategyVersionInput, type RetireStrategyInput, type StrategyCatalog, type StrategyCompileResult,
   type StrategyDetail, type StrategyKind, type StrategyManagementRepository, type StrategySubscription,
@@ -123,7 +124,7 @@ describe('Stage 12Q strategy management', () => {
   it('serves compile, detail and user strategy writes with strict CSRF/CAS boundaries', async () => {
     const repository = new MemoryStrategyRepository()
     const app = Fastify({ logger: false })
-    await app.register(strategyRoutes, { prefix: '/api/v4', service: new StrategyService(repository), auth })
+    await app.register(createStrategyHttp(new StrategyService(repository), auth))
 
     const compiled = await app.inject({ method: 'POST', url: '/api/v4/strategies/compile', headers: { 'x-csrf-token': 'csrf-token' }, payload: { kind: 'analysis', prompt_text: '分析', config: {} } })
     expect(compiled.statusCode).toBe(200)
@@ -145,7 +146,7 @@ describe('Stage 12Q strategy management', () => {
 
   it('rejects an executable subscription without a trader strategy', async () => {
     const app = Fastify({ logger: false })
-    await app.register(strategyRoutes, { prefix: '/api/v4', service: new StrategyService(new MemoryStrategyRepository()), auth })
+    await app.register(createStrategyHttp(new StrategyService(new MemoryStrategyRepository()), auth))
     const response = await app.inject({ method: 'POST', url: '/api/v4/strategy-subscriptions', headers: { 'x-csrf-token': 'csrf-token' }, payload: { trading_account_id: 'account-1', symbol: 'XAUUSD', analysis_strategy_id: 'strategy-analysis-1', trader_enabled: true } })
     expect(response.statusCode).toBe(422)
     expect(response.json()).toMatchObject({ code: 'subscription_trader_required' })
