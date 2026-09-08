@@ -1,0 +1,34 @@
+{
+  "kind": "current-observer-context-result/v1",
+  "observedAt": "2026-09-08T14:48:47.886Z",
+  "target": "dev_vue",
+  "mode": "--prepare",
+  "result": {
+    "ddlCount": 0,
+    "steps": [
+      {
+        "id": "inplace_037_01_observer_sources",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_037_02_observer_channels",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_037_03_observer_channel_accesses",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_037_04_trading_contexts",
+        "status": "pending"
+      }
+    ]
+  },
+  "completedSteps": 150,
+  "targetSteps": 154,
+  "proofHash": "6397878d3796391c500b77e9f51bd010f7e0c6c5eb3a70e8c1bb0bf73483b950",
+  "protectedTables": 224,
+  "addedTables": [],
+  "runtimeActivated": false,
+  "scope": "Append-only empty observer/context tables; exact prior rows and history reconciled. Client check is observational, not a database-wide write lock."
+}

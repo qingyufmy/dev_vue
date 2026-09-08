@@ -1,0 +1,55 @@
+{
+  "kind": "current-observer-context-result/v1",
+  "observedAt": "2026-09-08T14:51:27.203Z",
+  "target": "dev_vue",
+  "mode": "--apply",
+  "result": {
+    "ddlCount": 0,
+    "steps": [
+      {
+        "id": "inplace_037_01_observer_sources",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_037_02_observer_channels",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_037_03_observer_channel_accesses",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_037_04_trading_contexts",
+        "status": "completed"
+      }
+    ]
+  },
+  "completedSteps": 154,
+  "targetSteps": 154,
+  "proofHash": "6397878d3796391c500b77e9f51bd010f7e0c6c5eb3a70e8c1bb0bf73483b950",
+  "protectedTables": 224,
+  "addedTables": [
+    {
+      "name": "observer_channel_accesses",
+      "rows": 0,
+      "schemaSha256": "66fa22bcbc88e84aaaaa2eb3f6099cc54be9220a5dd4ee175671eb5eb0ba0122"
+    },
+    {
+      "name": "observer_channels",
+      "rows": 0,
+      "schemaSha256": "a504beeb48f5fe10ad99b276e918ba3060b827ffad1e059db5210c07e32bf985"
+    },
+    {
+      "name": "observer_sources",
+      "rows": 0,
+      "schemaSha256": "cd5f67cfbec4eed3fdc9fe2d1526ecfa9f8cfa96aaaca5b37a27ccba871713b5"
+    },
+    {
+      "name": "trading_contexts",
+      "rows": 0,
+      "schemaSha256": "5d37635fa64a607331206ce05fe8cdfaa42af3692acccb8c684fd7ac42c3c7b7"
+    }
+  ],
+  "runtimeActivated": false,
+  "scope": "Append-only empty observer/context tables; exact prior rows and history reconciled. Client check is observational, not a database-wide write lock."
+}

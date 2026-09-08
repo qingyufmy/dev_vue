@@ -149,3 +149,13 @@
 锁方案定向复核：MySQL禁止持有LOCK TABLES时CREATE TABLE，见[官方说明](https://dev.mysql.com/doc/refman/8.4/en/lock-tables.html)。本批尝试独立RR行/间隙冻结，真实临时库发现外键CREATE同样被父表事务锁阻塞，见[失败探针](inplace-create-source-freeze-probe-20260908.json)，临时库已清理；未保留不适用的工具实现。036是纯新增空表，不改写旧业务行，采用现有命名锁、每步前开发库其它连接检查、严格旧数据前后对账和逐步日志恢复；这属于观察与变更范围约束，不宣称全库停写锁。检测到其它连接或对账变化即停止，不恢复旧备份覆盖新数据。
 
 29项Vitest协调器/适配器测试与1项Node原生注册表测试通过。注册表文件最初误用Vitest导致“No test suite found”，改用其实际node:test运行器后通过，未修改冻结测试或SQL。当前应用消费者仍未启用；下一步151–154观摩/上下文表，再接155–165及K线回填。
+
+## 16. 当前观摩与交易上下文表升级完成（第九十一批）
+
+当前dev_vue从150升至154步、228表，新增observer_sources、observer_channels、observer_channel_accesses和trading_contexts，均为空。首次DDL4次，随后沿同proof重复执行DDL0次；原224表的完整行/结构与原150步日志一致。见[应用回执](current-observer-context-applied-20260908.json)及[重复回执](current-observer-context-repeat-20260908.json)。未把旧观摩状态自动激活，也未启用应用消费者。
+
+新增当前库入口和版本化MySQL适配器。旧适配器固定引用恢复副本reference，不能直接用于当前库，因此保留其冻结版本，当前版绑定[当前reference](current-observer-context-reference-20260908.json)，把自身及入口摘要纳入268项proof工具清单，并再次验证reference正文摘要、库身份、父proof及清理标记。当前版12项适配器测试包括拒绝另一数据库的重签reference、拒绝保留旧摘要的正文篡改。
+
+prepare在当前MySQL版本下建立唯一临时参考库，核对父键类型，执行原037 SQL并读取规范DDL；复用既有约束探针，18项真实检查通过，包括默认禁用/待配置状态、外键、默认频道唯一性、布尔值、模式与账户/观摩字段组合。探针事务回滚后7张参考表均为空，参考库删除并确认不存在，当前库前后数据/日志对账通过，再固化[当前proof](current-observer-context-proof-20260908.json)及[配套绑定](current-observer-context-proof-20260908.json.current.json)。
+
+33项定向测试通过（29项Vitest、4项Node原生），另有上述18项真实MySQL约束检查。首次混用运行器导致原生测试文件被Vitest报告无suite，按文件实际导入的node:test单独运行后通过；未更改旧测试。职责复核：新版本只调整当前reference与工具绑定，原037 SQL、状态协调及既有适配器不改；异常复核：逐步重验、其它客户端观察、旧数据严格对账及未知状态核对继续有效。下一步155–160账户/行情投影表，再做161–165与当前K线回填。

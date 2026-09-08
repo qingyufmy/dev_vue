@@ -1,0 +1,73 @@
+{
+  "frozen": {
+    "kind": "current-observer-context-binding/v1",
+    "proofFileSha256": "adf462fdd584528e98356a80b3ca88a0a92b79b30d9cd6ea14b49c9438bf635c",
+    "reference": {
+      "database": "dev_vue_observer_reference_4c1ff345786b5764eba20b51",
+      "removed": true,
+      "mysqlVersion": "8.4.8",
+      "parentDefinitions": [
+        {
+          "table": "users",
+          "id": {
+            "columnType": "int",
+            "charset": null,
+            "collation": null
+          }
+        },
+        {
+          "table": "trading_accounts",
+          "id": {
+            "columnType": "bigint unsigned",
+            "charset": null,
+            "collation": null
+          }
+        },
+        {
+          "table": "strategies",
+          "id": {
+            "columnType": "bigint unsigned",
+            "charset": null,
+            "collation": null
+          }
+        }
+      ]
+    },
+    "sourceHistoryHash": "d486308fbfd90e14cf47669af38b32637d26f56091c1accd73324b1c10a39608",
+    "tools": [
+      {
+        "path": "scripts/upgrade-current-observer-context-local.mjs",
+        "sha256": "c517817b4dfe9d4743bcfa0a65b582ec3016b66d7385acb19b70dba94248ad28"
+      },
+      {
+        "path": "docs/architecture/current-account-root-proof-20260908.json",
+        "sha256": "0c2db8b23ba536124223ab966926ec650b30bcfaae21c5c04e300123fc0cf1e9"
+      },
+      {
+        "path": "docs/architecture/current-account-root-proof-20260908.json.current.json",
+        "sha256": "2495159e6b47b7fa2fa01957944465ccfb865f7e10e8d0e76fb5df037f6ac141"
+      },
+      {
+        "path": "docs/architecture/current-account-root-applied-20260908.json",
+        "sha256": "9b957fd0195544252a09dd7c2c466f0f4c16667f8905d6e30b37a8e9cc790c3f"
+      },
+      {
+        "path": "docs/architecture/current-terminal-route-proof-20260908.json",
+        "sha256": "89dcc2061049bcf4ff87b155d32adb106c7167068488a566f252ab82c2dc9020"
+      },
+      {
+        "path": "docs/architecture/current-terminal-route-proof-20260908.json.current.json",
+        "sha256": "12ccf2769bff07388554bf5e44017d766d5194f4ca9cba63fc09771983a3f86f"
+      },
+      {
+        "path": "scripts/lib/mysql-current-observer-context-migration.mjs",
+        "sha256": "ebe4a3699277b570bb37295cf0af911133cb4b1a2cc788b40fdd133e9f3806c2"
+      },
+      {
+        "path": "docs/architecture/current-observer-context-reference-20260908.json",
+        "sha256": "d26dfffaa4a5ed333b07d111f94ab83c929c60f5fb8c4fa492bf72771dccb9dc"
+      }
+    ]
+  },
+  "manifestHash": "21b0a2d3313ec735fc80daf0170cf59d44fd23c1c8739cff7e1a7ff0c4f265a6"
+}

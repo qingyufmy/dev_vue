@@ -778,3 +778,9 @@ HTTP和生产组装已切换到ContextWritePort，移除读取接口、应用服
 当前库148→150步、222→224表，新增终端账户绑定和连接会话空表；原222表完整对账及148步旧日志保留。当前专属proof来自实际临时参考DDL，参考库已清理；首次DDL2次、重复0次。30项定向测试通过。
 
 见[应用回执](architecture/current-terminal-route-applied-20260908.json)、[重复回执](architecture/current-terminal-route-repeat-20260908.json)及[接入方案第15节](architecture/current-dev-vue-upgrade-plan-20260908.md)。记录CREATE不能沿用RENAME写锁及父表事务锁阻塞的实测结果；当前新增表步骤采用命名锁、其它客户端观察和严格前后对账，不宣称全库停写。下一步151–154观摩/交易上下文表。
+
+## 第九十一批：当前 dev_vue 观摩与上下文表升级完成
+
+当前150→154步、224→228表，四张037表均为空，原224表及旧150步日志对账一致；首次DDL4次，重复0次。当前专属适配器/入口保留旧冻结版本，绑定当前库reference、父proof及工具摘要。临时参考库18项真实约束验证通过并清理；33项定向测试通过。
+
+详见[应用回执](architecture/current-observer-context-applied-20260908.json)、[重复回执](architecture/current-observer-context-repeat-20260908.json)和[接入方案第16节](architecture/current-dev-vue-upgrade-plan-20260908.md)。下一步155–160账户/行情投影，再接161–165和当前K线回填；真实应用联合验收仍待完成。
