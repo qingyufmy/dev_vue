@@ -66,3 +66,6 @@ API 入口在启动与 health/ready 中注入 auth composition 的 assertAccount
 MysqlContextCommands、createTradingContextWriter 和 createTradingApiModule 必须注入 auth ActivePrincipalAccess 的连接工厂，无本地 SQL 后备。API 组装通过 auth composition 注入；写入仍在 begin 后以 update 模式锁用户，再读取回执和锁上下文，普通回执预检使用 none 模式。两处独立 users 查询归 auth，主事务仍由 trading 持有。
 
 mysql-context-receipts 中原有 EXISTS users 条件仍保留，使回执与有效性判断处于同一条查询；其它账户/观摩 SQL 也未据此宣称完成端口化。定向回归同时使用实际 auth 适配器和交易状态替身，覆盖用户锁顺序、撤销、历史重放、回滚及提交未知；本批未重新运行真实并发 MySQL 演练。
+
+
+上下文/auth 联合真实 MySQL 探针：先构建 server，再运行 node scripts/verify-context-principal-mysql.mjs <新绝对路径回执>。脚本只在独立连接建立三张同名临时 InnoDB 表，执行实际 auth 适配器与 MysqlContextCommands；验证提交、重放、冲突、真实重复键导致双写回滚及用户撤销拒绝。全部目标先遮蔽再 DML，结束销毁连接。目标解析为合成实现，临时表不含完整业务 FK/CHECK，不覆盖多连接锁竞争、提交确认丢失或浏览器/终端流程。

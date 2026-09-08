@@ -611,3 +611,12 @@ auth 公开 ActivePrincipalAccess 类型，并在受限 composition 创建绑定
 31 项定向测试、server 类型/构建和 API 生成运行校验通过。边界检查曾发现两个新类型导入相对路径错误，修正后回到原 104 条、无新增或陈旧记录；未新增豁免。演练脚本同步显式注入并通过语法检查，未运行真实数据库写入、服务重启或终端测试。
 
 保留 mysql-context-receipts 同一语句中的 users EXISTS，避免简单拆为两次非事务查询后放宽并发删除语义。完整读取授权投影、其它 users/Bridge SQL 和剩余结构能力仍待收口，整体 P0–P7 未完成。复核确认类型公开与组装入口分离、同连接与既有锁序保持，原子性和未知提交行为由原回归验证。
+
+
+## 42. 上下文与 Auth 联合 MySQL 验证（第一百一十二批）
+
+新增 verify-context-principal-mysql.mjs，使用当前 dev_vue 应用账号和 UTC 连接，在执行任何 DML 前建立 users/trading_contexts/trading_context_changes_v4 三张同名连接私有临时 InnoDB 表。执行构建后的 auth 用户查询与 MysqlContextCommands，调用方和 auth 使用同一连接；目标解析器明确为合成实现，正式业务写入 0。
+
+首次回执 architecture/context-principal-mysql-20260909.json 在准备重复 revision 夹具时遇到 ER_CANT_REOPEN_TABLE（临时表 INSERT SELECT 自引用）。改为直接插入合成占位回执后，architecture/context-principal-mysql-verified-20260909.json 四项通过：提交与同键重放；异体/旧 revision 拒绝；MySQL ER_DUP_ENTRY 在上下文写入后触发，回滚后原 revision/账户保持且失败请求无回执；撤销用户不能读取或重放。临时表随连接销毁。
+
+脚本语法和真实探针通过；本批未修改服务端逻辑或重启角色。该证据补充上一批替身回归，但不验证完整 schema/FK/CHECK、不同连接的锁竞争、确认丢失、观摩目标或浏览器行为。这些缺口及其余账户/结构解耦继续保留，整体 P0–P7 未完成。
