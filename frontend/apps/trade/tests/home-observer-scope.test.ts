@@ -59,6 +59,26 @@ beforeEach(() => {
 })
 
 describe('observer HTTP resync scope protection', () => {
+  it.each([
+    { status: 401, expected: '登录状态已失效' },
+    { status: 403, expected: '没有查看此分析的权限' },
+    { status: 503, expected: '最新分析暂时无法读取' },
+  ])('keeps analysis failure visible without exposing API internals ($status)', async ({ status, expected }) => {
+    mocks.api.listMarketAnalyses.mockRejectedValueOnce(new ApiClientError(status, {
+      type: 'about:blank', title: 'inference_unavailable', status, detail: 'private_storage_detail', code: 'inference_unavailable',
+    } as never))
+    const scope = effectScope()
+    const home = scope.run(() => useHomeWorkspace())!
+    try {
+      await home.load()
+      expect(home.analysisError.value).toContain(expected)
+      expect(home.analysisError.value).not.toContain('inference_unavailable')
+      expect(home.analysisError.value).not.toContain('private_storage_detail')
+      expect(home.latestAnalysis.value).toBeNull()
+      expect(home.hasAccount.value).toBe(true)
+    } finally { home.stop(); scope.stop() }
+  })
+
   it('clears identity-scoped data immediately on logout and refuses an in-flight resync', async () => {
     const scope = effectScope()
     const home = scope.run(() => useHomeWorkspace())!

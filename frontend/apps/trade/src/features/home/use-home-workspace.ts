@@ -183,7 +183,11 @@ export function useHomeWorkspace() {
       if (!current()) return
       latestAnalysis.value = analyses.data.items[0] ?? null
     } catch (reason) {
-      if (current()) analysisError.value = reason instanceof Error ? reason.message : '最新分析暂时无法读取'
+      if (current()) analysisError.value = reason instanceof ApiClientError && reason.status === 401
+        ? '登录状态已失效，请重新登录后查看最新分析'
+        : reason instanceof ApiClientError && reason.status === 403
+          ? '当前账号没有查看此分析的权限'
+          : '最新分析暂时无法读取，请稍后刷新重试'
     } finally { if (current()) analysisLoading.value = false }
   }
 

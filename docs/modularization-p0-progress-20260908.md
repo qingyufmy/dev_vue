@@ -1297,3 +1297,15 @@ useHomeWorkspace 原先收到当前快照/行情的401或403时只清空账户ru
 机器记录为[local-chrome-positive-account-flow-20260909.json](architecture/local-chrome-positive-account-flow-20260909.json)，包含浏览器步骤、当前上下文和会话计数。当前Vite提供0ec07bf2前端；服务端3010/3011监听PID与既有验收相同（42252/32740），本轮未重启，因此近期组装改造不能借本次浏览器结果声明运行验证通过。根因检查另发现最新分析卡直接显示inference_unavailable，需后续改善中文错误展示并独立诊断后端不可用原因。
 
 本批新增正向Chrome证据，数据库写入仅来自本次授权的合成账户上下文命令及登录/退出流程；归档核对为只读。下一步处理残留夹具会话与退役、错误展示，以及授权自动导航仍被拦截的缺口；P1和整体重构均未完成。
+
+## 77. 最新分析不可用的开发库缺表诊断（第一百四十七批）
+
+对浏览器发现的inference_unavailable执行真实只读诊断：当前编译MysqlInferenceRepository.listAnalyses对合成用户查询返回ER_NO_SUCH_TABLE/1146，缺少dev_vue.market_analyses。不是空分析列表或实时重连失败。进一步有界元数据核对8个明确表名：存在inference_snapshots、strategies、strategy_versions；缺少market_analyses、market_analysis_payloads、ai_analysis_runs、ai_trader_runs、trade_decisions。报告[local-inference-list-schema-gap-20260909.json](architecture/local-inference-list-schema-gap-20260909.json)。该清单不是完整推理升级审计，已存在表也未据此认定结构兼容。
+
+源DDL位于20260903_004_ai_strategy_and_inference_core.sql；不能直接运行历史建库SQL或只补一张空表，绕过当前库升级账本、旧数据映射和关联约束。P4需把该真实差距纳入当前库增量兼容、历史映射、回填对账和恢复方案，未完成前不得宣称推理API可用或全栈完成。当前账户接口可用与API健康不等于推理表就绪。
+
+本批修复首页错误展示：分析读取401提示重新登录，403提示无查看权限，其余错误提示暂时无法读取并重试；不再直接输出后端机器码或错误正文。仍保留明确失败状态，不返回伪造空列表、不隐藏后端缺表。账户工作区可继续读取，不将分析失败扩散为账户加载失败。
+
+17项home作用域回归通过，新增401/403/503的中文错误、内部信息不展示及账户读取继续工作验证。trade类型、前端边界检查通过；本次未运行浏览器复验，不将源码文案更改称为视觉验收。数据库操作全部为只读元数据及SELECT，未迁移、未重启。
+
+下一步继续P1夹具退役和剩余浏览器恢复，P4保留上述具体缺表门槛；整体目标未完成。
