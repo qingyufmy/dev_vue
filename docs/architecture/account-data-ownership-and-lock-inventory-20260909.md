@@ -55,3 +55,12 @@
 并发方案需覆盖注册、激活、投影、上下文、观摩管理与凭据撤销；尚未查明的投影写入者、动态 JSON/旧代码消费者、实际缺表由对应工作包继续核对。本报告完成了可重复源码候选采集和关键锁反转定位，未完成全依赖清零。确定协议后才追加退役回执迁移与领域阻断能力；期间保留合成账户。
 
 定向复核：扫描器只读取 server/src 和 Git HEAD、独占创建报告，不连接外部依赖；报告包含源码摘要用于防止把过期定位当作现状。两轮设计的约束继续有效，本轮新增证据扩大了锁参与者范围，取消“只调整注册入口即可完成”的实施假设。没有修改运行代码、迁移或冻结输入。
+
+
+## 后续真实锁交错证据（第一百五十二批）
+
+在 b167582d 源码重新构建后，verify-account-context-lock-cycle-mysql.mjs 使用精确合成用户及账户，通过当前 MysqlContextCommands/prepareMysqlContextTarget 和 createAccountRegistration 的两条真实连接复现锁环。先让上下文持有用户/context 锁，在目标解析处暂停，再让注册持账户锁，随后同时继续目标解析与归属复核。MySQL 返回一个 ER_LOCK_DEADLOCK，无锁超时；本次上下文被选为牺牲者，对外为 trading_context_write_failed，归属复核返回 revision 1。
+
+报告 account-context-lock-cycle-mysql-20260909.json 归档六项证据。适配器仅放行 SELECT，拦截业务 DML 和 commit，两条事务最终 rollback/destroy；账户归属、区间字段和上下文逐值不变，新 request ID 的回执为零。没有调用完整 Gateway、没有投影写入、没有模拟真实终端，本结果只把上述用户/账户锁环从源码风险提升为实际开发 MySQL 复现，不能视为修复验证。
+
+下一步必须保留此复现作为修复前对照；并发协调方案需同时审查观摩 viewer/operator、凭据和多账户路径。不得用吞掉死锁或将未提交失败改成成功替代协调；只允许完整幂等事务的有界重试，commit_unknown 不能普通重试。当前业务实现仍未修复。

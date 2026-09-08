@@ -1048,3 +1048,12 @@ Outbox探针升级v2：只排除已dispatched历史，对全部剩余事件仍�
 [账户数据所有权与锁序清单](architecture/account-data-ownership-and-lock-inventory-20260909.md)列出 auth/trading/bridge/strategies/execution/inference/risk/history/reviews 及 outbox 的责任和未完成项，补充无外键 JSON 与三类 Redis 租约引用。实际调用确认 Bridge 激活/复核也沿用账户到用户锁序，而上下文为用户到账户；观摩还涉及多个用户。尚未实测死锁，不报告为实际运行故障。
 
 这改变下一实施动作：先建立账户上下文与 Bridge 复核的双连接交错测试，再确定覆盖参与者的锁协议；不能只改注册或改成先锁当前用户便宣称统一。归属退役、投影写入者及动态/旧消费者清单仍未完成，合成账户继续保留。脚本语法、实际源码扫描、报告摘要复核、diff及321冻结输入检查通过；没有业务写入、迁移、重启或终端操作。
+
+
+## 82. 用户/账户锁反转的真实 MySQL 复现（第一百五十二批）
+
+重新构建 b167582d 当前源码，server 增量边界检查和14项运行合同一致性通过。新增 verify-account-context-lock-cycle-mysql.mjs，以既有精确合成身份在两条开发 MySQL 连接中调用编译后的上下文用例、目标解析和账户注册能力；通过屏障形成用户/context 与账户的相反持锁顺序。
+
+实际出现一个 ER_LOCK_DEADLOCK，牺牲者为上下文事务，其机器错误为 trading_context_write_failed；另一事务归属复核返回 revision 1，无 ER_LOCK_WAIT_TIMEOUT。六项回执位于 architecture/account-context-lock-cycle-mysql-20260909.json。工具只允许 SELECT，阻止任何业务写入与提交，最终回滚并销毁连接；归属/区间与上下文不变，专用 request ID 无命令回执。
+
+这是真实锁环复现，不是完整 Gateway/终端流程，也不是修复通过。下一步基于此反例确定覆盖多用户、多账户和凭据参与者的事务协调能力，再做修复后同类交错验证；归属退役暂不写入。语法、构建、diff及321冻结输入检查通过，无迁移、运行服务重启或公网操作。
