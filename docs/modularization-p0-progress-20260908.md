@@ -822,3 +822,9 @@ HTTP和生产组装已切换到ContextWritePort，移除读取接口、应用服
 真实应用数据库账号读取6有效用户和3账户，3组归属读取成功、15组非归属读取拒绝，UTC会话确认，写入0。见[回执](architecture/current-trading-readiness-20260908.json)。空上下文/档案/观摩不能作为正向功能验收；Redis/SSO本地依赖尚未配置，下一步继续真实HTTP与浏览器流程。
 
 职责复核：结构检查留在trading基础设施，经composition供运行角色使用；23个消费表不代表全部数据所有权已规范，也不代表其它域就绪。异常复核：SQL错误对外收敛为trading_schema_not_ready，升级锁未取得不释放他人锁，释放未知销毁连接；支持当前inplace档案，未知建库/非等价结构变化必须先提供兼容证据。
+
+## 第九十八批：本地 API/Redis 和认证基础链路
+
+2026-09-09，本地Redis与API已在独立回环端口运行；保留原MySQL配置，SSO与Redis密钥在仓库外私有目录。新增local配置入口及8项配置测试，新增可重复真实HTTP探针，8项基础检查通过且清理自身Redis登录事务。具体构建来源、摘要、启动限制和首次路径/探针问题见[运行说明](runbooks/local-account-api-20260909.md)。
+
+API健康与匿名认证通过不等于成功用户流程，下一步是成功SSO、trade开发代理及浏览器账户切换/观摩恢复；真实旧数据不改作测试账号。见[真实HTTP回执](architecture/local-account-api-smoke-20260909.json)。当前仅运行api-v4和本地Redis，没有启动交易角色或部署公网。
