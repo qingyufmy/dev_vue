@@ -1,0 +1,1 @@
+RENAME TABLE `trading_accounts` TO `trading_accounts_legacy_v3`, `trading_accounts_v4_build` TO `trading_accounts`, `trading_account_ownership_intervals_v4_build` TO `trading_account_ownership_intervals`, `trading_account_ownerships_v4_build` TO `trading_account_ownerships`, `user_trading_account_settings_v4_build` TO `user_trading_account_settings`;
