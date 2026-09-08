@@ -10,7 +10,6 @@ import type { Redis } from 'ioredis'
 import type { FastifyPluginAsync } from 'fastify'
 import { tradingRoutes } from './transport/http/trading-routes.js'
 import { observerManagementRoutes } from './transport/http/observer-management-routes.js'
-import type { AuthService } from '../auth/index.js'
 import type { AccountRegistration } from './application/account-registration.js'
 import type { ConnectionCapacityRepository, TradingReadRepository } from './application/trading-ports.js'
 import type { TradeSessionAuthenticator, ObserverManagementRequestAuthenticator } from './application/request-authentication.js'
@@ -22,8 +21,6 @@ import { MysqlAccountRegistration } from './infrastructure/mysql-account-registr
 import { MysqlTradingRepository } from './infrastructure/mysql-trading-repository.js'
 import { MysqlObserverAccessReader } from './infrastructure/mysql-observer-access-reader.js'
 import { MysqlObserverManagementRepository } from './infrastructure/mysql-observer-management-repository.js'
-import { AuthTradeRequestAdapter } from './infrastructure/auth-trade-request-adapter.js'
-import { AuthObserverAdminAdapter } from './infrastructure/auth-observer-admin-adapter.js'
 import { RedisConnectionLeaseStore } from './infrastructure/redis-connection-lease-store.js'
 import { RedisBrowserRealtimePublisher } from './infrastructure/redis-browser-realtime-publisher.js'
 import { RedisBrowserRealtimeSubscriber } from './infrastructure/redis-browser-realtime-subscriber.js'
@@ -49,7 +46,7 @@ export function createTradingReader(pool: Pool, leases?: GatewayLeases): Trading
   return new MysqlTradingRepository(pool, leases)
 }
 
-export function createTradingApiModule(pool: Pool, cache: Redis, auth: AuthService, leases: GatewayLeases): {
+export function createTradingApiModule(pool: Pool, cache: Redis, auth: { trade: TradeSessionAuthenticator; admin: ObserverManagementRequestAuthenticator }, leases: GatewayLeases): {
   trading: TradingService
   connectionCapacity: ConnectionCapacityService
   observerManagement: ObserverManagementService
@@ -63,8 +60,8 @@ export function createTradingApiModule(pool: Pool, cache: Redis, auth: AuthServi
   const trading = new TradingService(repository, new ObserverPublicationService(access, repository))
   const connectionCapacity = new ConnectionCapacityService(repository, new RedisConnectionLeaseStore(cache))
   const observerManagement = new ObserverManagementService(new MysqlObserverManagementRepository(pool))
-  const tradeAuth = new AuthTradeRequestAdapter(auth)
-  const observerAdminAuth = new AuthObserverAdminAdapter(auth)
+  const tradeAuth = auth.trade
+  const observerAdminAuth = auth.admin
   return { trading, connectionCapacity, observerManagement, tradeAuth, observerAdminAuth,
     tradeHttp: createTradingHttp(trading, connectionCapacity, tradeAuth, createTradingContextWriter(pool, leases)),
     observerHttp: createObserverManagementHttp(observerManagement, observerAdminAuth),

@@ -514,3 +514,9 @@ trade Vite 已接入精确 API/SSO 路径代理，保留浏览器 Host、Origin�
 独立开发用户通过实际 auth/trade Vite 代理完成密码登录、授权码交换、字符串用户 ID 会话读取，以及账户/观摩/终端档案空列表读取。探针 finally 撤销本次两个会话并以旧 Cookie 验证 401，8 项检查通过，见[真实 SSO 回执](architecture/local-account-sso-20260909.json)。可重复探针为 `scripts/verify-local-account-sso.mjs`；命令、数据范围与限制见[运行说明](runbooks/local-account-api-20260909.md)。未创建交易账户、未修改真实用户；开发夹具及认证审计历史保留供后续验收。
 
 Chrome 已打开本地 trade 首页，页面显示待登录和默认 UTC+03:00；这仅证明页面可加载，不是浏览器成功登录或账户流程验收。下一步继续正向账户/观摩夹具、浏览器恢复与跨域依赖收口；P1 与整体 P0–P7 仍未完成。
+
+## 30. 账户认证能力边界收口（第一百批）
+
+trading不再依赖具体AuthService；Cookie解析、会话读取与CSRF适配移入auth私有HTTP实现，通过BrowserRequestAccess能力由API入口组装注入，trade/admin作用域保持分离。新增能力型注入及拒绝传播测试，连同既有观摩HTTP共12项通过；完整server类型、构建与运行合同生成检查通过。321个冻结工具与当前165步proof完全一致。
+
+现有检测器债务仍110、无新增或陈旧记录，本批处理的是公开入口具体服务耦合，不能宣称债务数量下降。未重启本地API，本批为源码/定向测试证据，不能沿用上一批真实SSO作为本次构建运行证明。AuthService对其它消费者的公开导出、账户跨域SQL与整表就绪耦合仍待收口；正向账户/观摩和浏览器验收继续保留。

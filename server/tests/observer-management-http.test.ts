@@ -14,7 +14,7 @@ import {
   type ObserverSourceConfig,
 } from '../src/modules/trading/application/observer-management-ports.js'
 import { observerManagementRoutes } from '../src/modules/trading/transport/http/observer-management-routes.js'
-import { AuthObserverAdminAdapter } from '../src/modules/trading/infrastructure/auth-observer-admin-adapter.js'
+import { createBrowserRequestAccess } from '../src/modules/auth/composition.js'
 import type { AuthService } from '../src/modules/auth/application/auth-service.js'
 
 const sourceConfig: ObserverSourceConfig = {
@@ -210,7 +210,7 @@ describe('P4B admin session adapter', () => {
       resolveSession,
       assertCsrf: vi.fn(),
     } as unknown as AuthService
-    const adapter = new AuthObserverAdminAdapter(service)
+    const adapter = createBrowserRequestAccess(service).admin
     await expect(adapter.authenticate({ headers: { cookie: '__Host-Http-trade_session=trade-session' } })).rejects.toThrow('not-admin')
     await expect(adapter.authenticate({ headers: { cookie: 'aurum_dev_admin-web_session=dev-session' } })).rejects.toThrow('not-admin')
     await expect(adapter.authenticate({ headers: { cookie: '__Host-Http-admin_session=admin-session' } })).resolves.toEqual({ userId: 7, role: 'admin' })

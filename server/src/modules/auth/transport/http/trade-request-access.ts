@@ -1,5 +1,5 @@
-import type { AuthService } from '../../auth/index.js'
-import type { TradeRequestAuthenticator } from '../application/request-authentication.js'
+import type { AuthService } from '../../application/auth-service.js'
+import type { BrowserRequestAccess } from '../../application/browser-request-access.js'
 
 function cookieValue(header: unknown, names: string[]) {
   const cookies = new Map(String(header ?? '').split(';').map((item) => {
@@ -9,7 +9,7 @@ function cookieValue(header: unknown, names: string[]) {
   return undefined
 }
 
-export class AuthTradeRequestAdapter implements TradeRequestAuthenticator {
+export class AuthTradeRequestAdapter implements BrowserRequestAccess {
   constructor(private readonly service: AuthService) {}
 
   async authenticate(request: { headers: Record<string, unknown> }) {

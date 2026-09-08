@@ -1,4 +1,5 @@
 export { AuthService } from './application/auth-service.js'
+export type { BrowserRequestAccess } from './application/browser-request-access.js'
 export { RealtimeTicketAuthenticator } from './application/realtime-ticket-authenticator.js'
 export type { AuthServiceOptions, AuthorizationRequest } from './application/auth-service.js'
 export type * from './application/auth-ports.js'

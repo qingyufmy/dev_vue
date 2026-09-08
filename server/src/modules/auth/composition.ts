@@ -10,6 +10,13 @@ import { RedisAuthTransientStore } from './infrastructure/redis-auth-transient-s
 import { Es256IdTokenSigner } from './infrastructure/es256-id-token-signer.js'
 import { RealtimeTicketAuthenticator } from './application/realtime-ticket-authenticator.js'
 import { registerSsoRoutes } from './transport/http/register-sso-routes.js'
+import type { BrowserRequestAccess } from './application/browser-request-access.js'
+import { AuthTradeRequestAdapter } from './transport/http/trade-request-access.js'
+import { AuthObserverAdminAdapter } from './transport/http/admin-request-access.js'
+
+export function createBrowserRequestAccess(service: AuthService): { trade: BrowserRequestAccess; admin: BrowserRequestAccess } {
+  return { trade: new AuthTradeRequestAdapter(service), admin: new AuthObserverAdminAdapter(service) }
+}
 
 export function createAuthHttp(service: AuthService, secureCookies = true): FastifyPluginAsync {
   return async app => { await registerSsoRoutes(app, service, secureCookies) }

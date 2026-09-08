@@ -1,5 +1,5 @@
-import type { AuthService } from '../../auth/index.js'
-import type { ObserverManagementRequestAuthenticator } from '../application/request-authentication.js'
+import type { AuthService } from '../../application/auth-service.js'
+import type { BrowserRequestAccess } from '../../application/browser-request-access.js'
 
 function cookieValue(header: unknown, names: readonly string[]) {
   if (typeof header !== 'string') return undefined
@@ -27,7 +27,7 @@ function cookieValue(header: unknown, names: readonly string[]) {
  * accepts only the admin-web Host-only session cookie; a trade-web cookie
  * must never grant access to configuration writes.
  */
-export class AuthObserverAdminAdapter implements ObserverManagementRequestAuthenticator {
+export class AuthObserverAdminAdapter implements BrowserRequestAccess {
   constructor(private readonly service: AuthService) {}
 
   async authenticate(request: { headers: Record<string, unknown> }) {

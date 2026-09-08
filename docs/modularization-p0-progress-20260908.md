@@ -828,3 +828,13 @@ HTTP和生产组装已切换到ContextWritePort，移除读取接口、应用服
 2026-09-09，本地Redis与API已在独立回环端口运行；保留原MySQL配置，SSO与Redis密钥在仓库外私有目录。新增local配置入口及8项配置测试，新增可重复真实HTTP探针，8项基础检查通过且清理自身Redis登录事务。具体构建来源、摘要、启动限制和首次路径/探针问题见[运行说明](runbooks/local-account-api-20260909.md)。
 
 API健康与匿名认证通过不等于成功用户流程，下一步是成功SSO、trade开发代理及浏览器账户切换/观摩恢复；真实旧数据不改作测试账号。见[真实HTTP回执](architecture/local-account-api-smoke-20260909.json)。当前仅运行api-v4和本地Redis，没有启动交易角色或部署公网。
+
+## 第九十九批：真实开发代理 SSO
+
+trade代理及成功SSO探针已提交b6cf5962，8项实际HTTP检查通过，涵盖密码登录、授权码交换、会话、空列表和本次会话撤销；见总方案第29节与local-account-sso-20260909.json。未验收正向账户、观摩或浏览器操作。
+
+## 第一百批：账户请求认证能力
+
+将trading中的两种认证适配器移入auth私有HTTP层，公开BrowserRequestAccess窄合同，API组装处注入，trading不再导入AuthService。trade/admin隔离及CSRF调用行为保持，12项定向测试、server类型和构建通过；110条已检测债务不变，321个冻结输入摘要相等。没有启动新运行构建或数据库操作。
+
+定向复核：只有auth解析认证Cookie并接触StoredSession，trading仅消费身份结果；会话/CSRF拒绝原样传播，不回退管理端能力。剩余跨域SQL、整表就绪耦合与正向账户浏览器验收继续按总方案推进。

@@ -3,15 +3,35 @@ import type { Pool } from 'mysql2/promise'
 import type { Redis } from 'ioredis'
 import { expect, it, vi } from 'vitest'
 import type { AuthService } from '../src/modules/auth/index.js'
+import { createBrowserRequestAccess } from '../src/modules/auth/composition.js'
 import { BROWSER_REALTIME_EVENT_CHANNEL, OBSERVER_CONTROL_CHANNEL } from '../src/modules/trading/index.js'
 import { createTradingApiModule, createBridgeTradingModule, createBrowserTradingModule } from '../src/modules/trading/composition.js'
 
 const leases = { current: async () => null }
+it('accepts capability-only authenticators and propagates session and CSRF rejection', async () => {
+  const denied = new Error('session-revoked')
+  const csrfDenied = new Error('csrf-invalid')
+  const trade = {
+    authenticate: vi.fn(async () => { throw denied }),
+    assertWrite: vi.fn(async () => { throw csrfDenied }),
+  }
+  const admin = {
+    authenticate: vi.fn(async () => ({ userId: 9, role: 'admin' })),
+    assertWrite: vi.fn(async () => ({ userId: 9, role: 'admin' })),
+  }
+  const module = createTradingApiModule({} as Pool, {} as Redis, { trade, admin }, leases)
+  const request = { headers: {} }
+  await expect(module.tradeAuth.authenticate(request)).rejects.toBe(denied)
+  await expect(module.tradeAuth.assertWrite(request)).rejects.toBe(csrfDenied)
+  expect(admin.authenticate).not.toHaveBeenCalled()
+  expect(admin.assertWrite).not.toHaveBeenCalled()
+})
+
 it('keeps trade and administrator authentication scopes distinct in the API composition', async () => {
   const resolveSession = vi.fn(async (_cookie: unknown, client: string) => ({ user: { id: 7, role: client === 'admin-web' ? 'admin' : 'user' }, session: { id: 'session' } }))
   const assertCsrf = vi.fn()
   const auth = { cookieName: (client: string) => client + '-session', resolveSession, assertCsrf } as unknown as AuthService
-  const module = createTradingApiModule({} as Pool, {} as Redis, auth, leases)
+  const module = createTradingApiModule({} as Pool, {} as Redis, createBrowserRequestAccess(auth), leases)
   const headers = { cookie: 'trade-web-session=trade-secret; admin-web-session=admin-secret', 'x-csrf-token': 'csrf', origin: 'https://admin.example.test' }
   expect(await module.tradeAuth.authenticate({ headers })).toEqual({ userId: 7, role: 'user' })
   expect(resolveSession).toHaveBeenLastCalledWith('trade-secret', 'trade-web')

@@ -9,7 +9,7 @@ import {
   assertV4RuntimeEnabled, connectCacheRedis, createCacheRedis, createMysqlPool, installProcessLifecycle,
   loadServerEnvironment, loadV4ApiRuntimeConfig, loadV4BaseRuntimeConfig, RoleHealth,
 } from '../bootstrap/index.js'
-import { createAuthModule, createAuthHttp } from '../modules/auth/composition.js'
+import { createAuthModule, createAuthHttp, createBrowserRequestAccess } from '../modules/auth/composition.js'
 import { createBridgeDeviceRevoker } from '../modules/bridge/composition.js'
 import {
   BridgeCredentialService, MysqlBridgeCredentialRepository, RedisBridgeGatewayLeaseStore, RedisBridgeSessionTicketStore,
@@ -39,7 +39,7 @@ async function main() {
   await Promise.all([assertTradingSchemaReady(pool), connectCacheRedis(cache)])
 
   const auth = createAuthModule(pool, cache, web.auth, createBridgeDeviceRevoker(pool))
-  const trading = createTradingApiModule(pool, cache, auth, new RedisBridgeGatewayLeaseStore(cache))
+  const trading = createTradingApiModule(pool, cache, createBrowserRequestAccess(auth), new RedisBridgeGatewayLeaseStore(cache))
   const { tradeAuth, observerAdminAuth } = trading
   const userExecution = new UserExecutionCommandService(new MysqlUserExecutionCommandRepository(pool, createTransactionAccountClock))
   const executionDistribution = new ExecutionDistributionService(new MysqlExecutionDistributionRepository(pool))

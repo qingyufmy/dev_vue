@@ -8,6 +8,8 @@
 - `composition.ts`：运行入口创建认证服务、实时票据认证器及HTTP插件。`createAuthHttp(service, secureCookies)`封装完整SSO路由；全局路由登记器只接收插件，不导入auth内部路由。
 - MySQL、Redis、密码校验、签名器、客户端注册表、清理SQL及HTTP实现保留私有。测试可以直接验证内部适配器，跨域生产代码不得以测试导入为例外。
 
+`BrowserRequestAccess` 是窄的浏览器请求认证合同，只返回 userId/role；`createBrowserRequestAccess` 在 composition 内创建 trade/admin 两种实现，由 API 入口注入消费者。Cookie 解析、会话解析及 CSRF 留在 auth，不向 trading 暴露 AuthService 或持久会话。当前保留既有 Cookie 接受规则，本次结构调整不代表全域 AuthService 导出已收口。
+
 AuthService通过自身所需的BridgeDeviceRevoker端口触发设备撤销；实现由bridge提供并在运行入口注入。设备撤销失败向上传播，随后网页退出不会提前执行。不得把Bridge表SQL重新移回auth。
 
 ## 数据与生命周期
