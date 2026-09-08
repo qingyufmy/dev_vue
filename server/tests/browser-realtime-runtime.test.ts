@@ -16,6 +16,10 @@ import { createTradingHttp, createObserverManagementHttp, createBrowserRealtimeS
 import { exactTradeHostHook, exactAdminHostHook, registerApiV4Routes, type ApiV4RouteServices } from '../src/transport/api-v4-route-registrar.js'
 import { createAuditModule } from '../src/modules/audit/composition.js'
 import { createAuthHttp } from '../src/modules/auth/composition.js'
+import { createInferenceHttp } from '../src/modules/inference/composition.js'
+import { createStrategyHttp } from '../src/modules/strategies/composition.js'
+import { createReviewHttp } from '../src/modules/reviews/composition.js'
+import { createTradeHistoryHttp } from '../src/modules/trade-history/composition.js'
 import { createSettingsHttp } from '../src/modules/settings/composition.js'
 
 const closers: Array<() => Promise<void>> = []
@@ -147,6 +151,10 @@ describe('V4 browser realtime runtime', () => {
     services.authHttp = createAuthHttp(services.auth, false)
     const registrationOnly = new Proxy({}, { get: () => () => { throw new Error('registration_only') } })
     services.tradingHttp = createTradingHttp(...([registrationOnly, registrationOnly, registrationOnly, registrationOnly] as Parameters<typeof createTradingHttp>))
+    services.inferenceHttp = createInferenceHttp(...([registrationOnly, registrationOnly, registrationOnly] as Parameters<typeof createInferenceHttp>))
+    services.strategiesHttp = createStrategyHttp(...([registrationOnly, registrationOnly] as Parameters<typeof createStrategyHttp>))
+    services.reviewsHttp = createReviewHttp(...([registrationOnly, registrationOnly] as Parameters<typeof createReviewHttp>))
+    services.tradeHistoryHttp = createTradeHistoryHttp(...([registrationOnly, registrationOnly] as Parameters<typeof createTradeHistoryHttp>))
     services.observerManagementHttp = createObserverManagementHttp(...([registrationOnly, registrationOnly] as Parameters<typeof createObserverManagementHttp>))
     services.settingsHttp = createSettingsHttp({} as Parameters<typeof createSettingsHttp>[0], {
       authenticate: async () => { throw new Error('registration_only') }, assertWrite: async () => { throw new Error('registration_only') },
@@ -162,6 +170,7 @@ describe('V4 browser realtime runtime', () => {
       ['POST', '/api/v4/bridge/credential-revocations'],
       ['GET', '/api/v4/trading-context'], ['GET', '/api/v4/market/candles'],
       ['POST', '/api/v4/analysis-jobs'], ['GET', '/api/v4/risk-accounts/:account_id/policy'],
+      ['POST', '/api/v4/strategies/compile'], ['GET', '/api/v4/review-cases'], ['GET', '/api/v4/trade-history'],
       ['GET', '/api/v4/operations/:operation_id'], ['GET', '/api/v4/trading-accounts/:account_id/execution-context'],
       ['GET', '/api/v4/execution-distributions/preview'], ['GET', '/api/v4/execution-distributions/:distribution_id'],
       ['GET', '/api/v4/admin/observer/sources'], ['POST', '/api/v4/admin/observer/sources'],

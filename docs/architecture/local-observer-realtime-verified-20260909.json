@@ -1,0 +1,176 @@
+{
+  "kind": "local-observer-realtime-revocation/v1",
+  "observedAt": "2026-09-08T19:17:30.799Z",
+  "failed": false,
+  "phase": "observer-context-commands",
+  "checks": [
+    {
+      "name": "password-login-through-auth-proxy",
+      "status": 200
+    },
+    {
+      "name": "code-exchange-through-trade-proxy",
+      "status": 302
+    },
+    {
+      "name": "authenticated-session-string-user-id",
+      "status": 200
+    },
+    {
+      "name": "/api/v4/trading-accounts",
+      "status": 200,
+      "items": 2
+    },
+    {
+      "name": "/api/v4/observer-channels",
+      "status": 200,
+      "items": 1
+    },
+    {
+      "name": "/api/v4/bridge/terminal-profiles",
+      "status": 200,
+      "items": 0
+    },
+    {
+      "name": "owned-switch-requires-csrf-without-changing-context",
+      "passed": true
+    },
+    {
+      "name": "select-first-owned-account-and-replay-one-revision",
+      "passed": true
+    },
+    {
+      "name": "changed-account-body-and-stale-revision-rejected",
+      "passed": true
+    },
+    {
+      "name": "switch-second-account-and-keep-historical-receipt-separate",
+      "passed": true
+    },
+    {
+      "name": "concurrent-account-switches-have-one-winner",
+      "passed": true
+    },
+    {
+      "name": "observer-grant-does-not-confer-source-ownership",
+      "passed": true
+    },
+    {
+      "name": "enter-assigned-observer-and-replay-same-command",
+      "passed": true
+    },
+    {
+      "name": "observer-publication-matches-exact-source-and-is-read-only",
+      "passed": true
+    },
+    {
+      "name": "realtime-ticket-issued-through-authenticated-http",
+      "passed": true
+    },
+    {
+      "name": "real-websocket-ticket-and-observer-subscription-through-vite-proxy",
+      "passed": true
+    },
+    {
+      "name": "persisted-revocation-event-via-redis-resyncs-and-closes-real-websocket",
+      "passed": true
+    },
+    {
+      "name": "revocation-removes-directory-and-blocks-existing-context-and-publication",
+      "passed": true
+    },
+    {
+      "name": "historical-command-replay-does-not-restore-revoked-authority",
+      "passed": true
+    },
+    {
+      "name": "explicit-regrant-restores-authorization-with-a-new-grant-revision",
+      "passed": true
+    },
+    {
+      "name": "realtime-ticket-issued-through-authenticated-http",
+      "passed": true
+    },
+    {
+      "name": "real-websocket-ticket-and-observer-subscription-through-vite-proxy",
+      "passed": true
+    },
+    {
+      "name": "fresh-ticket-reconnect-reauthorizes-after-explicit-regrant",
+      "passed": true
+    },
+    {
+      "name": "leave-observer-restores-owned-context-without-replaying-old-result",
+      "passed": true
+    },
+    {
+      "name": "session-revocation-4174",
+      "logoutStatus": 204,
+      "replayStatus": 401
+    },
+    {
+      "name": "session-revocation-4176",
+      "logoutStatus": 204,
+      "replayStatus": 401
+    }
+  ],
+  "contextResult": {
+    "owned": {
+      "priorRevision": "39",
+      "finalRevision": "42",
+      "committedCommands": 3,
+      "accountIds": [
+        "4",
+        "5"
+      ],
+      "finalAccountId": "4",
+      "retained": "synthetic offline accounts, context and command receipts"
+    },
+    "observer": {
+      "priorRevision": "42",
+      "finalRevision": "44",
+      "committedCommands": 2,
+      "channelId": "1",
+      "sourceAccountId": "6",
+      "restoredAccountId": "4"
+    }
+  },
+  "accessControl": {
+    "initialRevision": 3,
+    "completedTransitions": 2,
+    "transitions": [
+      {
+        "key": "284f1648-5233-4cec-9b20-15000ccdddbb:revoke",
+        "granted": false,
+        "priorRevision": 3,
+        "commitState": "confirmed",
+        "result": {
+          "operation_id": "0e129c2c-96de-4637-9b04-ee9b33512303",
+          "target_id": "1",
+          "revision": 4,
+          "registry_revision": 8
+        },
+        "eligibilityWaitMs": 0,
+        "publication": {
+          "state": "confirmed",
+          "eventId": "8d034d92-08b1-4eb2-acd8-0a19d859b004",
+          "outboxAcknowledged": false
+        }
+      },
+      {
+        "key": "284f1648-5233-4cec-9b20-15000ccdddbb:restore",
+        "granted": true,
+        "priorRevision": 4,
+        "commitState": "confirmed",
+        "result": {
+          "operation_id": "d72023ab-e525-4988-ae3f-aa295456ea0b",
+          "target_id": "1",
+          "revision": 5,
+          "registry_revision": 9
+        },
+        "eligibilityWaitMs": 4797
+      }
+    ]
+  },
+  "scope": "Exercises real HTTP, Vite WebSocket proxy, browser realtime role, Redis and dev_vue; individual checks determine completion. Publishes only the exact persisted synthetic revocation event via the compiled publisher; does not claim/ack outbox or run the dispatcher. Not Chrome UI, general dispatcher, lost ACK or terminal proof."
+}

@@ -21,10 +21,10 @@ interface UserRow extends RowDataPacket {
 }
 
 interface SessionRow extends RowDataPacket {
-  id: number
+  id: number | string
   user_id: number
   client_id: StoredSession['clientId']
-  parent_session_id: number | null
+  parent_session_id: number | string | null
   auth_time_utc: Date
   mfa_level: StoredSession['mfaLevel']
   session_version: number
@@ -34,10 +34,10 @@ interface SessionRow extends RowDataPacket {
 }
 
 interface AuthorizationCodeRow extends RowDataPacket {
-  id: number
+  id: number | string
   code_hash: string
   user_id: number
-  auth_session_id: number
+  auth_session_id: number | string
   client_id: ConsumedAuthorizationCode['clientId']
   redirect_uri: string
   scope: string
@@ -78,12 +78,21 @@ function mapUser(row: UserRow | undefined): AuthUser | null {
   }
 }
 
+// mysql2 intentionally returns BIGINT as strings. Auth's internal session/code ports use safe numbers.
+// Normalize here, before issuing tickets or consuming codes; never round an out-of-range database identity.
+function authIdentity(value: unknown): number {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return value
+  if (typeof value === 'string' && /^[1-9][0-9]{0,15}$/.test(value)
+    && BigInt(value) <= BigInt(Number.MAX_SAFE_INTEGER)) return Number(value)
+  throw new Error('auth_storage_identity_invalid')
+}
+
 function mapSession(row: SessionRow): StoredSession {
   return {
-    id: row.id,
+    id: authIdentity(row.id),
     userId: row.user_id,
     clientId: row.client_id,
-    parentSessionId: row.parent_session_id,
+    parentSessionId: row.parent_session_id === null ? null : authIdentity(row.parent_session_id),
     authTimeUtc: new Date(row.auth_time_utc),
     mfaLevel: row.mfa_level,
     sessionVersion: row.session_version,
@@ -123,7 +132,7 @@ export class MysqlAuthRepository implements AuthRepository {
       input.lastSeenAtUtc, input.idleExpiresAtUtc, input.absoluteExpiresAtUtc,
     ])
     if (!('insertId' in result) || !result.insertId) throw new Error('auth_session_insert_failed')
-    return { ...input, id: Number(result.insertId), revokedAtUtc: null }
+    return { ...input, id: authIdentity(result.insertId), revokedAtUtc: null }
   }
 
   async findActiveSession(sessionHash: string, now: Date) {
@@ -194,15 +203,17 @@ export class MysqlAuthRepository implements AuthRepository {
         FOR UPDATE`, [codeHash, now, now])
       const row = rows[0]
       if (!row) return null
+      const codeId = authIdentity(row.id)
+      const authSessionId = authIdentity(row.auth_session_id)
       const [result] = await connection.execute(`
         UPDATE auth_authorization_codes SET consumed_at_utc = ?
-        WHERE id = ? AND consumed_at_utc IS NULL`, [now, row.id])
+        WHERE id = ? AND consumed_at_utc IS NULL`, [now, codeId])
       if (!('affectedRows' in result) || result.affectedRows !== 1) return null
       return {
-        id: row.id,
+        id: codeId,
         codeHash: row.code_hash,
         userId: row.user_id,
-        authSessionId: row.auth_session_id,
+        authSessionId,
         clientId: row.client_id,
         redirectUri: row.redirect_uri,
         scope: row.scope,

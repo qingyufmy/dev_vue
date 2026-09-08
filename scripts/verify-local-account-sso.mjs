@@ -1,17 +1,20 @@
 import { verifyLocalContextCommands } from './lib/local-context-command-checks.mjs'
 import { verifyLocalOwnedContextCommands } from './lib/local-owned-context-command-checks.mjs'
 import { verifyLocalObserverContextCommands } from './lib/local-observer-context-command-checks.mjs'
+import { createLocalObserverAccessControl } from './lib/local-observer-access-control.mjs'
 import assert from 'node:assert/strict'
 import { open, readFile } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import http from 'node:http'
 
 // Requires a private, explicitly provisioned synthetic user; never accepts real credentials on argv.
-const [fixturePath, destination, mode, intentPath, observerPath] = process.argv.slice(2)
+const [fixturePath, destination, mode, intentPath, observerPath, operatorJournalPath, runtimeConfigPath] = process.argv.slice(2)
 const contextCommands = mode === '--context-commands'
-const observerCommands = mode === '--observer-channel'
+const realtime = mode === '--observer-realtime'
+const observerRevocation = mode === '--observer-revocation' || realtime
+const observerCommands = mode === '--observer-channel' || observerRevocation
 const ownedCommands = mode === '--owned-accounts' || observerCommands
-assert.ok((observerCommands ? process.argv.length === 7 && isAbsolute(intentPath) && isAbsolute(observerPath) : ownedCommands ? process.argv.length === 6 && isAbsolute(intentPath) : contextCommands ? process.argv.length === 5 : process.argv.length === 4 && mode === undefined) && isAbsolute(fixturePath) && isAbsolute(destination) && fixturePath !== destination)
+assert.ok((observerCommands ? process.argv.length === (realtime ? 9 : observerRevocation ? 8 : 7) && isAbsolute(intentPath) && isAbsolute(observerPath) && (!observerRevocation || isAbsolute(operatorJournalPath)) && (!realtime || isAbsolute(runtimeConfigPath)) : ownedCommands ? process.argv.length === 6 && isAbsolute(intentPath) : contextCommands ? process.argv.length === 5 : process.argv.length === 4 && mode === undefined) && isAbsolute(fixturePath) && isAbsolute(destination) && fixturePath !== destination)
 const fixture = JSON.parse(await readFile(fixturePath, 'utf8'))
 assert.equal(fixture.kind, 'local-account-fixture/v1')
 assert.equal(fixture.identity.db, 'dev_vue')
@@ -34,7 +37,7 @@ if (observer) {
 const output = await open(destination, 'wx', 0o600)
 const sessions = new Map()
 const checks = []
-let phase = 'start', failed = false, contextResult = null
+let phase = 'start', failed = false, contextResult = null, accessControl, realtimeFailure
 
 function request(port, path, body, csrf, options = {}) {
   return new Promise((resolve, reject) => {
@@ -65,6 +68,10 @@ function remember(port, result) {
   sessions.set(port, cookies[0].split(';')[0])
 }
 try {
+  if (observerRevocation) {
+    phase = 'observer-fixture-control'
+    accessControl = await createLocalObserverAccessControl(fixture, observer, operatorJournalPath, runtimeConfigPath)
+  }
   let result = await request(4174, '/auth/start?next=%2F')
   assert.equal(result.status, 302)
   const authorize = new URL(result.headers.location)
@@ -115,10 +122,11 @@ try {
   }
   if (observerCommands) {
     phase = 'observer-context-commands'
-    contextResult = { owned: contextResult, observer: await verifyLocalObserverContextCommands(request, fixture.userId, observer, checks) }
+    contextResult = { owned: contextResult, observer: await verifyLocalObserverContextCommands(request, fixture.userId, observer, checks, accessControl, realtime) }
   }
-} catch {
+} catch (error) {
   failed = true
+  realtimeFailure = error.localRealtime
 } finally {
   // Revoke only the sessions issued to this probe, retaining audit history and the reusable fixture.
   for (const port of [4174, 4176]) {
@@ -135,8 +143,12 @@ try {
       checks.push({ name: `session-revocation-${port}`, logoutStatus: 204, replayStatus: 401 })
     } catch { failed = true; checks.push({ name: `session-revocation-${port}`, failed: true }) }
   }
-  const report = { kind: observerCommands ? 'local-observer-account-context-http/v1' : ownedCommands ? 'local-owned-account-context-http/v1' : contextCommands ? 'local-account-context-http/v1' : 'local-account-sso/v1', observedAt: new Date().toISOString(), failed, phase, checks, contextResult,
-    scope: observerCommands ? 'Real local HTTP/API/Redis/dev_vue: owned account switching plus assigned observer entry/exit, source ownership rejection and publication scope isolation. Synthetic data and receipts retained; sessions revoked. No revocation, browser, lost commit ACK or terminal proof.' : ownedCommands ? 'Real local HTTP/API/Redis/dev_vue: two synthetic offline owned accounts, switching, replay, conflicts, CSRF and receipts. Context and history retained; own sessions revoked. No observer, browser, lost commit ACK or terminal proof.' : contextCommands ? 'Real local proxies/API/Redis/development MySQL: synthetic user blocked-context commands, replay, concurrency, CSRF and receipt reads. Context revisions and audit receipts retained; own sessions revoked. No positive owned-account/observer-channel, browser, lost MySQL commit ACK or terminal proof.' : 'Real local Vite proxies, API, Redis and development MySQL using an existing synthetic user. Empty account reads only; no positive account/observer, browser, terminal or trading proof. Own sessions revoked; fixture and audit history retained.' }
+  if (accessControl) {
+    try { await accessControl.close() }
+    catch { failed = true; checks.push({ name: 'observer-control-cleanup', failed: true }) }
+  }
+  const report = { kind: realtime ? 'local-observer-realtime-revocation/v1' : observerRevocation ? 'local-observer-revocation-http/v1' : observerCommands ? 'local-observer-account-context-http/v1' : ownedCommands ? 'local-owned-account-context-http/v1' : contextCommands ? 'local-account-context-http/v1' : 'local-account-sso/v1', observedAt: new Date().toISOString(), failed, phase, checks, contextResult, realtimeFailure, accessControl: accessControl?.report(),
+    scope: realtime ? 'Exercises real HTTP, Vite WebSocket proxy, browser realtime role, Redis and dev_vue; individual checks determine completion. Publishes only the exact persisted synthetic revocation event via the compiled publisher; does not claim/ack outbox or run the dispatcher. Not Chrome UI, general dispatcher, lost ACK or terminal proof.' : observerRevocation ? 'Real local HTTP/API/Redis/dev_vue: observer revoke and explicit regrant via compiled management with durable keys, HTTP directory/context/publication denial and historical receipt isolation. Synthetic history retained; sessions revoked. No browser/realtime delivery, actual lost commit ACK or terminal proof.' : observerCommands ? 'Real local HTTP/API/Redis/dev_vue: owned account switching plus assigned observer entry/exit, source ownership rejection and publication scope isolation. Synthetic data and receipts retained; sessions revoked. No revocation, browser, lost commit ACK or terminal proof.' : ownedCommands ? 'Real local HTTP/API/Redis/dev_vue: two synthetic offline owned accounts, switching, replay, conflicts, CSRF and receipts. Context and history retained; own sessions revoked. No observer, browser, lost commit ACK or terminal proof.' : contextCommands ? 'Real local proxies/API/Redis/development MySQL: synthetic user blocked-context commands, replay, concurrency, CSRF and receipt reads. Context revisions and audit receipts retained; own sessions revoked. No positive owned-account/observer-channel, browser, lost MySQL commit ACK or terminal proof.' : 'Real local Vite proxies, API, Redis and development MySQL using an existing synthetic user. Empty account reads only; no positive account/observer, browser, terminal or trading proof. Own sessions revoked; fixture and audit history retained.' }
   await output.writeFile(JSON.stringify(report, null, 2) + '\n'); await output.sync(); await output.close()
   console.log(JSON.stringify({ failed, phase, checks: checks.length }))
   if (failed) process.exitCode = 1

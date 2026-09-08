@@ -1,0 +1,147 @@
+{
+  "kind": "local-observer-revocation-http/v1",
+  "observedAt": "2026-09-08T19:03:34.725Z",
+  "failed": false,
+  "phase": "observer-context-commands",
+  "checks": [
+    {
+      "name": "password-login-through-auth-proxy",
+      "status": 200
+    },
+    {
+      "name": "code-exchange-through-trade-proxy",
+      "status": 302
+    },
+    {
+      "name": "authenticated-session-string-user-id",
+      "status": 200
+    },
+    {
+      "name": "/api/v4/trading-accounts",
+      "status": 200,
+      "items": 2
+    },
+    {
+      "name": "/api/v4/observer-channels",
+      "status": 200,
+      "items": 1
+    },
+    {
+      "name": "/api/v4/bridge/terminal-profiles",
+      "status": 200,
+      "items": 0
+    },
+    {
+      "name": "owned-switch-requires-csrf-without-changing-context",
+      "passed": true
+    },
+    {
+      "name": "select-first-owned-account-and-replay-one-revision",
+      "passed": true
+    },
+    {
+      "name": "changed-account-body-and-stale-revision-rejected",
+      "passed": true
+    },
+    {
+      "name": "switch-second-account-and-keep-historical-receipt-separate",
+      "passed": true
+    },
+    {
+      "name": "concurrent-account-switches-have-one-winner",
+      "passed": true
+    },
+    {
+      "name": "observer-grant-does-not-confer-source-ownership",
+      "passed": true
+    },
+    {
+      "name": "enter-assigned-observer-and-replay-same-command",
+      "passed": true
+    },
+    {
+      "name": "observer-publication-matches-exact-source-and-is-read-only",
+      "passed": true
+    },
+    {
+      "name": "revocation-removes-directory-and-blocks-existing-context-and-publication",
+      "passed": true
+    },
+    {
+      "name": "historical-command-replay-does-not-restore-revoked-authority",
+      "passed": true
+    },
+    {
+      "name": "explicit-regrant-restores-authorization-with-a-new-grant-revision",
+      "passed": true
+    },
+    {
+      "name": "leave-observer-restores-owned-context-without-replaying-old-result",
+      "passed": true
+    },
+    {
+      "name": "session-revocation-4174",
+      "logoutStatus": 204,
+      "replayStatus": 401
+    },
+    {
+      "name": "session-revocation-4176",
+      "logoutStatus": 204,
+      "replayStatus": 401
+    }
+  ],
+  "contextResult": {
+    "owned": {
+      "priorRevision": "22",
+      "finalRevision": "25",
+      "committedCommands": 3,
+      "accountIds": [
+        "4",
+        "5"
+      ],
+      "finalAccountId": "4",
+      "retained": "synthetic offline accounts, context and command receipts"
+    },
+    "observer": {
+      "priorRevision": "25",
+      "finalRevision": "27",
+      "committedCommands": 2,
+      "channelId": "1",
+      "sourceAccountId": "6",
+      "restoredAccountId": "4"
+    }
+  },
+  "accessControl": {
+    "initialRevision": 1,
+    "completedTransitions": 2,
+    "transitions": [
+      {
+        "key": "086487df-fe90-4137-ac0b-acf0144cf222:revoke",
+        "granted": false,
+        "priorRevision": 1,
+        "commitState": "confirmed",
+        "result": {
+          "operation_id": "3c2a9db1-74b6-40c1-ae57-936901875d9c",
+          "target_id": "1",
+          "revision": 2,
+          "registry_revision": 6
+        },
+        "eligibilityWaitMs": 0
+      },
+      {
+        "key": "086487df-fe90-4137-ac0b-acf0144cf222:restore",
+        "granted": true,
+        "priorRevision": 2,
+        "commitState": "confirmed",
+        "result": {
+          "operation_id": "672a91eb-f90a-4a68-ad95-0b95b1de708a",
+          "target_id": "1",
+          "revision": 3,
+          "registry_revision": 7
+        },
+        "eligibilityWaitMs": 4746
+      }
+    ]
+  },
+  "scope": "Real local HTTP/API/Redis/dev_vue: observer revoke and explicit regrant via compiled management with durable keys, HTTP directory/context/publication denial and historical receipt isolation. Synthetic history retained; sessions revoked. No browser/realtime delivery, actual lost commit ACK or terminal proof."
+}

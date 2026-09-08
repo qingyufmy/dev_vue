@@ -2,6 +2,7 @@
 import { createServer as createHttpServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { createServer } from 'vite'
+import { WebSocket, WebSocketServer } from 'ws'
 import { expect, it, vi } from 'vitest'
 import configure from '../vite.config'
 
@@ -40,6 +41,45 @@ it('proxies trade API and SSO redirects and cookies without changing browser Ori
     expect(requests).toHaveLength(2)
   } finally {
     await proxy?.close()
+    upstream.closeAllConnections()
+    await new Promise<void>(resolve => upstream.close(() => resolve()))
+    vi.unstubAllEnvs()
+  }
+})
+
+it('forwards realtime upgrades to their own upstream preserving Origin, Host, ticket cookie and protocol', async () => {
+  const upstream = createHttpServer()
+  const websocketServer = new WebSocketServer({ server: upstream })
+  const requests: Array<{ path?: string; host?: string; origin?: string; cookie?: string; protocol?: string }> = []
+  websocketServer.on('connection', (socket, request) => {
+    requests.push({ path: request.url, host: request.headers.host, origin: request.headers.origin,
+      cookie: request.headers.cookie, protocol: request.headers['sec-websocket-protocol'] })
+    socket.send('connected')
+  })
+  await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve))
+  vi.stubEnv('AURUM_TRADE_REALTIME_BASE', `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`)
+  let proxy: Awaited<ReturnType<typeof createServer>> | undefined, socket: WebSocket | undefined
+  try {
+    if (typeof configure !== 'function') throw Error('expected config factory')
+    const config = await configure({ mode: 'test', command: 'serve' })
+    proxy = await createServer({ configFile: false, logLevel: 'silent', optimizeDeps: { noDiscovery: true, include: [] },
+      server: { host: '127.0.0.1', port: 0, hmr: false, proxy: config.server?.proxy } })
+    await proxy.listen()
+    const host = `127.0.0.1:${(proxy.httpServer!.address() as AddressInfo).port}`
+    socket = new WebSocket(`ws://${host}/realtime/v4`, 'aurum.realtime.v4', {
+      handshakeTimeout: 2000, origin: 'http://localhost:4174', headers: { Cookie: 'fixture_ticket=existing' },
+    })
+    const message = await new Promise<string>((resolve, reject) => {
+      socket!.once('message', value => resolve(value.toString())); socket!.once('error', reject)
+    })
+    expect(message).toBe('connected')
+    expect(requests).toEqual([{ path: '/realtime/v4', host, origin: 'http://localhost:4174',
+      cookie: 'fixture_ticket=existing', protocol: 'aurum.realtime.v4' }])
+  } finally {
+    socket?.terminate()
+    for (const client of websocketServer.clients) client.terminate()
+    await proxy?.close()
+    await new Promise<void>(resolve => websocketServer.close(() => resolve()))
     upstream.closeAllConnections()
     await new Promise<void>(resolve => upstream.close(() => resolve()))
     vi.unstubAllEnvs()

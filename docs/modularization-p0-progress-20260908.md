@@ -1183,3 +1183,24 @@ verify-local-account-sso 增加显式 --observer-channel 模式，17 项实际 H
 迁移协议 6 项、就绪回归 21 项、server 类型与构建检查通过；服务端债务仍 64 条，运行登记仍 14 项，321 个冻结输入不变。编译后真实 MySQL 就绪检查通过（observer-registry-seeded-readiness-20260909.json）。本地 API 更新到本批应用构建，可见 PowerShell 43996、Node 43444、3010 端口；8 项基础探针及上述 17 项 HTTP 通过，Redis/MySQL 地址保持原开发配置。
 
 Chrome 再次在授权地址报 ERR_BLOCKED_BY_CLIENT；独立无会话 HTTP 跳转链为 302→302→登录页 200，具体客户端拦截原因未确认，本次标签已关闭。没有浏览器正向切换、实时权限撤销/重连、真实终端或交易证明。下一步继续夹具精确退役机制、权限撤销与恢复，以及浏览器拦截诊断；P1 和整体重构均未完成。
+
+
+## 68. 观摩撤权、实时连接与身份 BIGINT 适配（第一百三十八批）
+
+新增仅用于合成夹具的 local-observer-access-control：按仓库外原始意图核对数据库 UUID、运营者 uid/email、源账户、assigned 频道及明确观众；只允许撤权→恢复两次转换。每次操作先同步持久 key/body，再经管理用例提交并记录确认，未知提交不自动恢复。首次实际 HTTP 撤权验收 20 项通过，授权 revision 1→3；目录移除、已有上下文转 blocked、源发布返回 403，旧命令/回执重放不改变当前权限。明确重新授权后恢复，报告 local-observer-revocation-http-20260909.json。
+
+核对实时入口发现 trade 的本地 Vite 代理缺少 /realtime/v4，补充独立 realtime upstream 和 ws 转发，保留原 Host/Origin/Cookie/子协议。新增真实 WebSocket 代理回归；浏览器实时角色启动及 ready 同步调用 trading/auth 所有者就绪能力。run-local-browser-realtime.mjs 复用已验证的本地环境装配，仅启动 3011 实时角色，Redis 仍在本机，数据库沿用开发库。
+
+真实连接进一步发现：票据接口 201 后网关拒绝票据；当前 mysql2 bigNumberStrings 配置把 auth_sessions.id/parent_session_id 返回为 string，而实时票据消费者要求安全整数。只读确认实际驱动类型，修复 MysqlAuthRepository 的 session/code ID 映射和 insertId 返回，按已有内部 number 合同严格转换正整数；非规范或超过 MAX_SAFE_INTEGER 的值拒绝，不取整、不放宽 Redis 消费校验。授权码转换在写入 consumed 标记之前完成，失败回滚。新增 13 项存储适配回归；实际 SSO→票据→网关成功验证该修复。
+
+首次实时报告 local-observer-realtime-revocation-20260909.json 和 diagnostic 报告记录失败；修复身份适配后的 fixed 报告已进入 welcome，但测试订阅缺少合同要求的 resource_id，未通过。已修正探针为 metrics 订阅并补协议错误诊断。失败文件保持原始结果；其 scope 是意图范围，不可据此将重连算成通过。
+
+最终 local-observer-realtime-verified-20260909.json 26 项通过：真实 HTTP 票据、Vite WebSocket 代理、已运行 realtime 角色、MySQL 观摩授权，以及精确持久化撤权事件→编译后的 Redis publisher→Redis 订阅→resync_required→网络 close 4003/authorization_changed。重新授权后，以新票据重新连接并订阅成功。发布只取本次合成管理 operation 对应的唯一 outbox 行，未 claim/ack outbox，未启动通用 dispatcher，因此不声称完整 Outbox 调度验收。两个 WebSocket 已关闭，自建 HTTP 会话均撤销；角色健康记录 connections=0。
+
+本批 HTTP 与调试过程的上下文/操作历史保留，最终成功探针上下文 39→44，恢复自有账户 4；最终授权 revision 3→5、管理 registry revision 7→9。恢复授权等待约 4.8 秒满足数据库授权时间，未修改时钟配置或弱化授权条件。原始观摩 provision 回执中的 accessRevision=1 是历史值，后续状态从数据库核对；不能在授权已变化后把旧 provision --resume 当成恢复当前权限的脚本。
+
+定向验证累计 66 项通过（auth 存储 13、SSO 13、实时运行 8、观摩发布 20、会话生命周期 2、撤权失效 8、前端代理 2）。补齐一处已过时的 API 注册测试，改用现有 inference/strategies/reviews/history 组装入口，并验证代表性路由。server 类型/构建、trade 类型、前端边界、API 生成/运行合同、脚本语法及 321 个冻结输入检查通过。未将定向结果表述为全仓验收。
+
+API 和 realtime 均更新到本批构建：API Node 42252/PowerShell 33680，实时 Node 32740/PowerShell 33128；端口分别 3010/3011。API 基础 8 项通过（local-observer-realtime-api-health-20260909.json），实时 live/ready 两项通过（local-browser-realtime-health-20260909.json）。本批没有新增数据库结构迁移、真实终端动作或公网操作。
+
+下一步仍需夹具精确退役、完整 dispatcher/前端失效与断线恢复、Chrome 授权拦截诊断及浏览器账户/观摩流程；本次真实 ws 客户端不替代 Chrome UI 验收。P1 和总体目标保持未完成，静态服务端债务 64 条未变。

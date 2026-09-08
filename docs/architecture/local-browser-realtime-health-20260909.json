@@ -1,0 +1,37 @@
+{
+  "kind": "local-browser-realtime-health/v1",
+  "observedAt": "2026-09-08T19:19:56.672Z",
+  "port": 3011,
+  "checks": [
+    {
+      "path": "/health/live",
+      "status": 200,
+      "result": {
+        "status": "ok",
+        "role": "browser-realtime",
+        "accepting": true,
+        "ready": true,
+        "startedAt": "2026-09-08T19:16:37.892Z",
+        "lastWorkAt": "2026-09-08T19:17:25.775Z",
+        "lastErrorCode": null,
+        "connections": 0
+      }
+    },
+    {
+      "path": "/health/ready",
+      "status": 200,
+      "result": {
+        "status": "ok",
+        "role": "browser-realtime",
+        "accepting": true,
+        "ready": true,
+        "startedAt": "2026-09-08T19:16:37.892Z",
+        "lastWorkAt": "2026-09-08T19:17:25.775Z",
+        "lastErrorCode": null,
+        "dependencies_ready": true,
+        "connections": 0
+      }
+    }
+  ],
+  "scope": "Running local browser realtime role; no retained probe WebSocket connections."
+}
