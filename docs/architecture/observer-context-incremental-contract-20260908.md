@@ -1,0 +1,44 @@
+# 观摩与交易上下文增量合同
+
+范围为账户全栈样板的结构依赖：在完整150步之后追加037四张表，保留历史迁移文件、旧数据与ID。不修改应用启动流程，不直接运行空库003/021，不宣称当前库已经154步。
+
+## 依赖、结构与所有权
+
+| 顺序 | 表 | 前置父表 | 写入所有者 |
+| --- | --- | --- | --- |
+| 151 | observer_sources | users、正式V4 trading_accounts、strategies | trading观摩管理用例 |
+| 152 | observer_channels | users、trading_accounts、observer_sources | trading观摩管理用例 |
+| 153 | observer_channel_accesses | users、observer_channels | trading观摩授权用例 |
+| 154 | trading_contexts | users、trading_accounts、observer_channels | trading账户上下文用例 |
+
+strategies已由006定义为BIGINT UNSIGNED主键，账户根依赖035正式提升。执行前仍须核对目标库完整父表定义、外键和已有日志，源码定义不能替代现场检查。
+
+037合并003和021的最终结构：观摩源默认disabled/pending；频道默认不启用、audience=assigned；default_slot生成列唯一键只允许一个默认频道，NULL允许多个非默认频道；授权保留撤销时间、授予人和revision。上下文保持full/observer/blocked互斥目标约束，observer和blocked必须read_only=1。
+
+源码中四张表的显式SQL写入位于mysql-observer-management-repository和mysql-trading-repository。管理操作继续使用原registry、operation、审计/outbox与revision事务；本包不建立第二写入口，也不拆分原子提交。数据库CHECK只约束行形状，不能替代管理员身份、来源就绪、账户归属或观摩访问校验。
+
+## 初始数据与旧事实
+
+四表在结构升级时为空，不执行INSERT/UPDATE、不创建默认频道、不授予访问。无上下文时TradingService.context返回blocked/readOnly/revision=0，不在GET中写默认行；选择账户和进入观摩仍重新校验权限再按revision保存。观摩源创建先disabled/pending，显式更新通过完整就绪条件后才能发布。
+
+旧观摩配置、授权及历史根引用永久保留到独立迁移/清理条件满足；不能把空新表解释为旧数据已完成迁移。若后续需要恢复旧观摩配置，先完成旧ID映射、主体/来源归属和受众语义对账，再通过明确的迁移合同导入；不得从旧在线标记推断V4就绪，也不得用扩大audience兜底。
+
+时间沿用UTC存储与用户指定的历史UTC原值解释；本包不移动旧时间或改变前端展示时区。
+
+## 执行与验收顺序
+
+1. loadObserverContextMigration复用150步完整对象，追加四个独立checksum；新增SQL按外键顺序注册。当前仅定义注册表，没有接入执行入口。
+2. 在独立空参考库核对父键并执行037，捕获完整MySQL SHOW CREATE，验证生成列唯一约束、FK、默认值及上下文CHECK；参考采集不能改动已冻结036工具。
+3. 新协调器先验证154步完整历史及四个新表状态，再仅剔除精确已验证新增表，复用原150步只读检查。保留036固定工具/证据和原旧数据保护，不扩展其允许表集合。
+4. 持久化计划绑定目标身份、原150步完成证据、规范结构、旧数据摘要和全部新工具。started/DDL/completed响应未知立即退出，跨进程按结构与日志恢复；禁止接管无日志同名表。
+5. 恢复副本演练150→154、未知响应和零DDL重入；对账原表/日志与新表空初态。此后才将该依赖包纳入当前库专属升级与账户流程验证。
+
+行情与账户投影仍需后续包；尤其market_candles存在旧同名结构，不能用IF NOT EXISTS跳过或删除旧表解决。仅建好这四表也不足以通过账户页面或真实Bridge验收。
+
+## 两轮复核
+
+第一轮（职责与需求）：核对实际服务端读写入口与003/021最终语义，先解决外键顺序，保留交易域唯一写入者、原操作日志及事务；没有新增通用框架或更改观摩产品语义。将“空初始结构”和“旧配置迁移”明确分开，后者仍列待验收。
+
+第二轮（兼容、权限与异常）：核对nullable来源、默认受众、生成列唯一键、read_only CHECK和父键类型；保持UTC、旧ID、原150步及冻结工具不变。新协调器必须完整验证新增表才可复用旧验证器；未知DDL不重放，已接收业务写入后不能DROP回退。
+
+本批证据：注册兼容/依赖顺序测试通过；原观摩管理、访问与上下文测试另记逐批进度。真实037建表、约束行为与150→154恢复演练尚未执行。剩余风险包括旧受众语义映射、实际父表一致性、投影表依赖和完整业务事务条件，不能以本注册测试替代这些验收。
