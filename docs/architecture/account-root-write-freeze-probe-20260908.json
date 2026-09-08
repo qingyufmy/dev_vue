@@ -1,0 +1,6 @@
+{
+  "failed": true,
+  "phase": "freeze",
+  "code": "ER_TABLE_NOT_LOCKED",
+  "temporaryDatabaseRemoved": true
+}

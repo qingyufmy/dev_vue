@@ -1,0 +1,6 @@
+{
+  "failed": true,
+  "phase": "freeze",
+  "code": "account_root_write_freeze_probe_failed",
+  "temporaryDatabaseRemoved": true
+}

@@ -1,0 +1,28 @@
+{
+  "failed": true,
+  "phase": "freeze",
+  "code": "account_root_freeze_lock_lost",
+  "lockEvidence": [
+    {
+      "name": "accounts",
+      "lockType": "SHARED_NO_READ_WRITE",
+      "duration": "TRANSACTION"
+    },
+    {
+      "name": "accounts_build",
+      "lockType": "SHARED_NO_READ_WRITE",
+      "duration": "TRANSACTION"
+    },
+    {
+      "name": "journal",
+      "lockType": "SHARED_NO_READ_WRITE",
+      "duration": "TRANSACTION"
+    },
+    {
+      "name": "settings_build",
+      "lockType": "SHARED_NO_READ_WRITE",
+      "duration": "TRANSACTION"
+    }
+  ],
+  "temporaryDatabaseRemoved": true
+}

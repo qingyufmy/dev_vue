@@ -1,0 +1,28 @@
+{
+  "kind": "account-root-write-freeze-probe/v1",
+  "observedAt": "2026-09-08T14:26:20.088Z",
+  "target": "dev_vue_ddl_probe_2458aa01a4fa",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "checks": [
+    "external_write_blocked",
+    "journal_autocommit_preserves_locks",
+    "atomic_rename_transfers_locks",
+    "new_and_legacy_names_write_blocked",
+    "foreign_key_tracks_promoted_root",
+    "premature_unlock_detected",
+    "writes_resume_after_release"
+  ],
+  "tools": [
+    {
+      "path": "scripts/probe-account-root-write-freeze-local.mjs",
+      "sha256": "b8b3930a0444e84b61c8ca78f8f99071e032e6df4c3c32a3915097d922224a93"
+    },
+    {
+      "path": "scripts/lib/account-root-write-freeze.mjs",
+      "sha256": "88029e81454a6e8624df7b30de0a5b46d5350da93f6758d9165e1c2dc40ef746"
+    }
+  ],
+  "currentDevVueWrites": 0,
+  "scope": "Synthetic two-connection DDL/lock probe only; current database promotion remains pending.",
+  "temporaryDatabaseRemoved": true
+}
