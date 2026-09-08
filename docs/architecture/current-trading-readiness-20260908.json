@@ -1,0 +1,24 @@
+{
+  "kind": "current-trading-readiness/v1",
+  "observedAt": "2026-09-08T15:48:20.585Z",
+  "identity": {
+    "databaseName": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "schemaProfile": "inplace-account-165/v1",
+  "checkedSteps": 165,
+  "checkedTables": 23,
+  "totals": {
+    "users": 6,
+    "accounts": 3,
+    "visibleAccounts": 3,
+    "contexts": 0,
+    "profiles": 0,
+    "observerChannels": 0,
+    "ownedPairs": 3,
+    "rejectedPairs": 15
+  },
+  "databaseWrites": 0,
+  "scope": "Real application MySQL reader and metadata readiness, consistent read-only transaction. No HTTP, Redis, browser, active terminal route or positive observer authorization evidence."
+}

@@ -24,7 +24,7 @@ import { MysqlRiskRepository, RiskService } from '../modules/risk/index.js'
 import { MysqlReviewRepository, ReviewService } from '../modules/reviews/index.js'
 import { MysqlStrategyCatalog, StrategyService } from '../modules/strategies/index.js'
 import { MysqlTradeHistoryRepository, TradeHistoryService } from '../modules/trade-history/index.js'
-import { createTradingApiModule } from '../modules/trading/composition.js'
+import { assertTradingSchemaReady, createTradingApiModule } from '../modules/trading/composition.js'
 import { registerApiV4Routes } from '../transport/api-v4-route-registrar.js'
 
 loadServerEnvironment()
@@ -36,7 +36,7 @@ async function main() {
   const health = new RoleHealth('api-v4')
   const pool = createMysqlPool(runtime.mysql)
   const cache = createCacheRedis(runtime.cacheRedis)
-  await Promise.all([pool.query('SELECT 1'), connectCacheRedis(cache)])
+  await Promise.all([assertTradingSchemaReady(pool), connectCacheRedis(cache)])
 
   const auth = createAuthModule(pool, cache, web.auth, createBridgeDeviceRevoker(pool))
   const trading = createTradingApiModule(pool, cache, auth, new RedisBridgeGatewayLeaseStore(cache))
@@ -94,7 +94,7 @@ async function main() {
 }
 
 async function dependenciesReady(pool: ReturnType<typeof createMysqlPool>, cache: ReturnType<typeof createCacheRedis>) {
-  try { await Promise.all([pool.query('SELECT 1'), cache.ping()]); return true } catch { return false }
+  try { await Promise.all([assertTradingSchemaReady(pool), cache.ping()]); return true } catch { return false }
 }
 
 void main().catch(error => {

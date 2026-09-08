@@ -30,3 +30,15 @@
 会话close是终止操作，区别于允许后续重新订阅的subscription.unsubscribe。关闭后不接收排队消息；异步授权/订阅迟到时立即释放返回的订阅，旧代次不再发送或关闭当前连接。WebSocket的close/error均调用会话close。
 
 复核：职责侧保留既有业务用例和角色分工，将具体实现组装集中到受限入口；异常侧核对认证scope/CSRF、实时回调与关闭顺序、投影提交和发布顺序保持。剩余问题明确列出，不通过新增边界例外消除检查错误。
+
+## 当前账户结构就绪检查
+
+`assertTradingSchemaReady`只从composition向API运行组装公开。API启动前及`/health/ready`调用它；检查失败不会监听启动端口，运行中的健康检查返回不就绪。它不自动迁移、不证明所有API/其它业务域就绪，也不代替停写窗口或逐请求授权。
+
+当前支持`inplace-account-165/v1`升级档案：165条登记checksum全部完成，后续新增步骤允许存在但必须完成；23张账户读取/上下文/投影依赖表的规范化DDL与触发器检查一致。依赖表检查不改变其业务写入所有者。新建库使用其它迁移账本、升级改变这些表、或MySQL产生非等价DDL时均失败关闭，须补充已验证的兼容档案，不得跳过检查。自增计数及等价utf8mb4显式字符集写法不属于结构漂移。
+
+这是当前升级到运行的过渡检查：整表DDL摘要会拒绝消费方不使用的新列，跨域表仍存在物理结构耦合。账户样板收口时须随SQL访问端口化，将跨域依赖改为所有者发布的兼容能力检查；无关新增列不应要求trading改动。该项未关闭前不能以本检查宣布模块独立性验收完成。
+
+生成源为登记迁移与当前165步证明，不绑定VM身份或行数据。更新时运行`node scripts/generate-trading-schema-readiness.mjs`，核对兼容性并执行`node scripts/generate-trading-schema-readiness.mjs --check`和`tests/trading-schema-generation.test.js`；生成测试会拒绝源与产物漂移。既有package脚本属于历史冻结输入，本批未修改。就绪检查短暂持有同连接升级锁，仅读取有界日志与元数据；释放不确定则销毁连接并拒绝就绪。
+
+实际只读核验入口为`node scripts/verify-current-trading-reads-local.mjs <新绝对路径回执.json>`，先构建server。使用server/.env应用账号和UTC连接池，在只读一致事务内核验账户读取及归属拒绝；不会建立会话或写入用户上下文。HTTP、Redis、浏览器与正向观摩授权仍需独立验收。

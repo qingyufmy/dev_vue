@@ -814,3 +814,11 @@ HTTP和生产组装已切换到ContextWritePort，移除读取接口、应用服
 当前dev_vue为165步、238表，新增上下文回执表为空，原237表及旧164步日志对账一致；首次DDL1次/日志2次，重复执行均0。当前临时参考13项真实MySQL约束通过并清理，19项定向测试通过；当前proof绑定321项工具/输入摘要，旧SQL及已执行工具冻结不变。
 
 见[应用回执](architecture/current-context-changes-applied-20260908.json)、[重复回执](architecture/current-context-changes-repeat-20260908.json)及[接入方案第21节](architecture/current-dev-vue-upgrade-plan-20260908.md)。下一步转入账户实际权限、HTTP/Redis和浏览器联合验收以及账户边界债务清理；本批完成账户升级前置，不代表全域数据库或前后端模块化完成。
+
+## 第九十七批：账户API结构就绪检查与当前库只读验证
+
+新增模块内只读结构检查，经受限composition接入API启动和健康就绪：165条登记checksum、23表DDL与触发器校验，升级锁异常或未完成步骤拒绝就绪；不迁移或扫描业务大表。生成契约绑定既有登记与165步证明，生成一致性回归覆盖；17项定向测试、server类型/构建通过，110条存量边界无新增。
+
+真实应用数据库账号读取6有效用户和3账户，3组归属读取成功、15组非归属读取拒绝，UTC会话确认，写入0。见[回执](architecture/current-trading-readiness-20260908.json)。空上下文/档案/观摩不能作为正向功能验收；Redis/SSO本地依赖尚未配置，下一步继续真实HTTP与浏览器流程。
+
+职责复核：结构检查留在trading基础设施，经composition供运行角色使用；23个消费表不代表全部数据所有权已规范，也不代表其它域就绪。异常复核：SQL错误对外收敛为trading_schema_not_ready，升级锁未取得不释放他人锁，释放未知销毁连接；支持当前inplace档案，未知建库/非等价结构变化必须先提供兼容证据。

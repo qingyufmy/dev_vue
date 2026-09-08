@@ -1,4 +1,5 @@
 import type { ContextWritePort } from './application/context-write-port.js'
+import { assertMysqlTradingSchemaReady } from './infrastructure/mysql-schema-readiness.js'
 import { createMysqlContextWritePort } from './infrastructure/mysql-context-write-port.js'
 import type { BrowserRealtimePublication, BrowserRealtimeSessions } from './application/browser-realtime-ports.js'
 import { BrowserRealtimeSession } from './transport/realtime/browser-realtime-session.js'
@@ -29,6 +30,8 @@ import { RedisBrowserRealtimeSubscriber } from './infrastructure/redis-browser-r
 import { BrowserRealtimeHub } from './transport/realtime/browser-realtime-hub.js'
 
 type GatewayLeases = NonNullable<ConstructorParameters<typeof MysqlTradingRepository>[1]>
+
+export const assertTradingSchemaReady = assertMysqlTradingSchemaReady
 
 export function createTradingHttp(service: TradingService, capacity: ConnectionCapacityService, auth: TradeSessionAuthenticator, contextCommands: ContextWritePort): FastifyPluginAsync {
   return async app => { await app.register(tradingRoutes, { prefix: '/api/v4', service, capacity, auth, contextCommands }) }
