@@ -1,3 +1,5 @@
+import type { ModelUsageLedger, ModelUsageRecovery } from './application/model-usage-ledger.js'
+import { MysqlModelUsageLedger } from './infrastructure/mysql-model-usage-ledger.js'
 import type { AnalysisMarketSource, MacroSnapshotReader } from './application/analysis-context-builder.js'
 import type { AnalysisTradingReader } from './application/trading-read-capabilities.js'
 import { TradingAnalysisMarketSource } from './infrastructure/trading-analysis-market-source.js'
@@ -64,4 +66,8 @@ export function createMysqlTraderWindowGuard(pool: Pool, clock: (connection: Poo
 
 export function createAnalysisMarketSource(trading: AnalysisTradingReader): AnalysisMarketSource {
   return new TradingAnalysisMarketSource(trading)
+}
+
+export function createMysqlModelUsageLedger(pool: Pool): ModelUsageLedger & ModelUsageRecovery {
+  return new MysqlModelUsageLedger(pool)
 }

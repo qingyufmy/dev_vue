@@ -4,7 +4,7 @@ import type { AnalysisModelGateway } from '../application/analysis-worker.js'
 import { ModelInvocationError } from '../application/analysis-worker.js'
 import type { TraderModelGateway as TraderGateway } from '../application/trader-worker.js'
 import type { AnalysisInputSnapshot, JsonObject, MarketAnalysisResult, TraderDecisionResult, TraderInputSnapshot } from '../domain/inference.js'
-import type { ModelUsageLedger, RuntimeModelUsageContext } from './mysql-model-usage-ledger.js'
+import type { ModelUsageLedger, RuntimeModelUsageContext } from '../application/model-usage-ledger.js'
 
 export interface RuntimeModelProfile {
   id: string

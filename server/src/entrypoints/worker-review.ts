@@ -1,10 +1,11 @@
+import { createMysqlModelUsageLedger } from '../modules/inference/composition.js'
 import { Worker } from 'bullmq'
 import {
   assertV4RuntimeEnabled, closeHttpServer, createMysqlPool, installProcessLifecycle,
   loadServerEnvironment, loadV4RuntimeConfig, RoleHealth, startRoleHealthServer,
 } from '../bootstrap/index.js'
 import {
-  HttpJsonObjectModelGateway, loadCredentialKeyring, MysqlModelUsageLedger, MysqlRuntimeModelProfileCatalog,
+  HttpJsonObjectModelGateway, loadCredentialKeyring,  MysqlRuntimeModelProfileCatalog,
 } from '../modules/inference/index.js'
 import { createMysqlReviewWorker } from '../modules/reviews/composition.js'
 import { REVIEW_QUEUE, type ReviewRunJob } from '../queue/task-queues.js'
@@ -15,7 +16,7 @@ async function main() {
   const config = loadV4RuntimeConfig(); assertV4RuntimeEnabled(config)
   const health = new RoleHealth('worker-review'); const pool = createMysqlPool(config.mysql)
   await pool.query('SELECT 1')
-  const usage = new MysqlModelUsageLedger(pool)
+  const usage = createMysqlModelUsageLedger(pool)
   const profiles = new MysqlRuntimeModelProfileCatalog(pool, loadCredentialKeyring(), {
     allowPrivateEndpoints: config.allowPrivateModelEndpoints, maxAttempts: config.modelMaxAttempts, defaultTimeoutMs: config.modelDefaultTimeoutMs,
   })

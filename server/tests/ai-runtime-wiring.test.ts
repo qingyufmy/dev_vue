@@ -1,8 +1,9 @@
+import { createMysqlModelUsageLedger } from '../src/modules/inference/composition.js'
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it, vi } from 'vitest'
 import {
   HttpJsonAnalysisModelGateway, HttpJsonTraderModelGateway, loadCredentialKeyring,
-  ModelTaskRecovery, MysqlModelUsageLedger, type ModelUsageLedger, type RuntimeModelProfile,
+  ModelTaskRecovery,  type ModelUsageLedger, type RuntimeModelProfile,
 } from '../src/modules/inference/index.js'
 import { BullMqOutboxTaskPublisher } from '../src/outbox/index.js'
 import type { ClaimedOutboxEvent } from '../src/outbox/application/outbox-ports.js'
@@ -115,7 +116,7 @@ describe('AI runtime wiring', () => {
       async commit() { statements.push('COMMIT') }, async rollback() {}, release() {},
     }
     const pool = { async getConnection() { return connection } }
-    const ledger = new MysqlModelUsageLedger(pool as never)
+    const ledger = createMysqlModelUsageLedger(pool as never)
     await expect(ledger.begin({
       userId: 42, profileId: '7', strategyId: '9', credentialSource: 'platform_shared', usage: 'auto',
     })).resolves.toBe('99')
@@ -132,7 +133,7 @@ describe('AI runtime wiring', () => {
       return [{ affectedRows: 3 }, []]
     } }
     const before = new Date('2026-09-04T00:00:00.000Z')
-    await expect(new MysqlModelUsageLedger(pool as never).recoverAbandoned(before, 50)).resolves.toBe(3)
+    await expect(createMysqlModelUsageLedger(pool as never).recoverAbandoned(before, 50)).resolves.toBe(3)
     expect(statements[0]?.sql).toContain("request_status='reserved'")
     expect(statements[0]?.sql).toContain("accounting_status='usage_unknown'")
     expect(statements[0]?.sql).toContain('ORDER BY id LIMIT 50')

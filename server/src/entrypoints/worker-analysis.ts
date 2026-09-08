@@ -1,3 +1,4 @@
+import { createMysqlModelUsageLedger } from '../modules/inference/composition.js'
 import { createMysqlInferenceRepository } from '../modules/inference/composition.js'
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import { createAnalysisMarketSource, createMysqlAnalysisWindowGuard, createMysqlMacroSnapshotReader } from '../modules/inference/composition.js'
@@ -9,7 +10,7 @@ import {
 import { RedisBridgeGatewayLeaseStore } from '../modules/bridge/index.js'
 import {
   AnalysisContextBuilder, AnalysisWorker, InferenceService, loadCredentialKeyring,
-  MysqlAnalysisModelGatewayResolver, MysqlModelUsageLedger,
+  MysqlAnalysisModelGatewayResolver,
   MysqlRuntimeModelProfileCatalog,
 } from '../modules/inference/index.js'
 import { createSubscriptionPreferencesReader, createMysqlStrategyService } from '../modules/strategies/composition.js'
@@ -39,7 +40,7 @@ async function main() {
     new InferenceService(repository, strategies),
     strategies,
     new AnalysisContextBuilder(createAnalysisMarketSource(trading), createMysqlMacroSnapshotReader(pool)),
-    new MysqlAnalysisModelGatewayResolver(profiles, new MysqlModelUsageLedger(pool), () => {
+    new MysqlAnalysisModelGatewayResolver(profiles, createMysqlModelUsageLedger(pool), () => {
       usageSettlementFailureRevision += 1
       health.workFailed('model_usage_settlement_failed')
       console.error('[worker-analysis] model usage settlement failed')

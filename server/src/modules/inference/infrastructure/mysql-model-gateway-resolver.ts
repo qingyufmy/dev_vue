@@ -6,7 +6,7 @@ import { InferenceError } from '../domain/inference.js'
 import {
   HttpJsonAnalysisModelGateway, HttpJsonTraderModelGateway, type ModelUsageSettlementErrorHandler, type RuntimeModelProfile,
 } from './http-json-model-gateway.js'
-import type { ModelUsageLedger, RuntimeModelUsageKind } from './mysql-model-usage-ledger.js'
+import type { ModelUsageLedger, RuntimeModelUsageKind } from '../application/model-usage-ledger.js'
 
 interface StrategyScopeRow extends RowDataPacket {
   id: string

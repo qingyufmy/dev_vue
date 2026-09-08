@@ -18,3 +18,6 @@ TradingAnalysisMarketSource 留在本域基础设施，不从业务 index 导出
 
 
 createMysqlAnalysisScheduler/createMysqlModelTaskRecovery 组装调度和恢复持久化，实现只留在基础设施层。调用方仅获得 tick/expireOverdue，仍拥有轮询和生命周期；工厂本身不发起查询、调度或恢复。相关定向回归为 analysis-schedule-query、analysis-scheduler-worker。
+
+
+模型用量接口及上下文位于 application/model-usage-ledger.ts，composition 的 createMysqlModelUsageLedger 返回结算和恢复能力。网关仅依赖用量接口，业务 index 不公开 MySQL 账本。用量规则和 SQL 未改，定向验证为 ai-runtime-wiring。

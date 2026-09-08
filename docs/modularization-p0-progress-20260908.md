@@ -1030,3 +1030,12 @@ inference composition 新增 createMysqlAnalysisScheduler/createMysqlModelTaskRe
 11 项分析调度查询/Worker 回归，server 类型/构建及 API 生成运行检查通过，321 个冻结输入一致。精确删除两项实现导出，债务 69→67，无新增或陈旧记录。调度时间窗、CAS 推进、任务租约与恢复 SQL 未修改，未启动调度器或连接数据库；本批不是实际过期任务恢复证明。
 
 模型调用与用量相关具体导出、其余域依赖、数据归属及完整流程仍待继续，整体 P0–P7 未完成。
+
+
+## 55. 模型用量应用端口与组装（第一百二十五批）
+
+ModelUsageLedger、用量上下文/完成输入及恢复能力归入 inference application，HTTP 网关和模型解析器不再从 MySQL 文件导入这些类型。createMysqlModelUsageLedger 在 composition 返回用量与恢复应用能力，三个 Worker 和分析调度器改用工厂；业务 index 仅公开应用类型，移除具体账本导出。
+
+10 项模型运行回归通过，用量恢复/结算测试经工厂实例验证；server 类型/构建及 API 生成运行检查通过，321 个冻结输入一致。精确删除一项实现导出，债务 67→66，无新增或陈旧。用量 SQL、配额判断、结算失败回调与废弃预留恢复逻辑未变，未调用模型、数据库或运行角色。
+
+模型 HTTP 网关和凭据目录仍有具体实现导出，继续按同一组装边界收口；真实结算和完整流程另行验收，整体 P0–P7 未完成。

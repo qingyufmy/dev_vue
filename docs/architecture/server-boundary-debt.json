@@ -785,19 +785,6 @@
     },
     {
       "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/inference/index.ts",
-        "target": "server/src/modules/inference/infrastructure/mysql-model-usage-ledger.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "inference",
-      "phase": "P4",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
         "rule": "source-cycle",
         "source": "server/src/modules/risk/domain/manual-risk-release.ts",
         "target": "server/src/modules/risk/domain/manual-risk-release.ts -> server/src/modules/risk/domain/risk.ts",

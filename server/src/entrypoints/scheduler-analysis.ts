@@ -1,3 +1,4 @@
+import { createMysqlModelUsageLedger } from '../modules/inference/composition.js'
 import { createMysqlInferenceRepository, createMysqlAnalysisScheduler, createMysqlModelTaskRecovery } from '../modules/inference/composition.js'
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import {
@@ -6,7 +7,7 @@ import {
 } from '../bootstrap/index.js'
 import {
   InferenceService,
-  MysqlModelUsageLedger,
+
 } from '../modules/inference/index.js'
 import { createSubscriptionPreferencesReader, createMysqlStrategyService } from '../modules/strategies/composition.js'
 import { createTradingReader } from '../modules/trading/composition.js'
@@ -27,7 +28,7 @@ async function main() {
     (accountId, userId) => trading.getAccountSnapshot(accountId, userId),
   )
   const recovery = createMysqlModelTaskRecovery(pool)
-  const usage = new MysqlModelUsageLedger(pool)
+  const usage = createMysqlModelUsageLedger(pool)
   const loop = new AsyncPollLoop(async () => {
     try {
       const now = new Date()
