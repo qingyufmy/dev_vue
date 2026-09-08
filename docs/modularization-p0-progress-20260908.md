@@ -646,3 +646,10 @@ getTradingContext/listTradingAccounts/listObserverChannels接入同源运行校�
 5项新测试模拟提交实际生效后确认丢失、正常提交、版本冲突、回滚失败及非法版本；与已有MySQL观摩、HTTP写合同和真实客户端对接共16项通过。完整server类型检查通过，边界110无新增、运行合同8项。测试使用连接适配器，未连接MySQL，不代替真实事务验证。
 
 [上下文写入恢复合同](architecture/trading-context-write-contract-20260908.md)完成两轮复审，规定同事务回执/审计、同键同体、用户根锁、权限复核及前端历史回执与当前上下文分开读取。下一步实现专属增量表和独立应用写端口，再接通HTTP与前端待确认状态。当前dev_vue不变，整体目标继续推进。
+
+
+## 第七十批：上下文命令端口与165步回执表注册
+
+新增领域命令/历史回执类型、确定性指纹输入及独立ContextWritePort；请求键、动作、目标、用户和预期版本全部参与身份。041只新增trading_context_changes_v4，记录幂等键、摘要、前后版本、历史结果和UTC时间，使用唯一键及动作/结果CHECK约束。loadTradingContextChanges保留原164步并追加165步，不修改已执行SQL。
+
+3项命令行为测试和1项注册兼容测试通过；完整server类型检查通过，边界债务110无新增，运行合同仍8项。两轮复核及字段设计见[写入合同](architecture/trading-context-write-contract-20260908.md)。本批没有连接数据库，165步只是注册，尚未执行。新端口未接线，后续继续同事务回执适配、迁移协调与前端待确认恢复。

@@ -1,4 +1,6 @@
 export * from './domain/trading.js'
+export type { ContextWriteCommand, ContextWriteReceipt, ContextWriteAction } from './domain/context-write.js'
+export type { ContextWritePort } from './application/context-write-port.js'
 export type { AccountClockReader } from './application/account-clock-reader.js'
 export * from './domain/account-access.js'
 export * from './application/account-access-policy.js'
