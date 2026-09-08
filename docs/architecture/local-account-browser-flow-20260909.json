@@ -1,0 +1,26 @@
+{
+  "kind": "local-account-browser-flow/v1",
+  "observedAt": "2026-09-08T18:27:43.126473+00:00",
+  "browser": "Chrome",
+  "origins": [
+    "http://localhost:4174",
+    "http://localhost:4176"
+  ],
+  "passed": true,
+  "checks": [
+    "trade-anonymous-route-requires-login",
+    "browser-password-login-via-auth-and-return-to-trade",
+    "authenticated-blocked-account-page",
+    "reload-restores-session-and-blocked-state",
+    "second-tab-recognizes-app-session",
+    "trade-logout-returns-to-login",
+    "second-tab-reload-after-logout-requires-login"
+  ],
+  "evidence": [
+    "local-account-browser-home-20260909.txt",
+    "local-account-browser-home-20260909.png",
+    "local-account-browser-logout-20260909.txt",
+    "local-account-browser-cleanup-20260909.json"
+  ],
+  "scope": "Manual CUA UI verification with private synthetic user against local Vite/API/Redis and configured development MySQL. No owned account or observer channel exists for this fixture. Does not prove account/channel switching, reconnect, late-response isolation, unknown-command recovery or responsive/accessibility acceptance. Trade session logged out via UI; unique auth parent revoked separately. Both test tabs closed."
+}

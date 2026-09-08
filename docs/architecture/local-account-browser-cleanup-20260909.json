@@ -1,0 +1,8 @@
+{
+  "kind": "local-browser-session-cleanup/v1",
+  "observedAt": "2026-09-08T18:26:53.897Z",
+  "passed": true,
+  "authSessionsRevoked": 1,
+  "selection": "Verified private synthetic user, after latest local API probe, unique active auth parent with revoked trade child",
+  "rowsDeleted": 0
+}

@@ -1,0 +1,10 @@
+Browser tab: 2022084502, Title: "登录｜量见", URL: "http://localhost:4174/login?next=/".
+1 AXWebArea 登录｜量见, URL: localhost:4174/login?next=/
+	2 container
+		3 text 进入 AI 交易实验室 登录后连接本地 MT4/MT5，查看行情、AI 信号和账户交易状态。
+		4 text 独立安全会话
+		5 text 账号密码只在量见身份中心输入，本应用不会保存登录令牌。
+		6 link Description: 前往安全登录, Value: localhost:4174/auth/start?next=%2F
+		7 text Bridge 设备授权与网站登录保持独立
+
+The focused UI element is 1 AXWebArea 登录｜量见, URL: localhost:4174/login?next=/

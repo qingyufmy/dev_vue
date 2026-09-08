@@ -1,0 +1,48 @@
+Browser tab: 2022084501, Title: "交易概览｜量见", URL: "http://localhost:4174/".
+1 AXWebArea 交易概览｜量见, URL: localhost:4174/
+	2 container app
+		3 container
+			4 link Description: AI 交易实验室 量见, Value: localhost:4174/
+			5 text 交易工作区
+			6 content list
+				7 link Description: 首页, Value: localhost:4174/
+				8 link Description: 市场行情, Value: localhost:4174/market
+				9 link Description: AI 分析师, Value: localhost:4174/analyst
+				10 link Description: AI 交易员, Value: localhost:4174/trader
+				11 link Description: AI 风控师, Value: localhost:4174/risk
+				12 link Description: AI 策略师, Value: localhost:4174/strategist
+				13 link Description: AI 复盘师, Value: localhost:4174/reviewer
+			14 text 记录
+			15 content list
+				16 link Description: 交易记录, Value: localhost:4174/trades
+				17 link Description: 系统审计, Value: localhost:4174/audit
+			18 content list
+				19 link Description: 量见智桥, Value: localhost:4174/bridge
+			20 button Toggle Sidebar
+		21 container
+			22 button 切换侧栏
+				23 image
+				24 text 切换侧栏
+			34 text 交易概览
+			26 text 终端时间 UTC+03:00 · 默认时区，待校准
+			27 container 运行状态
+				28 text 智桥未连接
+				29 text 快照模式
+				30 text 只读
+			31 pop up button (collapsed) 客 本地账户联调, ID: reka-dropdown-menu-trigger-v-10, Secondary Actions: Expand
+			35 text 交易工作区
+			36 heading 账户概览, Value: 1
+				37 text 账户概览
+			38 text 账户、行情和交易资源保持实时同步。
+			39 button 刷新快照
+				40 image
+				41 text 刷新快照
+			42 image
+			43 heading 还没有可用的交易账户, Value: 2
+				44 text 还没有可用的交易账户
+			45 text 连接量见智桥后，账户会自动出现在这里。账户档案可随时更换，只有当前在线连接占用额度。
+			46 link Description: 配置量见智桥, Value: localhost:4174/bridge
+		32 container Notifications alt+T
+			33 content list
+
+The focused UI element is 1 AXWebArea 交易概览｜量见, URL: localhost:4174/
