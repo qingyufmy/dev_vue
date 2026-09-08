@@ -22,7 +22,7 @@ import {
 import { InferenceService, MysqlInferenceRepository } from '../modules/inference/index.js'
 import { MysqlRiskRepository, RiskService } from '../modules/risk/index.js'
 import { createMysqlReviewHttp } from '../modules/reviews/composition.js'
-import { createMysqlStrategyService, createStrategyHttp } from '../modules/strategies/composition.js'
+import { createSubscriptionPreferencesReader, createMysqlStrategyService, createStrategyHttp } from '../modules/strategies/composition.js'
 import { createMysqlTradeHistoryHttp } from '../modules/trade-history/composition.js'
 import { assertTradingSchemaReady, createTradingApiModule } from '../modules/trading/composition.js'
 import { registerApiV4Routes } from '../transport/api-v4-route-registrar.js'
@@ -58,7 +58,7 @@ async function main() {
       new RedisBridgeSessionTicketStore(cache),
     ),
     tradingHttp: trading.tradeHttp,
-    inference: new InferenceService(new MysqlInferenceRepository(pool, createTransactionAccountClock), strategies),
+    inference: new InferenceService(new MysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader), strategies),
     strategies,
     strategiesHttp: createStrategyHttp(strategies, tradeAuth),
     risk: new RiskService(new MysqlRiskRepository(pool)),

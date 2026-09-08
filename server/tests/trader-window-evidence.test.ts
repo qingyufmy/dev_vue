@@ -1,9 +1,11 @@
+import { createSubscriptionPreferencesReader } from '../src/modules/strategies/composition.js'
+const traderWindowStaleReason = (clock: Parameters<typeof staleReason>[0], connection: Parameters<typeof staleReason>[1], run: TraderRun) => staleReason(clock, connection, run, createSubscriptionPreferencesReader)
 import { createTransactionAccountClock } from '../src/modules/trading/composition.js'
 import { describe, expect, it } from 'vitest'
 import type { PoolConnection } from 'mysql2/promise'
 import { contentHash, type TraderRun } from '../src/modules/inference/index.js'
 import { subscriptionWindowFingerprint } from '../src/modules/strategies/index.js'
-import { traderWindowStaleReason } from '../src/modules/inference/infrastructure/mysql-trader-window-evidence.js'
+import { traderWindowStaleReason as staleReason } from '../src/modules/inference/infrastructure/mysql-trader-window-evidence.js'
 
 describe('frozen trader window evidence', () => {
   it('hashes parsed configuration independent of JSON key order and whitespace', () => {

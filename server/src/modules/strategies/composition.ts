@@ -1,4 +1,6 @@
-import type { Pool } from 'mysql2/promise'
+import type { Pool, PoolConnection } from 'mysql2/promise'
+import type { SubscriptionPreferencesReader } from './application/subscription-preferences-reader.js'
+import { readSubscriptionExecutionPreferences } from './infrastructure/mysql-subscription-execution-preferences.js'
 import type { FastifyPluginAsync } from 'fastify'
 import { StrategyService } from './application/strategy-service.js'
 import { MysqlStrategyCatalog } from './infrastructure/mysql-strategy-catalog.js'
@@ -6,6 +8,10 @@ import { strategyRoutes, type StrategyRequestAuthenticator } from './transport/h
 
 export function createMysqlStrategyService(pool: Pool): StrategyService {
   return new StrategyService(new MysqlStrategyCatalog(pool))
+}
+
+export function createSubscriptionPreferencesReader(connection: PoolConnection): SubscriptionPreferencesReader {
+  return { read: scope => readSubscriptionExecutionPreferences(connection, scope) }
 }
 
 export function createStrategyHttp(service: StrategyService, auth: StrategyRequestAuthenticator): FastifyPluginAsync {

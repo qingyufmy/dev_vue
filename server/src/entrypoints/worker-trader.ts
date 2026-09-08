@@ -10,7 +10,7 @@ import {
   MysqlModelUsageLedger, MysqlRiskSummaryReader, MysqlRuntimeModelProfileCatalog, MysqlTraderModelGatewayResolver,
   TraderContextBuilder, TraderWorker, MysqlTraderWindowGuard, MysqlTraderPreferencesReader,
 } from '../modules/inference/index.js'
-import { createMysqlStrategyService } from '../modules/strategies/composition.js'
+import { createSubscriptionPreferencesReader, createMysqlStrategyService } from '../modules/strategies/composition.js'
 import { createTradingReader } from '../modules/trading/composition.js'
 import { TRADER_QUEUE, type TraderRunJob } from '../queue/task-queues.js'
 
@@ -23,7 +23,7 @@ async function main() {
   const pool = createMysqlPool(config.mysql)
   const cache = createCacheRedis(config.cacheRedis)
   await Promise.all([pool.query('SELECT 1'), connectCacheRedis(cache)])
-  const repository = new MysqlInferenceRepository(pool, createTransactionAccountClock)
+  const repository = new MysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader)
   const strategies = createMysqlStrategyService(pool)
   const profiles = new MysqlRuntimeModelProfileCatalog(pool, loadCredentialKeyring(), {
     allowPrivateEndpoints: config.allowPrivateModelEndpoints,
@@ -35,7 +35,7 @@ async function main() {
     repository,
     new InferenceService(repository, strategies),
     strategies,
-    new TraderContextBuilder(repository, createTradingReader(pool, new RedisBridgeGatewayLeaseStore(cache)), new MysqlInstrumentSnapshotReader(pool), new MysqlRiskSummaryReader(pool), new MysqlTraderPreferencesReader(pool)),
+    new TraderContextBuilder(repository, createTradingReader(pool, new RedisBridgeGatewayLeaseStore(cache)), new MysqlInstrumentSnapshotReader(pool), new MysqlRiskSummaryReader(pool), new MysqlTraderPreferencesReader(pool, createSubscriptionPreferencesReader)),
     new MysqlTraderModelGatewayResolver(profiles, new MysqlModelUsageLedger(pool), () => {
       usageSettlementFailureRevision += 1
       health.workFailed('model_usage_settlement_failed')

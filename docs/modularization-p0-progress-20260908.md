@@ -985,3 +985,12 @@ strategies composition 新增 createMysqlStrategyService/createStrategyHttp，�
 30 项策略管理、行情计划及入场方法回归通过，管理 HTTP 测试使用组装工厂；server 类型/构建及 API 生成运行检查通过。初次检查发现旧测试路由导出和 inference 所需服务参数遗漏，补齐后通过。精确删除两项具体实现导出，债务 82→80，无新增或陈旧记录。业务规则、SQL、版本和订阅更新行为未变，没有启动角色或连接外部依赖。
 
 订阅执行偏好 SQL 函数仍通过公开入口被 inference 消费，需按同事务能力继续收口；本次不是 strategies 或整体 P0–P7 完成。
+
+
+## 50. 订阅执行偏好事务读取能力（第一百二十批）
+
+strategies 业务 index 仅公开 SubscriptionPreferencesReader，移除 SQL 初始化/读取函数导出；composition 的 createSubscriptionPreferencesReader 绑定调用方连接。inference 快照偏好读取、快照写前检查和完成前窗口证据复查均必须注入该工厂，API 与三个后台入口同步提供；不存在默认跨域 SQL 后备。原 FOR SHARE、用户/账户/订阅范围、精确字符串 revision、缺失与异常拒绝逻辑不变，事务仍由调用方拥有。
+
+29 项偏好和窗口回归通过；测试经实际 strategies 工厂验证连接与锁定查询，类型检查发现一处旧窗口测试额外参数后已修正。server 类型/构建和 API 生成运行检查通过，精确删除一项具体 SQL 实现公开导出，债务 80→79，无新增或陈旧。本批未连接数据库或启动 Worker，不能作为真实锁竞争证明。
+
+strategies 此类已登记静态债务已清除；订阅的跨域 SQL 与业务全链、其它模块基础设施出口及整体 P0–P7 仍未完成。

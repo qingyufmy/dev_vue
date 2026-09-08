@@ -1,7 +1,10 @@
+import { createSubscriptionPreferencesReader } from '../src/modules/strategies/composition.js'
 import { describe, expect, it, vi } from 'vitest'
 import type { Pool, PoolConnection } from 'mysql2/promise'
-import { assertTraderPreferencesCurrent, MysqlTraderPreferencesReader } from '../src/modules/inference/infrastructure/mysql-trader-preferences.js'
+import { assertTraderPreferencesCurrent as assertCurrent, MysqlTraderPreferencesReader } from '../src/modules/inference/infrastructure/mysql-trader-preferences.js'
 import type { TraderRun } from '../src/modules/inference/domain/inference.js'
+
+const assertTraderPreferencesCurrent = (connection: PoolConnection, run: TraderRun, frozen: unknown) => assertCurrent(connection, run, frozen, createSubscriptionPreferencesReader)
 
 const run = { subscriptionId: '9', userId: 7, tradingAccountId: '5' } as TraderRun
 const frozen = { contractVersion: 1, takeProfitMode: 'ai_recommended', revision: '9007199254740993' }
@@ -25,7 +28,7 @@ describe('trader preferences transaction checks', () => {
   })
   it.each([true, false])('snapshot reader commits only present explicit preferences (present=%s)', async present => {
     const db = { execute: vi.fn().mockResolvedValue([present ? [row] : []]), beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn() }
-    const reader = new MysqlTraderPreferencesReader({ getConnection: async () => db } as unknown as Pool)
+    const reader = new MysqlTraderPreferencesReader({ getConnection: async () => db } as unknown as Pool, createSubscriptionPreferencesReader)
     if (present) {
       expect(await reader.read(run)).toEqual(frozen)
       expect(db.commit).toHaveBeenCalledOnce()

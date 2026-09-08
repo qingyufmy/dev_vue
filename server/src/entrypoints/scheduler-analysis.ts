@@ -8,7 +8,7 @@ import {
   MysqlInferenceRepository, MysqlModelTaskRecoveryRepository,
   MysqlModelUsageLedger,
 } from '../modules/inference/index.js'
-import { createMysqlStrategyService } from '../modules/strategies/composition.js'
+import { createSubscriptionPreferencesReader, createMysqlStrategyService } from '../modules/strategies/composition.js'
 import { createTradingReader } from '../modules/trading/composition.js'
 
 loadServerEnvironment()
@@ -23,7 +23,7 @@ async function main() {
   const trading = createTradingReader(pool)
   const scheduler = new AnalysisScheduler(
     new MysqlAnalysisScheduleRepository(pool),
-    new InferenceService(new MysqlInferenceRepository(pool, createTransactionAccountClock), strategies),
+    new InferenceService(new MysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader), strategies),
     (accountId, userId) => trading.getAccountSnapshot(accountId, userId),
   )
   const recovery = new ModelTaskRecovery(new MysqlModelTaskRecoveryRepository(pool))
