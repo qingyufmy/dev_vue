@@ -1,0 +1,28 @@
+{
+  "kind": "terminal-route-result-verification/v1",
+  "observedAt": "2026-09-08T09:08:42.277Z",
+  "identity": {
+    "database": "dev_vue_m1_source_20260907_02",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "proofHash": "395ac574ff633956e0669d069cfb152e751a3a360bf860c03e79207304389de1",
+  "restoredCompletedSteps": 150,
+  "protectedTableCount": 222,
+  "protectedSnapshotHash": "9348932ed8559ccf729cb367bf56e330cadcb9e45feee04362eb26a441d75758",
+  "priorHistoryHash": "36552bb406e226813c5887b0023447c6ccf49601d9b4df7d2523085467f78578",
+  "addedTables": [
+    {
+      "table": "terminal_account_bindings",
+      "rows": 0,
+      "canonicalSchemaMatches": true
+    },
+    {
+      "table": "bridge_connection_sessions",
+      "rows": 0,
+      "canonicalSchemaMatches": true
+    }
+  ],
+  "currentDevVueSteps": 147,
+  "currentDevVueRouteTables": 0,
+  "referenceRemoved": true
+}

@@ -1,0 +1,14 @@
+{
+  "kind": "terminal-route-registered-rehearsal/v1",
+  "observedAt": "2026-09-08T09:06:44.723Z",
+  "target": "dev_vue_m1_source_20260907_02",
+  "mode": "--apply-lost-ddl-restored-only",
+  "result": {
+    "status": "ddl-unknown-injected",
+    "ddlCount": 1
+  },
+  "registrySteps": 150,
+  "proofHash": "395ac574ff633956e0669d069cfb152e751a3a360bf860c03e79207304389de1",
+  "currentDevVueWritten": false,
+  "scope": "Restored database only; registered additions and history retained. No business facts synthesized."
+}

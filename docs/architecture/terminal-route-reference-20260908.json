@@ -1,0 +1,59 @@
+{
+  "kind": "terminal-route-reference/v1",
+  "observedAt": "2026-09-08T09:04:27.941Z",
+  "identity": {
+    "database": "dev_vue_m1_source_20260907_02",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "mysqlVersion": "8.4.8",
+  "rootProofHash": "0d29057ff605fa43b101a58f1c12079cc5fcd2c96fb7e0ef8509140ea4bacaa4",
+  "registryHash": "725706597d350f67e4cd8bede4497848e945620a579bb72303964cc0ad7f0fb1",
+  "reference": "dev_vue_route_reference_7bf96d1da25c4b6c666b618a",
+  "referenceRemoved": true,
+  "parentDefinitions": [
+    {
+      "table": "users",
+      "id": {
+        "columnType": "int",
+        "charset": null,
+        "collation": null
+      }
+    },
+    {
+      "table": "trading_accounts",
+      "id": {
+        "columnType": "bigint unsigned",
+        "charset": null,
+        "collation": null
+      }
+    },
+    {
+      "table": "terminal_profiles",
+      "id": {
+        "columnType": "varchar(128)",
+        "charset": "ascii",
+        "collation": "ascii_bin"
+      }
+    }
+  ],
+  "definitions": [
+    {
+      "table": "terminal_account_bindings",
+      "sourceSqlHash": "b9499c8909bf311dfe9ffe0278a3ff3905af3b85811dd41e724af40b98f2005a",
+      "ddl": "CREATE TABLE `terminal_account_bindings` (\n  `terminal_profile_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `terminal_instance_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `bound_at_utc` datetime(3) NOT NULL,\n  `unbound_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`terminal_profile_id`,`trading_account_id`,`bound_at_utc`),\n  KEY `idx_terminal_bindings_route` (`trading_account_id`,`unbound_at_utc`,`terminal_instance_id`),\n  CONSTRAINT `fk_terminal_bindings_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_terminal_bindings_profile` FOREIGN KEY (`terminal_profile_id`) REFERENCES `terminal_profiles` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "schemaHash": "d6cbfddedf81c880a0e615a52362c8f683ae9b32bf5be75e633283ae9c56875f"
+    },
+    {
+      "table": "bridge_connection_sessions",
+      "sourceSqlHash": "1f193eabf20a7f6dc075b6d678ef07baae45b4ff9720482e65928bbb1aa94394",
+      "ddl": "CREATE TABLE `bridge_connection_sessions` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `terminal_profile_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `terminal_instance_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `connection_epoch` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `connection_epoch_v4` bigint unsigned DEFAULT NULL,\n  `connected_at_utc` datetime(3) NOT NULL,\n  `last_seen_at_utc` datetime(3) NOT NULL,\n  `disconnected_at_utc` datetime(3) DEFAULT NULL,\n  `disconnect_reason` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_bridge_connection_route_epoch` (`terminal_instance_id`,`connection_epoch`),\n  KEY `idx_bridge_connection_profile_epoch_v4` (`user_id`,`terminal_profile_id`,`connection_epoch_v4`),\n  KEY `idx_bridge_sessions_user_online` (`user_id`,`disconnected_at_utc`,`last_seen_at_utc`),\n  KEY `idx_bridge_sessions_route` (`trading_account_id`,`disconnected_at_utc`,`connected_at_utc`),\n  KEY `fk_bridge_sessions_profile` (`terminal_profile_id`),\n  CONSTRAINT `fk_bridge_sessions_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_bridge_sessions_profile` FOREIGN KEY (`terminal_profile_id`) REFERENCES `terminal_profiles` (`id`),\n  CONSTRAINT `fk_bridge_sessions_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_bridge_connection_epoch_v4_safe` CHECK (((`connection_epoch_v4` is null) or (`connection_epoch_v4` between 1 and 9007199254740991)))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "schemaHash": "e1aaf82ed9334287fcda0e5c7bb01924decfab7faea60b6ccb9b89aa90917eed"
+    }
+  ],
+  "sourceSnapshotHash": "9348932ed8559ccf729cb367bf56e330cadcb9e45feee04362eb26a441d75758",
+  "sourceHistoryHash": "36552bb406e226813c5887b0023447c6ccf49601d9b4df7d2523085467f78578",
+  "captureToolHash": "7ba19e7eed749080f4bfc455d19ed6d41fcc84429fede8123748a08b42722f29",
+  "sourceWritten": false,
+  "currentDevVueWritten": false,
+  "proofHash": "0c02bf5f77230a97eccc2641cb397ef0476db7d4e46fd0d923f6b91390af54a2"
+}

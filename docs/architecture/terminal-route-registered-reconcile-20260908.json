@@ -1,0 +1,23 @@
+{
+  "kind": "terminal-route-registered-rehearsal/v1",
+  "observedAt": "2026-09-08T09:07:28.702Z",
+  "target": "dev_vue_m1_source_20260907_02",
+  "mode": "--apply-restored-only",
+  "result": {
+    "ddlCount": 1,
+    "steps": [
+      {
+        "id": "inplace_036_01_terminal_account_bindings",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_036_02_bridge_connection_sessions",
+        "status": "completed"
+      }
+    ]
+  },
+  "registrySteps": 150,
+  "proofHash": "395ac574ff633956e0669d069cfb152e751a3a360bf860c03e79207304389de1",
+  "currentDevVueWritten": false,
+  "scope": "Restored database only; registered additions and history retained. No business facts synthesized."
+}

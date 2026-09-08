@@ -8,7 +8,9 @@ import { mysqlAccountRootMigrationStore, freezeAccountRootMigrationTools, persis
 
 const check = (condition, code) => { if (!condition) throw Error(`terminal_route_store_${code}`) }
 const additions = ['scripts/lib/mysql-terminal-route-migration.mjs', 'scripts/lib/terminal-route-coordinator.mjs',
-  'scripts/lib/inplace-terminal-route-migration.mjs', 'server/db/migrations/inplace/036_terminal_route_tables.sql']
+  'scripts/lib/inplace-terminal-route-migration.mjs', 'server/db/migrations/inplace/036_terminal_route_tables.sql',
+  'scripts/capture-terminal-route-reference-local.mjs', 'scripts/rehearse-terminal-route-migration-local.mjs',
+  'docs/architecture/terminal-route-reference-20260908.json']
 export async function freezeTerminalRouteTools(root) {
   return [...await freezeAccountRootMigrationTools(root), ...await Promise.all(additions.map(async path => ({
     path, sha256: sha256(await readFile(new URL(path, root))),
