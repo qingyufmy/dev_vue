@@ -30,18 +30,10 @@ try {
       check(await verifyInplaceJournal(connection), 'journal')
       const history = await mysqlColumnStore(connection, true).history()
       check(history.length === 147 && history.every(row => row.status === 'completed'), 'journal_status')
-      let schemaVerification
-      try {
-        const coordinator = await loadSubscriptionForeignKeyCoordinator(root)
-        const schema = await coordinateInplaceSchema(coordinator.store(connection), coordinator)
-        check(schema.structureComplete && schema.steps.length === 147, 'schema')
-        schemaVerification = { verified: true }
-      } catch (error) {
-        // This report never migrates. Preserve the failed gate while collecting
-        // independent source facts; upgrade executors retain their strict check.
-        if (error.message !== 'inplace_learning_reference_tools') throw error
-        schemaVerification = { verified: false, code: error.message }
-      }
+      const coordinator = await loadSubscriptionForeignKeyCoordinator(root)
+      const schema = await coordinateInplaceSchema(coordinator.store(connection), coordinator)
+      check(schema.structureComplete && schema.steps.length === 147, 'schema')
+      const schemaVerification = { verified: true }
       const columns = accountSourceFields.map(name => ['id', 'user_id', 'is_deleted'].includes(name)
         ? `CAST(\`${name}\` AS CHAR) \`${name}\`` : `\`${name}\``).join(',')
       const [rows] = await connection.query(`SELECT ${columns} FROM trading_accounts ORDER BY id`)

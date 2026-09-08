@@ -2,6 +2,8 @@
 
 范围：按全栈模块化方案P1接续现有dev_vue账户根，保留旧行、历史归属和ID映射。当前仅完成只读事实预检与切换设计，尚未回填或切换。
 
+第三十批更新：历史package证据已归档，当前兼容校验按[专门设计](migration-package-evidence-design-20260908.md)落实；[v2只读回执](account-root-cutover-review-20260908-v2.json)已验证当前147步实际结构，schemaVerification=true。账户源摘要、映射和转换结果与原回执一致。原失败回执保留为历史证据；正式回填/切换仍未执行，readyForCutover保持false。
+
 ## 当前事实
 
 [只读回执](account-root-cutover-review-20260908-current.json)来自本机env所指开发库，使用同连接升级锁和只读一致性事务：4条旧账户映射为3个交易账户实体，保留4条用户设置；有1个旧ID映射到另一个代表ID。274条归属历史、3条当前绑定和3个开放区间通过既有身份/当前归属一致性核查。原始账户值不写入公开回执，仅记录摘要和数量。

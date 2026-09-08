@@ -3,6 +3,7 @@ import { sha256, splitSqlStatements } from './v4-migration-plan.mjs'
 import { loadSettingRequestCoordinator } from './inplace-setting-request-schema.mjs'
 import { orderedSchemaStep } from './inplace-ordered-schema-upgrade.mjs'
 import { tableDefinitionHash } from './inplace-foundation-upgrade.mjs'
+import { verifyLearningPackageEvidence } from './learning-package-evidence.mjs'
 
 export async function loadLearningCoreCoordinator(root) {
   const proofRaw = await readFile(new URL('docs/migration/dev-vue-learning-schema-probe-20260907.json', root), 'utf8')
@@ -15,6 +16,10 @@ export async function loadLearningCoreCoordinator(root) {
     || proof.acceptedRows !== 4 || proof.rejected.length !== 18 || !proof.exactPrecision || !proof.overDurationPreserved || !proof.rolledBack
     || proof.currentDevVueWritten !== false || proof.definitions.length !== 4 || !tables.every(table => proof.counts[table] === 0)) throw Error('inplace_learning_reference_invalid')
   for (const file of proof.toolManifest) {
+    if (file.path === 'package.json') {
+      await verifyLearningPackageEvidence(root, file.sha256)
+      continue
+    }
     if (!/^[a-zA-Z0-9_./-]+$/.test(file.path) || file.path.split('/').includes('..')
       || sha256(await readFile(new URL(file.path, root))) !== file.sha256) throw Error('inplace_learning_reference_tools')
   }
