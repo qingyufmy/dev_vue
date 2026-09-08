@@ -55,7 +55,9 @@ export function useRiskWorkspace(selectedDecisionId: Ref<string>, selectDecision
       activeAccountId.value = accountId
       if (!accountId) { clearRisk(); return }
       if (accountId !== contextResponse.data.accountId && session.value) {
-        applyTradingContext((await riskApi.selectAccount(session.value.csrf_token, accountId, contextResponse.data.revision)).data)
+        const selected = await riskApi.selectAccount(session.value.csrf_token, accountId, contextResponse.data.revision)
+        if (currentGeneration !== generation) return
+        applyTradingContext(selected.data)
       }
       await loadAccount(accountId, currentGeneration)
     } catch (reason) {
@@ -101,8 +103,9 @@ export function useRiskWorkspace(selectedDecisionId: Ref<string>, selectDecision
     switching.value = true
     error.value = ''
     try {
-      applyTradingContext((await riskApi.selectAccount(session.value.csrf_token, accountId, tradingContext.value.revision)).data)
+      const selected = await riskApi.selectAccount(session.value.csrf_token, accountId, tradingContext.value.revision)
       if (currentGeneration !== generation) return
+      applyTradingContext(selected.data)
       activeAccountId.value = accountId
       clearRisk()
       selectDecision('')
@@ -115,30 +118,37 @@ export function useRiskWorkspace(selectedDecisionId: Ref<string>, selectDecision
   }
 
   async function savePolicy(input: { patch: Partial<Record<NumericPolicyKey, string>> & { tradeSendEnabled?: boolean; accountKillSwitch?: boolean }; reason: string }) {
-    if (!session.value || !activeAccountId.value || !policy.value || readOnly.value) return false
+    if (!session.value || !activeAccountId.value || !policy.value || readOnly.value || savingPolicy.value) return false
+    const accountId = activeAccountId.value, userId = session.value.user.id, currentGeneration = generation
+    const isCurrent = () => currentGeneration === generation && activeAccountId.value === accountId && session.value?.user.id === userId
     savingPolicy.value = true
     policyError.value = ''
     try {
       const body = policyPatchBody(input.patch, input.reason)
-      policy.value = (await riskApi.replacePolicy(session.value.csrf_token, activeAccountId.value, body, policy.value.revision)).data
+      const response = await riskApi.replacePolicy(session.value.csrf_token, accountId, body, policy.value.revision)
+      if (!isCurrent()) return false
+      policy.value = response.data
       await Promise.all([refreshSummaryAndRelease(), refreshDecisions()])
-      return true
+      return isCurrent()
     } catch (reason) {
-      policyError.value = readableError(reason, '风控规则保存失败')
+      if (isCurrent()) policyError.value = readableError(reason, '风控规则保存失败')
       return false
     } finally { savingPolicy.value = false }
   }
 
   async function createManualRelease(reason: string) {
-    if (!session.value || !activeAccountId.value || !summary.value || readOnly.value) return false
+    if (!session.value || !activeAccountId.value || !summary.value || readOnly.value || releasing.value) return false
+    const accountId = activeAccountId.value, userId = session.value.user.id, currentGeneration = generation
+    const isCurrent = () => currentGeneration === generation && activeAccountId.value === accountId && session.value?.user.id === userId
     releasing.value = true
     releaseError.value = ''
     try {
-      await riskApi.createManualRelease(session.value.csrf_token, activeAccountId.value, { acknowledge_risk: true, reason }, summary.value.revision, crypto.randomUUID())
+      await riskApi.createManualRelease(session.value.csrf_token, accountId, { acknowledge_risk: true, reason }, summary.value.revision, crypto.randomUUID())
+      if (!isCurrent()) return false
       await Promise.all([refreshSummaryAndRelease(), refreshDecisions()])
-      return true
+      return isCurrent()
     } catch (failure) {
-      releaseError.value = readableError(failure, '手动解除限制失败')
+      if (isCurrent()) releaseError.value = readableError(failure, '手动解除限制失败')
       return false
     } finally { releasing.value = false }
   }
