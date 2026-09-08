@@ -516,3 +516,13 @@ loadObserverContextMigration复用完整150步并追加四项checksum，总定�
 [正式增量合同](architecture/account-projection-incremental-contract-20260908.md)明确旧market_candles的独立映射/构建/对账/提升流程。最近副本冻结快照有35,725行K线及3条来源，旧键为source/broker_symbol/timeframe/UTC毫秒，与V4账户键不同；保留全部旧行及V4不直接消费字段，不默认分配账户或猜测closed。列出旧读写消费者、映射歧义、合并冲突、旧历史验证适配及新写入后恢复要求。
 
 两轮复核覆盖职责/同事务、来源可信度、UTC/精度、六表父键顺序和K线旧事实保留。此次未连接数据库，恢复副本仍待154→160，当前库待专属升级。下一步参考MySQL验证六表规范结构及约束，接入其持久化计划和恢复演练，并推进旧K线来源映射调查。
+
+## 第五十五批：投影真实约束及旧K线重复键调查
+
+新增固定恢复副本参考采集和约束助手，在独立参考库建立4个最小父键表及038六表，真实MySQL20项检查全部通过，涵盖DECIMAL精度与溢出、UTC毫秒、默认权限、跨账户键、JSON及大ticket、来源复合外键/主体/区间/档案/kind约束。测试事务回滚、十表0行后删除参考库；恢复副本快照与154条历史不变。[证据](architecture/account-projection-reference-20260908.json)proofHash=b600165783d16134594974e83d24696cac3117145ea9902c32649612970cd4ea。
+
+新增只读probe-legacy-candle-mapping-local.mjs，仅查询固定恢复副本聚合结果，不输出账户登录信息。3个来源、35,725行各有一个server/login账户候选及历史owner候选；无孤立source/空标准品种/不支持周期。二进制标准品种分组后有5,499组跨来源重复键、10,998行，OHLC/tick_volume分歧组为0。[最终v2证据](architecture/legacy-candle-mapping-probe-20260908-v2.json)保留查询摘要，首次中间报告已清理。
+
+候选不是正式映射：仍需平台身份、逐时归属、品种约定、closed/revision依据，以及未比较字段的原始保留。不能通过无条件upsert静默处理重复，也不能用这项只读统计自动授权回填。后续可以在映射确认后为相同投影记录保留多个legacy来源，具体合同继续审查。
+
+5项本地注册/助手限制测试、语法与差异检查通过；两项职责/异常复核见投影合同。数据库连接及SSH隧道已关闭，当前dev_vue未写入。下一步实现154→160协调器/持久化计划并演练，继续K线映射、原始来源保全及改名后的历史校验。

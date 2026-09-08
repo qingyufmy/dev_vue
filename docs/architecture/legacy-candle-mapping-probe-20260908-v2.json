@@ -1,0 +1,57 @@
+{
+  "kind": "legacy-candle-mapping-probe/v1",
+  "observedAt": "2026-09-08T09:42:01.866Z",
+  "identity": {
+    "db": "dev_vue_m1_source_20260907_02",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "queryHashes": {
+    "sources": "81e5875a1cbe0b39e31f824ae80d3b43344f845011b1f89f3af30679f36ee4e5",
+    "summary": "b105bacd5380e5c67b821d12ffb71deb4dba1cbda7f15c4097046540a84fa465",
+    "collisions": "71cee888e5f9d6f7221aed3fa83b8fa2cd857e157b2e904f04374141b560c33f"
+  },
+  "results": {
+    "sources": [
+      {
+        "sourceId": "1",
+        "candleRows": "5646",
+        "identityCandidates": "1",
+        "historicalOwnerCandidates": "1"
+      },
+      {
+        "sourceId": "9311",
+        "candleRows": "25162",
+        "identityCandidates": "1",
+        "historicalOwnerCandidates": "1"
+      },
+      {
+        "sourceId": "9334",
+        "candleRows": "4917",
+        "identityCandidates": "1",
+        "historicalOwnerCandidates": "1"
+      }
+    ],
+    "summary": [
+      {
+        "candleRows": "35725",
+        "sourceCount": "3",
+        "orphanRows": "0",
+        "emptyStandardSymbols": "0",
+        "unsupportedTimeframes": "0",
+        "minUtcMilliseconds": "1745600400000",
+        "maxUtcMilliseconds": "1788311340000"
+      }
+    ],
+    "collisions": [
+      {
+        "collisionGroups": "5499",
+        "collisionRows": "10998",
+        "divergentGroups": "0",
+        "divergentRows": "0",
+        "crossSourceGroups": "5499"
+      }
+    ]
+  },
+  "databaseWrites": 0,
+  "interpretation": "Candidate matches only: server/login without platform or interval-time proof is not an approved mapping. Collision grouping assumes standard_symbol and must be reviewed."
+}
