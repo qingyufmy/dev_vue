@@ -21,6 +21,7 @@
     "test:frontend": "pnpm run verify:frontend-boundaries && pnpm -r --filter ./frontend/** --if-present run test",
     "verify:frontend-boundaries": "node frontend/scripts/verify-boundaries.mjs && pnpm run verify:frontend-boundary-delta",
     "inspect:server-boundaries": "node scripts/inspect-server-boundaries.mjs",
+    "inspect:sql-writes": "node scripts/inspect-sql-writes.mjs",
     "inspect:frontend-boundaries": "node scripts/inspect-frontend-boundaries.mjs",
     "generate:api-contract": "node scripts/build-api-contract.mjs",
     "verify:api-generated": "node scripts/build-api-contract.mjs --check",

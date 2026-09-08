@@ -1,0 +1,3834 @@
+{
+  "version": 1,
+  "scope": "server/src source candidates; not database or ownership verification",
+  "files": 235,
+  "limitations": [
+    "Literal SQL candidates may be unused; writers describe source directories, not approved owners.",
+    "Dynamic targets, CTEs, multi-table shapes and indirect execute/query calls require manual review.",
+    "No dataflow, imported SQL, ORM, triggers, stored procedure bodies, legacy code or migrations are analyzed.",
+    "Execute/query method names are not type-resolved; indirect calls include business methods. MySQL executable comments and injected SQL fragments are not expanded.",
+    "Single source writer does not prove business ownership; multi-writer tables may include legitimate transactional outbox producers."
+  ],
+  "tables": [
+    {
+      "table": "account_risk_states",
+      "writers": [
+        "risk"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+          "line": 119,
+          "writer": "risk",
+          "operation": "INSERT",
+          "table": "account_risk_states",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "account_risk_summaries",
+      "writers": [
+        "risk"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+          "line": 121,
+          "writer": "risk",
+          "operation": "INSERT",
+          "table": "account_risk_summaries",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "account_runtime_snapshots",
+      "writers": [
+        "trading"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+          "line": 562,
+          "writer": "trading",
+          "operation": "INSERT",
+          "table": "account_runtime_snapshots",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "account_trade_daily_summaries_v4",
+      "writers": [
+        "trade-history"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-collector-repository.ts",
+          "line": 87,
+          "writer": "trade-history",
+          "operation": "DELETE",
+          "table": "account_trade_daily_summaries_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-collector-repository.ts",
+          "line": 88,
+          "writer": "trade-history",
+          "operation": "INSERT",
+          "table": "account_trade_daily_summaries_v4",
+          "review": null,
+          "dynamic": true
+        }
+      ]
+    },
+    {
+      "table": "account_trade_record_deals_v4",
+      "writers": [
+        "trade-history"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-collector-repository.ts",
+          "line": 215,
+          "writer": "trade-history",
+          "operation": "INSERT",
+          "table": "account_trade_record_deals_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "account_trade_records_v4",
+      "writers": [
+        "trade-history"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-collector-repository.ts",
+          "line": 189,
+          "writer": "trade-history",
+          "operation": "INSERT",
+          "table": "account_trade_records_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "ai_analysis_runs",
+      "writers": [
+        "inference"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 164,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_analysis_runs",
+          "review": null,
+          "dynamic": true
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 226,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "ai_analysis_runs",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 256,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_analysis_runs",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 281,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_analysis_runs",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 321,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_analysis_runs",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 329,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_analysis_runs",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "ai_manual_analysis_cooldowns",
+      "writers": [
+        "inference"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 212,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "ai_manual_analysis_cooldowns",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 220,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_manual_analysis_cooldowns",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "ai_model_attempts",
+      "writers": [
+        "inference"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 170,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_model_attempts",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 188,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_model_attempts",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 255,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "ai_model_attempts",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 278,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_model_attempts",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 312,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_model_attempts",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 317,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "ai_model_attempts",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 375,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_model_attempts",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 387,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "ai_model_attempts",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 411,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_model_attempts",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 429,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_model_attempts",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 433,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "ai_model_attempts",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-model-task-recovery-repository.ts",
+          "line": 44,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_model_attempts",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "ai_model_tasks",
+      "writers": [
+        "inference"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 169,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_model_tasks",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 187,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_model_tasks",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 254,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "ai_model_tasks",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 280,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_model_tasks",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 320,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_model_tasks",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 376,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_model_tasks",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 386,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "ai_model_tasks",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 413,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_model_tasks",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 436,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_model_tasks",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-model-task-recovery-repository.ts",
+          "line": 46,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_model_tasks",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "writers": [
+        "inference"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-model-usage-ledger.ts",
+          "line": 50,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "ai_model_usage_logs",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-model-usage-ledger.ts",
+          "line": 66,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_model_usage_logs",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-model-usage-ledger.ts",
+          "line": 80,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_model_usage_logs",
+          "review": null,
+          "dynamic": true
+        }
+      ]
+    },
+    {
+      "table": "ai_trader_runs",
+      "writers": [
+        "inference"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 182,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_trader_runs",
+          "review": null,
+          "dynamic": true
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 292,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "ai_trader_runs",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 347,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "ai_trader_runs",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 377,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_trader_runs",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 388,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_trader_runs",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 414,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_trader_runs",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 437,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_trader_runs",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 445,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "ai_trader_runs",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "auth_authorization_codes",
+      "writers": [
+        "auth"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/auth/infrastructure/mysql-auth-cleanup.ts",
+          "line": 16,
+          "writer": "auth",
+          "operation": "DELETE",
+          "table": "auth_authorization_codes",
+          "review": null,
+          "dynamic": true
+        },
+        {
+          "file": "server/src/modules/auth/infrastructure/mysql-auth-repository.ts",
+          "line": 174,
+          "writer": "auth",
+          "operation": "INSERT",
+          "table": "auth_authorization_codes",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/auth/infrastructure/mysql-auth-repository.ts",
+          "line": 197,
+          "writer": "auth",
+          "operation": "UPDATE",
+          "table": "auth_authorization_codes",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "auth_sessions",
+      "writers": [
+        "auth"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/auth/infrastructure/mysql-auth-cleanup.ts",
+          "line": 21,
+          "writer": "auth",
+          "operation": "DELETE",
+          "table": "auth_sessions",
+          "review": null,
+          "dynamic": true
+        },
+        {
+          "file": "server/src/modules/auth/infrastructure/mysql-auth-repository.ts",
+          "line": 116,
+          "writer": "auth",
+          "operation": "INSERT",
+          "table": "auth_sessions",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/auth/infrastructure/mysql-auth-repository.ts",
+          "line": 154,
+          "writer": "auth",
+          "operation": "UPDATE",
+          "table": "auth_sessions",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/auth/infrastructure/mysql-auth-repository.ts",
+          "line": 161,
+          "writer": "auth",
+          "operation": "UPDATE",
+          "table": "auth_sessions",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/auth/infrastructure/mysql-auth-repository.ts",
+          "line": 167,
+          "writer": "auth",
+          "operation": "UPDATE",
+          "table": "auth_sessions",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "bridge_command_events_v4",
+      "writers": [
+        "execution"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 471,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "bridge_command_events_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "bridge_command_payloads_v4",
+      "writers": [
+        "execution"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 86,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "bridge_command_payloads_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "bridge_command_results_v4",
+      "writers": [
+        "execution"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 182,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "bridge_command_results_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "bridge_commands_v4",
+      "writers": [
+        "execution"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 75,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "bridge_commands_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 337,
+          "writer": "execution",
+          "operation": "UPDATE",
+          "table": "bridge_commands_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "bridge_connection_sessions",
+      "writers": [
+        "bridge"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
+          "line": 104,
+          "writer": "bridge",
+          "operation": "INSERT",
+          "table": "bridge_connection_sessions",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
+          "line": 144,
+          "writer": "bridge",
+          "operation": "UPDATE",
+          "table": "bridge_connection_sessions",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
+          "line": 151,
+          "writer": "bridge",
+          "operation": "UPDATE",
+          "table": "bridge_connection_sessions",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
+          "line": 172,
+          "writer": "bridge",
+          "operation": "UPDATE",
+          "table": "bridge_connection_sessions",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
+          "line": 201,
+          "writer": "bridge",
+          "operation": "UPDATE",
+          "table": "bridge_connection_sessions",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "bridge_refresh_sessions",
+      "writers": [
+        "auth",
+        "bridge"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/auth/infrastructure/mysql-bridge-device-revoker.ts",
+          "line": 14,
+          "writer": "auth",
+          "operation": "UPDATE",
+          "table": "bridge_refresh_sessions",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-credential-repository.ts",
+          "line": 67,
+          "writer": "bridge",
+          "operation": "UPDATE",
+          "table": "bridge_refresh_sessions",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-credential-repository.ts",
+          "line": 115,
+          "writer": "bridge",
+          "operation": "UPDATE",
+          "table": "bridge_refresh_sessions",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-credential-repository.ts",
+          "line": 129,
+          "writer": "bridge",
+          "operation": "INSERT",
+          "table": "bridge_refresh_sessions",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-credential-repository.ts",
+          "line": 173,
+          "writer": "bridge",
+          "operation": "UPDATE",
+          "table": "bridge_refresh_sessions",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-pairing-repository.ts",
+          "line": 68,
+          "writer": "bridge",
+          "operation": "INSERT",
+          "table": "bridge_refresh_sessions",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "bridge_trade_state_snapshots_v4",
+      "writers": [
+        "trading"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+          "line": 579,
+          "writer": "trading",
+          "operation": "DELETE",
+          "table": "bridge_trade_state_snapshots_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+          "line": 582,
+          "writer": "trading",
+          "operation": "INSERT",
+          "table": "bridge_trade_state_snapshots_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "bridge_v4_pairing_requests",
+      "writers": [
+        "auth",
+        "bridge"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/auth/infrastructure/mysql-bridge-device-revoker.ts",
+          "line": 12,
+          "writer": "auth",
+          "operation": "UPDATE",
+          "table": "bridge_v4_pairing_requests",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-pairing-repository.ts",
+          "line": 30,
+          "writer": "bridge",
+          "operation": "INSERT",
+          "table": "bridge_v4_pairing_requests",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-pairing-repository.ts",
+          "line": 72,
+          "writer": "bridge",
+          "operation": "UPDATE",
+          "table": "bridge_v4_pairing_requests",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "execution_distribution_targets",
+      "writers": [
+        "execution"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 419,
+          "writer": "execution",
+          "operation": "UPDATE",
+          "table": "execution_distribution_targets",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+          "line": 285,
+          "writer": "execution",
+          "operation": "UPDATE",
+          "table": "execution_distribution_targets",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+          "line": 306,
+          "writer": "execution",
+          "operation": "UPDATE",
+          "table": "execution_distribution_targets",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+          "line": 327,
+          "writer": "execution",
+          "operation": "UPDATE",
+          "table": "execution_distribution_targets",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+          "line": 537,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "execution_distribution_targets",
+          "review": null,
+          "dynamic": true
+        }
+      ]
+    },
+    {
+      "table": "execution_distributions",
+      "writers": [
+        "execution"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 450,
+          "writer": "execution",
+          "operation": "UPDATE",
+          "table": "execution_distributions",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+          "line": 466,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "execution_distributions",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+          "line": 641,
+          "writer": "execution",
+          "operation": "UPDATE",
+          "table": "execution_distributions",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "execution_intent_events",
+      "writers": [
+        "execution"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 351,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "execution_intent_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+          "line": 141,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "execution_intent_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+          "line": 164,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "execution_intent_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
+          "line": 620,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "execution_intent_events",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "execution_intent_payloads",
+      "writers": [
+        "execution"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+          "line": 163,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "execution_intent_payloads",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
+          "line": 617,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "execution_intent_payloads",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "execution_intents",
+      "writers": [
+        "execution"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 349,
+          "writer": "execution",
+          "operation": "UPDATE",
+          "table": "execution_intents",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+          "line": 139,
+          "writer": "execution",
+          "operation": "UPDATE",
+          "table": "execution_intents",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+          "line": 160,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "execution_intents",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
+          "line": 605,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "execution_intents",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "execution_outcomes",
+      "writers": [
+        "execution"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 313,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "execution_outcomes",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "inference_snapshot_payloads",
+      "writers": [
+        "inference"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 253,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "inference_snapshot_payloads",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 385,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "inference_snapshot_payloads",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "inference_snapshots",
+      "writers": [
+        "inference"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 252,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "inference_snapshots",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 384,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "inference_snapshots",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "learning_progress",
+      "writers": [
+        "learning"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/learning/infrastructure/mysql-learning-completion.ts",
+          "line": 59,
+          "writer": "learning",
+          "operation": "UPDATE",
+          "table": "learning_progress",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/learning/infrastructure/mysql-learning-completion.ts",
+          "line": 64,
+          "writer": "learning",
+          "operation": "INSERT",
+          "table": "learning_progress",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "learning_progress_changes",
+      "writers": [
+        "learning"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/learning/infrastructure/mysql-learning-completion.ts",
+          "line": 70,
+          "writer": "learning",
+          "operation": "INSERT",
+          "table": "learning_progress_changes",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "manual_review_candidates_v4",
+      "writers": [
+        "reviews"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 122,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "manual_review_candidates_v4",
+          "review": null,
+          "dynamic": true
+        }
+      ]
+    },
+    {
+      "table": "market_analyses",
+      "writers": [
+        "inference"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 276,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "market_analyses",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "market_analysis_payloads",
+      "writers": [
+        "inference"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 277,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "market_analysis_payloads",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "market_candles",
+      "writers": [
+        "trading"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+          "line": 568,
+          "writer": "trading",
+          "operation": "INSERT",
+          "table": "market_candles",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "market_quotes",
+      "writers": [
+        "trading"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+          "line": 565,
+          "writer": "trading",
+          "operation": "INSERT",
+          "table": "market_quotes",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "observer_channel_accesses",
+      "writers": [
+        "trading"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-observer-management-repository.ts",
+          "line": 431,
+          "writer": "trading",
+          "operation": "INSERT",
+          "table": "observer_channel_accesses",
+          "review": null,
+          "dynamic": true
+        },
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-observer-management-repository.ts",
+          "line": 436,
+          "writer": "trading",
+          "operation": "UPDATE",
+          "table": "observer_channel_accesses",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "observer_channels",
+      "writers": [
+        "trading"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-observer-management-repository.ts",
+          "line": 281,
+          "writer": "trading",
+          "operation": "UPDATE",
+          "table": "observer_channels",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-observer-management-repository.ts",
+          "line": 285,
+          "writer": "trading",
+          "operation": "UPDATE",
+          "table": "observer_channels",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-observer-management-repository.ts",
+          "line": 297,
+          "writer": "trading",
+          "operation": "INSERT",
+          "table": "observer_channels",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-observer-management-repository.ts",
+          "line": 346,
+          "writer": "trading",
+          "operation": "UPDATE",
+          "table": "observer_channels",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-observer-management-repository.ts",
+          "line": 395,
+          "writer": "trading",
+          "operation": "UPDATE",
+          "table": "observer_channels",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-observer-management-repository.ts",
+          "line": 399,
+          "writer": "trading",
+          "operation": "UPDATE",
+          "table": "observer_channels",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "observer_management_operations",
+      "writers": [
+        "trading"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-observer-management-repository.ts",
+          "line": 176,
+          "writer": "trading",
+          "operation": "INSERT",
+          "table": "observer_management_operations",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "observer_management_registry",
+      "writers": [
+        "trading"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-observer-management-repository.ts",
+          "line": 565,
+          "writer": "trading",
+          "operation": "UPDATE",
+          "table": "observer_management_registry",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "observer_sources",
+      "writers": [
+        "trading"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-observer-management-repository.ts",
+          "line": 233,
+          "writer": "trading",
+          "operation": "INSERT",
+          "table": "observer_sources",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-observer-management-repository.ts",
+          "line": 271,
+          "writer": "trading",
+          "operation": "UPDATE",
+          "table": "observer_sources",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "operation_events",
+      "writers": [
+        "execution"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 406,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "operation_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 455,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "operation_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+          "line": 465,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "operation_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+          "line": 646,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "operation_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+          "line": 146,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "operation_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+          "line": 158,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "operation_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
+          "line": 681,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "operation_events",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "operations",
+      "writers": [
+        "execution"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 405,
+          "writer": "execution",
+          "operation": "UPDATE",
+          "table": "operations",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 454,
+          "writer": "execution",
+          "operation": "UPDATE",
+          "table": "operations",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+          "line": 464,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "operations",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+          "line": 467,
+          "writer": "execution",
+          "operation": "UPDATE",
+          "table": "operations",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+          "line": 645,
+          "writer": "execution",
+          "operation": "UPDATE",
+          "table": "operations",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+          "line": 143,
+          "writer": "execution",
+          "operation": "UPDATE",
+          "table": "operations",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+          "line": 157,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "operations",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
+          "line": 170,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "operations",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "outbox_events",
+      "writers": [
+        "@outbox",
+        "execution",
+        "inference",
+        "reviews",
+        "risk",
+        "trade-history",
+        "trading"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 91,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "outbox_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 407,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "outbox_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 456,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "outbox_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+          "line": 549,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "outbox_events",
+          "review": null,
+          "dynamic": true
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+          "line": 554,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "outbox_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+          "line": 296,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "outbox_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
+          "line": 726,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "outbox_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 100,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "outbox_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-model-task-recovery-repository.ts",
+          "line": 55,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "outbox_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 412,
+          "writer": "reviews",
+          "operation": "INSERT",
+          "table": "outbox_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+          "line": 341,
+          "writer": "risk",
+          "operation": "INSERT",
+          "table": "outbox_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-collector-repository.ts",
+          "line": 101,
+          "writer": "trade-history",
+          "operation": "INSERT",
+          "table": "outbox_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-collector-repository.ts",
+          "line": 118,
+          "writer": "trade-history",
+          "operation": "INSERT",
+          "table": "outbox_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-schedule-repository.ts",
+          "line": 29,
+          "writer": "trade-history",
+          "operation": "INSERT",
+          "table": "outbox_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-observer-management-repository.ts",
+          "line": 583,
+          "writer": "trading",
+          "operation": "INSERT",
+          "table": "outbox_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/outbox/infrastructure/mysql-outbox-repository.ts",
+          "line": 20,
+          "writer": "@outbox",
+          "operation": "UPDATE",
+          "table": "outbox_events",
+          "review": null,
+          "dynamic": true
+        },
+        {
+          "file": "server/src/outbox/infrastructure/mysql-outbox-repository.ts",
+          "line": 28,
+          "writer": "@outbox",
+          "operation": "UPDATE",
+          "table": "outbox_events",
+          "review": null,
+          "dynamic": true
+        },
+        {
+          "file": "server/src/outbox/infrastructure/mysql-outbox-repository.ts",
+          "line": 40,
+          "writer": "@outbox",
+          "operation": "UPDATE",
+          "table": "outbox_events",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/outbox/infrastructure/mysql-outbox-repository.ts",
+          "line": 47,
+          "writer": "@outbox",
+          "operation": "UPDATE",
+          "table": "outbox_events",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "referral_credit_ledger",
+      "writers": [
+        "commerce"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/commerce/infrastructure/mysql-referral-credit.ts",
+          "line": 46,
+          "writer": "commerce",
+          "operation": "INSERT",
+          "table": "referral_credit_ledger",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "referral_rule_changes",
+      "writers": [
+        "commerce"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/commerce/infrastructure/mysql-referral-rule-writer.ts",
+          "line": 44,
+          "writer": "commerce",
+          "operation": "INSERT",
+          "table": "referral_rule_changes",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "referral_rules",
+      "writers": [
+        "commerce"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/commerce/infrastructure/mysql-referral-rule-writer.ts",
+          "line": 40,
+          "writer": "commerce",
+          "operation": "UPDATE",
+          "table": "referral_rules",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "review_case_sources_v4",
+      "writers": [
+        "reviews"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 121,
+          "writer": "reviews",
+          "operation": "INSERT",
+          "table": "review_case_sources_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "review_cases_v4",
+      "writers": [
+        "reviews"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 119,
+          "writer": "reviews",
+          "operation": "INSERT",
+          "table": "review_cases_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 143,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "review_cases_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 161,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "review_cases_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 177,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "review_cases_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 190,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "review_cases_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 282,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "review_cases_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 333,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "review_cases_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 353,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "review_cases_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "review_evidence_payloads_v4",
+      "writers": [
+        "reviews"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 120,
+          "writer": "reviews",
+          "operation": "INSERT",
+          "table": "review_evidence_payloads_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "review_job_events_v4",
+      "writers": [
+        "reviews"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 411,
+          "writer": "reviews",
+          "operation": "INSERT",
+          "table": "review_job_events_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "review_jobs_v4",
+      "writers": [
+        "reviews"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 123,
+          "writer": "reviews",
+          "operation": "INSERT",
+          "table": "review_jobs_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 142,
+          "writer": "reviews",
+          "operation": "INSERT",
+          "table": "review_jobs_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 280,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "review_jobs_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 299,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "review_jobs_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 330,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "review_jobs_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 350,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "review_jobs_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "review_model_attempts_v4",
+      "writers": [
+        "reviews"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 277,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "review_model_attempts_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 298,
+          "writer": "reviews",
+          "operation": "INSERT",
+          "table": "review_model_attempts_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 313,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "review_model_attempts_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 323,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "review_model_attempts_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "review_user_states_v4",
+      "writers": [
+        "reviews"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 334,
+          "writer": "reviews",
+          "operation": "INSERT",
+          "table": "review_user_states_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "review_version_payloads_v4",
+      "writers": [
+        "reviews"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 160,
+          "writer": "reviews",
+          "operation": "INSERT",
+          "table": "review_version_payloads_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 329,
+          "writer": "reviews",
+          "operation": "INSERT",
+          "table": "review_version_payloads_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "review_versions_v4",
+      "writers": [
+        "reviews"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 159,
+          "writer": "reviews",
+          "operation": "INSERT",
+          "table": "review_versions_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 328,
+          "writer": "reviews",
+          "operation": "INSERT",
+          "table": "review_versions_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "risk_decision_payloads_v4",
+      "writers": [
+        "risk"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+          "line": 244,
+          "writer": "risk",
+          "operation": "INSERT",
+          "table": "risk_decision_payloads_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "risk_decisions_v4",
+      "writers": [
+        "execution",
+        "risk"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+          "line": 109,
+          "writer": "execution",
+          "operation": "UPDATE",
+          "table": "risk_decisions_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+          "line": 243,
+          "writer": "risk",
+          "operation": "INSERT",
+          "table": "risk_decisions_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "risk_manual_releases",
+      "writers": [
+        "risk"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+          "line": 99,
+          "writer": "risk",
+          "operation": "UPDATE",
+          "table": "risk_manual_releases",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+          "line": 130,
+          "writer": "risk",
+          "operation": "UPDATE",
+          "table": "risk_manual_releases",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+          "line": 159,
+          "writer": "risk",
+          "operation": "UPDATE",
+          "table": "risk_manual_releases",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+          "line": 163,
+          "writer": "risk",
+          "operation": "INSERT",
+          "table": "risk_manual_releases",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "risk_policy_change_items_v4",
+      "writers": [
+        "risk"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+          "line": 94,
+          "writer": "risk",
+          "operation": "INSERT",
+          "table": "risk_policy_change_items_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "risk_policy_sets_v4",
+      "writers": [
+        "risk"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+          "line": 82,
+          "writer": "risk",
+          "operation": "INSERT",
+          "table": "risk_policy_sets_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+          "line": 91,
+          "writer": "risk",
+          "operation": "UPDATE",
+          "table": "risk_policy_sets_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "risk_policy_versions_v4",
+      "writers": [
+        "risk"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+          "line": 90,
+          "writer": "risk",
+          "operation": "INSERT",
+          "table": "risk_policy_versions_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "risk_reservation_events_v4",
+      "writers": [
+        "execution",
+        "trading"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 360,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "risk_reservation_events_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 368,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "risk_reservation_events_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+          "line": 142,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "risk_reservation_events_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+          "line": 172,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "risk_reservation_events_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
+          "line": 633,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "risk_reservation_events_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+          "line": 616,
+          "writer": "trading",
+          "operation": "INSERT",
+          "table": "risk_reservation_events_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "risk_reservations_v4",
+      "writers": [
+        "execution",
+        "trading"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 359,
+          "writer": "execution",
+          "operation": "UPDATE",
+          "table": "risk_reservations_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+          "line": 367,
+          "writer": "execution",
+          "operation": "UPDATE",
+          "table": "risk_reservations_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+          "line": 171,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "risk_reservations_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
+          "line": 623,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "risk_reservations_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+          "line": 612,
+          "writer": "trading",
+          "operation": "UPDATE",
+          "table": "risk_reservations_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "risk_state_events",
+      "writers": [
+        "risk"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+          "line": 122,
+          "writer": "risk",
+          "operation": "INSERT",
+          "table": "risk_state_events",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "strategies",
+      "writers": [
+        "strategies"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+          "line": 101,
+          "writer": "strategies",
+          "operation": "INSERT",
+          "table": "strategies",
+          "review": null,
+          "dynamic": true
+        },
+        {
+          "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+          "line": 116,
+          "writer": "strategies",
+          "operation": "UPDATE",
+          "table": "strategies",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+          "line": 133,
+          "writer": "strategies",
+          "operation": "UPDATE",
+          "table": "strategies",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+          "line": 152,
+          "writer": "strategies",
+          "operation": "UPDATE",
+          "table": "strategies",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+          "line": 166,
+          "writer": "strategies",
+          "operation": "UPDATE",
+          "table": "strategies",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "strategy_memory_libraries_v4",
+      "writers": [
+        "reviews"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 237,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "strategy_memory_libraries_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 255,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "strategy_memory_libraries_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 389,
+          "writer": "reviews",
+          "operation": "INSERT",
+          "table": "strategy_memory_libraries_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "strategy_memory_library_revisions_v4",
+      "writers": [
+        "reviews"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 236,
+          "writer": "reviews",
+          "operation": "INSERT",
+          "table": "strategy_memory_library_revisions_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 254,
+          "writer": "reviews",
+          "operation": "INSERT",
+          "table": "strategy_memory_library_revisions_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "strategy_memory_pending_updates_v4",
+      "writers": [
+        "reviews"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 218,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "strategy_memory_pending_updates_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 239,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "strategy_memory_pending_updates_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 242,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "strategy_memory_pending_updates_v4",
+          "review": null,
+          "dynamic": true
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 244,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "strategy_memory_pending_updates_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 257,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "strategy_memory_pending_updates_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 402,
+          "writer": "reviews",
+          "operation": "INSERT",
+          "table": "strategy_memory_pending_updates_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+          "line": 446,
+          "writer": "reviews",
+          "operation": "UPDATE",
+          "table": "strategy_memory_pending_updates_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "strategy_subscriptions",
+      "writers": [
+        "strategies"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+          "line": 203,
+          "writer": "strategies",
+          "operation": "INSERT",
+          "table": "strategy_subscriptions",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+          "line": 256,
+          "writer": "strategies",
+          "operation": "UPDATE",
+          "table": "strategy_subscriptions",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+          "line": 308,
+          "writer": "strategies",
+          "operation": "UPDATE",
+          "table": "strategy_subscriptions",
+          "review": null,
+          "dynamic": true
+        }
+      ]
+    },
+    {
+      "table": "strategy_versions",
+      "writers": [
+        "strategies"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+          "line": 102,
+          "writer": "strategies",
+          "operation": "INSERT",
+          "table": "strategy_versions",
+          "review": null,
+          "dynamic": true
+        },
+        {
+          "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+          "line": 132,
+          "writer": "strategies",
+          "operation": "INSERT",
+          "table": "strategy_versions",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "subscription_execution_preferences_v4",
+      "writers": [
+        "strategies"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/strategies/infrastructure/mysql-subscription-execution-preferences.ts",
+          "line": 8,
+          "writer": "strategies",
+          "operation": "INSERT",
+          "table": "subscription_execution_preferences_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "subscription_schedules",
+      "writers": [
+        "inference",
+        "strategies"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-analysis-schedule-repository.ts",
+          "line": 32,
+          "writer": "inference",
+          "operation": "UPDATE",
+          "table": "subscription_schedules",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+          "line": 204,
+          "writer": "strategies",
+          "operation": "INSERT",
+          "table": "subscription_schedules",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+          "line": 258,
+          "writer": "strategies",
+          "operation": "UPDATE",
+          "table": "subscription_schedules",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "system_setting_changes",
+      "writers": [
+        "settings"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/settings/infrastructure/mysql-setting-writer.ts",
+          "line": 63,
+          "writer": "settings",
+          "operation": "INSERT",
+          "table": "system_setting_changes",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "system_setting_requests",
+      "writers": [
+        "settings"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/settings/infrastructure/mysql-setting-management.ts",
+          "line": 43,
+          "writer": "settings",
+          "operation": "INSERT",
+          "table": "system_setting_requests",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "system_settings",
+      "writers": [
+        "settings"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/settings/infrastructure/mysql-setting-writer.ts",
+          "line": 55,
+          "writer": "settings",
+          "operation": "UPDATE",
+          "table": "system_settings",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "terminal_account_bindings",
+      "writers": [
+        "bridge"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
+          "line": 396,
+          "writer": "bridge",
+          "operation": "UPDATE",
+          "table": "terminal_account_bindings",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
+          "line": 399,
+          "writer": "bridge",
+          "operation": "INSERT",
+          "table": "terminal_account_bindings",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "terminal_history_deals_v4",
+      "writers": [
+        "trade-history"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-collector-repository.ts",
+          "line": 162,
+          "writer": "trade-history",
+          "operation": "INSERT",
+          "table": "terminal_history_deals_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "terminal_history_orders_v4",
+      "writers": [
+        "trade-history"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-collector-repository.ts",
+          "line": 154,
+          "writer": "trade-history",
+          "operation": "INSERT",
+          "table": "terminal_history_orders_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "terminal_profiles",
+      "writers": [
+        "bridge"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
+          "line": 348,
+          "writer": "bridge",
+          "operation": "UPDATE",
+          "table": "terminal_profiles",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
+          "line": 357,
+          "writer": "bridge",
+          "operation": "INSERT",
+          "table": "terminal_profiles",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "trade_decision_payloads",
+      "writers": [
+        "inference"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 410,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "trade_decision_payloads",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "trade_decisions",
+      "writers": [
+        "inference",
+        "risk"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+          "line": 409,
+          "writer": "inference",
+          "operation": "INSERT",
+          "table": "trade_decisions",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+          "line": 246,
+          "writer": "risk",
+          "operation": "UPDATE",
+          "table": "trade_decisions",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "trade_history_sync_states_v4",
+      "writers": [
+        "trade-history"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-collector-repository.ts",
+          "line": 35,
+          "writer": "trade-history",
+          "operation": "INSERT",
+          "table": "trade_history_sync_states_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-collector-repository.ts",
+          "line": 43,
+          "writer": "trade-history",
+          "operation": "UPDATE",
+          "table": "trade_history_sync_states_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-collector-repository.ts",
+          "line": 75,
+          "writer": "trade-history",
+          "operation": "UPDATE",
+          "table": "trade_history_sync_states_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-collector-repository.ts",
+          "line": 83,
+          "writer": "trade-history",
+          "operation": "UPDATE",
+          "table": "trade_history_sync_states_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-collector-repository.ts",
+          "line": 115,
+          "writer": "trade-history",
+          "operation": "UPDATE",
+          "table": "trade_history_sync_states_v4",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-schedule-repository.ts",
+          "line": 26,
+          "writer": "trade-history",
+          "operation": "INSERT",
+          "table": "trade_history_sync_states_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "trading_account_ownership_intervals",
+      "writers": [
+        "bridge"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-first-account-claim.ts",
+          "line": 25,
+          "writer": "bridge",
+          "operation": "INSERT",
+          "table": "trading_account_ownership_intervals",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "trading_account_ownerships",
+      "writers": [
+        "bridge"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-first-account-claim.ts",
+          "line": 30,
+          "writer": "bridge",
+          "operation": "INSERT",
+          "table": "trading_account_ownerships",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "trading_accounts",
+      "writers": [
+        "bridge"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-first-account-claim.ts",
+          "line": 12,
+          "writer": "bridge",
+          "operation": "INSERT",
+          "table": "trading_accounts",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "trading_contexts",
+      "writers": [
+        "trading"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+          "line": 186,
+          "writer": "trading",
+          "operation": "INSERT",
+          "table": "trading_contexts",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "trading_projection_provenance_v4",
+      "writers": [
+        "trading"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+          "line": 535,
+          "writer": "trading",
+          "operation": "INSERT",
+          "table": "trading_projection_provenance_v4",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "trading_projection_revisions",
+      "writers": [
+        "trading"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+          "line": 554,
+          "writer": "trading",
+          "operation": "INSERT",
+          "table": "trading_projection_revisions",
+          "review": null,
+          "dynamic": false
+        },
+        {
+          "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+          "line": 573,
+          "writer": "trading",
+          "operation": "UPDATE",
+          "table": "trading_projection_revisions",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "user_execution_commands",
+      "writers": [
+        "execution"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
+          "line": 182,
+          "writer": "execution",
+          "operation": "INSERT",
+          "table": "user_execution_commands",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    },
+    {
+      "table": "user_referral_accounts",
+      "writers": [
+        "commerce"
+      ],
+      "evidence": [
+        {
+          "file": "server/src/modules/commerce/infrastructure/mysql-referral-credit.ts",
+          "line": 49,
+          "writer": "commerce",
+          "operation": "UPDATE",
+          "table": "user_referral_accounts",
+          "review": null,
+          "dynamic": false
+        }
+      ]
+    }
+  ],
+  "unresolved": [
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+      "line": 140,
+      "writer": "execution",
+      "operation": "UPDATE",
+      "table": null,
+      "review": "unsupported-target-shape",
+      "dynamic": false
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-model-task-recovery-repository.ts",
+      "line": 50,
+      "writer": "inference",
+      "operation": "UPDATE",
+      "table": null,
+      "review": "dynamic-or-incomplete-target",
+      "dynamic": true
+    },
+    {
+      "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-repository.ts",
+      "line": 48,
+      "writer": "trade-history",
+      "operation": "WITH",
+      "table": null,
+      "review": "unsupported-statement",
+      "dynamic": true
+    },
+    {
+      "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+      "line": 549,
+      "writer": "trading",
+      "operation": "DELETE",
+      "table": null,
+      "review": "dynamic-or-incomplete-target",
+      "dynamic": true
+    },
+    {
+      "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+      "line": 550,
+      "writer": "trading",
+      "operation": "INSERT",
+      "table": null,
+      "review": "dynamic-or-incomplete-target",
+      "dynamic": true
+    }
+  ],
+  "indirectCalls": [
+    {
+      "file": "server/src/modules/audit/infrastructure/mysql-audit-repository.ts",
+      "line": 127,
+      "writer": "audit",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/bridge/infrastructure/mysql-bridge-pairing-repository.ts",
+      "line": 18,
+      "writer": "bridge",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/bridge/infrastructure/mysql-bridge-pairing-repository.ts",
+      "line": 33,
+      "writer": "bridge",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/bridge/infrastructure/mysql-bridge-pairing-repository.ts",
+      "line": 48,
+      "writer": "bridge",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/commerce/application/referral-rule-management.ts",
+      "line": 37,
+      "writer": "commerce",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/application/execution-distribution-worker.ts",
+      "line": 28,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+      "line": 44,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+      "line": 102,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+      "line": 222,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+      "line": 248,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-bridge-command-repository.ts",
+      "line": 344,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+      "line": 158,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+      "line": 238,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+      "line": 281,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+      "line": 290,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+      "line": 293,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+      "line": 317,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+      "line": 366,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+      "line": 482,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+      "line": 489,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+      "line": 492,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+      "line": 495,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+      "line": 636,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-distribution-repository.ts",
+      "line": 642,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+      "line": 67,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+      "line": 76,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+      "line": 82,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+      "line": 117,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+      "line": 123,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+      "line": 133,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+      "line": 144,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+      "line": 177,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+      "line": 224,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+      "line": 225,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
+      "line": 118,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
+      "line": 331,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
+      "line": 487,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
+      "line": 494,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-user-execution-command-repository.ts",
+      "line": 495,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/execution/transport/http/user-execution-command-routes.ts",
+      "line": 61,
+      "writer": "execution",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 200,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 205,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 214,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 222,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 229,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 237,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 245,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 258,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 265,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 294,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 299,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 306,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 336,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 344,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 349,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 356,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 360,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 390,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 397,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 416,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 423,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 450,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 459,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 461,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
+      "line": 468,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-model-gateway-resolver.ts",
+      "line": 63,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-model-gateway-resolver.ts",
+      "line": 77,
+      "writer": "inference",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/learning/application/learning-completion-service.ts",
+      "line": 6,
+      "writer": "learning",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+      "line": 74,
+      "writer": "reviews",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+      "line": 198,
+      "writer": "reviews",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+      "line": 202,
+      "writer": "reviews",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+      "line": 271,
+      "writer": "reviews",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+      "line": 365,
+      "writer": "reviews",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "line": 53,
+      "writer": "risk",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "line": 56,
+      "writer": "risk",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "line": 65,
+      "writer": "risk",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "line": 69,
+      "writer": "risk",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "line": 97,
+      "writer": "risk",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "line": 124,
+      "writer": "risk",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "line": 141,
+      "writer": "risk",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "line": 156,
+      "writer": "risk",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "line": 158,
+      "writer": "risk",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "line": 170,
+      "writer": "risk",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "line": 179,
+      "writer": "risk",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "line": 233,
+      "writer": "risk",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "line": 248,
+      "writer": "risk",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "line": 259,
+      "writer": "risk",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "line": 264,
+      "writer": "risk",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "line": 279,
+      "writer": "risk",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "line": 280,
+      "writer": "risk",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/settings/application/setting-management.ts",
+      "line": 21,
+      "writer": "settings",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/settings/infrastructure/mysql-setting-writer.ts",
+      "line": 47,
+      "writer": "settings",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/settings/infrastructure/mysql-setting-writer.ts",
+      "line": 58,
+      "writer": "settings",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+      "line": 91,
+      "writer": "strategies",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+      "line": 94,
+      "writer": "strategies",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+      "line": 178,
+      "writer": "strategies",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+      "line": 183,
+      "writer": "strategies",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+      "line": 216,
+      "writer": "strategies",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+      "line": 241,
+      "writer": "strategies",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+      "line": 279,
+      "writer": "strategies",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+      "line": 299,
+      "writer": "strategies",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/trade-history/application/trade-history-collector.ts",
+      "line": 30,
+      "writer": "trade-history",
+      "method": "query"
+    },
+    {
+      "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-repository.ts",
+      "line": 28,
+      "writer": "trade-history",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-repository.ts",
+      "line": 36,
+      "writer": "trade-history",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-repository.ts",
+      "line": 68,
+      "writer": "trade-history",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/trading/application/observer-management-service.ts",
+      "line": 49,
+      "writer": "trading",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/trading/infrastructure/mysql-observer-access-reader.ts",
+      "line": 129,
+      "writer": "trading",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/trading/infrastructure/mysql-observer-access-reader.ts",
+      "line": 173,
+      "writer": "trading",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+      "line": 193,
+      "writer": "trading",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+      "line": 196,
+      "writer": "trading",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+      "line": 201,
+      "writer": "trading",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+      "line": 206,
+      "writer": "trading",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+      "line": 299,
+      "writer": "trading",
+      "method": "execute"
+    },
+    {
+      "file": "server/src/outbox/infrastructure/redis-outbox-realtime-publisher.ts",
+      "line": 293,
+      "writer": "@outbox",
+      "method": "execute"
+    }
+  ],
+  "counts": {
+    "tables": 92,
+    "writeCandidates": 264,
+    "multipleWriterTables": 8,
+    "unresolved": 5,
+    "indirectCalls": 114
+  }
+}
