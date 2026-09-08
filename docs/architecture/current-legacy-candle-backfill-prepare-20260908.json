@@ -1,0 +1,50 @@
+{
+  "kind": "current-legacy-candle-backfill-result/v1",
+  "observedAt": "2026-09-08T15:17:25.875Z",
+  "identity": {
+    "databaseName": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "mode": "--prepare",
+  "proofHash": "f1730d29d274498524515f70724ee4ba85cded1f0b71b1d8332d812fc557c8e1",
+  "conversionPlanHash": "ad02ff50e68a322d1c572a2b8276e15aeadfe6ef77a4c532590892541d5b3933",
+  "result": {
+    "status": "pending",
+    "planHash": "ad02ff50e68a322d1c572a2b8276e15aeadfe6ef77a4c532590892541d5b3933",
+    "mappedRows": 0,
+    "projectionRows": 0,
+    "lastLegacyId": "0",
+    "batches": 0
+  },
+  "committedBatches": 0,
+  "verificationCommitted": false,
+  "inputRows": 35725,
+  "outputRows": 30226,
+  "duplicateRows": 5499,
+  "protectedTableCount": 234,
+  "protectedSnapshotHash": "5938b2c2a48d56294bf0b983acaaee693d87b9af9ed7442ecf249855d202cd53",
+  "historyHash": "c3177b89001822df6d69de40f997103c5616b935bca492bf71d80ced39cd8d0c",
+  "buildTables": [
+    {
+      "name": "legacy_candle_backfill_v4",
+      "rows": 0,
+      "rowsSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "schemaSha256": "8c0dcc0337fc9006c4ed54061c69b5e9f795aec1177c013d94e25f5f2f5811c5"
+    },
+    {
+      "name": "legacy_candle_mappings_v4",
+      "rows": 0,
+      "rowsSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "schemaSha256": "88e058816c1f28bcb554d07a584471d0d7d607347e1fef537a8e5cf705f46a9b"
+    },
+    {
+      "name": "market_candles_build_v4",
+      "rows": 0,
+      "rowsSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "schemaSha256": "26d19b8fc0a6c0a1cda0d1f0ad759551ad535a6ed49178fecb8ff38aed745e99"
+    }
+  ],
+  "currentDevVueWritten": false,
+  "scope": "Current database build area only; no table promotion or runtime cutover. Legacy rows and complete registered history retained."
+}
