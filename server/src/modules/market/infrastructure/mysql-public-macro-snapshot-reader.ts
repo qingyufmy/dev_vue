@@ -29,22 +29,22 @@ export class MysqlPublicMacroSnapshotReader implements PublicMacroSnapshotReader
     }
     params.push(query.limit)
     try {
-      const [rows] = await this.executor.execute<RowDataPacket[]>(`WITH lineage AS (
-        SELECT m.snapshot_id,JSON_ARRAYAGG(JSON_OBJECT('factorCode',m.factor_code,
+      const [rows] = await this.executor.execute<RowDataPacket[]>(`SELECT p.id,p.schema_version,
+        CAST(p.revision AS CHAR) revision,CAST(p.business_date AS CHAR) business_date,
+        p.horizon,p.data_cutoff_at_utc,p.published_at_utc,p.valid_until_utc,p.freshness_status,
+        p.content_sha256,p.payload_json,l.observations
+        FROM macro_research_snapshots p JOIN LATERAL (
+        SELECT JSON_ARRAYAGG(JSON_OBJECT('factorCode',m.factor_code,
           'observationAt',CAST(o.observation_at_utc AS CHAR),'availableAt',CAST(o.available_at_utc AS CHAR),
           'ingestedAt',CAST(o.ingested_at_utc AS CHAR),'value',CAST(o.decimal_value AS CHAR))) observations
         FROM macro_snapshot_observations m
         LEFT JOIN macro_observations o ON o.id=m.observation_id
         LEFT JOIN macro_series s ON s.id=o.series_id
         LEFT JOIN macro_data_sources d ON d.id=s.source_id
-        GROUP BY m.snapshot_id
+        WHERE m.snapshot_id=p.id
         HAVING MIN(CASE WHEN d.status='approved' AND d.display_allowed=1 AND d.derived_data_allowed=1
           AND d.retired_at_utc IS NULL AND d.license_reviewed_at_utc<=?
-          AND (d.license_expires_at_utc IS NULL OR d.license_expires_at_utc>?) THEN 1 ELSE 0 END)=1)
-        SELECT p.id,p.schema_version,CAST(p.revision AS CHAR) revision,CAST(p.business_date AS CHAR) business_date,
-          p.horizon,p.data_cutoff_at_utc,p.published_at_utc,p.valid_until_utc,p.freshness_status,
-          p.content_sha256,p.payload_json,l.observations
-        FROM macro_research_snapshots p JOIN lineage l ON l.snapshot_id=p.id
+          AND (d.license_expires_at_utc IS NULL OR d.license_expires_at_utc>?) THEN 1 ELSE 0 END)=1) l ON TRUE
         WHERE p.owner_scope='platform' AND p.owner_user_id IS NULL AND p.schema_version=1
           AND p.publication_status IN ('published','superseded') AND p.published_at_utc<=?
           AND p.data_cutoff_at_utc<=?${filter}

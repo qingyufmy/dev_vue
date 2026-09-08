@@ -16,11 +16,13 @@ const pool = createMysqlPool({ host: env.MYSQL_HOST, port: Number(env.MYSQL_PORT
   password: env.MYSQL_PASSWORD, database: env.MYSQL_DATABASE, poolSize: 1 })
 let connection
 const checks = [], driverErrors = []
+let lastQuery, queryPlan
 try {
   connection = await pool.getConnection()
   const [[identity]] = await connection.query('SELECT DATABASE() db,@@server_uuid serverUuid,@@session.time_zone timezone')
   assert.equal(identity.db, 'dev_vue'); assert.equal(identity.serverUuid, 'ac423207-6ef3-11f1-b302-000c29fda104'); assert.equal(identity.timezone, '+00:00')
   const reader = new MysqlPublicMacroSnapshotReader({ async execute(...args) {
+    lastQuery = args
     try { return await connection.execute(...args) }
     catch (error) { driverErrors.push({ code: error.code, errno: error.errno, sqlState: error.sqlState }); throw error }
   } })
@@ -68,6 +70,14 @@ try {
   assert.equal(projected.revision, '9007199254740993'); assert.equal(projected.factors[0].value, '1.82')
   assert.ok(!JSON.stringify(projected).includes('must-not-be-returned'))
   checks.push('published-and-superseded-history', 'actual-json-dates-decimal-revision-and-whitelist')
+  // Unrelated mappings must not be aggregated for these two selected snapshots.
+  const unrelated = Array.from({ length: 2000 }, (_, i) => [`unrelated-${i}`, 1, 'noise', '2026-09-08'])
+  await connection.query('INSERT INTO macro_snapshot_observations (snapshot_id,observation_id,factor_code,created_at_utc) VALUES ?', [unrelated])
+  assert.deepEqual((await reader.list(query)).map(row => row.record.id), ['b', 'a'])
+  const [explanation] = await connection.execute('EXPLAIN ANALYZE ' + lastQuery[0], lastQuery[1])
+  queryPlan = Object.values(explanation[0])[0]
+  assert.match(queryPlan, /Index lookup on m .*snapshot_id=p.id/)
+  checks.push('indexed-per-snapshot-lineage-with-2000-unrelated-mappings')
   assert.deepEqual((await reader.list({ ...query, latest: true })).map(row => row.record.id), ['b'])
   assert.deepEqual((await reader.list({ ...query, after: { publishedAt: rows[0].record.publishedAt, id: 'b' } })).map(row => row.record.id), ['a'])
   assert.equal((await reader.list({ ...query, id: 'a', limit: 1 })).length, 1)
@@ -100,7 +110,7 @@ try {
   const [[remaining]] = await connection.query('SELECT COUNT(*) n FROM macro_observations')
   assert.equal(Number(remaining.n), 0)
   checks.push('temporary-writes-rolled-back')
-  await output.writeFile(JSON.stringify({ kind: 'macro-snapshot-reader-mysql/v1', passed: true, observedAt: new Date().toISOString(), identity, checks,
+  await output.writeFile(JSON.stringify({ kind: 'macro-snapshot-reader-mysql/v1', passed: true, observedAt: new Date().toISOString(), identity, checks, queryPlan,
     scope: 'Unmodified compiled query against permanent schema and session-local LIKE tables. No SQL identifier rewriting, permanent writes, providers or service restart. LIKE does not copy foreign keys; deliberate dangling links test rejection. Positive fixtures rolled back; not source calendar, query-scale or HTTP validation.' }, null, 2) + '\n')
   console.log(JSON.stringify({ passed: true, checks: checks.length }))
 } catch (error) {

@@ -1,0 +1,22 @@
+{
+  "kind": "macro-snapshot-reader-mysql/v1",
+  "passed": true,
+  "observedAt": "2026-09-08T21:37:47.495Z",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "checks": [
+    "compiled-query-on-permanent-schema",
+    "published-and-superseded-history",
+    "actual-json-dates-decimal-revision-and-whitelist",
+    "latest-id-and-tie-pagination",
+    "missing-and-future-publication-excluded",
+    "expired-latest-and-source-permission-denied",
+    "draft-empty-and-dangling-lineage-denied",
+    "future-ingestion-rejected-by-projection",
+    "temporary-writes-rolled-back"
+  ],
+  "scope": "Unmodified compiled query against permanent schema and session-local LIKE tables. No SQL identifier rewriting, permanent writes, providers or service restart. LIKE does not copy foreign keys; deliberate dangling links test rejection. Positive fixtures rolled back; not source calendar, query-scale or HTTP validation."
+}
