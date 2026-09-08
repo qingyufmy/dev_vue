@@ -270,7 +270,7 @@ describe('SSO V4 HTTP routes', () => {
       expect(opened.json().data.access).toBe('allowed')
       expect(opened.json().data.lessons[0].progress.watched_ms).toBe('10000')
       const csrf = session.json().data.csrf_token as string
-      const write = (extra: Record<string, string> = {}, payload: unknown = { completed: true, expected_revision: '1' }) => www.inject({
+      const write = (extra: Record<string, string> = {}, payload: Record<string, unknown> = { completed: true, expected_revision: '1' }) => www.inject({
         method: 'PUT', url: '/api/v4/learning/courses/12/lessons/99/completion', headers: { host: 'www.example.test', cookie,
           origin: 'https://www.example.test', 'x-csrf-token': csrf, 'idempotency-key': 'a56a2134-9105-4e93-a806-bb3793f7ad38', ...extra }, payload,
       })
