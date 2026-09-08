@@ -784,3 +784,9 @@ HTTP和生产组装已切换到ContextWritePort，移除读取接口、应用服
 当前150→154步、224→228表，四张037表均为空，原224表及旧150步日志对账一致；首次DDL4次，重复0次。当前专属适配器/入口保留旧冻结版本，绑定当前库reference、父proof及工具摘要。临时参考库18项真实约束验证通过并清理；33项定向测试通过。
 
 详见[应用回执](architecture/current-observer-context-applied-20260908.json)、[重复回执](architecture/current-observer-context-repeat-20260908.json)和[接入方案第16节](architecture/current-dev-vue-upgrade-plan-20260908.md)。下一步155–160账户/行情投影，再接161–165和当前K线回填；真实应用联合验收仍待完成。
+
+## 第九十二批：当前 dev_vue 账户/行情投影表升级完成
+
+当前154→160步、228→234表，六张038投影表为空；原228表及旧154步日志完整对账，首次DDL6次、重复0次。当前专属适配器和proof接续当前库证据链，旧SQL/工具冻结不变。35项定向测试和20项真实MySQL约束检查通过，临时参考库已清理。
+
+见[应用回执](architecture/current-account-projection-applied-20260908.json)、[重复回执](architecture/current-account-projection-repeat-20260908.json)及[接入方案第17节](architecture/current-dev-vue-upgrade-plan-20260908.md)。下一步161–163构建表、当前K线回填、164提升和165回执表；应用消费者与账户联合验收尚未启用/完成。

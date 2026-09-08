@@ -159,3 +159,13 @@
 prepare在当前MySQL版本下建立唯一临时参考库，核对父键类型，执行原037 SQL并读取规范DDL；复用既有约束探针，18项真实检查通过，包括默认禁用/待配置状态、外键、默认频道唯一性、布尔值、模式与账户/观摩字段组合。探针事务回滚后7张参考表均为空，参考库删除并确认不存在，当前库前后数据/日志对账通过，再固化[当前proof](current-observer-context-proof-20260908.json)及[配套绑定](current-observer-context-proof-20260908.json.current.json)。
 
 33项定向测试通过（29项Vitest、4项Node原生），另有上述18项真实MySQL约束检查。首次混用运行器导致原生测试文件被Vitest报告无suite，按文件实际导入的node:test单独运行后通过；未更改旧测试。职责复核：新版本只调整当前reference与工具绑定，原037 SQL、状态协调及既有适配器不改；异常复核：逐步重验、其它客户端观察、旧数据严格对账及未知状态核对继续有效。下一步155–160账户/行情投影表，再做161–165与当前K线回填。
+
+## 17. 当前账户与行情投影表升级完成（第九十二批）
+
+当前dev_vue已从154到160步、234表。新增account_runtime_snapshots、market_quotes、open_position_snapshots、pending_order_snapshots、trading_projection_revisions、trading_projection_provenance_v4，六表均为空；没有把旧终端快照或时区推断为可信实时事实。首次DDL6次，沿同proof重复执行DDL0次，原228表完整行/结构及旧154步日志一致。见[应用回执](current-account-projection-applied-20260908.json)和[重复回执](current-account-projection-repeat-20260908.json)。
+
+当前专属入口接续当前根表、终端路由和观摩proof链；新增版本化投影适配器，使用当前观摩适配器与[当前reference](current-account-projection-reference-20260908.json)，原执行版本及038 SQL保持不变。prepare检查四张父表主键类型，在唯一临时参考库执行原SQL和20项约束测试；覆盖DECIMAL精度/溢出、UTC毫秒、账户隔离、默认权限及来源外键。探针回滚后10张参考表全部为空，参考库删除并核验不存在，源库快照/日志前后相等后固化[proof](current-account-projection-proof-20260908.json)及[配套绑定](current-account-projection-proof-20260908.json.current.json)。
+
+35项定向测试通过（12项当前适配器、18项协调器、5项Node注册/参考探针测试），包含拒绝其它数据库reference、正文篡改、旧数据变化、错误schema和未知状态恢复；另20项真实MySQL约束检查通过。309项原冻结工具、278项投影proof工具及10项当前绑定工具摘要已核对一致。
+
+职责复核：六表只承载可重建投影，历史K线保留/映射/提升仍由039–040独立协议完成；本批未写入市场或账户实时状态。异常复核：仍按每步前客户端观察、登记协调器和严格前后对账执行，观察不等于数据库停写锁；结果未知保留同proof，不重建历史或恢复旧备份覆盖数据。下一步161–163构建表、当前历史K线回填与164提升，再执行165上下文回执表，之后做应用真实联合验收。

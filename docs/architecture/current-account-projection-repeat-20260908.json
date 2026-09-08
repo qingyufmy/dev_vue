@@ -1,0 +1,73 @@
+{
+  "kind": "current-account-projection-result/v1",
+  "observedAt": "2026-09-08T14:59:02.992Z",
+  "target": "dev_vue",
+  "mode": "--apply",
+  "result": {
+    "ddlCount": 0,
+    "steps": [
+      {
+        "id": "inplace_038_01_account_runtime_snapshots",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_038_02_market_quotes",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_038_03_open_position_snapshots",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_038_04_pending_order_snapshots",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_038_05_trading_projection_revisions",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_038_06_trading_projection_provenance_v4",
+        "status": "completed"
+      }
+    ]
+  },
+  "completedSteps": 160,
+  "targetSteps": 160,
+  "proofHash": "46297eec104d0e03b32731bbc48d65dc1b1c3acbbb06bb005523011e2e1f80dd",
+  "protectedTables": 228,
+  "addedTables": [
+    {
+      "name": "account_runtime_snapshots",
+      "rows": 0,
+      "schemaSha256": "6df92a77561d6592901e84bbe41055ce90fe61c018069c0e2cad67e5b1af35b8"
+    },
+    {
+      "name": "market_quotes",
+      "rows": 0,
+      "schemaSha256": "fff559ffb1a66e81abd132e2e5373a1c9e2aca84efac8b6f034cf98d78bfa9d6"
+    },
+    {
+      "name": "open_position_snapshots",
+      "rows": 0,
+      "schemaSha256": "6f66c9ced2edff02042c80498c2639f33b3f77ed095632ae7c999d034f4288c9"
+    },
+    {
+      "name": "pending_order_snapshots",
+      "rows": 0,
+      "schemaSha256": "1415e329515c6e3a5fa45e9f64bcb37e3509990f851583717d13244813b170b9"
+    },
+    {
+      "name": "trading_projection_provenance_v4",
+      "rows": 0,
+      "schemaSha256": "af9447fdb2f5dc6c3343146b6854b47e958779111dd19a08f6ea07527d76f26e"
+    },
+    {
+      "name": "trading_projection_revisions",
+      "rows": 0,
+      "schemaSha256": "7fc29a4c9ce460152e4ce2896e199b6f881e0c0b4addd90e552d8f9835fa1e3e"
+    }
+  ],
+  "runtimeActivated": false,
+  "scope": "Append-only empty account/market projection tables; exact prior rows and history reconciled. Client check is observational, not a database-wide write lock."
+}

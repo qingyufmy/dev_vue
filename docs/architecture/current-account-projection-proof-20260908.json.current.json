@@ -1,0 +1,89 @@
+{
+  "frozen": {
+    "kind": "current-account-projection-binding/v1",
+    "proofFileSha256": "a747f2fb2708357bdac65ac7cfb0af07f69babde3ec1ea788048431a41b44fa5",
+    "reference": {
+      "database": "dev_vue_projection_reference_6acf08c662100677979ffd57",
+      "removed": true,
+      "mysqlVersion": "8.4.8",
+      "parentDefinitions": [
+        {
+          "table": "users",
+          "id": {
+            "columnType": "int",
+            "charset": null,
+            "collation": null
+          }
+        },
+        {
+          "table": "trading_accounts",
+          "id": {
+            "columnType": "bigint unsigned",
+            "charset": null,
+            "collation": null
+          }
+        },
+        {
+          "table": "terminal_profiles",
+          "id": {
+            "columnType": "varchar(128)",
+            "charset": "ascii",
+            "collation": "ascii_bin"
+          }
+        },
+        {
+          "table": "trading_account_ownership_intervals",
+          "id": {
+            "columnType": "char(36)",
+            "charset": "ascii",
+            "collation": "ascii_bin"
+          }
+        }
+      ]
+    },
+    "sourceHistoryHash": "6689a0f50d05d258ac844c30448a467567df501e4b430b3f00b4d17942084f26",
+    "tools": [
+      {
+        "path": "scripts/upgrade-current-account-projection-local.mjs",
+        "sha256": "b2d7e6e55867618ca52c77e6e5a8e629335442104bfa69ffee37ef9b8a807618"
+      },
+      {
+        "path": "docs/architecture/current-account-root-proof-20260908.json",
+        "sha256": "0c2db8b23ba536124223ab966926ec650b30bcfaae21c5c04e300123fc0cf1e9"
+      },
+      {
+        "path": "docs/architecture/current-account-root-proof-20260908.json.current.json",
+        "sha256": "2495159e6b47b7fa2fa01957944465ccfb865f7e10e8d0e76fb5df037f6ac141"
+      },
+      {
+        "path": "docs/architecture/current-account-root-applied-20260908.json",
+        "sha256": "9b957fd0195544252a09dd7c2c466f0f4c16667f8905d6e30b37a8e9cc790c3f"
+      },
+      {
+        "path": "docs/architecture/current-terminal-route-proof-20260908.json",
+        "sha256": "89dcc2061049bcf4ff87b155d32adb106c7167068488a566f252ab82c2dc9020"
+      },
+      {
+        "path": "docs/architecture/current-terminal-route-proof-20260908.json.current.json",
+        "sha256": "12ccf2769bff07388554bf5e44017d766d5194f4ca9cba63fc09771983a3f86f"
+      },
+      {
+        "path": "scripts/lib/mysql-current-account-projection-migration.mjs",
+        "sha256": "f458f615dca773b88c73011c0ac0e107e21ed9d3c6d4d203d6942673fe556999"
+      },
+      {
+        "path": "docs/architecture/current-account-projection-reference-20260908.json",
+        "sha256": "f4e7e894612767c04f07d0fd7b7922b2f36f3ba37b47116ff2407e7c05cbb455"
+      },
+      {
+        "path": "docs/architecture/current-observer-context-proof-20260908.json",
+        "sha256": "adf462fdd584528e98356a80b3ca88a0a92b79b30d9cd6ea14b49c9438bf635c"
+      },
+      {
+        "path": "docs/architecture/current-observer-context-proof-20260908.json.current.json",
+        "sha256": "9652944b6ef1afb0e9e2e5bc5bca0da71afa409ce0a9d1302d9211ff02657a27"
+      }
+    ]
+  },
+  "manifestHash": "dd85fff6c33250377cee84d184051797f7afc57432e00803ff83c9d29fdacc03"
+}

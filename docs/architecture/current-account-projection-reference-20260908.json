@@ -1,0 +1,187 @@
+{
+  "kind": "account-projection-reference/v1",
+  "identity": {
+    "database": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "priorProofHash": "6397878d3796391c500b77e9f51bd010f7e0c6c5eb3a70e8c1bb0bf73483b950",
+  "registryHash": "4875b299f999669c3cdb4ed6cfdfab6d0ae17617a84bb34aa88931d91429c5e3",
+  "sourceSnapshotHash": "056fe9370403490cad2b4bf4e2aebd9cdb684e13569466d9cbe77579001c2cec",
+  "sourceHistoryHash": "6689a0f50d05d258ac844c30448a467567df501e4b430b3f00b4d17942084f26",
+  "reference": "dev_vue_projection_reference_6acf08c662100677979ffd57",
+  "referenceRemoved": true,
+  "sourceWritten": false,
+  "mysqlVersion": "8.4.8",
+  "parentDefinitions": [
+    {
+      "table": "users",
+      "id": {
+        "columnType": "int",
+        "charset": null,
+        "collation": null
+      }
+    },
+    {
+      "table": "trading_accounts",
+      "id": {
+        "columnType": "bigint unsigned",
+        "charset": null,
+        "collation": null
+      }
+    },
+    {
+      "table": "terminal_profiles",
+      "id": {
+        "columnType": "varchar(128)",
+        "charset": "ascii",
+        "collation": "ascii_bin"
+      }
+    },
+    {
+      "table": "trading_account_ownership_intervals",
+      "id": {
+        "columnType": "char(36)",
+        "charset": "ascii",
+        "collation": "ascii_bin"
+      }
+    }
+  ],
+  "definitions": [
+    {
+      "table": "account_runtime_snapshots",
+      "sourceSqlHash": "d67a342fe555776a9d821d5b74298a31892c9cf418cca081a3d60a228b5ae7e9",
+      "ddl": "CREATE TABLE `account_runtime_snapshots` (\n  `trading_account_id` bigint unsigned NOT NULL,\n  `balance` decimal(24,8) NOT NULL,\n  `equity` decimal(24,8) NOT NULL,\n  `margin_amount` decimal(24,8) NOT NULL,\n  `free_margin` decimal(24,8) NOT NULL,\n  `floating_profit` decimal(24,8) NOT NULL,\n  `leverage` int unsigned DEFAULT NULL,\n  `timezone_offset_minutes` smallint DEFAULT NULL,\n  `clock_status` enum('calibrated','observer_bootstrap','stale','unavailable') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `trade_permission` tinyint(1) NOT NULL DEFAULT '0',\n  `observed_at_utc` datetime(3) NOT NULL,\n  `revision` bigint unsigned NOT NULL,\n  PRIMARY KEY (`trading_account_id`),\n  KEY `idx_account_snapshot_observed` (`observed_at_utc`),\n  CONSTRAINT `fk_account_snapshot_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "schemaHash": "6df92a77561d6592901e84bbe41055ce90fe61c018069c0e2cad67e5b1af35b8"
+    },
+    {
+      "table": "market_quotes",
+      "sourceSqlHash": "89e583c28e988cfc54d90656ebaeb3c26c464be8fc4352e64d1456ad8aa295fe",
+      "ddl": "CREATE TABLE `market_quotes` (\n  `trading_account_id` bigint unsigned NOT NULL,\n  `symbol` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `bid` decimal(24,10) NOT NULL,\n  `ask` decimal(24,10) NOT NULL,\n  `last_price` decimal(24,10) DEFAULT NULL,\n  `spread` decimal(24,10) NOT NULL,\n  `trade_mode` enum('full','long_only','short_only','close_only','disabled','unknown') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `observed_at_utc` datetime(3) NOT NULL,\n  `revision` bigint unsigned NOT NULL,\n  PRIMARY KEY (`trading_account_id`,`symbol`),\n  KEY `idx_market_quotes_observed` (`observed_at_utc`),\n  CONSTRAINT `fk_market_quotes_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "schemaHash": "fff559ffb1a66e81abd132e2e5373a1c9e2aca84efac8b6f034cf98d78bfa9d6"
+    },
+    {
+      "table": "open_position_snapshots",
+      "sourceSqlHash": "994715b3fa739cd8526d7828ae8cf836bfde1eac570c8d96affcf68ef2c8f608",
+      "ddl": "CREATE TABLE `open_position_snapshots` (\n  `trading_account_id` bigint unsigned NOT NULL,\n  `ticket` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `payload_json` json NOT NULL,\n  `revision` bigint unsigned NOT NULL,\n  `observed_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`trading_account_id`,`ticket`),\n  KEY `idx_open_positions_revision` (`trading_account_id`,`revision`),\n  CONSTRAINT `fk_open_positions_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "schemaHash": "6f66c9ced2edff02042c80498c2639f33b3f77ed095632ae7c999d034f4288c9"
+    },
+    {
+      "table": "pending_order_snapshots",
+      "sourceSqlHash": "4174a4b635ff6e0b72133520fb5c8185484d543fa66f04885693ef458168066f",
+      "ddl": "CREATE TABLE `pending_order_snapshots` (\n  `trading_account_id` bigint unsigned NOT NULL,\n  `ticket` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `payload_json` json NOT NULL,\n  `revision` bigint unsigned NOT NULL,\n  `observed_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`trading_account_id`,`ticket`),\n  KEY `idx_pending_orders_revision` (`trading_account_id`,`revision`),\n  CONSTRAINT `fk_pending_orders_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "schemaHash": "1415e329515c6e3a5fa45e9f64bcb37e3509990f851583717d13244813b170b9"
+    },
+    {
+      "table": "trading_projection_revisions",
+      "sourceSqlHash": "868865c13b0188efcc17ada2cd0d2621c846f191d9fccb3dd931b792d132fdaf",
+      "ddl": "CREATE TABLE `trading_projection_revisions` (\n  `trading_account_id` bigint unsigned NOT NULL,\n  `resource_kind` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `resource_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `revision` bigint unsigned NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`trading_account_id`,`resource_kind`,`resource_id`),\n  CONSTRAINT `fk_projection_revisions_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "schemaHash": "7fc29a4c9ce460152e4ce2896e199b6f881e0c0b4addd90e552d8f9835fa1e3e"
+    },
+    {
+      "table": "trading_projection_provenance_v4",
+      "sourceSqlHash": "50418726a66b0050e8aad86d5f567327f3a0fc5d0ab9e2053529fb5a8d6089e1",
+      "ddl": "CREATE TABLE `trading_projection_provenance_v4` (\n  `trading_account_id` bigint unsigned NOT NULL,\n  `resource_kind` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `resource_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `user_id` int NOT NULL,\n  `ownership_interval_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `ownership_revision` bigint unsigned NOT NULL,\n  `terminal_profile_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `terminal_instance_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `connection_epoch` bigint unsigned NOT NULL,\n  `projection_revision` bigint unsigned NOT NULL,\n  `observed_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`trading_account_id`,`resource_kind`,`resource_id`),\n  KEY `idx_projection_provenance_interval` (`ownership_interval_id`),\n  KEY `fk_projection_provenance_user` (`user_id`),\n  KEY `fk_projection_provenance_profile` (`terminal_profile_id`),\n  CONSTRAINT `fk_projection_provenance_interval` FOREIGN KEY (`ownership_interval_id`) REFERENCES `trading_account_ownership_intervals` (`id`),\n  CONSTRAINT `fk_projection_provenance_profile` FOREIGN KEY (`terminal_profile_id`) REFERENCES `terminal_profiles` (`id`),\n  CONSTRAINT `fk_projection_provenance_revision` FOREIGN KEY (`trading_account_id`, `resource_kind`, `resource_id`) REFERENCES `trading_projection_revisions` (`trading_account_id`, `resource_kind`, `resource_id`),\n  CONSTRAINT `fk_projection_provenance_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_projection_provenance_kind` CHECK ((`resource_kind` in (_utf8mb4'account.metrics',_utf8mb4'positions',_utf8mb4'pending_orders')))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "schemaHash": "af9447fdb2f5dc6c3343146b6854b47e958779111dd19a08f6ea07527d76f26e"
+    }
+  ],
+  "constraintChecks": [
+    {
+      "name": "exact_decimal_utc_milliseconds_permission_defaults",
+      "passed": true
+    },
+    {
+      "name": "account_snapshot_foreign_key",
+      "expectedErrno": 1452,
+      "passed": true
+    },
+    {
+      "name": "account_decimal_overflow",
+      "expectedErrno": 1264,
+      "passed": true
+    },
+    {
+      "name": "quote_decimal_precision_and_account_scoping",
+      "passed": true
+    },
+    {
+      "name": "quote_duplicate_account_symbol",
+      "expectedErrno": 1062,
+      "passed": true
+    },
+    {
+      "name": "quote_account_foreign_key",
+      "expectedErrno": 1452,
+      "passed": true
+    },
+    {
+      "name": "open_position_snapshots_json_ticket_account_scoping",
+      "passed": true
+    },
+    {
+      "name": "open_position_snapshots_invalid_json",
+      "expectedErrno": 3140,
+      "passed": true
+    },
+    {
+      "name": "open_position_snapshots_account_foreign_key",
+      "expectedErrno": 1452,
+      "passed": true
+    },
+    {
+      "name": "pending_order_snapshots_json_ticket_account_scoping",
+      "passed": true
+    },
+    {
+      "name": "pending_order_snapshots_invalid_json",
+      "expectedErrno": 3140,
+      "passed": true
+    },
+    {
+      "name": "pending_order_snapshots_account_foreign_key",
+      "expectedErrno": 1452,
+      "passed": true
+    },
+    {
+      "name": "valid_projection_provenance",
+      "passed": true
+    },
+    {
+      "name": "provenance_kind_check",
+      "expectedErrno": 3819,
+      "passed": true
+    },
+    {
+      "name": "provenance_composite_revision_fk",
+      "expectedErrno": 1452,
+      "passed": true
+    },
+    {
+      "name": "provenance_user_fk",
+      "expectedErrno": 1452,
+      "passed": true
+    },
+    {
+      "name": "provenance_interval_fk",
+      "expectedErrno": 1452,
+      "passed": true
+    },
+    {
+      "name": "provenance_profile_fk",
+      "expectedErrno": 1452,
+      "passed": true
+    },
+    {
+      "name": "referenced_revision_delete",
+      "expectedErrno": 1451,
+      "passed": true
+    },
+    {
+      "name": "revision_account_fk",
+      "expectedErrno": 1452,
+      "passed": true
+    }
+  ],
+  "captureToolHash": "b2d7e6e55867618ca52c77e6e5a8e629335442104bfa69ffee37ef9b8a807618",
+  "constraintToolHash": "33af08fc7de9bd1413d0b72ef4dbe175fc99d55cfab935bc672e102e275cc184",
+  "proofHash": "8c2b361446d25944feada473c70548f76378c369665eb3d255d8836ff4ee73d2"
+}

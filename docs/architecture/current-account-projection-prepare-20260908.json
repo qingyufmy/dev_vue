@@ -1,0 +1,42 @@
+{
+  "kind": "current-account-projection-result/v1",
+  "observedAt": "2026-09-08T14:55:33.811Z",
+  "target": "dev_vue",
+  "mode": "--prepare",
+  "result": {
+    "ddlCount": 0,
+    "steps": [
+      {
+        "id": "inplace_038_01_account_runtime_snapshots",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_038_02_market_quotes",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_038_03_open_position_snapshots",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_038_04_pending_order_snapshots",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_038_05_trading_projection_revisions",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_038_06_trading_projection_provenance_v4",
+        "status": "pending"
+      }
+    ]
+  },
+  "completedSteps": 154,
+  "targetSteps": 160,
+  "proofHash": "46297eec104d0e03b32731bbc48d65dc1b1c3acbbb06bb005523011e2e1f80dd",
+  "protectedTables": 228,
+  "addedTables": [],
+  "runtimeActivated": false,
+  "scope": "Append-only empty account/market projection tables; exact prior rows and history reconciled. Client check is observational, not a database-wide write lock."
+}
