@@ -1,0 +1,109 @@
+{
+  "kind": "local-observer-outbox-dispatch/v1",
+  "observedAt": "2026-09-08T19:26:59.697Z",
+  "passed": true,
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "checks": [
+    "entire-outbox-is-bounded-pending-synthetic-observer-events",
+    "real-mysql-claim-dispatcher-publisher-and-acknowledgement-complete",
+    "redis-subscriber-received-every-persisted-control-payload",
+    "all-selected-events-acknowledged-once-and-leases-cleared"
+  ],
+  "batchResult": {
+    "claimed": 9,
+    "dispatched": 9,
+    "failed": 0
+  },
+  "beforeHash": "330d90f3afda339ff75603568121bfacf97d448f2e6e533a140573ebe496c205",
+  "eventIds": [
+    "c718b401-0495-4860-af8e-500630772479",
+    "f9c1b878-a0cc-42c2-8174-a6ede2b0acc9",
+    "b5edead3-ce3e-4299-974a-994e01832538",
+    "baef1f45-9fc7-47c9-8cf2-5006ccf3e1c5",
+    "235e5370-2438-4e69-ad47-51a02353b225",
+    "28c2f303-46a8-4d90-a95f-50c20af16073",
+    "8656b369-37aa-4555-8d69-08f518eef8c7",
+    "8d034d92-08b1-4eb2-acd8-0a19d859b004",
+    "d6fadc2e-75d3-4e18-a66f-da22b4f4c8bd"
+  ],
+  "after": [
+    {
+      "id": "1",
+      "status": "dispatched",
+      "attempts": 1,
+      "leaseOwner": null,
+      "leaseExpiresAt": null,
+      "dispatchedAt": "2026-09-08T19:26:59.689Z"
+    },
+    {
+      "id": "2",
+      "status": "dispatched",
+      "attempts": 1,
+      "leaseOwner": null,
+      "leaseExpiresAt": null,
+      "dispatchedAt": "2026-09-08T19:26:59.690Z"
+    },
+    {
+      "id": "3",
+      "status": "dispatched",
+      "attempts": 1,
+      "leaseOwner": null,
+      "leaseExpiresAt": null,
+      "dispatchedAt": "2026-09-08T19:26:59.691Z"
+    },
+    {
+      "id": "4",
+      "status": "dispatched",
+      "attempts": 1,
+      "leaseOwner": null,
+      "leaseExpiresAt": null,
+      "dispatchedAt": "2026-09-08T19:26:59.692Z"
+    },
+    {
+      "id": "5",
+      "status": "dispatched",
+      "attempts": 1,
+      "leaseOwner": null,
+      "leaseExpiresAt": null,
+      "dispatchedAt": "2026-09-08T19:26:59.693Z"
+    },
+    {
+      "id": "6",
+      "status": "dispatched",
+      "attempts": 1,
+      "leaseOwner": null,
+      "leaseExpiresAt": null,
+      "dispatchedAt": "2026-09-08T19:26:59.693Z"
+    },
+    {
+      "id": "7",
+      "status": "dispatched",
+      "attempts": 1,
+      "leaseOwner": null,
+      "leaseExpiresAt": null,
+      "dispatchedAt": "2026-09-08T19:26:59.694Z"
+    },
+    {
+      "id": "8",
+      "status": "dispatched",
+      "attempts": 1,
+      "leaseOwner": null,
+      "leaseExpiresAt": null,
+      "dispatchedAt": "2026-09-08T19:26:59.695Z"
+    },
+    {
+      "id": "9",
+      "status": "dispatched",
+      "attempts": 1,
+      "leaseOwner": null,
+      "leaseExpiresAt": null,
+      "dispatchedAt": "2026-09-08T19:26:59.695Z"
+    }
+  ],
+  "redisDeliveries": 9,
+  "scope": "Real permanent MySQL claim/ack and Redis delivery for the complete bounded synthetic observer batch. Transactional fixture guard precedes repository mutations. No unrelated event, BullMQ task, background dispatcher loop or terminal action."
+}

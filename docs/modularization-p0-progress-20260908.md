@@ -1204,3 +1204,16 @@ Chrome 再次在授权地址报 ERR_BLOCKED_BY_CLIENT；独立无会话 HTTP 跳
 API 和 realtime 均更新到本批构建：API Node 42252/PowerShell 33680，实时 Node 32740/PowerShell 33128；端口分别 3010/3011。API 基础 8 项通过（local-observer-realtime-api-health-20260909.json），实时 live/ready 两项通过（local-browser-realtime-health-20260909.json）。本批没有新增数据库结构迁移、真实终端动作或公网操作。
 
 下一步仍需夹具精确退役、完整 dispatcher/前端失效与断线恢复、Chrome 授权拦截诊断及浏览器账户/观摩流程；本次真实 ws 客户端不替代 Chrome UI 验收。P1 和总体目标保持未完成，静态服务端债务 64 条未变。
+
+
+## 69. 合成观摩 Outbox 成功链路归档（第一百三十九批）
+
+审查并归档 scripts/verify-local-observer-outbox.mjs 与 docs/architecture/local-observer-outbox-dispatch-20260909.json。回执记录于 2026-09-08T19:26:59.697Z（北京时间 9 月 9 日）：真实开发 MySQL 中 9 条合成观摩事件全部 claimed/dispatched，failed=0；独立 Redis 订阅收到对应 9 个有效载荷，最终 attempts=1、状态 dispatched、租约清空。此次归档读取已有回执，没有重新投递已确认事件，也不将历史回执当作当前数据库状态重测。
+
+工具使用真实 MysqlOutboxRepository、OutboxDispatcher、RedisOutboxRealtimePublisher。执行前核对开发库 UUID、独立夹具意图与运营者身份；在实际 claim 事务内以 REPEATABLE READ 和 FOR UPDATE 再次核对全表有界事件集合及摘要，要求每条事件均属于指定合成观摩操作且 pending/attempts=0。认领后发布与确认限制在捕获的 ID 集合和生成的 owner，未启动通用 Dispatcher 循环、BullMQ 任务或终端操作。
+
+这是受控的一次性探针，不是常规运维重试工具：有已确认、其他业务或超限事件即拒绝；失败后需按精确事件状态和租约检查，不重置 dispatched、不盲目重跑。原始回执证明成功路径，不能证明进程崩溃、租约转移、Redis 断开恢复或所有事件类型；这些仍由任务域验收补齐。全表锁定仅适用于隔离开发夹具，不应复制到生产 Dispatcher。
+
+本次执行脚本语法检查、OutboxDispatcher 两项定向回归（发布先于确认；失败终次进入有界延迟与 dead 状态）、321 个冻结输入一致性检查，均通过。两项回归使用内存替身，与已有真实 MySQL/Redis 回执分开记录。探针与回执未修改执行内容，保留原始证据；未改变业务源码、数据库结构或运行配置。
+
+下一工作包已定位 MysqlAccountRegistration.lockCurrentOwnership 对 auth.users 的跨域连接。需先核对 Bridge 注册/恢复事务及锁顺序，再注入 auth 的公开 ActivePrincipalAccess，更新当前运行组装及夹具调用，保护失效主体拒绝和同事务语义。账户浏览器完整流程、精确退役与 P1 退出仍未完成，整体目标继续推进。
