@@ -1,3 +1,4 @@
+import { createMysqlInferenceRepository, createInferenceHttp } from '../modules/inference/composition.js'
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import { createMysqlLearningService, createMysqlLearningCompletionService, createLearningHttp } from '../modules/learning/composition.js'
 import { MysqlLearningMembershipReader } from '../modules/commerce/index.js'
@@ -19,7 +20,7 @@ import {
   ExecutionDistributionService, ExecutionService, MysqlExecutionDistributionRepository, MysqlExecutionRepository,
   MysqlUserExecutionCommandRepository, UserExecutionCommandService,
 } from '../modules/execution/index.js'
-import { InferenceService, MysqlInferenceRepository } from '../modules/inference/index.js'
+import { InferenceService } from '../modules/inference/index.js'
 import { MysqlRiskRepository, RiskService } from '../modules/risk/index.js'
 import { createMysqlReviewHttp } from '../modules/reviews/composition.js'
 import { createSubscriptionPreferencesReader, createMysqlStrategyService, createStrategyHttp } from '../modules/strategies/composition.js'
@@ -58,8 +59,7 @@ async function main() {
       new RedisBridgeSessionTicketStore(cache),
     ),
     tradingHttp: trading.tradeHttp,
-    inference: new InferenceService(new MysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader), strategies),
-    strategies,
+    inferenceHttp: createInferenceHttp(new InferenceService(createMysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader), strategies), strategies, tradeAuth),
     strategiesHttp: createStrategyHttp(strategies, tradeAuth),
     risk: new RiskService(new MysqlRiskRepository(pool)),
     reviewsHttp: createMysqlReviewHttp(pool, tradeAuth),

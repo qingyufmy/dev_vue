@@ -787,19 +787,6 @@
       "finding": {
         "rule": "public-implementation-export",
         "source": "server/src/modules/inference/index.ts",
-        "target": "server/src/modules/inference/infrastructure/mysql-inference-repository.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "inference",
-      "phase": "P4",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/inference/index.ts",
         "target": "server/src/modules/inference/infrastructure/mysql-model-gateway-resolver.ts",
         "kind": "export",
         "typeOnly": false
@@ -834,58 +821,6 @@
       "owner": "inference",
       "phase": "P4",
       "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "public-implementation-export",
-        "source": "server/src/modules/inference/index.ts",
-        "target": "server/src/modules/inference/transport/http/inference-routes.ts",
-        "kind": "export",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "inference",
-      "phase": "P4",
-      "reason": "现有公开入口转导出具体适配器或传输实现；迁到受限composition入口并同步调用方。"
-    },
-    {
-      "finding": {
-        "rule": "cross-module-internal",
-        "source": "server/src/modules/inference/transport/http/inference-routes.ts",
-        "target": "server/src/modules/strategies/application/strategy-service.ts",
-        "kind": "import",
-        "typeOnly": true
-      },
-      "count": 1,
-      "owner": "inference",
-      "phase": "P4",
-      "reason": "现有跨域内部依赖；随所属域迁移到公开业务端口并由组装入口注入，禁止继续新增。"
-    },
-    {
-      "finding": {
-        "rule": "cross-module-internal",
-        "source": "server/src/modules/inference/transport/http/inference-routes.ts",
-        "target": "server/src/modules/strategies/domain/strategy.ts",
-        "kind": "import",
-        "typeOnly": true
-      },
-      "count": 1,
-      "owner": "inference",
-      "phase": "P4",
-      "reason": "现有跨域内部依赖；随所属域迁移到公开业务端口并由组装入口注入，禁止继续新增。"
-    },
-    {
-      "finding": {
-        "rule": "cross-module-internal",
-        "source": "server/src/modules/inference/transport/http/inference-routes.ts",
-        "target": "server/src/modules/strategies/domain/strategy.ts",
-        "kind": "import",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "inference",
-      "phase": "P4",
-      "reason": "现有跨域内部依赖；随所属域迁移到公开业务端口并由组装入口注入，禁止继续新增。"
     },
     {
       "finding": {

@@ -1,3 +1,4 @@
+import { createMysqlInferenceRepository } from '../modules/inference/composition.js'
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import { createAnalysisMarketSource, createMysqlAnalysisWindowGuard, createMysqlMacroSnapshotReader } from '../modules/inference/composition.js'
 import { Worker } from 'bullmq'
@@ -8,7 +9,7 @@ import {
 import { RedisBridgeGatewayLeaseStore } from '../modules/bridge/index.js'
 import {
   AnalysisContextBuilder, AnalysisWorker, InferenceService, loadCredentialKeyring,
-  MysqlAnalysisModelGatewayResolver, MysqlInferenceRepository, MysqlModelUsageLedger,
+  MysqlAnalysisModelGatewayResolver, MysqlModelUsageLedger,
   MysqlRuntimeModelProfileCatalog,
 } from '../modules/inference/index.js'
 import { createSubscriptionPreferencesReader, createMysqlStrategyService } from '../modules/strategies/composition.js'
@@ -24,7 +25,7 @@ async function main() {
   const pool = createMysqlPool(config.mysql)
   const cache = createCacheRedis(config.cacheRedis)
   await Promise.all([pool.query('SELECT 1'), connectCacheRedis(cache)])
-  const repository = new MysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader)
+  const repository = createMysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader)
   const strategies = createMysqlStrategyService(pool)
   const trading = createTradingReader(pool, new RedisBridgeGatewayLeaseStore(cache))
   const profiles = new MysqlRuntimeModelProfileCatalog(pool, loadCredentialKeyring(), {

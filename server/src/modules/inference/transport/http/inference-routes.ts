@@ -1,7 +1,5 @@
 import type { FastifyPluginAsync } from 'fastify'
-import type { StrategyKind, StrategySummary } from '../../../strategies/domain/strategy.js'
-import { assertStrategyKind, StrategyAccessError } from '../../../strategies/domain/strategy.js'
-import type { StrategyService } from '../../../strategies/application/strategy-service.js'
+import { assertStrategyKind, StrategyAccessError, type StrategyKind, type StrategySummary, type StrategyService } from '../../../strategies/index.js'
 import type { InferenceService } from '../../application/inference-service.js'
 import type { AnalysisRun, MarketAnalysisDetail, MarketAnalysisSummary, TraderDecisionDetail, TraderDecisionSummary, TraderRun } from '../../domain/inference.js'
 import { InferenceError } from '../../domain/inference.js'

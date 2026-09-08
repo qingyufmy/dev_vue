@@ -708,3 +708,12 @@ inference composition 新增 createMysqlAnalysisWindowGuard/createMysqlMacroSnap
 15 项分析窗口、宏观证据及推理流程回归通过，窗口/宏观测试经实际工厂验证；server 类型/构建及 API 生成运行一致性通过，321 项冻结输入不变。精确删除两项实现导出，债务 76→74，无新增或陈旧记录。本批没有启动分析 Worker、查询数据库或调用模型。
 
 宏观读取及窗口 SQL 所有权、其余 inference 出口、完整账户与推理用户流程仍需继续，整体 P0–P7 未完成。
+
+
+## 53. 推理持久化与 HTTP 组装（第一百二十三批）
+
+createMysqlInferenceRepository 从受限 composition 返回 InferenceRepository 应用端口，保留账户时钟和订阅偏好连接工厂显式注入；API、两个 Worker 和分析调度入口同步使用。createInferenceHttp 在模块内固定 /api/v4 并注入策略业务能力，API 总注册器只挂载插件。业务 index 移除 MySQL 持久化与 HTTP 实现导出，路由不再导入 strategies 内部路径。
+
+22 项推理流程、窗口、偏好回归最终通过；HTTP 测试改用实际组装工厂后8项重跑通过。server 类型/构建、API 生成运行检查通过，321 个冻结输入不变。精确移除两项实现导出与三项内部依赖，债务 74→69，无新增或陈旧记录。SQL、任务事务、账户作用域和线上 HTTP 合同不变；未启动服务或连接数据库/模型。
+
+其余模型网关、用量、调度与恢复适配器出口，跨域数据归属及完整用户流程继续保留，整体 P0–P7 未完成。

@@ -12,3 +12,6 @@ TradingAnalysisMarketSource 留在本域基础设施，不从业务 index 导出
 
 
 分析 Worker 使用 createMysqlAnalysisWindowGuard/createMysqlMacroSnapshotReader 获得应用能力，业务 index 不公开具体类。时钟回调保留账户和用户范围，宏观证据哈希、版本、时效及缺失拒绝规则保持。定向入口为 analysis-window-guard、macro-evidence-context、inference-pipeline-vertical-slice。
+
+
+运行入口经 createMysqlInferenceRepository 获得应用持久化端口，必须注入账户时钟与偏好连接工厂。createInferenceHttp 组装路由及策略服务，模块持有 /api/v4 前缀，总注册器保留 trade Host 隔离。业务 index 不导出 MySQL repository 与路由；模型、调度、恢复及用量相关具体出口仍待清理。

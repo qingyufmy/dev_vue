@@ -1,3 +1,4 @@
+import { createMysqlInferenceRepository } from '../modules/inference/composition.js'
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import {
   assertV4RuntimeEnabled, AsyncPollLoop, closeHttpServer, createMysqlPool,
@@ -5,7 +6,7 @@ import {
 } from '../bootstrap/index.js'
 import {
   AnalysisScheduler, InferenceService, ModelTaskRecovery, MysqlAnalysisScheduleRepository,
-  MysqlInferenceRepository, MysqlModelTaskRecoveryRepository,
+  MysqlModelTaskRecoveryRepository,
   MysqlModelUsageLedger,
 } from '../modules/inference/index.js'
 import { createSubscriptionPreferencesReader, createMysqlStrategyService } from '../modules/strategies/composition.js'
@@ -23,7 +24,7 @@ async function main() {
   const trading = createTradingReader(pool)
   const scheduler = new AnalysisScheduler(
     new MysqlAnalysisScheduleRepository(pool),
-    new InferenceService(new MysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader), strategies),
+    new InferenceService(createMysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader), strategies),
     (accountId, userId) => trading.getAccountSnapshot(accountId, userId),
   )
   const recovery = new ModelTaskRecovery(new MysqlModelTaskRecoveryRepository(pool))

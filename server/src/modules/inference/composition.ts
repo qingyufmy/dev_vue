@@ -15,6 +15,20 @@ import type { SubscriptionWindowClock } from '../strategies/index.js'
 import type { AnalysisWindowGuard } from './application/analysis-window-guard.js'
 import { MysqlAnalysisWindowGuard } from './infrastructure/mysql-analysis-window-guard.js'
 import { MysqlMacroSnapshotReader } from './infrastructure/mysql-macro-snapshot-reader.js'
+import type { FastifyPluginAsync } from 'fastify'
+import type { StrategyService } from '../strategies/index.js'
+import { InferenceService } from './application/inference-service.js'
+import { MysqlInferenceRepository } from './infrastructure/mysql-inference-repository.js'
+import { inferenceRoutes, type InferenceRequestAuthenticator } from './transport/http/inference-routes.js'
+
+export function createMysqlInferenceRepository(pool: Pool, clock: (connection: PoolConnection) => AccountClockReader,
+  preferences: (connection: PoolConnection) => SubscriptionPreferencesReader): InferenceRepository {
+  return new MysqlInferenceRepository(pool, clock, preferences)
+}
+
+export function createInferenceHttp(service: InferenceService, strategies: StrategyService, auth: InferenceRequestAuthenticator): FastifyPluginAsync {
+  return async app => { await app.register(inferenceRoutes, { prefix: '/api/v4', service, strategies, auth }) }
+}
 
 export function createMysqlAnalysisWindowGuard(pool: Pool,
   readClock: (accountId: string, userId: number) => Promise<SubscriptionWindowClock | null>): AnalysisWindowGuard {

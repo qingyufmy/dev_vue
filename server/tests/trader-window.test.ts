@@ -1,9 +1,10 @@
+import { createMysqlInferenceRepository } from '../src/modules/inference/composition.js'
 import { createMysqlTraderWindowGuard } from '../src/modules/inference/composition.js'
 import { createSubscriptionPreferencesReader } from '../src/modules/strategies/composition.js'
 import { createTransactionAccountClock } from '../src/modules/trading/composition.js'
 import { describe, expect, it } from 'vitest'
 import type { Pool, PoolConnection } from 'mysql2/promise'
-import { MysqlInferenceRepository, type InferenceRepository, type TraderRun } from '../src/modules/inference/index.js'
+import { type InferenceRepository, type TraderRun } from '../src/modules/inference/index.js'
 import { traderWindowAllows } from '../src/modules/inference/infrastructure/mysql-trader-window.js'
 
 const config = { version: 1, timezone: 'terminal_server', enabled: true, weekdays: [1], windows: [{ start: '22:00', end: '02:00' }], outsideBehavior: 'pause_all' }
@@ -74,7 +75,7 @@ describe('trader fan-out window', () => {
         throw new Error('unexpected_sql')
       },
     }
-    const repo = new MysqlInferenceRepository({ async getConnection() { return connection } } as unknown as Pool, createTransactionAccountClock, createSubscriptionPreferencesReader)
+    const repo = createMysqlInferenceRepository({ async getConnection() { return connection } } as unknown as Pool, createTransactionAccountClock, createSubscriptionPreferencesReader)
     const input = { runId: 'run', userId: 42, expectedRevision: 2, marketAnalysisId: 'analysis', taskId: 'task', attemptId: 'attempt', fencingToken: 1, usage: null,
       result: { opportunity: 'long_setup', marketBias: 'bullish', confidence: 70, summary: 'result', analyzedAt: now.toISOString(), validUntil: now.toISOString() } } as Parameters<InferenceRepository['completeAnalysis']>[0]
     expect((await repo.completeAnalysis(input)).traderRuns).toEqual([])

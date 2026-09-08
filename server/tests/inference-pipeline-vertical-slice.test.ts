@@ -1,7 +1,8 @@
+import { createInferenceHttp } from '../src/modules/inference/composition.js'
 import { readFile } from 'node:fs/promises'
 import Fastify from 'fastify'
 import { describe, expect, it } from 'vitest'
-import { contentHash, InferenceError, InferenceService, inferenceRoutes, snapshotHash, type AnalysisInputSnapshot, type AnalysisRun, type InferenceRepository, type MarketAnalysisSummary, type TraderDecisionSummary, type TraderInputSnapshot, type TraderRun } from '../src/modules/inference/index.js'
+import { contentHash, InferenceError, InferenceService, snapshotHash, type AnalysisInputSnapshot, type AnalysisRun, type InferenceRepository, type MarketAnalysisSummary, type TraderDecisionSummary, type TraderInputSnapshot, type TraderRun } from '../src/modules/inference/index.js'
 import { StrategyService, type StrategyCatalog, type StrategyKind, type StrategySummary, type StrategyVersion } from '../src/modules/strategies/index.js'
 
 const analysisVersion: StrategyVersion = { id: '11', strategyId: '10', kind: 'analysis', version: 1, promptText: '只分析行情', promptHash: 'a'.repeat(64), config: {}, inputContractVersion: 'market-analysis-input/v1', outputContractVersion: 'market-analysis/v1' }
@@ -91,7 +92,7 @@ describe('Stage 12A analyst and account-trader pipeline', () => {
   it('serves normalized HTTP summaries and keeps full payloads on HTTP rather than realtime', async () => {
     const repository = new MemoryInference(); const service = new InferenceService(repository, new StrategyService(new MemoryStrategies()))
     const app = Fastify({ logger: false })
-    await app.register(inferenceRoutes, { prefix: '/api/v4', service, strategies: new StrategyService(new MemoryStrategies()), auth: { async authenticate() { return { userId: 42 } }, async assertWrite() { return { userId: 42 } } } })
+    await app.register(createInferenceHttp(service, new StrategyService(new MemoryStrategies()), { async authenticate() { return { userId: 42 } }, async assertWrite() { return { userId: 42 } } }))
     const accepted = await app.inject({ method: 'POST', url: '/api/v4/analysis-jobs', headers: { 'idempotency-key': 'manual-request-0001' }, payload: { strategy_id: '10', symbol: 'XAUUSD', mode: 'manual' } })
     expect(accepted.statusCode).toBe(202)
     expect(accepted.json().data).toMatchObject({ strategy_version_id: '11', trigger: 'manual', status: 'queued' })
