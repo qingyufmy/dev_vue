@@ -1029,3 +1029,13 @@ Outbox探针升级v2：只排除已dispatched历史，对全部剩余事件仍�
 真实公开trading reader确认合成用户观摩目录为空，数据库未确认Outbox计数0。四项退役复核包含同key/body操作结果、实体版本保全、公开目录与Outbox，报告local-observer-retirement-verified-20260909.json；计划、prepare/apply/replay JSONL及Outbox回执均在architecture目录。27项管理回归、脚本语法、diff和321冻结输入检查通过。
 
 本批关闭的是合成观摩权限与发布入口，未删除账号、归属或历史，未发送终端命令、未重启或部署。两个自有合成账户及源账户归属仍在，尚需决定并实现对应的精确归属退役能力；该能力不能绕过历史区间、revision、绑定与上下文约束。P1及整体目标仍未完成。
+
+## 80. 账户归属退役依赖预检与设计（第一百五十批）
+
+新增inspect-local-account-retirement.mjs，使用私有合成用户/账户意图与观摩原始意图识别账户4/5/6，在真实开发库只读一致快照中核对当前归属、开放区间及runtime来源；枚举15项指向trading_accounts.id的外键并按精确账户计数。非空引用为归属、区间、账户4的当前上下文和账户6的观摩源/频道。其余外键计数为空不代表SQL-only或JSON依赖为空。
+
+预检报告local-account-retirement-preflight-20260909.json记录当前上下文full/account4/revision47，所有账户行和归属保持原样。源码搜索未找到完整账户归属撤销应用能力；上下文回执合同也不允许退役动作，不能借清理脚本直接改表或删除账户。
+
+新增[归属退役设计](architecture/account-ownership-retirement-design-20260909.md)，完成职责及兼容/并发两轮复审。明确保留账户与历史，专用幂等回执、同事务归属/区间/上下文/事件变更，以及未知结果恢复。记录Bridge账户优先与上下文用户优先的锁序差异、部分依赖表缺失等实施前问题，尚未声称退役能力可用。
+
+脚本语法、真实只读预检及diff检查通过；本批无数据写入、迁移、服务启动或终端动作。下一步补齐依赖和锁序清单，再实施受限退役能力；整体目标未完成。

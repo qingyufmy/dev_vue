@@ -1,0 +1,191 @@
+{
+  "kind": "local-account-retirement-preflight/v1",
+  "observedAt": "2026-09-08T20:17:04.597Z",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "accounts": [
+    {
+      "id": "4",
+      "revision": "1",
+      "userId": 31,
+      "intervalId": "bc31bed7-7372-4834-a848-c8278998f26f",
+      "grantRevision": "1",
+      "revokedAt": null,
+      "endedAt": null,
+      "originKind": "runtime",
+      "originRef": "bridge-first-account:4"
+    },
+    {
+      "id": "5",
+      "revision": "1",
+      "userId": 31,
+      "intervalId": "5cec2062-a395-45ed-8eb6-b81c897d64dd",
+      "grantRevision": "1",
+      "revokedAt": null,
+      "endedAt": null,
+      "originKind": "runtime",
+      "originRef": "bridge-first-account:5"
+    },
+    {
+      "id": "6",
+      "revision": "1",
+      "userId": 32,
+      "intervalId": "7a148d49-051d-4e40-8d5e-9cad3d587633",
+      "grantRevision": "1",
+      "revokedAt": null,
+      "endedAt": null,
+      "originKind": "runtime",
+      "originRef": "bridge-first-account:6"
+    }
+  ],
+  "references": [
+    {
+      "tableName": "account_runtime_snapshots",
+      "columnName": "trading_account_id",
+      "constraintName": "fk_account_snapshot_account",
+      "rows": []
+    },
+    {
+      "tableName": "bridge_connection_sessions",
+      "columnName": "trading_account_id",
+      "constraintName": "fk_bridge_sessions_account",
+      "rows": []
+    },
+    {
+      "tableName": "market_candles",
+      "columnName": "trading_account_id",
+      "constraintName": "fk_market_candles_account",
+      "rows": []
+    },
+    {
+      "tableName": "market_quotes",
+      "columnName": "trading_account_id",
+      "constraintName": "fk_market_quotes_account",
+      "rows": []
+    },
+    {
+      "tableName": "observer_channels",
+      "columnName": "source_trading_account_id",
+      "constraintName": "fk_observer_channel_account",
+      "rows": [
+        {
+          "accountId": "6",
+          "count": "1"
+        }
+      ]
+    },
+    {
+      "tableName": "observer_sources",
+      "columnName": "trading_account_id",
+      "constraintName": "fk_observer_source_account",
+      "rows": [
+        {
+          "accountId": "6",
+          "count": "1"
+        }
+      ]
+    },
+    {
+      "tableName": "open_position_snapshots",
+      "columnName": "trading_account_id",
+      "constraintName": "fk_open_positions_account",
+      "rows": []
+    },
+    {
+      "tableName": "pending_order_snapshots",
+      "columnName": "trading_account_id",
+      "constraintName": "fk_pending_orders_account",
+      "rows": []
+    },
+    {
+      "tableName": "strategy_subscriptions_v4_build",
+      "columnName": "trading_account_id",
+      "constraintName": "build_sub_725f39a146e86dec96dbd0aa",
+      "rows": []
+    },
+    {
+      "tableName": "terminal_account_bindings",
+      "columnName": "trading_account_id",
+      "constraintName": "fk_terminal_bindings_account",
+      "rows": []
+    },
+    {
+      "tableName": "trading_account_ownership_intervals",
+      "columnName": "trading_account_id",
+      "constraintName": "fk_ownership_intervals_account",
+      "rows": [
+        {
+          "accountId": "4",
+          "count": "1"
+        },
+        {
+          "accountId": "5",
+          "count": "1"
+        },
+        {
+          "accountId": "6",
+          "count": "1"
+        }
+      ]
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "columnName": "trading_account_id",
+      "constraintName": "fk_account_owners_account",
+      "rows": [
+        {
+          "accountId": "4",
+          "count": "1"
+        },
+        {
+          "accountId": "5",
+          "count": "1"
+        },
+        {
+          "accountId": "6",
+          "count": "1"
+        }
+      ]
+    },
+    {
+      "tableName": "trading_contexts",
+      "columnName": "trading_account_id",
+      "constraintName": "fk_trading_context_account",
+      "rows": [
+        {
+          "accountId": "4",
+          "count": "1"
+        }
+      ]
+    },
+    {
+      "tableName": "trading_projection_revisions",
+      "columnName": "trading_account_id",
+      "constraintName": "fk_projection_revisions_account",
+      "rows": []
+    },
+    {
+      "tableName": "user_trading_account_settings",
+      "columnName": "trading_account_id",
+      "constraintName": "fk_user_trading_account_settings_account",
+      "rows": []
+    }
+  ],
+  "contexts": [
+    {
+      "userId": 31,
+      "mode": "full",
+      "accountId": "4",
+      "revision": "47"
+    }
+  ],
+  "mutationAuthorizedByReport": false,
+  "limitations": [
+    "Foreign keys do not enumerate SQL-only, JSON, Redis or external references.",
+    "Counts include history and do not decide deletion safety.",
+    "No complete account ownership retirement application capability exists yet; do not update ownership or delete accounts from this report."
+  ],
+  "scope": "Read-only consistent snapshot of exact synthetic accounts and declared foreign-key references; preserve all rows."
+}
