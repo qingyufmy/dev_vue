@@ -1,5 +1,3 @@
-export * from './domain/audit.js'
-export * from './application/audit-ports.js'
-export * from './application/audit-service.js'
-export * from './infrastructure/mysql-audit-repository.js'
-export * from './transport/http/audit-routes.js'
+export { AuditError } from './domain/audit.js'
+export type { AuditEventDetail, AuditEventSummary, AuditSummary, AuditTraceNode, AuditSourceKind } from './domain/audit.js'
+export type { AuditReadApi, AuditQuery, AuditPage } from './application/audit-ports.js'

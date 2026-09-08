@@ -5,13 +5,14 @@ import { EventEmitter } from 'node:events'
 import type { Redis } from 'ioredis'
 import { WebSocket } from 'ws'
 import { afterEach, describe, expect, it } from 'vitest'
-import { RealtimeTicketAuthenticator, type AuthRepository, type RealtimeTicketStore } from '../src/modules/auth/index.js'
+import { cookieNameForClient, RealtimeTicketAuthenticator, type AuthRepository, type RealtimeTicketStore } from '../src/modules/auth/index.js'
 import {
   BrowserRealtimeHub, RedisBrowserRealtimeSubscriber, parseBrowserRealtimeEvent,
   type BrowserRealtimeEvent, type TradingReadRepository, type TradingRealtimeEvent,
 } from '../src/modules/trading/index.js'
 import { BrowserRealtimeWebSocketServer } from '../src/transport/browser-realtime-websocket-server.js'
 import { exactTradeHostHook, exactAdminHostHook, registerApiV4Routes, type ApiV4RouteServices } from '../src/transport/api-v4-route-registrar.js'
+import { createAuditModule } from '../src/modules/audit/composition.js'
 
 const closers: Array<() => Promise<void>> = []
 afterEach(async () => { for (const close of closers.splice(0).reverse()) await close() })
@@ -136,7 +137,13 @@ describe('V4 browser realtime runtime', () => {
 
   it('mounts SSO, Bridge credentials and every implemented trade V4 HTTP module in one API role', async () => {
     const app = Fastify()
-    await registerApiV4Routes(app, {} as ApiV4RouteServices, { tradeOrigin: 'https://trade.example.test', adminOrigin: 'https://admin.example.test', secureCookies: false })
+    const services = {} as ApiV4RouteServices
+    // This fixture checks registration only; handlers except audit are not called.
+    services.auth = { cookieName: cookieNameForClient } as ApiV4RouteServices['auth']
+    services.auditHttp = createAuditModule({ ownsAccount: async () => false,
+      list: async () => { throw new Error('forbidden audit must not query') }, find: async () => null,
+    }, { authenticate: async () => ({ userId: 7 }) }).http
+    await registerApiV4Routes(app, services, { tradeOrigin: 'https://trade.example.test', adminOrigin: 'https://admin.example.test', secureCookies: false })
     await app.ready()
     for (const route of [
       ['GET', '/oauth/authorize'], ['POST', '/api/v4/realtime/tickets'],
@@ -148,7 +155,11 @@ describe('V4 browser realtime runtime', () => {
       ['GET', '/api/v4/execution-distributions/preview'], ['GET', '/api/v4/execution-distributions/:distribution_id'],
       ['GET', '/api/v4/admin/observer/sources'], ['POST', '/api/v4/admin/observer/sources'],
       ['PUT', '/api/v4/admin/observer/default-channel'], ['PUT', '/api/v4/admin/observer/channels/:channel_id/accesses/:user_id'],
+      ['GET', '/api/v4/audit/events'], ['GET', '/api/v4/audit/events/:sourceKind/:sourceId'],
     ] as const) expect(app.hasRoute({ method: route[0], url: route[1] })).toBe(true)
+    const audit = await app.inject({ url: '/api/v4/audit/events?account_id=42', headers: { host: 'trade.example.test' } })
+    expect(audit.statusCode).toBe(403)
+    expect(audit.json().code).toBe('audit_account_forbidden')
     await app.close()
   })
 

@@ -1,7 +1,10 @@
 import Fastify from 'fastify'
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it, vi } from 'vitest'
-import { AuditService, auditRoutes, type AuditEventDetail, type AuditRepository } from '../src/modules/audit/index.js'
+import type { AuditEventDetail } from '../src/modules/audit/index.js'
+import { AuditService } from '../src/modules/audit/application/audit-service.js'
+import type { AuditRepository } from '../src/modules/audit/application/audit-ports.js'
+import { auditRoutes } from '../src/modules/audit/transport/http/audit-routes.js'
 import { BrowserRealtimeHub, BrowserRealtimeSession } from '../src/modules/trading/index.js'
 
 const now = '2026-09-04T08:00:00.000Z'
@@ -23,6 +26,17 @@ function repository(overrides: Partial<AuditRepository> = {}): AuditRepository {
 }
 
 describe('Stage 12U system audit and execution trace', () => {
+  it('normalizes audit identifiers and rejects invalid identifiers before repository access', async () => {
+    const find = vi.fn(repository().find)
+    const service = new AuditService(repository({ find }))
+    await service.detail(7, 'operation', '  operation-1  ')
+    expect(find).toHaveBeenCalledWith(7, 'operation', 'operation-1')
+    find.mockClear()
+    for (const id of ['../secret', 'a b', 'a'.repeat(192), '']) {
+      await expect(service.detail(7, 'operation', id)).rejects.toMatchObject({ code: 'audit_source_id_invalid', status: 400 })
+    }
+    expect(find).not.toHaveBeenCalled()
+  })
   it('freezes keyset pages and binds cursors to the complete filter', async () => {
     const service = new AuditService(repository({ list: async () => ({ items: [event], hasMore: true, summary }) }), () => new Date(now))
     const first = await service.events(7, { accountId: '42', category: 'execution', pageSize: 1 })

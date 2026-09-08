@@ -3,7 +3,7 @@ import { MysqlLearningMembershipReader } from '../modules/commerce/index.js'
 import { validateSettingMenu,AdminSettingReader,MysqlAdminSettingReader,SettingManagementService,MysqlSettingManagement } from '../modules/settings/management.js'
 import { ReferralRuleManagementService, MysqlReferralRuleManagement } from '../modules/commerce/index.js'
 import Fastify from 'fastify'
-import { AuditService, MysqlAuditRepository } from '../modules/audit/index.js'
+import { createMysqlAuditModule } from '../modules/audit/composition.js'
 import {
   assertV4RuntimeEnabled, connectCacheRedis, createCacheRedis, createMysqlPool, installProcessLifecycle,
   loadServerEnvironment, loadV4ApiRuntimeConfig, loadV4BaseRuntimeConfig, RoleHealth,
@@ -67,7 +67,7 @@ async function main() {
     userExecution,
     executionDistribution,
     tradeHistory: new TradeHistoryService(new MysqlTradeHistoryRepository(pool)),
-    audit: new AuditService(new MysqlAuditRepository(pool)),
+    auditHttp: createMysqlAuditModule(pool, tradeAuth).http,
     tradeAuth,
     settingReader: new AdminSettingReader(new MysqlAdminSettingReader(pool)),
     settings: new SettingManagementService(new MysqlSettingManagement(pool,validateSettingMenu)),

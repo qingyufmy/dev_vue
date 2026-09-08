@@ -1,8 +1,7 @@
 import { learningRoutes, learningCompletionRoutes, type LearningService, type LearningCompletionService } from '../modules/learning/index.js'
 import { settingRoutes,adminSettingReadRoutes,type AdminSettingReader,type SettingManagementService } from '../modules/settings/management.js'
 import { referralRuleRoutes, type ReferralRuleManagementService } from '../modules/commerce/index.js'
-import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import { auditRoutes, type AuditService } from '../modules/audit/index.js'
+import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import { registerSsoRoutes, type AuthService } from '../modules/auth/index.js'
 import { bridgeCredentialRoutes, bridgePairingRoutes, type BridgeCredentialService, type BridgePairingService } from '../modules/bridge/index.js'
 import {
@@ -35,7 +34,7 @@ export interface ApiV4RouteServices {
   userExecution: UserExecutionCommandService
   executionDistribution: ExecutionDistributionService
   tradeHistory: TradeHistoryService
-  audit: AuditService
+  auditHttp: FastifyPluginAsync
   tradeAuth: AuthTradeRequestAdapter
   settingReader: AdminSettingReader
   settings: SettingManagementService
@@ -82,7 +81,7 @@ export async function registerApiV4Routes(
     await trade.register(userExecutionCommandRoutes, { prefix: '/api/v4', service: services.userExecution, auth: services.tradeAuth })
     await trade.register(executionDistributionRoutes, { prefix: '/api/v4', service: services.executionDistribution, auth: services.tradeAuth })
     await trade.register(tradeHistoryRoutes, { prefix: '/api/v4', service: services.tradeHistory, auth: services.tradeAuth })
-    await trade.register(auditRoutes, { prefix: '/api/v4', service: services.audit, auth: services.tradeAuth })
+    await trade.register(services.auditHttp, { prefix: '/api/v4' })
   })
 }
 

@@ -203,7 +203,8 @@ server/
 
 ```text
 modules/<domain>/
-  index.ts                 唯一公开入口
+  index.ts                 唯一跨域业务入口，公开端口与必要 DTO
+  composition.ts           受限运行组装入口，只由 bootstrap/entrypoints 使用
   transport/http/          Fastify 路由与合同适配
   transport/realtime/      该域实时投影适配
   transport/jobs/          任务载荷与消费者适配

@@ -1,23 +1,10 @@
-import { assertOpaqueId } from '../../trading/domain/trading.js'
 import {
   auditActors, auditCategories, auditFilterKey, auditSourceKinds, auditStatuses, decodeAuditCursor, encodeAuditCursor,
   AuditError, type AuditActor, type AuditCategory, type AuditFilter, type AuditSourceKind, type AuditStatus,
 } from '../domain/audit.js'
-import type { AuditRepository } from './audit-ports.js'
+import type { AuditQuery, AuditReadApi, AuditRepository } from './audit-ports.js'
 
-export interface AuditQuery {
-  accountId?: string
-  category?: string
-  status?: string
-  actor?: string
-  from?: string
-  to?: string
-  query?: string
-  pageSize?: number
-  cursor?: string
-}
-
-export class AuditService {
+export class AuditService implements AuditReadApi {
   constructor(private readonly repository: AuditRepository, private readonly now: () => Date = () => new Date()) {}
 
   async events(userId: number, input: AuditQuery) {
@@ -69,8 +56,9 @@ function normalize(input: AuditQuery, now: Date): AuditFilter {
 }
 
 function validId(value: string, field: string) {
-  try { return assertOpaqueId(value, field) }
-  catch { throw new AuditError(`${field}_invalid`, 400) }
+  const normalized = String(value ?? '').trim()
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,190}$/.test(normalized)) throw new AuditError(`${field}_invalid`, 400)
+  return normalized
 }
 function oneOf(value: string, values: readonly string[], code: string) { if (!values.includes(value)) throw new AuditError(code, 400); return value }
 function parseUtc(value: string, code: string) {

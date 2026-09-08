@@ -1,9 +1,9 @@
 import type { FastifyPluginAsync } from 'fastify'
-import type { AuditService } from '../../application/audit-service.js'
+import type { AuditReadApi } from '../../application/audit-ports.js'
 import { AuditError, type AuditEventDetail, type AuditEventSummary, type AuditTraceNode } from '../../domain/audit.js'
 
 export interface AuditRequestAuthenticator { authenticate(request: { headers: Record<string, unknown> }): Promise<{ userId: number }> }
-export interface AuditRoutesOptions { service: AuditService; auth: AuditRequestAuthenticator }
+export interface AuditRoutesOptions { service: AuditReadApi; auth: AuditRequestAuthenticator }
 const response = (requestId: string, data: unknown) => ({ data, meta: { request_id: requestId, generated_at: new Date().toISOString() } })
 
 export const auditRoutes: FastifyPluginAsync<AuditRoutesOptions> = async (fastify, options) => {
