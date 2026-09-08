@@ -1,0 +1,35 @@
+{
+  "kind": "observer-context-registered-rehearsal/v1",
+  "observedAt": "2026-09-08T09:28:15.476Z",
+  "target": "dev_vue_m1_source_20260907_02",
+  "mode": "--prepare-restored-only",
+  "result": {
+    "ddlCount": 0,
+    "steps": [
+      {
+        "id": "inplace_037_01_observer_sources",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_037_02_observer_channels",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_037_03_observer_channel_accesses",
+        "status": "pending"
+      },
+      {
+        "id": "inplace_037_04_trading_contexts",
+        "status": "pending"
+      }
+    ]
+  },
+  "registrySteps": 154,
+  "proofHash": "ee3b32509a4b87b276cbdc205ac98ce141fe81b5b74ff0aac2122319547402a0",
+  "protectedTableCount": 224,
+  "protectedSnapshotHash": "e52f6efe81f11e86091f4dd08a3e10e074549e11c59e242560584a0cccc28ccd",
+  "priorHistoryHash": "76dd1a2ee7289fac945bcf97e27cb108e74f8abf6f4a1bdb0dd49f341fc9d7e4",
+  "addedTables": [],
+  "currentDevVueWritten": false,
+  "scope": "Restored database only; registered additions and history retained. No business facts synthesized."
+}

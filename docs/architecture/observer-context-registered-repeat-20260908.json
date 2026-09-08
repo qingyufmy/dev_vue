@@ -1,0 +1,56 @@
+{
+  "kind": "observer-context-registered-rehearsal/v1",
+  "observedAt": "2026-09-08T09:30:36.304Z",
+  "target": "dev_vue_m1_source_20260907_02",
+  "mode": "--apply-restored-only",
+  "result": {
+    "ddlCount": 0,
+    "steps": [
+      {
+        "id": "inplace_037_01_observer_sources",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_037_02_observer_channels",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_037_03_observer_channel_accesses",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_037_04_trading_contexts",
+        "status": "completed"
+      }
+    ]
+  },
+  "registrySteps": 154,
+  "proofHash": "ee3b32509a4b87b276cbdc205ac98ce141fe81b5b74ff0aac2122319547402a0",
+  "protectedTableCount": 224,
+  "protectedSnapshotHash": "e52f6efe81f11e86091f4dd08a3e10e074549e11c59e242560584a0cccc28ccd",
+  "priorHistoryHash": "76dd1a2ee7289fac945bcf97e27cb108e74f8abf6f4a1bdb0dd49f341fc9d7e4",
+  "addedTables": [
+    {
+      "name": "observer_channel_accesses",
+      "rows": 0,
+      "schemaSha256": "66fa22bcbc88e84aaaaa2eb3f6099cc54be9220a5dd4ee175671eb5eb0ba0122"
+    },
+    {
+      "name": "observer_channels",
+      "rows": 0,
+      "schemaSha256": "a504beeb48f5fe10ad99b276e918ba3060b827ffad1e059db5210c07e32bf985"
+    },
+    {
+      "name": "observer_sources",
+      "rows": 0,
+      "schemaSha256": "cd5f67cfbec4eed3fdc9fe2d1526ecfa9f8cfa96aaaca5b37a27ccba871713b5"
+    },
+    {
+      "name": "trading_contexts",
+      "rows": 0,
+      "schemaSha256": "5d37635fa64a607331206ce05fe8cdfaa42af3692acccb8c684fd7ac42c3c7b7"
+    }
+  ],
+  "currentDevVueWritten": false,
+  "scope": "Restored database only; registered additions and history retained. No business facts synthesized."
+}
