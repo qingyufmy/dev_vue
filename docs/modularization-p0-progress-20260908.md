@@ -338,3 +338,15 @@ SSO的两种Cookie课程解锁与完成写入用例改经实际HTTP工厂；学�
 17项新状态机测试通过，包含新建store从持久化事实恢复、三处响应未知与前后置漂移；另44项历史适配及原协调器测试通过。语法与差异检查通过。两轮复审见账户根设计。
 
 本批没有连接数据库或执行035。当前交付是正式步骤加载器与状态机，持久化计划入口/MySQL适配、真实148步恢复副本演练和软引用审查仍待接入，不能称当前dev_vue已经148步或账户样板完成。
+
+## 第三十七批：正式148步真实恢复副本演练
+
+新增持久化计划/MySQL适配器与固定恢复副本入口。计划独占创建并fsync；入口准备时复核旧147步、212表保护摘要和完整账户字段投影。适配器要求正确数据库/UUID、UTC/autocommit、有效日志结构及同连接升级锁，每次写操作再次核对锁；只有固定步骤及SQL可执行。完整工具集合不能删项、重复或通过路径穿越读取其它文件。
+
+实际由五个独立本机进程执行[准备](architecture/account-root-registered-prepare-20260908.json)、[DDL响应丢失注入](architecture/account-root-registered-lost-ddl-20260908.json)、[只读识别](architecture/account-root-registered-inspect-unknown-20260908.json)、[恢复日志](architecture/account-root-registered-reconcile-20260908.json)与[重复执行](architecture/account-root-registered-repeat-20260908.json)。整个流程只执行1次RENAME；新进程识别reconcile后只补完成日志，再次返回completed/0DDL。
+
+恢复副本dev_vue_m1_source_20260907_02现在保留148步与提升后的正式表名，没有删除日志或反向伪造原状态。[最终只读核对](architecture/account-root-registered-result-verification-20260908.json)证明原147条日志的全部列摘要不变，222表的非日志数据/DDL与提升计划一致。当前dev_vue另行只读核验仍为147步、旧账户4行、四张账户构建表均0行。
+
+本批4项新持久化/连接锁/工具清单测试和17项状态机测试通过，真实MySQL跨进程恢复通过，SSH隧道已关闭。计划与回执永久保留用于恢复和审查，测试临时文件已清理。新增读取验证器只读检查副本与当前库，不输出业务原始字段或凭据。
+
+当前库应用仍需旧根软引用/JSON引用及本地运行写入口调查，并准备当前库自己的回填与提升计划；不能把副本148步视为当前dev_vue升级完成。账户API与前端完整流程、其余P0–P7继续。

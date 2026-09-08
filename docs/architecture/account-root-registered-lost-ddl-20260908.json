@@ -1,0 +1,15 @@
+{
+  "kind": "account-root-registered-rehearsal/v1",
+  "observedAt": "2026-09-08T07:45:44.130Z",
+  "target": "dev_vue_m1_source_20260907_02",
+  "mode": "--apply-lost-ddl-restored-only",
+  "result": {
+    "status": "ddl-unknown-injected",
+    "ddlCount": 1
+  },
+  "registrySteps": 148,
+  "priorRegistryHash": "6bd9b37a155323eeda3bc8e36cfb0e7f8beaf7743a6e92cbe3f9dc7e3040ef59",
+  "proofHash": "0d29057ff605fa43b101a58f1c12079cc5fcd2c96fb7e0ef8509140ea4bacaa4",
+  "currentDevVueWritten": false,
+  "scope": "Fixed restored database; programs run locally. Registered promotion is retained with its journal, not undone by deleting history."
+}

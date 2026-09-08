@@ -1,0 +1,25 @@
+{
+  "kind": "account-root-registered-result-verification/v1",
+  "observedAt": "2026-09-08T07:47:33.701Z",
+  "restored": {
+    "target": "dev_vue_m1_source_20260907_02",
+    "proofHash": "0d29057ff605fa43b101a58f1c12079cc5fcd2c96fb7e0ef8509140ea4bacaa4",
+    "tables": 222,
+    "completedSteps": 148,
+    "original147JournalRowsUnchanged": true,
+    "allNonJournalRowsAndDdlMatchPromotion": true
+  },
+  "current": {
+    "database": "dev_vue",
+    "verifiedSteps": 147,
+    "accountCounts": {
+      "trading_accounts": 4,
+      "trading_accounts_v4_build": 0,
+      "trading_account_ownership_intervals_v4_build": 0,
+      "trading_account_ownerships_v4_build": 0,
+      "user_trading_account_settings_v4_build": 0
+    }
+  },
+  "databaseWrites": 0,
+  "toolSha256": "50a732d4e9c725cf00d58c34b969b67e6785720c9d7c370bead3329f2bee39f1"
+}
