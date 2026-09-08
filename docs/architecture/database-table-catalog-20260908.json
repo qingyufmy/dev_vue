@@ -1,0 +1,897 @@
+{
+  "kind": "module-ownership-table-catalog/v1",
+  "observedAt": "2026-09-08T06:36:45.071Z",
+  "database": "dev_vue",
+  "scope": "Read-only table-name inventory; no row, column, privilege or migration verification.",
+  "databaseWrites": 0,
+  "tables": [
+    {
+      "name": "admin_position_close_jobs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "admin_position_close_targets",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "admin_position_protection_jobs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "admin_position_protection_targets",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "admin_strategy_pending_cancel_jobs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "admin_strategy_pending_cancel_targets",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "admin_strategy_trade_dispatches",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "admin_strategy_trade_targets",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_configs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_feature_flags",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_inference_preferences",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_manual_analysis_cooldowns",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_manual_analysis_jobs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_market_benchmark_cases",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_market_benchmark_sets",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_model_capacity_leases",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_model_capacity_policies",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_model_capacity_waiters",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_model_compare_checkpoints",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_model_compare_jobs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_model_profiles",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_model_provider_capabilities",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_model_provider_incidents",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_model_purpose_defaults",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_model_task_attempts",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_model_task_events",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_model_tasks",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_model_usage_logs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_observer_channel_assignments",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_observer_channels",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_observer_sources",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_position_management_commands",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_position_management_evaluations",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_position_management_events",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_position_management_tasks",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_signals",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "ai_trade_theses",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "audit_logs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "auth_authorization_codes",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "auth_sessions",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "auto_prompt_types",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "auto_scheduler",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "auto_signal_deliveries",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "bridge_connection_capacity_grants",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "bridge_device_pairings",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "bridge_refresh_sessions",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "bridge_update_events",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "bridge_v3_account_latest",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "bridge_v3_command_events",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "bridge_v3_command_ledger",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "bridge_v3_deals",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "bridge_v3_orders_latest",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "bridge_v3_positions_latest",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "bridge_v3_stream_revisions",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "bridge_v3_terminal_sessions",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "bridge_v4_pairing_requests",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "broadcast_messages",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "chan_structure_anchors",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "close_config",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "close_signal_tickets",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "comment_likes",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "comments",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "course_resources",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "courses",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "credential_migration_runs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "crypto_watch_list",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "data_migration_batches",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "data_migration_checkpoints",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "data_migration_id_maps",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "data_migration_row_receipts",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "data_migration_runs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "data_migration_source_rows",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "database_upgrade_steps_v4",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "economic_calendar_event_revisions",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "economic_calendar_events",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "experience_long_term_memories",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "experience_memory_items",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "experience_memory_summaries",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "feedback",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "global_auto_config",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "global_position_guard_control",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "global_position_management_control",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "global_risk_control",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "global_risk_controls",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "history_range_preferences",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "inference_snapshots",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "learning_courses",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "learning_lessons",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "learning_media_references",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "learning_progress",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "learning_progress_changes",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "macro_data_sources",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "macro_feature_sets",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "macro_ingestion_runs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "macro_model_versions",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "macro_observations",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "macro_pipeline_jobs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "macro_research_snapshots",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "macro_series",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "macro_snapshot_observations",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "manual_trade_review_aggregate_cases",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "manual_trade_review_aggregate_sources",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "manual_trade_review_aggregate_versions",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "manual_trade_review_cases",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "manual_trade_review_counterfactual_points",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "manual_trade_review_jobs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "manual_trade_review_sources",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "manual_trade_review_stage_runs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "manual_trade_review_versions",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "market_candles",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "market_clock_samples",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "market_data_sources",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "membership_expiry_notifications",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "memberships",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "memory_compression_jobs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "memory_injection_logs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "mt5_account_bindings",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "mt5_account_ownership_history",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "mt5_account_performance_daily",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "mt5_account_performance_sync_state",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "mt5_account_performance_totals",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "notification_campaigns",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "notification_deliveries",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "notification_idempotency_keys",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "notifications",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "observer_management_operations",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "observer_management_registry",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "order_intents",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "orders",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "outbox_events",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "payment_matches",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "payment_orders",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "payment_side_effects",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "payment_transactions",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "payment_wallet_addresses",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "pending_orders",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "period_review_cases",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "period_review_derivation_jobs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "period_review_job_events",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "period_review_jobs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "period_review_monthly_checkpoints",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "period_review_sources",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "period_review_user_states",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "period_review_versions",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "platform_model_usage_policy",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "platform_strategy_experience_items",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "platform_strategy_experience_logs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "platform_strategy_experience_policies",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "position_guard_position_states",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "position_guard_profile_versions",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "position_guard_profiles",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "position_management_account_rollouts",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "post_assets",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "post_replies",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "post_reports",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "post_tags",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "posts",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "progress",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "quiz_questions",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "referral_credit_ledger",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "referral_rule_changes",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "referral_rules",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "referrals",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "risk_account_state",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "risk_decisions",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "risk_policy_change_items",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "risk_policy_sets",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "risk_policy_versions",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "risk_profiles",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "risk_reservations",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "risk_rule_rollouts",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "schema_migrations",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "signal_outcome_deals",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "signal_outcomes",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "storage_upload_sessions",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "stored_files",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "strategies",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "strategy_memory_compression_jobs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "strategy_memory_conflict_bindings",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "strategy_memory_conflict_occurrences",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "strategy_memory_conflicts",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "strategy_memory_consistency_jobs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "strategy_memory_injection_logs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "strategy_memory_injection_logs_v4",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "strategy_memory_libraries",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "strategy_memory_libraries_v4",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "strategy_memory_library_revisions",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "strategy_memory_library_revisions_v4",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "strategy_memory_pending_updates",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "strategy_subscriptions",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "strategy_subscriptions_v4_build",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "strategy_versions",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "subscription_execution_preferences_v4_build",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "subscription_schedules_v4_build",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "system_config",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "system_prompts",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "system_setting_changes",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "system_setting_requests",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "system_settings",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "terminal_profiles",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "trade_audit_logs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "trade_history_migration_checkpoints_v4",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "trade_review_cases",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "trade_review_jobs",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "trade_review_versions",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "trades",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "trading_account_ownership_intervals_v4_build",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "trading_account_ownerships_v4_build",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "trading_accounts",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "trading_accounts_v4_build",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "user_bridge_settings",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "user_memory_settings",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "user_model_defaults",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "user_notices",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "user_position_guard_settings",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "user_position_management_settings",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "user_referral_accounts",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "user_trading_account_settings_v4_build",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "users",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "verification_codes",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "video_streams",
+      "type": "BASE TABLE"
+    },
+    {
+      "name": "wallet_keys",
+      "type": "BASE TABLE"
+    }
+  ]
+}
