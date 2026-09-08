@@ -21,3 +21,6 @@ createMysqlAnalysisScheduler/createMysqlModelTaskRecovery 组装调度和恢复�
 
 
 模型用量接口及上下文位于 application/model-usage-ledger.ts，composition 的 createMysqlModelUsageLedger 返回结算和恢复能力。网关仅依赖用量接口，业务 index 不公开 MySQL 账本。用量规则和 SQL 未改，定向验证为 ai-runtime-wiring。
+
+
+模型运行组装：分析、交易和冻结复盘经 composition 的 createMysqlAnalysisModelResolver/createMysqlTraderModelResolver/createMysqlReviewModelResolver 获取应用端口。HTTP 网关、凭据目录及 RuntimeModelProfile 保持基础设施内部实现；业务 index 不公开具体适配器。冻结复盘保留历史策略解析路径，分析/交易仍校验活动版本。回归入口为 ai-runtime-wiring.test.ts 与 review-worker.test.ts；本批不改变 SQL 数据所有权或证明真实模型联调。

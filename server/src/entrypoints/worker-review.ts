@@ -1,12 +1,9 @@
-import { createMysqlModelUsageLedger } from '../modules/inference/composition.js'
+import { createMysqlReviewModelResolver, loadCredentialKeyring } from '../modules/inference/composition.js'
 import { Worker } from 'bullmq'
 import {
   assertV4RuntimeEnabled, closeHttpServer, createMysqlPool, installProcessLifecycle,
   loadServerEnvironment, loadV4RuntimeConfig, RoleHealth, startRoleHealthServer,
 } from '../bootstrap/index.js'
-import {
-  HttpJsonObjectModelGateway, loadCredentialKeyring,  MysqlRuntimeModelProfileCatalog,
-} from '../modules/inference/index.js'
 import { createMysqlReviewWorker } from '../modules/reviews/composition.js'
 import { REVIEW_QUEUE, type ReviewRunJob } from '../queue/task-queues.js'
 
@@ -16,16 +13,10 @@ async function main() {
   const config = loadV4RuntimeConfig(); assertV4RuntimeEnabled(config)
   const health = new RoleHealth('worker-review'); const pool = createMysqlPool(config.mysql)
   await pool.query('SELECT 1')
-  const usage = createMysqlModelUsageLedger(pool)
-  const profiles = new MysqlRuntimeModelProfileCatalog(pool, loadCredentialKeyring(), {
+  const models = createMysqlReviewModelResolver(pool, loadCredentialKeyring(), {
     allowPrivateEndpoints: config.allowPrivateModelEndpoints, maxAttempts: config.modelMaxAttempts, defaultTimeoutMs: config.modelDefaultTimeoutMs,
-  })
-  const processor = createMysqlReviewWorker(pool, {
-    resolve: async claim => new HttpJsonObjectModelGateway(
-      await profiles.resolveForFrozenReview({ userId: claim.userId, strategyId: claim.strategyId, usage: claim.kind === 'manual' ? 'manual' : 'auto' }),
-      usage, fetch, () => health.workFailed('review_model_usage_settlement_failed'),
-    ),
-  }, `review:${process.pid}`)
+  }, () => health.workFailed('review_model_usage_settlement_failed'))
+  const processor = createMysqlReviewWorker(pool, models, `review:${process.pid}`)
   const worker = new Worker<ReviewRunJob>(REVIEW_QUEUE, async job => {
     if (job.name !== 'review.run' || !job.data.reviewJobId) throw new Error('review_job_invalid')
     const result = await processor.process(job.data.reviewJobId)

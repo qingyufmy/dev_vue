@@ -1,15 +1,38 @@
-import { createMysqlModelUsageLedger } from '../src/modules/inference/composition.js'
+import type { Pool } from 'mysql2/promise'
+import type { ReviewJobClaim } from '../src/modules/reviews/index.js'
+import { createMysqlAnalysisModelResolver, createMysqlTraderModelResolver, createMysqlReviewModelResolver } from '../src/modules/inference/composition.js'
+import { HttpJsonAnalysisModelGateway, HttpJsonTraderModelGateway, type RuntimeModelProfile } from '../src/modules/inference/infrastructure/http-json-model-gateway.js'
+import { createMysqlModelUsageLedger, loadCredentialKeyring } from '../src/modules/inference/composition.js'
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it, vi } from 'vitest'
 import {
-  HttpJsonAnalysisModelGateway, HttpJsonTraderModelGateway, loadCredentialKeyring,
-  ModelTaskRecovery,  type ModelUsageLedger, type RuntimeModelProfile,
+  ModelTaskRecovery, type ModelUsageLedger,
 } from '../src/modules/inference/index.js'
 import { BullMqOutboxTaskPublisher } from '../src/outbox/index.js'
 import type { ClaimedOutboxEvent } from '../src/outbox/application/outbox-ports.js'
 import type { RuntimeTaskQueues } from '../src/queue/task-queues.js'
 
 describe('AI runtime wiring', () => {
+  it('rejects inactive strategies for live work while allowing frozen reviews to resolve their model', async () => {
+    const execute = vi.fn(async (sql: string) => {
+      if (sql.includes('FROM strategies')) {
+        return [sql.includes("status='active'") ? [] : [{ id: '17', scope: 'user', owner_user_id: 42 }], []]
+      }
+      return [[], []]
+    })
+    const pool = { execute } as unknown as Pool
+    const options = { allowPrivateEndpoints: false, maxAttempts: 1, defaultTimeoutMs: 30_000 }
+    const keyring = new Map<string, Buffer>()
+    const input = { userId: 42, strategyId: '17', strategyVersionId: '19', trigger: 'manual' as const }
+    await expect(createMysqlAnalysisModelResolver(pool, keyring, options).resolve(input)).rejects.toThrow('model_strategy_unavailable')
+    await expect(createMysqlTraderModelResolver(pool, keyring, options).resolve(input)).rejects.toThrow('model_strategy_unavailable')
+    expect(execute).toHaveBeenCalledTimes(2)
+    const claim = { userId: 42, strategyId: '17', kind: 'manual' } as ReviewJobClaim
+    await expect(createMysqlReviewModelResolver(pool, keyring, options).resolve(claim)).rejects.toThrow('model_profile_unavailable')
+    expect(execute).toHaveBeenCalledTimes(4)
+    expect(execute.mock.calls.every(([sql]) => sql.trimStart().startsWith('SELECT'))).toBe(true)
+  })
+
   it('routes committed outbox wake-ups to isolated queues and skips non-actionable decisions', async () => {
     const calls: Array<{ queue: string; name: string; data: unknown; jobId: string }> = []
     const queue = (name: string) => ({ add: async (job: string, data: unknown, options: { jobId: string }) => {

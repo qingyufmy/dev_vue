@@ -1,3 +1,8 @@
+import type { AnalysisModelGatewayResolver } from './application/analysis-worker.js'
+import type { TraderModelGatewayResolver } from './application/trader-worker.js'
+import type { ReviewModelGatewayResolver } from '../reviews/index.js'
+import { HttpJsonObjectModelGateway, type ModelUsageSettlementErrorHandler } from './infrastructure/http-json-model-gateway.js'
+import { MysqlAnalysisModelGatewayResolver, MysqlTraderModelGatewayResolver, MysqlRuntimeModelProfileCatalog, type RuntimeModelResolverOptions } from './infrastructure/mysql-model-gateway-resolver.js'
 import type { ModelUsageLedger, ModelUsageRecovery } from './application/model-usage-ledger.js'
 import { MysqlModelUsageLedger } from './infrastructure/mysql-model-usage-ledger.js'
 import type { AnalysisMarketSource, MacroSnapshotReader } from './application/analysis-context-builder.js'
@@ -26,6 +31,8 @@ import { AnalysisScheduler } from './application/analysis-scheduler.js'
 import { ModelTaskRecovery } from './application/model-task-recovery.js'
 import { MysqlAnalysisScheduleRepository } from './infrastructure/mysql-analysis-schedule-repository.js'
 import { MysqlModelTaskRecoveryRepository } from './infrastructure/mysql-model-task-recovery-repository.js'
+
+export { loadCredentialKeyring } from './infrastructure/mysql-model-gateway-resolver.js'
 
 export function createMysqlAnalysisScheduler(pool: Pool, service: InferenceService,
   readClock: (accountId: string, userId: number) => Promise<SubscriptionWindowClock | null>): Pick<AnalysisScheduler, 'tick'> {
@@ -70,4 +77,28 @@ export function createAnalysisMarketSource(trading: AnalysisTradingReader): Anal
 
 export function createMysqlModelUsageLedger(pool: Pool): ModelUsageLedger & ModelUsageRecovery {
   return new MysqlModelUsageLedger(pool)
+}
+
+export function createMysqlAnalysisModelResolver(pool: Pool, keyring: ReadonlyMap<string, Buffer>,
+  options: RuntimeModelResolverOptions, onUsageSettlementError?: ModelUsageSettlementErrorHandler): AnalysisModelGatewayResolver {
+  return new MysqlAnalysisModelGatewayResolver(new MysqlRuntimeModelProfileCatalog(pool, keyring, options),
+    createMysqlModelUsageLedger(pool), onUsageSettlementError)
+}
+
+export function createMysqlTraderModelResolver(pool: Pool, keyring: ReadonlyMap<string, Buffer>,
+  options: RuntimeModelResolverOptions, onUsageSettlementError?: ModelUsageSettlementErrorHandler): TraderModelGatewayResolver {
+  return new MysqlTraderModelGatewayResolver(new MysqlRuntimeModelProfileCatalog(pool, keyring, options),
+    createMysqlModelUsageLedger(pool), onUsageSettlementError)
+}
+
+export function createMysqlReviewModelResolver(pool: Pool, keyring: ReadonlyMap<string, Buffer>,
+  options: RuntimeModelResolverOptions, onUsageSettlementError?: ModelUsageSettlementErrorHandler): ReviewModelGatewayResolver {
+  const profiles = new MysqlRuntimeModelProfileCatalog(pool, keyring, options)
+  const usage = createMysqlModelUsageLedger(pool)
+  return {
+    resolve: async claim => new HttpJsonObjectModelGateway(
+      await profiles.resolveForFrozenReview({ userId: claim.userId, strategyId: claim.strategyId, usage: claim.kind === 'manual' ? 'manual' : 'auto' }),
+      usage, fetch, onUsageSettlementError,
+    ),
+  }
 }

@@ -1,4 +1,4 @@
-import { createMysqlModelUsageLedger } from '../modules/inference/composition.js'
+import { createMysqlTraderModelResolver, loadCredentialKeyring } from '../modules/inference/composition.js'
 import { createMysqlInferenceRepository } from '../modules/inference/composition.js'
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import { createMysqlTraderContext, createMysqlTraderWindowGuard } from '../modules/inference/composition.js'
@@ -9,8 +9,7 @@ import {
 } from '../bootstrap/index.js'
 import { RedisBridgeGatewayLeaseStore } from '../modules/bridge/index.js'
 import {
-  InferenceService, loadCredentialKeyring,
-   MysqlRuntimeModelProfileCatalog, MysqlTraderModelGatewayResolver,
+  InferenceService,
   TraderWorker,
 } from '../modules/inference/index.js'
 import { createSubscriptionPreferencesReader, createMysqlStrategyService } from '../modules/strategies/composition.js'
@@ -28,18 +27,17 @@ async function main() {
   await Promise.all([pool.query('SELECT 1'), connectCacheRedis(cache)])
   const repository = createMysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader)
   const strategies = createMysqlStrategyService(pool)
-  const profiles = new MysqlRuntimeModelProfileCatalog(pool, loadCredentialKeyring(), {
-    allowPrivateEndpoints: config.allowPrivateModelEndpoints,
-    maxAttempts: config.modelMaxAttempts,
-    defaultTimeoutMs: config.modelDefaultTimeoutMs,
-  })
   let usageSettlementFailureRevision = 0
   const processor = new TraderWorker(
     repository,
     new InferenceService(repository, strategies),
     strategies,
     createMysqlTraderContext(pool, repository, createTradingReader(pool, new RedisBridgeGatewayLeaseStore(cache)), createSubscriptionPreferencesReader),
-    new MysqlTraderModelGatewayResolver(profiles, createMysqlModelUsageLedger(pool), () => {
+    createMysqlTraderModelResolver(pool, loadCredentialKeyring(), {
+      allowPrivateEndpoints: config.allowPrivateModelEndpoints,
+      maxAttempts: config.modelMaxAttempts,
+      defaultTimeoutMs: config.modelDefaultTimeoutMs,
+    }, () => {
       usageSettlementFailureRevision += 1
       health.workFailed('model_usage_settlement_failed')
       console.error('[worker-trader] model usage settlement failed')

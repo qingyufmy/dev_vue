@@ -1,4 +1,4 @@
-import { createMysqlModelUsageLedger } from '../modules/inference/composition.js'
+import { createMysqlAnalysisModelResolver, loadCredentialKeyring } from '../modules/inference/composition.js'
 import { createMysqlInferenceRepository } from '../modules/inference/composition.js'
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import { createAnalysisMarketSource, createMysqlAnalysisWindowGuard, createMysqlMacroSnapshotReader } from '../modules/inference/composition.js'
@@ -9,9 +9,7 @@ import {
 } from '../bootstrap/index.js'
 import { RedisBridgeGatewayLeaseStore } from '../modules/bridge/index.js'
 import {
-  AnalysisContextBuilder, AnalysisWorker, InferenceService, loadCredentialKeyring,
-  MysqlAnalysisModelGatewayResolver,
-  MysqlRuntimeModelProfileCatalog,
+  AnalysisContextBuilder, AnalysisWorker, InferenceService,
 } from '../modules/inference/index.js'
 import { createSubscriptionPreferencesReader, createMysqlStrategyService } from '../modules/strategies/composition.js'
 import { createTradingReader } from '../modules/trading/composition.js'
@@ -29,18 +27,17 @@ async function main() {
   const repository = createMysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader)
   const strategies = createMysqlStrategyService(pool)
   const trading = createTradingReader(pool, new RedisBridgeGatewayLeaseStore(cache))
-  const profiles = new MysqlRuntimeModelProfileCatalog(pool, loadCredentialKeyring(), {
-    allowPrivateEndpoints: config.allowPrivateModelEndpoints,
-    maxAttempts: config.modelMaxAttempts,
-    defaultTimeoutMs: config.modelDefaultTimeoutMs,
-  })
   let usageSettlementFailureRevision = 0
   const processor = new AnalysisWorker(
     repository,
     new InferenceService(repository, strategies),
     strategies,
     new AnalysisContextBuilder(createAnalysisMarketSource(trading), createMysqlMacroSnapshotReader(pool)),
-    new MysqlAnalysisModelGatewayResolver(profiles, createMysqlModelUsageLedger(pool), () => {
+    createMysqlAnalysisModelResolver(pool, loadCredentialKeyring(), {
+      allowPrivateEndpoints: config.allowPrivateModelEndpoints,
+      maxAttempts: config.modelMaxAttempts,
+      defaultTimeoutMs: config.modelDefaultTimeoutMs,
+    }, () => {
       usageSettlementFailureRevision += 1
       health.workFailed('model_usage_settlement_failed')
       console.error('[worker-analysis] model usage settlement failed')
