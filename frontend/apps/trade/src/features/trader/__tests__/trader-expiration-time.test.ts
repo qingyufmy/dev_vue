@@ -1,8 +1,9 @@
+import { applyTradingContext } from '~/features/trading-context'
 import { mount } from '@vue/test-utils'
 import { afterEach, expect, it } from 'vitest'
 import { nextTick } from 'vue'
 import type { AccountSnapshot, TradingContext, PendingOrder } from '@aurum/contracts'
-import { accountSnapshot, tradingContext } from '~/lib/trading-runtime'
+import { accountSnapshot } from '~/lib/trading-runtime'
 import TraderCommandSheet from '../components/TraderCommandSheet.vue'
 import TraderResourceEditSheet from '../components/TraderResourceEditSheet.vue'
 
@@ -11,10 +12,10 @@ const account = {
   terminalProfileId: 'profile-1', terminalInstanceId: null, bridgeState: 'online' as const, tradePermission: true, lastSeenAt: null,
 }
 function setClock(offset: number | null) {
-  tradingContext.value = { accountId: account.id } as TradingContext
+  applyTradingContext({ accountId: account.id } as TradingContext)
   accountSnapshot.value = { ...account, timezoneOffsetMinutes: offset, clockStatus: 'calibrated' } as AccountSnapshot
 }
-afterEach(() => { accountSnapshot.value = null; tradingContext.value = null; document.body.innerHTML = '' })
+afterEach(() => { accountSnapshot.value = null; applyTradingContext(null); document.body.innerHTML = '' })
 
 it.each([180, 0, -210])('emits the same UTC expiry after displaying offset %s', async (offset) => {
   setClock(offset)
@@ -30,7 +31,7 @@ it.each([180, 0, -210])('emits the same UTC expiry after displaying offset %s', 
     document.body.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     await nextTick()
     expect(wrapper.emitted('submit')?.[0]?.[0]).toMatchObject({ expiration_utc_msc: expiry })
-    tradingContext.value = { accountId: 'account-2' } as TradingContext
+    applyTradingContext({ accountId: 'account-2' } as TradingContext)
     document.body.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     await nextTick()
     expect(wrapper.emitted('submit')).toHaveLength(1)

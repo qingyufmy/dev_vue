@@ -1,9 +1,7 @@
 import { computed, ref } from 'vue'
-import type { AccountSnapshot, MarketCandle, MarketQuote, ObserverChannel, OpenPosition, PendingOrder, TradingAccount, TradingContext } from '@aurum/contracts'
+import type { AccountSnapshot, MarketCandle, MarketQuote, OpenPosition, PendingOrder } from '@aurum/contracts'
+import { tradingContext, tradingAccounts } from '~/features/trading-context'
 
-export const tradingContext = ref<TradingContext | null>(null)
-export const tradingAccounts = ref<TradingAccount[]>([])
-export const observerChannels = ref<ObserverChannel[]>([])
 export const accountSnapshot = ref<AccountSnapshot | null>(null)
 export const marketQuote = ref<MarketQuote | null>(null)
 export const marketCandles = ref<MarketCandle[]>([])

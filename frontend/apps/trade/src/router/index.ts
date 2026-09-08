@@ -1,5 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useTradeSession, loadLoginView } from '~/features/auth'
+import { loadHomeView } from '~/features/home'
+import { loadModulePlaceholderView } from '~/features/shell'
 
 const moduleRoutes = [
   { path: '/market', title: '市场行情', description: '宏观环境、关键因子与黄金市场状态将在对应阶段接入。' },
@@ -23,7 +25,7 @@ export const router = createRouter({
     {
       path: '/',
       name: 'home',
-      component: () => import('~/features/home/HomeView.vue'),
+      component: loadHomeView,
       meta: { title: '交易概览' },
     },
     {
@@ -70,7 +72,7 @@ export const router = createRouter({
     },
     ...moduleRoutes.map((route) => ({
       path: route.path,
-      component: () => import('~/features/shell/ModulePlaceholderView.vue'),
+      component: loadModulePlaceholderView,
       meta: { title: route.title, description: route.description },
     })),
   ],

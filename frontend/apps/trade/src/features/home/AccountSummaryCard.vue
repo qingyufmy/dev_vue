@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@aurum/ui/card'
 import { Button } from '@aurum/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@aurum/ui/select'
 
-const props = defineProps<{ accounts: TradingAccount[]; observers: ObserverChannel[]; accountId: string | null; observerChannelId: string | null; snapshot: AccountSnapshot | null; loading: boolean }>()
+const props = defineProps<{ accounts: readonly TradingAccount[]; observers: readonly ObserverChannel[]; accountId: string | null; observerChannelId: string | null; snapshot: AccountSnapshot | null; loading: boolean }>()
 const emit = defineEmits<{ select: [accountId: string]; observer: [observerChannelId: string]; leaveObserver: [] }>()
 const displayTimezone = computed(() => terminalDisplayTimezone(props.snapshot?.timezoneOffsetMinutes, props.snapshot?.clockStatus))
 const selection = computed(() => props.observerChannelId ? `observer:${props.observerChannelId}` : props.accountId ? `account:${props.accountId}` : undefined)

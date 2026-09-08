@@ -10,7 +10,7 @@ import { terminalDisplayTimezone } from '~/lib/terminal-display-time'
 import { formatDateTime, formatDecimal } from '../model/trader-presentation'
 
 const props = withDefaults(defineProps<{
-  accounts?: TradingAccount[]
+  accounts?: readonly TradingAccount[]
   accountId?: string | null
   account?: TradingAccount | AccountSnapshot | null
   snapshot?: AccountSnapshot | null

@@ -1,3 +1,4 @@
+import { tradingAccounts, tradingContext, applyTradingContext, applyTradingAccounts } from '~/features/trading-context'
 import { applyAccountMetrics } from '~/lib/apply-account-metrics'
 import type {
   AccountSnapshot,
@@ -8,14 +9,7 @@ import type {
 } from '@aurum/contracts'
 import { computed, onBeforeUnmount, onMounted, ref, type Ref, watch } from 'vue'
 import { useTradeSession } from '~/features/auth'
-import {
-  accountSnapshot,
-  openPositions,
-  pendingOrders,
-  resourceRevisions,
-  tradingAccounts,
-  tradingContext,
-} from '~/features/home/home-runtime'
+import { accountSnapshot, openPositions, pendingOrders, resourceRevisions } from '~/features/home/home-runtime'
 import { traderApi } from '../api/trader-api'
 import { createTraderRealtime, type TraderRealtimeState } from '../realtime/trader-realtime'
 
@@ -56,8 +50,8 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
         traderApi.getContext(), traderApi.listAccounts(), traderApi.listObservers(), traderApi.listStrategies(),
       ])
       if (currentGeneration !== generation) return
-      tradingContext.value = contextResponse.data
-      tradingAccounts.value = accountsResponse.data.items
+      applyTradingContext(contextResponse.data)
+      applyTradingAccounts(accountsResponse.data.items)
       strategies.value = strategiesResponse.data.items
       const observer = contextResponse.data.mode === 'observer'
         ? observersResponse.data.items.find((item) => item.id === contextResponse.data.observerChannelId && item.active)
@@ -164,7 +158,7 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
       try {
         const context = await traderApi.selectAccount(session.value.csrf_token, nextAccountId, tradingContext.value.revision)
         if (currentGeneration !== generation) break
-        tradingContext.value = context.data
+        applyTradingContext(context.data)
         observerChannelId.value = null
         activeAccountId.value = nextAccountId
         detail.value = null

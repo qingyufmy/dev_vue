@@ -8,7 +8,7 @@ import { Card, CardContent } from '@aurum/ui/card'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@aurum/ui/select'
 
 const props = withDefaults(defineProps<{
-  accounts: TradingAccount[]
+  accounts: readonly TradingAccount[]
   accountId: string | null
   account: TradingAccount | AccountSnapshot | null
   loading?: boolean

@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { tradingContext } from '~/features/trading-context'
+
 import { activeTerminalDisplayTimezone } from '~/lib/laboratory-display-time'
-import { tradingContext } from '~/lib/trading-runtime'
+
 import { terminalInputTime, terminalInputUtc } from '~/lib/terminal-input-time'
 import { computed, ref, watch } from 'vue'
 import type { AccountSnapshot, ExecutionCommandContext, ExecutionDistributionPreview, MarketQuote, StrategySummary, TradingAccount } from '@aurum/contracts'

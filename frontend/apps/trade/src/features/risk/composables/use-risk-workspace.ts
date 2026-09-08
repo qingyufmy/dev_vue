@@ -1,8 +1,9 @@
+import { tradingAccounts, tradingContext, applyTradingContext, applyTradingAccounts } from '~/features/trading-context'
 import type { ManualReleaseState, RiskDecisionDetail, RiskDecisionSummary, RiskPolicy, RiskPolicyPatchBody, RiskSummary, TradingAccount } from '@aurum/contracts'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { Ref } from 'vue'
 import { useTradeSession } from '~/features/auth'
-import { tradingAccounts, tradingContext } from '~/features/home/home-runtime'
+
 import { riskApi } from '../api/risk-api'
 import { createRiskRealtime, type RiskChangeKind, type RiskRealtimeState } from '../realtime/risk-realtime'
 import type { NumericPolicyKey } from '../model/risk-presentation'
@@ -43,8 +44,8 @@ export function useRiskWorkspace(selectedDecisionId: Ref<string>, selectDecision
     try {
       const [contextResponse, accountsResponse] = await Promise.all([riskApi.getContext(), riskApi.listAccounts()])
       if (currentGeneration !== generation) return
-      tradingContext.value = contextResponse.data
-      tradingAccounts.value = accountsResponse.data.items
+      applyTradingContext(contextResponse.data)
+      applyTradingAccounts(accountsResponse.data.items)
       if (contextResponse.data.mode === 'observer') {
         activeAccountId.value = null
         clearRisk()
@@ -54,7 +55,7 @@ export function useRiskWorkspace(selectedDecisionId: Ref<string>, selectDecision
       activeAccountId.value = accountId
       if (!accountId) { clearRisk(); return }
       if (accountId !== contextResponse.data.accountId && session.value) {
-        tradingContext.value = (await riskApi.selectAccount(session.value.csrf_token, accountId, contextResponse.data.revision)).data
+        applyTradingContext((await riskApi.selectAccount(session.value.csrf_token, accountId, contextResponse.data.revision)).data)
       }
       await loadAccount(accountId, currentGeneration)
     } catch (reason) {
@@ -100,7 +101,7 @@ export function useRiskWorkspace(selectedDecisionId: Ref<string>, selectDecision
     switching.value = true
     error.value = ''
     try {
-      tradingContext.value = (await riskApi.selectAccount(session.value.csrf_token, accountId, tradingContext.value.revision)).data
+      applyTradingContext((await riskApi.selectAccount(session.value.csrf_token, accountId, tradingContext.value.revision)).data)
       if (currentGeneration !== generation) return
       activeAccountId.value = accountId
       clearRisk()
