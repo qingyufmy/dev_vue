@@ -1,9 +1,9 @@
+import { applyAccountSnapshot } from '~/features/trading-context'
 import { applyTradingContext } from '~/features/trading-context'
 import { mount } from '@vue/test-utils'
 import { afterEach, expect, it } from 'vitest'
 import { nextTick } from 'vue'
 import type { AccountSnapshot, TradingContext, PendingOrder } from '@aurum/contracts'
-import { accountSnapshot } from '~/lib/trading-runtime'
 import TraderCommandSheet from '../components/TraderCommandSheet.vue'
 import TraderResourceEditSheet from '../components/TraderResourceEditSheet.vue'
 
@@ -13,9 +13,9 @@ const account = {
 }
 function setClock(offset: number | null) {
   applyTradingContext({ accountId: account.id } as TradingContext)
-  accountSnapshot.value = { ...account, timezoneOffsetMinutes: offset, clockStatus: 'calibrated' } as AccountSnapshot
+  applyAccountSnapshot({ ...account, timezoneOffsetMinutes: offset, clockStatus: 'calibrated' } as AccountSnapshot)
 }
-afterEach(() => { accountSnapshot.value = null; applyTradingContext(null); document.body.innerHTML = '' })
+afterEach(() => { applyAccountSnapshot(null); applyTradingContext(null); document.body.innerHTML = '' })
 
 it.each([180, 0, -210])('emits the same UTC expiry after displaying offset %s', async (offset) => {
   setClock(offset)

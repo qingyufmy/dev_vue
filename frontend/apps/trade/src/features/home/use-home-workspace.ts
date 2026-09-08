@@ -1,3 +1,4 @@
+import { applyAccountSnapshot } from '~/features/trading-context'
 import { observerChannels, tradingAccounts, tradingContext, applyTradingContext, applyTradingAccounts, applyObserverChannels } from '~/features/trading-context'
 import { ApiClientError, createApiClient } from '@aurum/api-client'
 import { computed, ref } from 'vue'
@@ -87,7 +88,7 @@ export function useHomeWorkspace() {
     }
     if (scope !== scopeVersion || request !== snapshotRequest || session.value?.user.id !== userId) return
     error.value = ''
-    accountSnapshot.value = workspace.snapshot; openPositions.value = workspace.positions.items; pendingOrders.value = workspace.pendingOrders.items
+    applyAccountSnapshot(workspace.snapshot); openPositions.value = workspace.positions.items; pendingOrders.value = workspace.pendingOrders.items
     resourceRevisions.value.account = workspace.snapshot?.revision ?? 0; resourceRevisions.value.positions = workspace.positions.revision; resourceRevisions.value.pendingOrders = workspace.pendingOrders.revision
     symbols.value = workspace.symbols
     if (!symbol.value || !workspace.symbols.includes(symbol.value)) symbol.value = workspace.symbols[0] ?? ''

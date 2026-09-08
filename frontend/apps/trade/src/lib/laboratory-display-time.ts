@@ -1,6 +1,6 @@
 import { tradingContext } from '~/features/trading-context'
 import { formatDisplayTime } from '@aurum/ui/lib/time'
-import { accountSnapshot } from './trading-runtime'
+import { accountSnapshot } from '~/features/trading-context'
 import { terminalDisplayTimezone } from './terminal-display-time'
 
 export function activeTerminalDisplayTimezone() {

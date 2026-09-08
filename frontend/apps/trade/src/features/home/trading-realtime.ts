@@ -1,10 +1,12 @@
+import { applyRealtimeState } from '~/features/trading-context'
+import { applyAccountSnapshot } from '~/features/trading-context'
 import type { TradeSessionSnapshot } from '~/features/auth'
 import { applyAccountMetrics } from '~/lib/apply-account-metrics'
 import { createApiClient } from '@aurum/api-client'
 import { browserRealtimeEventSchema, marketCandleSchema, marketQuoteSchema, openPositionSchema, pendingOrderSchema } from '@aurum/contracts'
 import type { Timeframe } from '@aurum/contracts'
 import { connectRealtime } from '@aurum/realtime'
-import { accountSnapshot, marketCandles, marketQuote, openPositions, pendingOrders, realtimeState, resourceRevisions } from './home-runtime'
+import { accountSnapshot, marketCandles, marketQuote, openPositions, pendingOrders, resourceRevisions } from './home-runtime'
 
 const client = createApiClient()
 let connection: ReturnType<typeof connectRealtime> | null = null
@@ -20,7 +22,7 @@ export function stopTradingRealtime() {
   connection?.close(1000, 'account_changed')
   connection = null
   reconnectAttempt = 0
-  realtimeState.value = 'idle'
+  applyRealtimeState('idle')
 }
 
 export async function startTradingRealtime(session: TradeSessionSnapshot, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>, onAnalysisChanged?: () => void) {
@@ -38,20 +40,20 @@ async function connect(session: TradeSessionSnapshot, accountId: string, symbol:
     if (currentGeneration !== generation || !connectionAlive) return
     if (resyncInFlight) { resyncQueued = true; return }
     resyncInFlight = true
-    realtimeState.value = 'recovering'
+    applyRealtimeState('recovering')
     try {
       do {
         resyncQueued = false
         await resync()
       } while (resyncQueued && currentGeneration === generation && connectionAlive)
-      if (currentGeneration === generation && connectionAlive) realtimeState.value = 'live'
+      if (currentGeneration === generation && connectionAlive) applyRealtimeState('live')
     } catch {
-      if (currentGeneration === generation && connectionAlive) realtimeState.value = 'recovering'
+      if (currentGeneration === generation && connectionAlive) applyRealtimeState('recovering')
     } finally {
       resyncInFlight = false
     }
   }
-  realtimeState.value = 'connecting'
+  applyRealtimeState('connecting')
   try { await client.createRealtimeTicket(session.csrf_token) }
   catch { scheduleReconnect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration); return }
   if (currentGeneration !== generation) return
@@ -85,12 +87,12 @@ async function connect(session: TradeSessionSnapshot, accountId: string, symbol:
     async onMessage(raw) {
     if (currentGeneration !== generation || !connectionAlive) return
     const messageType = typeof raw === 'object' && raw !== null && 'type' in raw ? String(raw.type) : ''
-    if (messageType === 'subscription.ready') { reconnectAttempt = 0; realtimeState.value = 'live'; return }
-    if (messageType === 'subscription.resync_required') { realtimeState.value = 'recovering'; connection?.close(4000, 'revision_resync_required'); return }
+    if (messageType === 'subscription.ready') { reconnectAttempt = 0; applyRealtimeState('live'); return }
+    if (messageType === 'subscription.resync_required') { applyRealtimeState('recovering'); connection?.close(4000, 'revision_resync_required'); return }
     const parsed = browserRealtimeEventSchema.safeParse(raw)
     if (!parsed.success || parsed.data.scope.user_id !== session.user.id) return
     const event = parsed.data
-    if (lastSequence > 0 && event.sequence !== lastSequence + 1) { realtimeState.value = 'recovering'; connection?.close(4000, 'sequence_gap'); return }
+    if (lastSequence > 0 && event.sequence !== lastSequence + 1) { applyRealtimeState('recovering'); connection?.close(4000, 'sequence_gap'); return }
     lastSequence = event.sequence
     if (event.type === 'market_analysis.created' && event.scope.trading_account_id === null) {
       onAnalysisChanged?.()
@@ -107,9 +109,9 @@ async function connect(session: TradeSessionSnapshot, accountId: string, symbol:
     if (observerChannelId !== null) return
     if (event.scope.trading_account_id !== accountId || event.scope.observer_channel_id !== observerChannelId) return
     if (event.type === 'runtime.bridge.changed') {
-      if (accountSnapshot.value && isBridgeRuntime(event.data)) accountSnapshot.value = {
+      if (accountSnapshot.value && isBridgeRuntime(event.data)) applyAccountSnapshot({
         ...accountSnapshot.value, bridgeState: event.data.state, lastSeenAt: event.data.last_seen_at,
-      }
+      })
     } else if (event.type === 'market.quote.updated') {
       const data = marketQuoteSchema.safeParse({ ...objectData(event.data), account_id: accountId, trade_mode: marketQuote.value?.tradeMode ?? 'unknown', revision: event.revision }); if (data.success && data.data.symbol === symbol) { marketQuote.value = data.data; resourceRevisions.value.quote = data.data.revision }
     } else if (event.type === 'market.candle.updated' || event.type === 'market.candle.closed') {
@@ -121,12 +123,12 @@ async function connect(session: TradeSessionSnapshot, accountId: string, symbol:
       const data = pendingOrderSchema.array().safeParse(collectionItems(event.data)); if (data.success) { pendingOrders.value = data.data; resourceRevisions.value.pendingOrders = Number(event.revision) }
     } else if (event.type === 'account.metrics.changed') {
       if (accountSnapshot.value && accountSnapshot.value.id === accountId) {
-        accountSnapshot.value = applyAccountMetrics(accountSnapshot.value, event.data, Number(event.revision))
+        applyAccountSnapshot(applyAccountMetrics(accountSnapshot.value, event.data, Number(event.revision)))
         resourceRevisions.value.account = accountSnapshot.value.revision
       }
     }
     },
-    onError() { if (currentGeneration === generation && connectionAlive) realtimeState.value = 'recovering' },
+    onError() { if (currentGeneration === generation && connectionAlive) applyRealtimeState('recovering') },
     onClose() {
     connectionAlive = false
     if (currentGeneration !== generation) return
@@ -138,7 +140,7 @@ async function connect(session: TradeSessionSnapshot, accountId: string, symbol:
 
 function scheduleReconnect(session: TradeSessionSnapshot, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>, currentGeneration: number, onAnalysisChanged?: () => void) {
   if (currentGeneration !== generation || reconnectTimer !== null) return
-  realtimeState.value = 'offline'
+  applyRealtimeState('offline')
   const baseDelay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)] ?? 30_000
   reconnectAttempt += 1
   const delay = Math.round(baseDelay * (0.8 + Math.random() * 0.4))

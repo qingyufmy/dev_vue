@@ -1,15 +1,16 @@
+import { applyAccountSnapshot } from '~/features/trading-context'
 import { applyTradingContext } from '~/features/trading-context'
 import { terminalInputTime, terminalInputUtc } from '../terminal-input-time'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AccountSnapshot, TradingContext } from '@aurum/contracts'
 import { formatBeijingTime, formatDisplayTime } from '@aurum/ui/lib/time'
-import { accountSnapshot } from '../trading-runtime'
+import { accountSnapshot } from '~/features/trading-context'
 import { activeTerminalDisplayTimezone, formatLaboratoryTime } from '../laboratory-display-time'
 import { analysisTime } from '../../features/analyst/model/analysis-presentation'
 import { formatReviewTime } from '../../features/reviewer/model/reviewer-presentation'
 
 const instant = '2026-09-06T23:30:00.000Z'
-afterEach(() => { accountSnapshot.value = null; applyTradingContext(null) })
+afterEach(() => { applyAccountSnapshot(null); applyTradingContext(null) })
 
 describe('UTC storage and display policy', () => {
   it('uses Beijing outside the laboratory and UTC+3 for uncalibrated laboratory displays', () => {
@@ -25,13 +26,13 @@ describe('UTC storage and display policy', () => {
   })
   it('isolates account switches and gives frozen historical offsets priority', () => {
     applyTradingContext({ accountId: 'a' } as TradingContext)
-    accountSnapshot.value = { id: 'a', timezoneOffsetMinutes: 0, clockStatus: 'calibrated' } as AccountSnapshot
+    applyAccountSnapshot({ id: 'a', timezoneOffsetMinutes: 0, clockStatus: 'calibrated' } as AccountSnapshot)
     expect(analysisTime(instant)).toBe('2026-09-06 23:30:00')
     expect(formatReviewTime(instant, 480)).toBe('2026-09-07 07:30:00')
     applyTradingContext({ accountId: 'b' } as TradingContext)
     expect(analysisTime(instant)).toBe('2026-09-07 02:30:00')
     expect(activeTerminalDisplayTimezone().isDefault).toBe(true)
-    expect(accountSnapshot.value.timezoneOffsetMinutes).toBe(0)
+    expect(accountSnapshot.value).toBeNull()
   })
 })
 

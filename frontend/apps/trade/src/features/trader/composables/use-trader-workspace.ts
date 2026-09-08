@@ -1,7 +1,7 @@
 import { tradingAccounts, tradingContext, applyTradingContext, applyTradingAccounts } from '~/features/trading-context'
 import { applyAccountMetrics } from '~/lib/apply-account-metrics'
 import type {
-  AccountSnapshot,
+  AccountSnapshot, OpenPosition, PendingOrder,
   StrategySummary,
   TraderDecisionDetail,
   TraderDecisionSummary,
@@ -9,12 +9,15 @@ import type {
 } from '@aurum/contracts'
 import { computed, onBeforeUnmount, onMounted, ref, type Ref, watch } from 'vue'
 import { useTradeSession } from '~/features/auth'
-import { accountSnapshot, openPositions, pendingOrders, resourceRevisions } from '~/features/home/home-runtime'
+import { accountSnapshot, applyAccountSnapshot } from '~/features/trading-context'
 import { traderApi } from '../api/trader-api'
 import { createTraderRealtime, type TraderRealtimeState } from '../realtime/trader-realtime'
 
 export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecision: (id: string) => void, operationChanged?: (operationId: string) => void) {
   const { session } = useTradeSession()
+  const openPositions = ref<OpenPosition[]>([])
+  const pendingOrders = ref<PendingOrder[]>([])
+  const resourceRevisions = ref({ account: 0, positions: 0, pendingOrders: 0 })
   const loading = ref(false)
   const refreshing = ref(false)
   const switching = ref(false)
@@ -85,7 +88,7 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
       throw workspaceResult.reason
     }
     const workspaceResponse = workspaceResult.value
-    accountSnapshot.value = workspaceResponse.data.snapshot
+    applyAccountSnapshot(workspaceResponse.data.snapshot)
     symbols.value = workspaceResponse.data.symbols
     openPositions.value = workspaceResponse.data.positions.items
     pendingOrders.value = workspaceResponse.data.pendingOrders.items
@@ -107,7 +110,7 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
     const currentGeneration = generation
     const workspace = await traderApi.getWorkspace(activeAccountId.value, observerChannelId.value)
     if (currentGeneration !== generation) return
-    accountSnapshot.value = workspace.data.snapshot
+    applyAccountSnapshot(workspace.data.snapshot)
     symbols.value = workspace.data.symbols
     openPositions.value = workspace.data.positions.items
     pendingOrders.value = workspace.data.pendingOrders.items
@@ -191,15 +194,15 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
       onPendingOrders: (items, revision) => { pendingOrders.value = items; resourceRevisions.value.pendingOrders = revision },
       onMetrics: (data, revision) => {
         if (!accountSnapshot.value || accountSnapshot.value.id !== accountId) return
-        accountSnapshot.value = applyAccountMetrics(accountSnapshot.value, data, revision)
+        applyAccountSnapshot(applyAccountMetrics(accountSnapshot.value, data, revision))
         resourceRevisions.value.account = accountSnapshot.value.revision
       },
       onBridge: (data) => {
-        if (accountSnapshot.value) accountSnapshot.value = {
+        if (accountSnapshot.value) applyAccountSnapshot({
           ...accountSnapshot.value,
           bridgeState: data.state,
           lastSeenAt: data.last_seen_at,
-        }
+        })
       },
       onDecisionChanged: (decisionId) => { void refreshDecisions(decisionId) },
       onOperationChanged: (operationId) => {
@@ -241,7 +244,7 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
   }
 
   function clearWorkspace() {
-    accountSnapshot.value = null
+    applyAccountSnapshot(null)
     openPositions.value = []
     pendingOrders.value = []
     symbols.value = []

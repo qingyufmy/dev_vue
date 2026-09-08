@@ -1,3 +1,4 @@
+import { applyAccountSnapshot, applyRealtimeState } from '~/features/trading-context'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AccountSnapshot, SessionSummary } from '@aurum/contracts'
 import { accountSnapshot, clearAccountRuntime, realtimeState } from '../src/features/home/home-runtime'
@@ -54,18 +55,18 @@ describe('trade home observer realtime adapter', () => {
   beforeEach(() => {
     stopTradingRealtime()
     clearAccountRuntime()
-    realtimeState.value = 'idle'
+    applyRealtimeState('idle')
     mocks.createRealtimeTicket.mockReset().mockResolvedValue(undefined)
     mocks.connectRealtime.mockReset().mockImplementation((next: any) => {
       options = next
       socket = { send: vi.fn(), close: vi.fn() }
       return { socket, close: vi.fn() }
     })
-    accountSnapshot.value = { id: '7' } as never
+    applyAccountSnapshot({ id: '7' } as never)
   })
 
   it('updates the owner clock from metrics and rejects older or foreign-account events', async () => {
-    accountSnapshot.value = { id: '7', revision: 10, timezoneOffsetMinutes: 120, clockStatus: 'calibrated' } as AccountSnapshot
+    applyAccountSnapshot({ id: '7', revision: 10, timezoneOffsetMinutes: 120, clockStatus: 'calibrated' } as AccountSnapshot)
     await startTradingRealtime(session, '7', 'XAUUSD', 'M5', null, async () => undefined)
     const metrics = { balance: '100', equity: '100', margin: '0', free_margin: '100', floating_profit: '0', currency: 'USD', observed_at: '2026-09-06T08:00:00.000Z', timezone_offset_minutes: 0, clock_status: 'stale' }
     const event = sourceEvent({ type: 'account.metrics.changed', scope: { user_id: '99', trading_account_id: '7', terminal_instance_id: 'terminal-1', observer_channel_id: null }, resource: { kind: 'account.metrics', id: 'current' }, revision: '11', data: metrics })

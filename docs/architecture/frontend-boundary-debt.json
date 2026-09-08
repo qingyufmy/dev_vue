@@ -2,32 +2,5 @@
   "version": 1,
   "reviewedAt": "2026-09-08",
   "sourceCommit": "60fe3476",
-  "entries": [
-    {
-      "finding": {
-        "rule": "feature-internal",
-        "source": "frontend/apps/trade/src/App.vue",
-        "target": "frontend/apps/trade/src/features/home/home-runtime.ts",
-        "kind": "import",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "trade/trading-context",
-      "phase": "P1",
-      "reason": "当前应用/交易员通过home内部转导出读取共享交易状态；随账户/行情状态所有权迁移到所属模块公开能力，不能直接公开可写ref。"
-    },
-    {
-      "finding": {
-        "rule": "feature-internal",
-        "source": "frontend/apps/trade/src/features/trader/composables/use-trader-workspace.ts",
-        "target": "frontend/apps/trade/src/features/home/home-runtime.ts",
-        "kind": "import",
-        "typeOnly": false
-      },
-      "count": 1,
-      "owner": "trade/trading-context",
-      "phase": "P1",
-      "reason": "当前应用/交易员通过home内部转导出读取共享交易状态；随账户/行情状态所有权迁移到所属模块公开能力，不能直接公开可写ref。"
-    }
-  ]
+  "entries": []
 }

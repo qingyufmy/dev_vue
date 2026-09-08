@@ -50,7 +50,7 @@ import {
 } from '@aurum/ui/sidebar'
 import { Toaster } from '@aurum/ui/sonner'
 import { useTradeSession } from '~/features/auth'
-import { currentAccount, realtimeState } from '~/features/home/home-runtime'
+import { currentAccount, realtimeState } from '~/features/trading-context'
 
 const displayTimezone = computed(activeTerminalDisplayTimezone)
 const route = useRoute()
