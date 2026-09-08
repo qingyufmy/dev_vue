@@ -602,3 +602,11 @@ loadObserverContextMigration复用完整150步并追加四项checksum，总定�
 新增受限candle元数据适配，可与已有账户根适配组合，仅改表头/FK表引用及元数据表参数，拒绝业务SQL、写入和混合布局。13项状态机、6项新元数据与原8项历史测试共27项通过，其中使用已采集真实reference DDL验证FK精确还原。两轮复核和限制见[合同](architecture/account-projection-incremental-contract-20260908.md)。
 
 本批未连接数据库或执行040；实际163步历史store组合、持久化提升计划及恢复副本改名继续待接入，当前dev_vue不变。下一步完成这些适配后复核账户API查询。
+
+## 第六十五批：K线提升后的完整历史store组合
+
+新增promotedLegacyCandlePriorStore，将实际改名快照还原为历史名称并保留schema/行摘要；顶层验证精确163条旧日志后复用现有K线构建、投影、观摩、终端、账户根和最早结构协调器。最早结构检查通过两层受限元数据适配访问真实旧逻辑表。所有层写入口显式禁用，原冻结文件不修改。
+
+6项新组合测试及已有元数据/提升测试共25项通过，覆盖实际旧SHOW CREATE调用、三类schema漂移、混合布局、日志缺失/陌生日志及规范定义变化。两轮复核见[合同](architecture/account-projection-incremental-contract-20260908.md)。本批未连接数据库；恢复副本最近完成163步及全量回填，尚未改名。
+
+下一步MySQL提升proof与执行入口，核对已验证回填的前后快照，执行恢复副本163→164和独立重入，再检查账户查询。
