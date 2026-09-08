@@ -1,0 +1,18 @@
+{
+  "kind": "account-principal-facts-mysql/v1",
+  "observedAt": "2026-09-08T18:07:36.286Z",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "passed": true,
+  "checks": [
+    "active-only-deduplicated-facts-with-utc-milliseconds",
+    "shared-lock-read-on-caller-transaction",
+    "negative-identity-version-rejected"
+  ],
+  "permanentBusinessWrites": 0,
+  "temporaryTables": 1,
+  "scope": "Compiled auth principal facts reader in a private temporary InnoDB users fixture. Does not prove observer integration, cross-domain snapshot consistency, concurrent user locks or browser authorization."
+}

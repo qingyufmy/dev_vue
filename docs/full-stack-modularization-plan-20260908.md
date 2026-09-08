@@ -790,3 +790,14 @@ mysql-context-target 的 ownedTarget 移除 users 联查，仅查询账户、当
 17项结构能力正反例通过，覆盖V1兼容、V2缺列、错误类型、可空、异常排序规则、重复元数据及驱动失败脱敏；server 类型/构建和API生成运行检查通过，321个冻结输入一致。新只读脚本 verify-account-principal-schema-v2-local.mjs 对当前开发 MySQL 在升级锁下验证 V2 与其余22表检查通过，数据库写入0，回执为 architecture/account-principal-schema-v2-readiness-20260909.json。
 
 本批解决真实的就绪检查遗漏，没有完成观摩身份事实端口或 SQL 拆分；第59节的所有构造入口、普通读取一致快照及事务内多主体锁要求继续执行。静态债务仍64条。未重启本地 API，本次只读编译产物验证不等同当前已运行进程接入V2；下一次运行验收需使用新构建。
+
+
+## 61. 认证域批量主体事实能力（第一百三十一批）
+
+新增 auth application AccountPrincipalReader/AccountPrincipalFacts，业务 index 仅公开类型，composition 创建 MySQL 实现。readMany 一次最多101个ID（一个观众加一页100个运营者），去重排序后参数化查询；只返回活动用户的userId、plan、UTC到期时间和tokenVersion。不存在/停用用户省略，非法输入、异常时间/版本、未请求ID及重复结果拒绝；错误不暴露SQL正文。接口不判定观摩权限，不返回邮箱、凭据或其它个人字段。
+
+调用者拥有事务：none 必须与其它授权事实处于同一一致快照；share 必须使用外层已开启事务，同连接读取后由调用者释放。不能通过pool分别读取身份和频道后拼接授权；批量上限也不能成为无限累积全部用户事实的理由。
+
+12项身份事实回归、server类型/构建、API生成运行检查通过，321个冻结输入一致。scripts/verify-account-principal-facts-mysql.mjs 在当前开发MySQL的私有临时InnoDB users表验证活动过滤、去重、驱动类型、UTC毫秒、共享读取及负版本拒绝，共3项检查通过；临时表随连接销毁，永久业务写入0，回执 architecture/account-principal-facts-mysql-20260909.json。
+
+该能力已可供组装使用，但本批尚未接入 MysqlObserverAccessReader，原观摩联查仍保留。下一批必须实现观摩的一致读取作用域与全入口注入，按第59节替换SQL并验证会员过期、停用、授权版本及事务内复核；不能将新增端口或临时表验证表述为观摩模块已完成。静态债务仍64条，未重启API。

@@ -41,3 +41,6 @@ AuthService通过自身所需的BridgeDeviceRevoker端口触发设备撤销；�
 
 
 账户身份只读结构能力 V2 由 composition 的 assertAccountPrincipalReadSchemaV2 提供，在 V1 基础上校验观摩授权依赖的 token_version；API 启动与 readiness 使用V2，旧V1保持可复现。验证入口 scripts/verify-account-principal-schema-v2-local.mjs（新报告绝对路径），只读当前开发库元数据与迁移账本；不代表完整auth写入能力或观摩 SQL 已拆分。
+
+
+主体事实公开能力 AccountPrincipalReader.readMany：最多101个请求ID，返回活动用户的会员原值、UTC到期时间与身份版本；缺失或停用主体不返回。composition 的 createAccountPrincipalReader 绑定调用者连接。none 读取必须与授权其它事实共享一致快照，share 使用外层事务，reader 不负责 begin/commit/release。验证入口 auth-account-principal-reader.test.ts 与 scripts/verify-account-principal-facts-mysql.mjs；观摩消费者尚待注入。

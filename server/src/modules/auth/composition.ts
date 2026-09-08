@@ -62,3 +62,5 @@ export function createRealtimeTicketAuthenticator(pool: Pool, redis: Redis) {
 export { createMysqlActivePrincipalAccess as createActivePrincipalAccess } from './infrastructure/mysql-active-principal-access.js'
 
 export { assertMysqlAccountPrincipalReadSchemaV2 as assertAccountPrincipalReadSchemaV2 } from './infrastructure/mysql-account-principal-schema-v2.js'
+
+export { createMysqlAccountPrincipalReader as createAccountPrincipalReader } from './infrastructure/mysql-account-principal-reader.js'
