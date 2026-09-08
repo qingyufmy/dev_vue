@@ -21,13 +21,14 @@ assert.match(owned.brokerServer, /^V4-LOCAL-[a-f0-9-]{36}$/)
 const output = await open(destination, 'wx', 0o600)
 let pool, a, b, phase = 'identity'
 const driverErrors = [], checkpoints = []
+let contextAttempts = 0, blockedWrites = 0
 function guard(connection, label) {
   return new Proxy(connection, { get(target, key) {
     if (key === 'release') return () => {}
     if (key === 'commit') return async () => { throw Error('probe_commit_forbidden') }
     if (key === 'execute') return async (sql, params) => {
       // Real application reads and locks only; stop the survivor before any write.
-      if (!/^\s*SELECT\b/i.test(sql)) throw Error('probe_write_forbidden')
+      if (!/^\s*SELECT\b/i.test(sql)) { blockedWrites++; throw Error('probe_write_forbidden') }
       try { return await target.execute(sql, params) }
       catch (error) { driverErrors.push({ connection: label, code: error.code }); throw error }
     }
@@ -70,7 +71,7 @@ try {
   let targetReached, resumeTarget
   const reached = new Promise(resolve => { targetReached = resolve })
   const resume = new Promise(resolve => { resumeTarget = resolve })
-  const commands = new MysqlContextCommands({ async getConnection() { return ga } }, async (...args) => {
+  const commands = new MysqlContextCommands({ async getConnection() { contextAttempts++; return ga } }, async (...args) => {
     checkpoints.push('context-holds-user-and-context'); targetReached(); await resume
     return target(...args)
   }, createActivePrincipalAccess)
@@ -95,18 +96,22 @@ try {
   const outcomes = await Promise.all([contextRun, registrationRun])
   assert.equal(driverErrors.filter(error => error.code === 'ER_LOCK_DEADLOCK').length, 1)
   assert.ok(!driverErrors.some(error => error.code === 'ER_LOCK_WAIT_TIMEOUT'))
+  // Require the intended victim so this run proves recovery, not merely another cycle.
+  assert.equal(driverErrors[0].connection, 'context')
+  assert.equal(contextAttempts, 2)
+  assert.equal(blockedWrites, 1)
   await a.rollback(); await b.rollback()
   phase = 'preservation'
   assert.deepEqual((await a.execute(sql, params))[0], before)
   assert.deepEqual((await a.execute(contextSql, [fixture.userId]))[0], contextBefore)
   const [[receipt]] = await a.execute('SELECT COUNT(*) n FROM trading_context_changes_v4 WHERE user_id=? AND request_id=?', [fixture.userId, command.requestId])
   assert.equal(Number(receipt.n), 0)
-  await output.writeFile(JSON.stringify({ kind: 'account-context-lock-cycle-mysql/v1', passed: true,
-    observedAt: new Date().toISOString(), identity, checkpoints, driverErrors, outcomes,
+  await output.writeFile(JSON.stringify({ kind: 'account-context-lock-cycle-mysql/v2', passed: true,
+    observedAt: new Date().toISOString(), identity, checkpoints, driverErrors, outcomes, contextAttempts, blockedWrites,
     checks: ['actual-context-command-user-lock', 'actual-account-registration-lock', 'mysql-detected-cycle',
-      'no-lock-timeout', 'ownership-and-context-preserved', 'no-command-receipt'],
+      'no-lock-timeout', 'ownership-and-context-preserved', 'no-command-receipt', 'deadlock-victim-restarts-and-reaches-write-guard'],
     committedMutations: 0,
-    scope: 'Current compiled context target and account registration on exact synthetic identity. SELECT locks only; guard blocks every application write/commit. Reproduces the lock cycle, not a full gateway transaction or a repaired lock protocol.' }, null, 2) + '\n')
+    scope: 'Current compiled context target and account registration on exact synthetic identity. SELECT locks only; guard blocks every application write/commit. Proves the context victim restarts and reaches its write boundary; does not prove a successful real commit or a repaired global lock order.' }, null, 2) + '\n')
   console.log(JSON.stringify({ passed: true, driverErrors, committedMutations: 0 }))
 } catch {
   await output.writeFile(JSON.stringify({ passed: false, phase, code: 'account_lock_cycle_probe_failed', driverErrors, checkpoints }) + '\n')

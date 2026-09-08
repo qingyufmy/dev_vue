@@ -1,4 +1,5 @@
 import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise'
+import { setTimeout as delay } from 'node:timers/promises'
 import type { ActivePrincipalAccess } from '../../auth/index.js'
 import type { ContextWritePort } from '../application/context-write-port.js'
 import { normalizeContextWrite, type ContextWriteCommand, type ContextWriteReceipt } from '../domain/context-write.js'
@@ -8,12 +9,28 @@ import { assertContextResult, contextCommandHash, readContextReceipt } from './m
 // Resolver must use this connection to lock and validate the current target. No network I/O.
 export type ContextTargetResolver = (connection: PoolConnection, command: ContextWriteCommand) => Promise<Omit<TradingContext, 'revision'>>
 
+// Only raised after an explicit deadlock victim has been rolled back successfully.
+class RolledBackContextDeadlock extends Error {}
+
 export class MysqlContextCommands implements ContextWritePort {
   constructor(private readonly pool: Pick<Pool, 'getConnection'>, private readonly resolveTarget: ContextTargetResolver,
     private readonly principalAccess: (connection: PoolConnection) => ActivePrincipalAccess) {}
 
   async execute(input: ContextWriteCommand): Promise<ContextWriteReceipt> {
     const command = Object.freeze(normalizeContextWrite(input)), digest = contextCommandHash(command)
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { return await this.executeAttempt(command, digest) }
+      catch (error) {
+        if (!(error instanceof RolledBackContextDeadlock)) throw error
+        if (attempt === 2) throw new TradingAccessError('trading_context_write_failed', 503)
+        // The failed connection has been released; never back off while holding locks.
+        await delay(10 * 2 ** attempt + Math.floor(Math.random() * 10))
+      }
+    }
+    throw new TradingAccessError('trading_context_write_failed', 503)
+  }
+
+  private async executeAttempt(command: ContextWriteCommand, digest: string): Promise<ContextWriteReceipt> {
     const connection = await this.pool.getConnection()
     let started = false, commitAttempted = false, destroyed = false
     try {
@@ -53,6 +70,9 @@ export class MysqlContextCommands implements ContextWritePort {
       if (started) {
         try { await connection.rollback() }
         catch { connection.destroy(); destroyed = true; throw new TradingAccessError('trading_context_rollback_unknown', 503) }
+      }
+      if (started && error instanceof Error && 'code' in error && error.code === 'ER_LOCK_DEADLOCK') {
+        throw new RolledBackContextDeadlock()
       }
       if (error instanceof TradingAccessError) throw error
       throw new TradingAccessError('trading_context_write_failed', 503)

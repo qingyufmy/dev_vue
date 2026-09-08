@@ -1,0 +1,42 @@
+{
+  "kind": "account-context-lock-cycle-mysql/v2",
+  "passed": true,
+  "observedAt": "2026-09-08T20:34:04.912Z",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "deadlockDetection": "1"
+  },
+  "checkpoints": [
+    "context-holds-user-and-context",
+    "registration-holds-account",
+    "context-holds-user-and-context"
+  ],
+  "driverErrors": [
+    {
+      "connection": "context",
+      "code": "ER_LOCK_DEADLOCK"
+    }
+  ],
+  "outcomes": [
+    {
+      "error": "trading_context_write_failed"
+    },
+    {
+      "revision": "1"
+    }
+  ],
+  "contextAttempts": 2,
+  "blockedWrites": 1,
+  "checks": [
+    "actual-context-command-user-lock",
+    "actual-account-registration-lock",
+    "mysql-detected-cycle",
+    "no-lock-timeout",
+    "ownership-and-context-preserved",
+    "no-command-receipt",
+    "deadlock-victim-restarts-and-reaches-write-guard"
+  ],
+  "committedMutations": 0,
+  "scope": "Current compiled context target and account registration on exact synthetic identity. SELECT locks only; guard blocks every application write/commit. Proves the context victim restarts and reaches its write boundary; does not prove a successful real commit or a repaired global lock order."
+}

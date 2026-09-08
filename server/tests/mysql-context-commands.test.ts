@@ -10,6 +10,7 @@ type State = { revision: number; receipts: Record<string, Record<string, unknown
 function fixture() {
   let state: State = { revision: 0, receipts: {} }
   let beginFailure = false
+  let receiptDeadlocks = 0
   let active = true, receiptFailure = false, lostAck = false, rollbackFailure = false
   const connections: Array<{ calls: string[] }> = []
   const pool = { async getConnection() {
@@ -24,6 +25,7 @@ function fixture() {
         if (sql.includes('INSERT INTO trading_contexts')) { calls.push('context-write'); pending.revision = Number(params[5]); return [{ affectedRows: 1 }] }
         if (sql.includes('INSERT INTO trading_context_changes_v4')) {
           calls.push('receipt-write')
+          if (receiptDeadlocks > 0) { receiptDeadlocks--; throw Object.assign(Error('deadlock'), { code: 'ER_LOCK_DEADLOCK' }) }
           if (receiptFailure) throw Error('receipt-insert-failed')
           const names = ['user_id','request_id','request_sha256','action','target_id','prior_revision','revision','result_mode','result_account_id','result_observer_channel_id','result_read_only']
           pending.receipts[String(params[1])] = { ...Object.fromEntries(names.map((name, index) => [name, params[index]])), recorded_at: '2026-09-08T12:00:00.000Z' }
@@ -40,6 +42,7 @@ function fixture() {
     mode: 'full' as const, accountId: c.targetId, observerChannelId: null, readOnly: false }))
   return { writer: new MysqlContextCommands(pool as unknown as Pool, resolve, createActivePrincipalAccess), resolve, connections,
     failBegin: () => { beginFailure = true },
+    deadlockReceipt: () => { receiptDeadlocks = 1 },
     failRollback: () => { rollbackFailure = true }, state: () => state, failReceipt: () => { receiptFailure = true }, loseAck: () => { lostAck = true }, deactivate: () => { active = false } }
 }
 
@@ -154,4 +157,73 @@ it('destroys a receipt connection if beginning its authorization transaction fai
   const f = fixture(); f.failBegin()
   await expect(f.writer.receipt(42, command.requestId)).rejects.toMatchObject({ code: 'trading_context_receipt_unavailable', status: 503 })
   expect(f.connections[0]!.calls).toEqual(['begin', 'destroy'])
+})
+
+it('restarts the full transaction on a confirmed deadlock with the original command', async () => {
+  const f = fixture()
+  f.resolve.mockRejectedValueOnce(Object.assign(Error('deadlock'), { code: 'ER_LOCK_DEADLOCK' }))
+  await expect(f.writer.execute(command)).resolves.toMatchObject({ result: { revision: 1 }, replayed: false })
+  expect(f.connections).toHaveLength(2)
+  expect(f.connections[0]!.calls.slice(-2)).toEqual(['rollback', 'release'])
+  expect(f.connections[1]!.calls.slice(0, 4)).toEqual(['begin', 'user-lock', 'receipt-read', 'context-lock'])
+  expect(f.resolve.mock.calls.map(call => call[1])).toEqual([command, command])
+  expect(Object.keys(f.state().receipts)).toEqual([command.requestId])
+})
+
+it('bounds repeated deadlocks to three attempts without a write or receipt', async () => {
+  const f = fixture()
+  f.resolve.mockRejectedValue(Object.assign(Error('deadlock'), { code: 'ER_LOCK_DEADLOCK' }))
+  await expect(f.writer.execute(command)).rejects.toMatchObject({ code: 'trading_context_write_failed' })
+  expect(f.connections).toHaveLength(3)
+  expect(f.state()).toEqual({ revision: 0, receipts: {} })
+  for (const connection of f.connections) expect(connection.calls.slice(-2)).toEqual(['rollback', 'release'])
+})
+
+it('rolls back an already-written context before retrying its receipt and commits only once', async () => {
+  const f = fixture(); f.deadlockReceipt()
+  await expect(f.writer.execute(command)).resolves.toMatchObject({ result: { revision: 1 } })
+  expect(f.connections).toHaveLength(2)
+  expect(f.connections[0]!.calls).toContain('context-write')
+  expect(f.connections[0]!.calls).not.toContain('commit')
+  expect(f.connections.flatMap(connection => connection.calls).filter(call => call === 'commit')).toHaveLength(1)
+  expect(f.state().revision).toBe(1)
+  expect(Object.keys(f.state().receipts)).toEqual([command.requestId])
+})
+
+it('rejects a revision changed by another transaction between attempts', async () => {
+  const f = fixture()
+  f.resolve.mockImplementationOnce(async () => {
+    f.state().revision = 1
+    throw Object.assign(Error('deadlock'), { code: 'ER_LOCK_DEADLOCK' })
+  })
+  await expect(f.writer.execute(command)).rejects.toMatchObject({ code: 'revision_conflict' })
+  expect(f.connections).toHaveLength(2)
+  expect(f.resolve).toHaveBeenCalledOnce()
+  expect(f.state()).toEqual({ revision: 1, receipts: {} })
+})
+
+it('rechecks authorization after a deadlock instead of trusting the first attempt', async () => {
+  const f = fixture()
+  f.resolve.mockImplementationOnce(async () => {
+    f.deactivate()
+    throw Object.assign(Error('deadlock'), { code: 'ER_LOCK_DEADLOCK' })
+  })
+  await expect(f.writer.execute(command)).rejects.toMatchObject({ status: 403 })
+  expect(f.connections).toHaveLength(2)
+  expect(f.resolve).toHaveBeenCalledOnce()
+  expect(f.state().revision).toBe(0)
+})
+
+it('does not retry lock timeouts, unknown commits or failed rollback', async () => {
+  const timeout = fixture()
+  timeout.resolve.mockRejectedValue(Object.assign(Error('timeout'), { code: 'ER_LOCK_WAIT_TIMEOUT' }))
+  await expect(timeout.writer.execute(command)).rejects.toMatchObject({ code: 'trading_context_write_failed' })
+  expect(timeout.connections).toHaveLength(1)
+  const unknown = fixture(); unknown.loseAck()
+  await expect(unknown.writer.execute(command)).rejects.toMatchObject({ code: 'trading_context_commit_unknown' })
+  expect(unknown.connections).toHaveLength(1)
+  const rollback = fixture(); rollback.failRollback()
+  rollback.resolve.mockRejectedValue(Object.assign(Error('deadlock'), { code: 'ER_LOCK_DEADLOCK' }))
+  await expect(rollback.writer.execute(command)).rejects.toMatchObject({ code: 'trading_context_rollback_unknown' })
+  expect(rollback.connections).toHaveLength(1)
 })
