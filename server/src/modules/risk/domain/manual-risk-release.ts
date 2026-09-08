@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { AccountRiskSummary, EffectiveRiskPolicy } from './risk.js'
+import type { AccountRiskSummary, EffectiveRiskPolicy } from './risk-state.js'
 
 export const MANUAL_RELEASE_RULES = [
   'RISK_DAILY_LOSS_LIMIT',

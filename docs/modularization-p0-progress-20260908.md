@@ -1454,3 +1454,7 @@ market/calendar订阅、ready后HTTP重读、用户scope和退避清理接线；
 ## 第一百七十五批：Risk 组装
 
 risk具体repository与HTTP退出业务index，运行入口使用composition工厂；24项回归、类型/构建、API96/96及冻结321通过。服务端债务48条，risk仍4条；详见总体方案第105节。
+
+## 第一百七十六批：Risk 类型边界
+
+纯状态消除循环，动作输入归risk，存储经inference公开类型；35项回归、类型/构建及冻结321通过。risk登记债务0，全服务端44，完整模块验收仍待继续；详见总体方案第106节。

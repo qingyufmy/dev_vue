@@ -1,88 +1,11 @@
+import type { RiskPolicyValues, AccountRiskPolicyPatch, RiskPolicyBoundary, EffectiveRiskPolicy, AccountRiskSummary } from './risk-state.js'
+export type { RiskPolicyValues, AccountRiskPolicyPatch, RiskPolicyBoundary, EffectiveRiskPolicy, AccountRiskSummary } from './risk-state.js'
 import { createHash } from 'node:crypto'
-import type { JsonObject, TraderAction, TraderDecisionResult } from '../../inference/domain/inference.js'
+import type { RiskJsonObject, RiskAction, RiskDecisionInput } from './risk-action.js'
 import { manualReleaseApplies, type ManualReleaseRuleCode, type ManualRiskRelease } from './manual-risk-release.js'
 
 export type RiskDecisionStatus = 'approved' | 'rejected'
 export type RiskRuleOutcome = 'passed' | 'rejected' | 'not_applicable'
-
-export interface RiskPolicyValues {
-  allowedSymbols: string[]
-  requireStopLoss: true
-  failClosedOnIncompleteData: true
-  maxRiskPerTradePercent: number
-  maxDailyLossPercent: number
-  maxDrawdownPercent: number
-  maxOpenPositions: number
-  maxPendingOrders: number
-  maxTotalVolume: number
-  maxSpreadPoints: number
-  maxQuoteAgeSeconds: number
-  maxRiskSummaryAgeSeconds: number
-  maxDecisionAgeSeconds: number
-  maxPriceDeviationPercent: number
-  manualReleaseEnabled: boolean
-  manualReleaseMaxDailyLossPercent: number
-  manualReleaseMaxDrawdownPercent: number
-  manualReleaseMaxDailyOpenCount: number
-  manualReleaseConsecutiveLossLimit: number
-  minOpenIntervalSeconds: number
-  maxDailyOpenCount: number
-  consecutiveLossLimit: number
-  lossCooldownMinutes: number
-  pendingValidMinutes: number
-  weekendCloseMinutes: number
-  tradeSendEnabled: boolean
-  accountKillSwitch: boolean
-}
-
-export type AccountRiskPolicyPatch = Partial<Pick<RiskPolicyValues,
-  'maxRiskPerTradePercent' | 'maxDailyLossPercent' | 'maxDrawdownPercent' |
-  'maxOpenPositions' | 'maxPendingOrders' | 'maxTotalVolume' | 'maxSpreadPoints' |
-  'minOpenIntervalSeconds' | 'maxDailyOpenCount' | 'consecutiveLossLimit' |
-  'lossCooldownMinutes' | 'pendingValidMinutes' | 'weekendCloseMinutes' |
-  'tradeSendEnabled' | 'accountKillSwitch'>>
-
-export interface RiskPolicyBoundary {
-  values: Omit<RiskPolicyValues, 'tradeSendEnabled' | 'accountKillSwitch'>
-  globalKillSwitch: boolean
-  revision: number
-}
-
-export interface EffectiveRiskPolicy {
-  accountId: string
-  userId: number
-  platformPolicyVersionId: string
-  accountPolicyVersionId: string | null
-  policySetRevision: number
-  globalKillSwitch: boolean
-  values: RiskPolicyValues
-  editableFields: Array<keyof AccountRiskPolicyPatch>
-  updatedAt: string
-}
-
-export interface AccountRiskSummary {
-  accountId: string
-  userId: number
-  businessDate: string | null
-  equity: string
-  freeMargin: string
-  marginLevelPercent: number | null
-  dailyLossPercent: number
-  drawdownPercent: number
-  openPositions: number
-  pendingOrders: number
-  totalVolume: string
-  dailyOpenCount: number
-  consecutiveLosses: number
-  terminalTimezoneOffsetMinutes: number | null
-  clockStatus: 'calibrated' | 'observer_bootstrap' | 'stale' | 'unavailable'
-  lastSuccessfulOpenAt: string | null
-  cooldownUntil: string | null
-  dataComplete: boolean
-  incompleteReasons: string[]
-  observedAt: string
-  revision: number
-}
 
 export interface RiskInstrumentSnapshot {
   symbol: string
@@ -108,7 +31,7 @@ export interface RiskRuleResult {
   code: string
   outcome: RiskRuleOutcome
   actionId: string | null
-  details: JsonObject
+  details: RiskJsonObject
 }
 
 export interface RiskEvaluationInput {
@@ -116,13 +39,13 @@ export interface RiskEvaluationInput {
   decisionRevision: number
   decisionCreatedAt: string
   decisionStatus: 'proposed'
-  result: TraderDecisionResult
+  result: RiskDecisionInput
   policy: EffectiveRiskPolicy
   summary: AccountRiskSummary
   quote: RiskQuoteSnapshot
   instrument: RiskInstrumentSnapshot
-  positions: JsonObject[]
-  pendingOrders: JsonObject[]
+  positions: RiskJsonObject[]
+  pendingOrders: RiskJsonObject[]
   manualRelease?: ManualRiskRelease | null
   currentRevisions: {
     analysis: number
@@ -146,7 +69,7 @@ export interface RiskEvaluationResult {
   status: RiskDecisionStatus
   rejectCode: string | null
   rules: RiskRuleResult[]
-  approvedActions: TraderAction[]
+  approvedActions: RiskAction[]
   evaluatedAt: string
   policyHash: string
   manualReleaseId: string | null
@@ -268,11 +191,11 @@ export function evaluateRisk(input: RiskEvaluationInput, now = new Date()): Risk
   const policy = input.policy.values
   const riskReducing = input.result.actions.filter(action => isRiskReducing(action, input))
   const riskIncreasing = input.result.actions.filter(action => !isRiskReducing(action, input))
-  const reject = (code: string, actionId: string | null = null, details: JsonObject = {}): RiskEvaluationResult => {
+  const reject = (code: string, actionId: string | null = null, details: RiskJsonObject = {}): RiskEvaluationResult => {
     rules.push({ code, outcome: 'rejected', actionId, details })
     return result('rejected', code, rules, [], input.policy, now)
   }
-  const pass = (code: string, details: JsonObject = {}) => rules.push({ code, outcome: 'passed' as const, actionId: null, details })
+  const pass = (code: string, details: RiskJsonObject = {}) => rules.push({ code, outcome: 'passed' as const, actionId: null, details })
   let releaseApplied = false
   const accountLimit = (triggered: boolean, code: ManualReleaseRuleCode, platformLimitReached = false) => {
     if (!triggered) return null
@@ -362,10 +285,10 @@ export function evaluateRisk(input: RiskEvaluationInput, now = new Date()): Risk
   return result('approved', null, rules, input.result.actions, input.policy, now, releaseApplied ? input.manualRelease ?? null : null)
 }
 
-function evaluateAction(action: TraderAction, input: RiskEvaluationInput, ask: number, bid: number) {
+function evaluateAction(action: RiskAction, input: RiskEvaluationInput, ask: number, bid: number) {
   const rules: RiskRuleResult[] = []
-  const fail = (code: string, details: JsonObject = {}) => ({ rejectCode: code, addedVolume: 0, rules: [...rules, { code, outcome: 'rejected' as const, actionId: action.actionId, details }] })
-  const pass = (code: string, details: JsonObject = {}) => rules.push({ code, outcome: 'passed' as const, actionId: action.actionId, details })
+  const fail = (code: string, details: RiskJsonObject = {}) => ({ rejectCode: code, addedVolume: 0, rules: [...rules, { code, outcome: 'rejected' as const, actionId: action.actionId, details }] })
+  const pass = (code: string, details: RiskJsonObject = {}) => rules.push({ code, outcome: 'passed' as const, actionId: action.actionId, details })
   if (action.kind === 'modify_position' || action.kind === 'modify_order') return fail('RISK_MODIFICATION_REQUIRES_DETERMINISTIC_DIFF')
   if (action.kind !== 'market_order' && action.kind !== 'pending_order') return { rejectCode: null, addedVolume: 0, rules }
   const params = action.parameters
@@ -399,12 +322,12 @@ function evaluateAction(action: TraderAction, input: RiskEvaluationInput, ask: n
   return { rejectCode: null, addedVolume: volume, rules }
 }
 
-function expectedState(action: TraderAction) {
+function expectedState(action: RiskAction) {
   const value = action.expectedState
   return value as Record<string, unknown>
 }
 
-function isRiskReducing(action: TraderAction, input: RiskEvaluationInput) {
+function isRiskReducing(action: RiskAction, input: RiskEvaluationInput) {
   if (action.kind === 'close_position' || action.kind === 'cancel_order') return true
   const ticket = String(action.parameters.ticket ?? '')
   if (action.kind === 'modify_position') {
@@ -497,7 +420,7 @@ function weekendProtected(now: Date, offsetMinutes: number, advanceMinutes: numb
   return minuteOfWeek >= 6 * 1440 - advanceMinutes
 }
 
-function result(status: RiskDecisionStatus, rejectCode: string | null, rules: RiskRuleResult[], approvedActions: TraderAction[], policy: EffectiveRiskPolicy, now: Date, manualRelease: ManualRiskRelease | null = null): RiskEvaluationResult {
+function result(status: RiskDecisionStatus, rejectCode: string | null, rules: RiskRuleResult[], approvedActions: RiskAction[], policy: EffectiveRiskPolicy, now: Date, manualRelease: ManualRiskRelease | null = null): RiskEvaluationResult {
   return { status, rejectCode, rules, approvedActions, evaluatedAt: now.toISOString(), policyHash: riskPolicyHash(policy), manualReleaseId: manualRelease?.id ?? null, manualReleaseRevision: manualRelease?.revision ?? null }
 }
 

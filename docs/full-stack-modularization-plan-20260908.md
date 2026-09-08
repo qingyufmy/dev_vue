@@ -1260,3 +1260,9 @@ Chrome实际打开localhost:4174/market，现有服务可访问但会话未登�
 继续总体服务端收口：risk业务index移除MysqlRiskRepository与riskRoutes公开导出，新增composition提供createRiskService/createRiskReviewWorker/createRiskHttp。API和Worker入口使用工厂，中央路由仅注册riskHttp插件；路由检查器和组装测试同步注入。未改变风控规则、事务或执行权限。
 
 16项确定性风控与8项运行组装共24项通过，类型/构建、96/96实际路由对账及冻结321通过。精确删除risk两条public-implementation-export，债务50→48（risk剩4），无新增或陈旧记录。仍有risk域类型循环、inference内部类型依赖及其它域债务，不能称risk整体完成。无数据库连接、重启、部署或终端动作；下一批处理risk剩余类型边界并验证规则行为不变。
+
+## 106. Risk 纯状态与动作输入（第一百七十六批）
+
+抽出risk-state纯类型，主规则和人工解锁共同依赖该文件，消除risk/manual-risk-release类型循环；原业务类型导出保持兼容。存储适配器经inference公开index读取历史决定类型，不穿透内部文件。领域新增RiskDecisionInput/RiskAction，只声明实际评估用到的action/actions、参数和expectedState，独立于推理结果中的confidence/summary/reasoning；未复制完整推理结果类型或添加宽泛any。
+
+原风控评估和动作对象保持不变，JSON结构同形、未转换持久化正文或更改哈希。16项风控和19项用户执行/分发回归共35项通过，类型、构建及冻结321通过。精确删除4条已解决记录，risk登记债务0，全服务端44条。仍需跨域SQL、事务所有权与完整API/数据库/前端验收，不把检测器清零当模块完成。本批无数据库连接或运行重启。

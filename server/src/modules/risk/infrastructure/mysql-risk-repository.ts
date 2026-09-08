@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
-import type { TraderDecisionResult } from '../../inference/domain/inference.js'
+import type { TraderDecisionResult } from '../../inference/index.js'
 import { assessManualRelease, manualReleaseStillValid, type ManualRiskRelease, type ManualReleaseRuleCode } from '../domain/manual-risk-release.js'
 import { DEFAULT_RISK_POLICY, resolveRiskPolicy, riskPolicyHash, RiskError, type AccountRiskPolicyPatch, type AccountRiskSummary, type EffectiveRiskPolicy, type RiskEvaluationInput, type RiskEvaluationResult, type RiskInstrumentSnapshot } from '../domain/risk.js'
 import type { CompleteRiskReviewInput, CreateManualRiskReleaseInput, ReplaceAccountRiskPolicyInput, RiskDecisionDetail, RiskDecisionSummary, RiskRepository, SaveRiskSummaryInput } from '../application/risk-ports.js'
