@@ -838,3 +838,11 @@ trade代理及成功SSO探针已提交b6cf5962，8项实际HTTP检查通过，�
 将trading中的两种认证适配器移入auth私有HTTP层，公开BrowserRequestAccess窄合同，API组装处注入，trading不再导入AuthService。trade/admin隔离及CSRF调用行为保持，12项定向测试、server类型和构建通过；110条已检测债务不变，321个冻结输入摘要相等。没有启动新运行构建或数据库操作。
 
 定向复核：只有auth解析认证Cookie并接触StoredSession，trading仅消费身份结果；会话/CSRF拒绝原样传播，不回退管理端能力。剩余跨域SQL、整表就绪耦合与正向账户浏览器验收继续按总方案推进。
+
+## 第一百零一批：Bridge 投影能力与内部穿透清理
+
+Bridge接收/解码通过trading公开输入合同和BridgeProjectionPort协作，具体projector仅由本域composition创建，不再公开导出。3条内部穿透精确删除；既有类型环只替换本次对应边，范围不扩大，债务107、无新增/陈旧记录。27项投影/实时/组装测试及server类型/构建通过，321个冻结输入相等。
+
+首次债务核对辅助断言把扫描结果中的line字段与基线身份字段一同比较，导致核对失败且未写入；改用source/target/kind/typeOnly身份字段后确认仅本批边变化，门禁通过。未改检测器或重建基线。
+
+后续优先处理可信投影与预留吸收的同事务跨域写入；保留锁序和原子性。详细状态见总方案第31节，P1和P0–P7全局仍未完成。

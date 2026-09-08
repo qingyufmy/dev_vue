@@ -1,4 +1,4 @@
-import type { BridgeProjectionInput, BridgeStreamProjector } from '../../trading/application/bridge-stream-projector.js'
+import type { BridgeProjectionInput, BridgeProjectionPort } from '../../trading/index.js'
 import type { BridgeGatewayRoute } from '../domain/bridge-gateway.js'
 import { BridgeGatewayError } from '../domain/bridge-gateway.js'
 import type { BridgeGatewayStreamIngestor } from './bridge-gateway-ports.js'
@@ -34,7 +34,7 @@ export interface BridgeProjectionDecoder {
 export class BridgeV4StreamIngestor implements BridgeGatewayStreamIngestor {
   constructor(
     private readonly decoder: BridgeProjectionDecoder,
-    private readonly projector: BridgeStreamProjector,
+    private readonly projector: BridgeProjectionPort,
     private readonly now = () => new Date(),
   ) {}
 

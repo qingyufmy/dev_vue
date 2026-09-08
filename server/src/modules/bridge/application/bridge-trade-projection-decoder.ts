@@ -1,5 +1,4 @@
-import type { BridgeProjectionInput } from '../../trading/application/bridge-stream-projector.js'
-import type { BridgeExactTradeState } from '../../trading/application/trading-ports.js'
+import type { BridgeProjectionInput, BridgeExactTradeState } from '../../trading/index.js'
 import { BridgeGatewayError, type BridgeGatewayRoute } from '../domain/bridge-gateway.js'
 import type { BridgeProjectionDecoder, BridgeStreamEventEnvelope } from './bridge-stream-ingestor.js'
 

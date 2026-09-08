@@ -17,6 +17,7 @@ import { TradingService, ConnectionCapacityService } from './application/trading
 import { ObserverManagementService } from './application/observer-management-service.js'
 import { ObserverPublicationService } from './application/observer-publication-service.js'
 import { BridgeStreamProjector } from './application/bridge-stream-projector.js'
+import type { BridgeProjectionPort } from './application/bridge-projection-port.js'
 import { MysqlAccountRegistration } from './infrastructure/mysql-account-registration.js'
 import { MysqlTradingRepository } from './infrastructure/mysql-trading-repository.js'
 import { MysqlObserverAccessReader } from './infrastructure/mysql-observer-access-reader.js'
@@ -70,7 +71,7 @@ export function createTradingApiModule(pool: Pool, cache: Redis, auth: { trade: 
 
 export function createBridgeTradingModule(pool: Pool, cache: Redis, leases: GatewayLeases, onPublishError: (error: unknown) => void): {
   capacity: ConnectionCapacityRepository
-  projector: BridgeStreamProjector
+  projector: BridgeProjectionPort
 } {
   const repository = new MysqlTradingRepository(pool, leases)
   return { capacity: repository, projector: new BridgeStreamProjector(repository, new RedisBrowserRealtimePublisher(cache, undefined, onPublishError)) }

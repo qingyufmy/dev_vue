@@ -8,7 +8,7 @@
 
 - `createTradingApiModule`组装账户/观摩服务、连接额度和HTTP插件，接收独立的trade/admin认证端口。会话Cookie解析和CSRF归auth实现，由API入口注入；trading不依赖AuthService或持久会话结构。
 - `createTradingReader`向分析/交易员/调度角色提供现有查询能力，不公开具体MySQL类。
-- `createBridgeTradingModule`提供连接额度能力与Bridge投影用例；保留原投影事务，提交后再发布实时事件。
+- `createBridgeTradingModule`提供连接额度能力与BridgeProjectionPort投影能力；Bridge仅通过公开输入合同调用，不依赖BridgeStreamProjector具体类。保留原投影事务，提交后再发布实时事件；具体类不再从业务index导出。
 - `createBrowserTradingModule`组装同一账户/观摩读取器、实时hub及Redis生命周期，返回公开的sessions、publication能力和订阅生命周期。WebSocket层通过sessions.open创建会话；Redis订阅器使用application发布端口，不再引用传输层。启动与关闭仍由运行角色控制，工厂不会自动监听或订阅。
 - `createAccountRegistration`由Bridge的同事务工厂调用，使用传入连接完成账户及归属写入，不独立提交。
 - `createTransactionAccountClock`将调用方已经开启的事务连接绑定为`AccountClockReader`。推理与执行的repository/guard显式注入该工厂；任务生成、冻结证据复核、规划及派发前检查均使用各自当前事务，不新建连接或独立提交。业务公开入口不再导出时钟SQL实现。

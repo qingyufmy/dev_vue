@@ -2,13 +2,9 @@ import { randomUUID } from 'node:crypto'
 import type { BridgeExactTradeState, BrowserRealtimePublisher, TradingProjectionWrite, TradingRealtimeEvent, TrustedBridgeProjectionRepository, TrustedBridgeProjectionRoute } from './trading-ports.js'
 import { TradingAccessError, type RealtimeResource } from '../domain/trading.js'
 
-type WithoutAccount<T> = T extends unknown ? Omit<T, 'accountId'> : never
-type ProjectionPayload = WithoutAccount<TradingProjectionWrite>
-export type BridgeProjectionInput =
-  | Exclude<ProjectionPayload, { resource: 'positions' | 'pending_orders' }>
-  | (Extract<ProjectionPayload, { resource: 'positions' | 'pending_orders' }> & { tradeStates: BridgeExactTradeState[]; observedAt: string })
+import type { BridgeProjectionInput, BridgeProjectionPort } from './bridge-projection-port.js'
 
-export class BridgeStreamProjector {
+export class BridgeStreamProjector implements BridgeProjectionPort {
   constructor(
     private readonly repository: TrustedBridgeProjectionRepository,
     private readonly publisher: BrowserRealtimePublisher,

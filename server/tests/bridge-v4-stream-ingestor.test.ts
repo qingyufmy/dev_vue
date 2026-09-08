@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { BridgeTradeProjectionDecoder, BridgeV4StreamIngestor, type BridgeGatewayRoute, type BridgeStreamEventEnvelope } from '../src/modules/bridge/index.js'
-import { BridgeStreamProjector, type TrustedBridgeProjectionRepository } from '../src/modules/trading/index.js'
+import type { TrustedBridgeProjectionRepository } from '../src/modules/trading/index.js'
+import { BridgeStreamProjector } from '../src/modules/trading/application/bridge-stream-projector.js'
 
 const route: BridgeGatewayRoute = {
   platform: 'mt5', timezoneOffsetMinutes: 180,
@@ -9,6 +10,21 @@ const route: BridgeGatewayRoute = {
 }
 
 describe('Stage 12G trusted Bridge stream ingestion', () => {
+  it('uses a capability-only projector and never ACKs a failed projection as applied', async () => {
+    const failure = new Error('projection-commit-unknown')
+    let calls = 0
+    const ingestor = new BridgeV4StreamIngestor(new BridgeTradeProjectionDecoder(), {
+      async ingest(actualRoute, input) {
+        calls += 1
+        expect(actualRoute).toBe(route)
+        expect(input).toMatchObject({ resource: 'positions', revision: 9, tradeStates: [] })
+        throw failure
+      },
+    })
+    await expect(ingestor.ingest(route, event(true))).rejects.toBe(failure)
+    expect(calls).toBe(1)
+  })
+
   it('rejects malformed snapshot items before decoding them', async () => {
     const repository: TrustedBridgeProjectionRepository = { async applyTrustedProjection() { return { applied: true, absorbedReservationIds: [] } } }
     const ingestor = new BridgeV4StreamIngestor(new BridgeTradeProjectionDecoder(), new BridgeStreamProjector(repository, { publish() {} }))
