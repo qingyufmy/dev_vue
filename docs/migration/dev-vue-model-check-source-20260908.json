@@ -1,0 +1,32 @@
+{
+  "kind": "model-check-preflight/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "observedAt": "2026-09-08T02:04:42.835Z",
+  "schemaSteps": 131,
+  "databaseWrites": 0,
+  "models": {
+    "total": "6",
+    "invalid": "0"
+  },
+  "policy": {
+    "total": "1",
+    "invalid": "0"
+  },
+  "definitions": [
+    {
+      "name": "ai_model_profiles",
+      "rowCount": "6",
+      "sql": "CREATE TABLE `ai_model_profiles` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `owner_user_id` int NOT NULL,\n  `scope` enum('user','platform') NOT NULL,\n  `provider` varchar(64) NOT NULL,\n  `model_name` varchar(191) NOT NULL,\n  `api_base_url` varchar(512) DEFAULT NULL,\n  `api_key_encrypted` text,\n  `key_version` varchar(32) DEFAULT NULL,\n  `temperature` decimal(3,2) DEFAULT NULL,\n  `max_tokens` int unsigned DEFAULT NULL,\n  `thinking_enabled` tinyint NOT NULL DEFAULT '0',\n  `reasoning_effort` varchar(16) DEFAULT NULL,\n  `request_timeout_ms` int unsigned DEFAULT NULL,\n  `is_default` tinyint NOT NULL DEFAULT '0',\n  `status` varchar(16) NOT NULL DEFAULT 'inactive',\n  `created_at` datetime(3) NOT NULL,\n  `updated_at` datetime(3) NOT NULL,\n  `deleted_at` datetime(3) DEFAULT NULL,\n  `active_default_owner_key` int GENERATED ALWAYS AS ((case when ((`is_default` = 1) and (`status` = _utf8mb4'active') and (`deleted_at` is null)) then `owner_user_id` else NULL end)) STORED /*!80023 INVISIBLE */,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_model_active_default_owner` (`active_default_owner_key`),\n  KEY `idx_model_profiles_owner` (`owner_user_id`,`deleted_at`),\n  KEY `idx_model_profiles_scope` (`scope`,`status`,`deleted_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+      "sha256": "684710103b1fbcfb7673d7cc6cde55329a94e74589c5c058d8eb4c1987eba3b1"
+    },
+    {
+      "name": "platform_model_usage_policy",
+      "rowCount": "1",
+      "sql": "CREATE TABLE `platform_model_usage_policy` (\n  `id` int NOT NULL,\n  `share_for_manual` tinyint NOT NULL DEFAULT '0',\n  `share_for_auto` tinyint NOT NULL DEFAULT '0',\n  `share_for_review` tinyint NOT NULL DEFAULT '0',\n  `share_for_memory_compression` tinyint NOT NULL DEFAULT '0',\n  `allowed_plans` json DEFAULT NULL,\n  `daily_requests_per_user` int unsigned NOT NULL DEFAULT '0',\n  `daily_tokens_per_user` bigint unsigned NOT NULL DEFAULT '0',\n  `updated_at` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+      "sha256": "134da80b3b5bf2c1cb73eddb7049d7ab129650f5ade37de8e29322b1a7681ad0"
+    }
+  ]
+}
