@@ -1,0 +1,94 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AURUM API V4 Contract Backbone",
+    "version": "4.0.0",
+    "description": "HTTP common contract for SSO, trading, analysis, deterministic risk, immutable reviews and confirmed strategy memory.",
+    "license": {
+      "name": "Proprietary",
+      "identifier": "LicenseRef-Proprietary"
+    }
+  },
+  "servers": [
+    {
+      "url": "/api/v4",
+      "description": "Same-origin application API"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Settings",
+      "description": "Administrator configuration updates and request recovery"
+    },
+    {
+      "name": "Referral Management",
+      "description": "Administrator referral configuration and audit"
+    },
+    {
+      "name": "Session",
+      "description": "Host-only application session and SSO lifecycle"
+    },
+    {
+      "name": "Context",
+      "description": "Authorized user and trading scope"
+    },
+    {
+      "name": "Realtime",
+      "description": "Browser realtime connection bootstrap"
+    },
+    {
+      "name": "Accounts",
+      "description": "Trading account snapshots"
+    },
+    {
+      "name": "Market",
+      "description": "Quotes and candle history"
+    },
+    {
+      "name": "Execution",
+      "description": "Positions and asynchronous operations"
+    },
+    {
+      "name": "Trade History",
+      "description": "Authoritative terminal orders, deals and reconciled account trade records"
+    },
+    {
+      "name": "Audit",
+      "description": "Current-user operations and exact execution trace projections"
+    },
+    {
+      "name": "Strategies",
+      "description": "Versioned market-analysis and account-trader strategies"
+    },
+    {
+      "name": "Analysis",
+      "description": "AI market-analysis jobs and immutable results"
+    },
+    {
+      "name": "Trader",
+      "description": "Per-account AI trader evaluations without direct execution authority"
+    },
+    {
+      "name": "Risk",
+      "description": "Account risk policy"
+    },
+    {
+      "name": "Reviews",
+      "description": "Evidence-frozen review cases, human confirmation and strategy memory"
+    },
+    {
+      "name": "Bridge",
+      "description": "Bridge device credential lifecycle"
+    },
+    {
+      "name": "Observer Management",
+      "description": "Administrator-only observer source, channel and explicit audience authorization configuration"
+    }
+  ],
+  "security": [
+    {
+      "applicationSession": []
+    }
+  ],
+  "x-contract-status": "stage-12s-authoritative-trade-history"
+}

@@ -1,0 +1,3613 @@
+{
+  "paths": {
+    "/trading-context": {
+      "get": {
+        "operationId": "getTradingContext",
+        "summary": "Get the current trading context",
+        "tags": [
+          "Context"
+        ],
+        "responses": {
+          "200": {
+            "description": "Current user trading scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradingContextResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "put": {
+        "operationId": "replaceTradingContext",
+        "summary": "Select one owned trading account or an authorized observer channel",
+        "tags": [
+          "Context"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TradingContextInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Trading context replaced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradingContextResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/trading-context/observer": {
+      "delete": {
+        "operationId": "leaveObserverMode",
+        "summary": "Exit observer mode and restore the first owned account when available",
+        "tags": [
+          "Context"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/ExpectedRevisionQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Observer mode exited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradingContextResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/trading-accounts": {
+      "get": {
+        "operationId": "listTradingAccounts",
+        "summary": "List trading accounts owned by the current system user",
+        "tags": [
+          "Accounts"
+        ],
+        "parameters": [
+          {
+            "name": "access",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "current",
+                "history"
+              ],
+              "default": "current"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Owned trading accounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradingAccountListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bridge/connection-capacity": {
+      "get": {
+        "operationId": "getBridgeConnectionCapacity",
+        "summary": "Get included, purchased and currently used trading-account connection capacity",
+        "tags": [
+          "Bridge"
+        ],
+        "responses": {
+          "200": {
+            "description": "Connection capacity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionCapacityResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bridge/terminal-profiles": {
+      "get": {
+        "operationId": "listTerminalProfiles",
+        "summary": "List replaceable MT4 and MT5 terminal profiles without counting offline profiles as capacity",
+        "tags": [
+          "Bridge"
+        ],
+        "responses": {
+          "200": {
+            "description": "Terminal profiles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalProfileListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/observer-channels": {
+      "get": {
+        "operationId": "listObserverChannels",
+        "summary": "List observer channels authorized for the current user",
+        "tags": [
+          "Context"
+        ],
+        "responses": {
+          "200": {
+            "description": "Authorized observer channels",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObserverChannelListResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/admin/observer/sources": {
+      "get": {
+        "operationId": "listObserverSourcesForAdmin",
+        "summary": "List observer sources for the current administrator",
+        "description": "Uses only the admin-web Host-only session. Results are bounded by an opaque stable-id cursor and never expose private bridge credentials.",
+        "tags": [
+          "Observer Management"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObserverAdminLimit"
+          },
+          {
+            "$ref": "#/components/parameters/ObserverAdminCursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Observer source page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObserverSourcePageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createObserverSource",
+        "summary": "Create a disabled, pending observer source",
+        "tags": [
+          "Observer Management"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/ObserverAdminIdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObserverSourceCreateInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Observer source operation receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObserverManagementWriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/admin/observer/sources/{source_id}": {
+      "put": {
+        "operationId": "updateObserverSource",
+        "summary": "Replace one observer source configuration with CAS",
+        "tags": [
+          "Observer Management"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObserverSourceId"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/ObserverAdminIdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObserverSourceUpdateInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Observer source operation receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObserverManagementWriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/admin/observer/channels": {
+      "get": {
+        "operationId": "listObserverChannelsForAdmin",
+        "summary": "List observer channels for the current administrator",
+        "tags": [
+          "Observer Management"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObserverAdminLimit"
+          },
+          {
+            "$ref": "#/components/parameters/ObserverAdminCursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Observer channel page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObserverChannelPageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createObserverChannel",
+        "summary": "Create an assigned, inactive observer channel",
+        "tags": [
+          "Observer Management"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/ObserverAdminIdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObserverChannelCreateInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Observer channel operation receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObserverManagementWriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/admin/observer/channels/{channel_id}": {
+      "put": {
+        "operationId": "updateObserverChannel",
+        "summary": "Replace one observer channel configuration with CAS",
+        "tags": [
+          "Observer Management"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObserverChannelId"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/ObserverAdminIdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObserverChannelUpdateInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Observer channel operation receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObserverManagementWriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/admin/observer/channels/{channel_id}/accesses": {
+      "get": {
+        "operationId": "listObserverChannelAccesses",
+        "summary": "List explicit observer grants for one channel",
+        "tags": [
+          "Observer Management"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObserverChannelId"
+          },
+          {
+            "$ref": "#/components/parameters/ObserverAdminLimit"
+          },
+          {
+            "$ref": "#/components/parameters/ObserverAdminCursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Observer access page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObserverAccessPageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/admin/observer/channels/{channel_id}/accesses/{user_id}": {
+      "put": {
+        "operationId": "setObserverChannelAccess",
+        "summary": "Grant or revoke one explicit observer access tombstone",
+        "description": "A revoke removes only the explicit grant; it does not override an all/plus/pro audience rule.",
+        "tags": [
+          "Observer Management"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObserverChannelId"
+          },
+          {
+            "$ref": "#/components/parameters/ObserverUserId"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/ObserverAdminIdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObserverAccessInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Observer access operation receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObserverManagementWriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/admin/observer/default-channel": {
+      "put": {
+        "operationId": "setObserverDefaultChannel",
+        "summary": "Set or clear the default observer channel with registry CAS",
+        "tags": [
+          "Observer Management"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/ObserverAdminIdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObserverDefaultChannelInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Observer default operation receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObserverManagementWriteResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/admin/observer/operations": {
+      "get": {
+        "operationId": "listObserverManagementOperations",
+        "summary": "List observer management operation receipts",
+        "description": "Admin-only audit-safe receipt fields plus the canonical command in audit_json; idempotency keys and request hashes are never returned.",
+        "tags": [
+          "Observer Management"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ObserverAdminLimit"
+          },
+          {
+            "$ref": "#/components/parameters/ObserverOperationCursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Observer operation page",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObserverOperationPageResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/trading-accounts/{account_id}/snapshot": {
+      "get": {
+        "operationId": "getTradingAccountSnapshot",
+        "summary": "Get a consistent trading account snapshot",
+        "tags": [
+          "Accounts"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AccountId"
+          },
+          {
+            "$ref": "#/components/parameters/ObserverChannelIdQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Consistent account snapshot",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradingWorkspaceResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/market/quotes/{symbol}": {
+      "get": {
+        "operationId": "getMarketQuote",
+        "summary": "Get the current quote for one symbol",
+        "tags": [
+          "Market"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AccountIdQuery"
+          },
+          {
+            "$ref": "#/components/parameters/Symbol"
+          },
+          {
+            "$ref": "#/components/parameters/ObserverChannelIdQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current quote snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuoteResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/market/candles": {
+      "get": {
+        "operationId": "listMarketCandles",
+        "summary": "List a historical candle window",
+        "tags": [
+          "Market"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AccountIdQuery"
+          },
+          {
+            "$ref": "#/components/parameters/SymbolQuery"
+          },
+          {
+            "$ref": "#/components/parameters/Timeframe"
+          },
+          {
+            "$ref": "#/components/parameters/CandlePageSize"
+          },
+          {
+            "$ref": "#/components/parameters/ObserverChannelIdQuery"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Historical candle window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandleListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/market/overview": {
+      "get": {
+        "operationId": "getMacroMarketOverview",
+        "summary": "Get the latest bounded macro summary and nearby high-impact calendar events",
+        "tags": [
+          "Market"
+        ],
+        "responses": {
+          "200": {
+            "description": "Macro market overview",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MacroMarketOverviewResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/market/macro-snapshots/latest": {
+      "get": {
+        "operationId": "getLatestMacroSnapshot",
+        "summary": "Get the latest compatible published platform macro snapshot",
+        "tags": [
+          "Market"
+        ],
+        "responses": {
+          "200": {
+            "description": "Latest macro snapshot",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MacroSnapshotResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/market/macro-snapshots": {
+      "get": {
+        "operationId": "listMacroSnapshots",
+        "summary": "List published platform macro snapshot summaries with a stable cursor",
+        "tags": [
+          "Market"
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Macro snapshot summaries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MacroSnapshotListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/market/macro-snapshots/{snapshot_id}": {
+      "get": {
+        "operationId": "getMacroSnapshot",
+        "summary": "Get one immutable published platform macro snapshot",
+        "tags": [
+          "Market"
+        ],
+        "parameters": [
+          {
+            "name": "snapshot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OpaqueId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Macro snapshot detail",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MacroSnapshotResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/market/macro-series": {
+      "get": {
+        "operationId": "listMacroSeriesPoints",
+        "summary": "List point-in-time macro series observations",
+        "tags": [
+          "Market"
+        ],
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/UtcDateTime"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/UtcDateTime"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Macro series observations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MacroSeriesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/market/calendar-events": {
+      "get": {
+        "operationId": "listEconomicCalendarEvents",
+        "summary": "List economic calendar events by schedule and importance",
+        "tags": [
+          "Market"
+        ],
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UtcDateTime"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UtcDateTime"
+            }
+          },
+          {
+            "name": "importance",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "unknown"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Economic calendar events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EconomicCalendarEventListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/market/calendar-events/{event_id}": {
+      "get": {
+        "operationId": "getEconomicCalendarEvent",
+        "summary": "Get one economic calendar event at its latest known revision",
+        "tags": [
+          "Market"
+        ],
+        "parameters": [
+          {
+            "name": "event_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OpaqueId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Economic calendar event",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EconomicCalendarEventResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "AccountId": {
+        "name": "account_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/OpaqueId"
+        }
+      },
+      "AccountIdQuery": {
+        "name": "account_id",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/OpaqueId"
+        }
+      },
+      "ObserverChannelIdQuery": {
+        "name": "observer_channel_id",
+        "in": "query",
+        "required": false,
+        "description": "Authorized observer channel required when reading an account the current user does not own.",
+        "schema": {
+          "$ref": "#/components/schemas/OpaqueId"
+        }
+      },
+      "Symbol": {
+        "name": "symbol",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Symbol"
+        }
+      },
+      "SymbolQuery": {
+        "name": "symbol",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Symbol"
+        }
+      },
+      "SymbolQueryOptional": {
+        "name": "symbol",
+        "in": "query",
+        "schema": {
+          "$ref": "#/components/schemas/Symbol"
+        }
+      },
+      "Timeframe": {
+        "name": "timeframe",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Timeframe"
+        }
+      },
+      "CandlePageSize": {
+        "name": "page_size",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 200
+        }
+      },
+      "ObserverAdminLimit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 50
+        }
+      },
+      "ObserverAdminCursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "description": "Stable positive decimal ID cursor for source, channel or access pages.",
+        "schema": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "maxLength": 20
+        }
+      },
+      "ObserverOperationCursor": {
+        "name": "cursor",
+        "in": "query",
+        "required": false,
+        "description": "Stable UUID cursor for operation pages.",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "ObserverSourceId": {
+        "name": "source_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "maxLength": 20
+        }
+      },
+      "ObserverChannelId": {
+        "name": "channel_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,19}$",
+          "maxLength": 20
+        }
+      },
+      "ObserverUserId": {
+        "name": "user_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]{0,9}$",
+          "maxLength": 10
+        }
+      },
+      "ObserverAdminIdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9._:-]+$"
+        }
+      }
+    },
+    "schemas": {
+      "TradingContext": {
+        "type": "object",
+        "required": [
+          "mode",
+          "user_id",
+          "account_id",
+          "observer_channel_id",
+          "read_only",
+          "revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "full",
+              "observer",
+              "blocked"
+            ]
+          },
+          "user_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "account_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observer_channel_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "read_only": {
+            "type": "boolean"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        }
+      },
+      "TradingContextResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/TradingContext"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "TradingContextInput": {
+        "type": "object",
+        "required": [
+          "mode",
+          "expected_revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "full",
+              "observer"
+            ]
+          },
+          "account_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "observer_channel_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expected_revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        }
+      },
+      "TradingAccount": {
+        "type": "object",
+        "required": [
+          "id",
+          "platform",
+          "login",
+          "server",
+          "currency",
+          "terminal_profile_id",
+          "terminal_instance_id",
+          "bridge_state",
+          "trade_permission",
+          "last_seen_at"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "mt4",
+              "mt5"
+            ]
+          },
+          "login": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "server": {
+            "type": "string",
+            "maxLength": 191
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 12
+          },
+          "terminal_profile_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "terminal_instance_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "bridge_state": {
+            "type": "string",
+            "enum": [
+              "online",
+              "offline",
+              "paused",
+              "replaced",
+              "unauthorized"
+            ]
+          },
+          "trade_permission": {
+            "type": "boolean"
+          },
+          "last_seen_at": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UtcDateTime"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "TradingAccountListResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "items"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TradingAccount"
+                }
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "ConnectionCapacityResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "included",
+              "purchased",
+              "total",
+              "active",
+              "available"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "included": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "purchased": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "total": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "active": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "available": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "TerminalProfileListResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "items"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "display_name",
+                    "platform",
+                    "installation_id",
+                    "account_id",
+                    "connection_state",
+                    "last_seen_at"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "$ref": "#/components/schemas/OpaqueId"
+                    },
+                    "display_name": {
+                      "type": "string"
+                    },
+                    "platform": {
+                      "type": "string",
+                      "enum": [
+                        "mt4",
+                        "mt5"
+                      ]
+                    },
+                    "installation_id": {
+                      "$ref": "#/components/schemas/OpaqueId"
+                    },
+                    "account_id": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/OpaqueId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "connection_state": {
+                      "type": "string",
+                      "enum": [
+                        "online",
+                        "offline",
+                        "paused"
+                      ]
+                    },
+                    "last_seen_at": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/UtcDateTime"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "ObserverChannelListResponse": {
+        "description": "Authenticated active users only. Source/channel must be ready and aligned. Audience all, exact effective plus/pro plan, or an explicit active grant authorizes reading; pro does not inherit plus. This never grants trading rights. Observer HTTP reads return a sanitized publication, not operator metadata or private history.",
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "items"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "display_name",
+                    "source_account_id",
+                    "active"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "$ref": "#/components/schemas/OpaqueId"
+                    },
+                    "display_name": {
+                      "type": "string"
+                    },
+                    "source_account_id": {
+                      "$ref": "#/components/schemas/OpaqueId"
+                    },
+                    "active": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "ObserverUnsignedId": {
+        "type": "string",
+        "pattern": "^[1-9][0-9]{0,19}$",
+        "maxLength": 20,
+        "description": "Positive decimal identifier bounded by the target unsigned BIGINT range (1..18446744073709551615)."
+      },
+      "ObserverRevisionInput": {
+        "description": "A JSON integer or its decimal string representation. Updates require at least 1; access creation and registry CAS may use 0.",
+        "oneOf": [
+          {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          {
+            "type": "string",
+            "pattern": "^(?:0|[1-9][0-9]{0,15})$"
+          }
+        ]
+      },
+      "ObserverSourceCreateInput": {
+        "type": "object",
+        "required": [
+          "display_name"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 255,
+            "default": null
+          },
+          "trading_account_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ObserverUnsignedId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "analysis_strategy_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ObserverUnsignedId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "status": {
+            "type": "string",
+            "const": "disabled",
+            "default": "disabled"
+          }
+        }
+      },
+      "ObserverSourceUpdateInput": {
+        "type": "object",
+        "required": [
+          "display_name",
+          "notes",
+          "trading_account_id",
+          "analysis_strategy_id",
+          "status",
+          "expected_revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 255
+          },
+          "trading_account_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ObserverUnsignedId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "analysis_strategy_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ObserverUnsignedId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "disabled"
+            ]
+          },
+          "expected_revision": {
+            "$ref": "#/components/schemas/ObserverRevisionInput"
+          }
+        }
+      },
+      "ObserverChannelCreateInput": {
+        "type": "object",
+        "required": [
+          "display_name",
+          "slug"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "source_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ObserverUnsignedId"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "slug": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 255,
+            "default": null
+          },
+          "audience": {
+            "type": "string",
+            "enum": [
+              "all",
+              "plus",
+              "pro",
+              "assigned"
+            ],
+            "default": "assigned"
+          },
+          "active": {
+            "type": "boolean",
+            "const": false,
+            "default": false
+          },
+          "sort_order": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000,
+            "default": 0
+          }
+        }
+      },
+      "ObserverChannelUpdateInput": {
+        "type": "object",
+        "required": [
+          "display_name",
+          "source_id",
+          "slug",
+          "description",
+          "audience",
+          "active",
+          "sort_order",
+          "expected_revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "display_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "source_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ObserverUnsignedId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "slug": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 255
+          },
+          "audience": {
+            "type": "string",
+            "enum": [
+              "all",
+              "plus",
+              "pro",
+              "assigned"
+            ]
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "sort_order": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "expected_revision": {
+            "$ref": "#/components/schemas/ObserverRevisionInput"
+          }
+        }
+      },
+      "ObserverAccessInput": {
+        "type": "object",
+        "required": [
+          "granted",
+          "expected_revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "granted": {
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "$ref": "#/components/schemas/ObserverRevisionInput"
+          }
+        }
+      },
+      "ObserverDefaultChannelInput": {
+        "type": "object",
+        "required": [
+          "channel_id",
+          "expected_revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "channel_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ObserverUnsignedId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expected_revision": {
+            "$ref": "#/components/schemas/ObserverRevisionInput"
+          }
+        }
+      },
+      "ObserverManagementWriteResult": {
+        "type": "object",
+        "required": [
+          "operation_id",
+          "target_id",
+          "revision",
+          "registry_revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          },
+          "registry_revision": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          }
+        }
+      },
+      "ObserverManagementWriteResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ObserverManagementWriteResult"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "ObserverSourceAdminItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "display_name",
+          "notes",
+          "operator_user_id",
+          "trading_account_id",
+          "analysis_strategy_id",
+          "status",
+          "configuration_status",
+          "created_by_user_id",
+          "created_at_utc",
+          "updated_at_utc",
+          "revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ObserverUnsignedId"
+          },
+          "display_name": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 255
+          },
+          "operator_user_id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "trading_account_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ObserverUnsignedId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "analysis_strategy_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ObserverUnsignedId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "disabled"
+            ]
+          },
+          "configuration_status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "ready"
+            ]
+          },
+          "created_by_user_id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "created_at_utc": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "updated_at_utc": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          }
+        }
+      },
+      "ObserverChannelAdminItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "source_id",
+          "source_trading_account_id",
+          "display_name",
+          "slug",
+          "description",
+          "audience",
+          "active",
+          "is_default",
+          "sort_order",
+          "created_at_utc",
+          "updated_at_utc",
+          "revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ObserverUnsignedId"
+          },
+          "source_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ObserverUnsignedId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source_trading_account_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ObserverUnsignedId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "display_name": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "slug": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 255
+          },
+          "audience": {
+            "type": "string",
+            "enum": [
+              "all",
+              "plus",
+              "pro",
+              "assigned"
+            ]
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "is_default": {
+            "type": "boolean"
+          },
+          "sort_order": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1000000
+          },
+          "created_at_utc": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "updated_at_utc": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UtcDateTime"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          }
+        }
+      },
+      "ObserverAccessAdminItem": {
+        "type": "object",
+        "required": [
+          "observer_channel_id",
+          "user_id",
+          "granted_at_utc",
+          "revoked_at_utc",
+          "granted_by_user_id",
+          "revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "observer_channel_id": {
+            "$ref": "#/components/schemas/ObserverUnsignedId"
+          },
+          "user_id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "granted_at_utc": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "revoked_at_utc": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UtcDateTime"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "granted_by_user_id": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          }
+        }
+      },
+      "ObserverOperationAdminItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "action",
+          "actor_user_id",
+          "target_id",
+          "result",
+          "audit_json",
+          "created_at_utc"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "action": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "actor_user_id": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "target_id": {
+            "type": "string",
+            "maxLength": 191
+          },
+          "result": {
+            "$ref": "#/components/schemas/ObserverManagementWriteResult"
+          },
+          "audit_json": {
+            "type": "object",
+            "description": "Canonical observer-management command; returned only from the admin-only operation endpoint."
+          },
+          "created_at_utc": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          }
+        }
+      },
+      "ObserverSourcePageResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ObserverSourcePage"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "ObserverSourcePage": {
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor",
+          "registry_revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObserverSourceAdminItem"
+            }
+          },
+          "next_cursor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ObserverUnsignedId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "registry_revision": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          }
+        }
+      },
+      "ObserverChannelPageResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ObserverChannelPage"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "ObserverChannelPage": {
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor",
+          "registry_revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObserverChannelAdminItem"
+            }
+          },
+          "next_cursor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ObserverUnsignedId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "registry_revision": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          }
+        }
+      },
+      "ObserverAccessPageResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ObserverAccessPage"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "ObserverAccessPage": {
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor",
+          "registry_revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObserverAccessAdminItem"
+            }
+          },
+          "next_cursor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ObserverUnsignedId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "registry_revision": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          }
+        }
+      },
+      "ObserverOperationPageResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ObserverOperationPage"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "ObserverOperationPage": {
+        "type": "object",
+        "required": [
+          "items",
+          "next_cursor",
+          "registry_revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObserverOperationAdminItem"
+            }
+          },
+          "next_cursor": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "registry_revision": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          }
+        }
+      },
+      "AccountSnapshot": {
+        "type": "object",
+        "required": [
+          "id",
+          "platform",
+          "login",
+          "server",
+          "currency",
+          "terminal_profile_id",
+          "terminal_instance_id",
+          "bridge_state",
+          "trade_permission",
+          "last_seen_at",
+          "balance",
+          "equity",
+          "margin",
+          "free_margin",
+          "floating_profit",
+          "leverage",
+          "timezone_offset_minutes",
+          "clock_status",
+          "observed_at",
+          "revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "terminal_instance_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "terminal_profile_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "mt4",
+              "mt5"
+            ]
+          },
+          "server": {
+            "type": "string",
+            "maxLength": 191
+          },
+          "login": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "bridge_state": {
+            "type": "string",
+            "enum": [
+              "online",
+              "offline",
+              "paused",
+              "replaced",
+              "unauthorized"
+            ]
+          },
+          "trade_permission": {
+            "type": "boolean"
+          },
+          "last_seen_at": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UtcDateTime"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "balance": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "equity": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "margin": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "free_margin": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "floating_profit": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "leverage": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "currency": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 12
+          },
+          "timezone_offset_minutes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": -840,
+            "maximum": 840
+          },
+          "clock_status": {
+            "type": "string",
+            "enum": [
+              "calibrated",
+              "observer_bootstrap",
+              "stale",
+              "unavailable"
+            ]
+          },
+          "observed_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        }
+      },
+      "AccountSnapshotResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AccountSnapshot"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "TradingWorkspaceResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "account",
+              "snapshot",
+              "symbols",
+              "positions",
+              "pending_orders"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "account": {
+                "$ref": "#/components/schemas/TradingAccount"
+              },
+              "snapshot": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/AccountSnapshot"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "symbols": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Symbol"
+                }
+              },
+              "positions": {
+                "type": "object",
+                "required": [
+                  "revision",
+                  "items"
+                ],
+                "properties": {
+                  "revision": {
+                    "$ref": "#/components/schemas/Revision"
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/Position"
+                    }
+                  }
+                }
+              },
+              "pending_orders": {
+                "type": "object",
+                "required": [
+                  "revision",
+                  "items"
+                ],
+                "properties": {
+                  "revision": {
+                    "$ref": "#/components/schemas/Revision"
+                  },
+                  "items": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/components/schemas/PendingOrder"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "Quote": {
+        "type": "object",
+        "required": [
+          "account_id",
+          "symbol",
+          "bid",
+          "ask",
+          "spread",
+          "observed_at",
+          "revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "symbol": {
+            "$ref": "#/components/schemas/Symbol"
+          },
+          "bid": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "ask": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "last": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "spread": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "trade_mode": {
+            "type": "string",
+            "enum": [
+              "full",
+              "long_only",
+              "short_only",
+              "close_only",
+              "disabled",
+              "unknown"
+            ]
+          },
+          "observed_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        }
+      },
+      "QuoteResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Quote"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "Candle": {
+        "type": "object",
+        "required": [
+          "account_id",
+          "symbol",
+          "timeframe",
+          "open_time",
+          "open",
+          "high",
+          "low",
+          "close",
+          "tick_volume",
+          "closed",
+          "revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "symbol": {
+            "$ref": "#/components/schemas/Symbol"
+          },
+          "timeframe": {
+            "$ref": "#/components/schemas/Timeframe"
+          },
+          "open_time": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "open": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "high": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "low": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "close": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "tick_volume": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "closed": {
+            "type": "boolean"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        }
+      },
+      "CandleListResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "items"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Candle"
+                }
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "MacroFactor": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "label",
+          "value",
+          "unit",
+          "observation_at",
+          "available_at",
+          "freshness",
+          "gold_relation"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 191
+          },
+          "value": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "observation_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "available_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "freshness": {
+            "type": "string",
+            "enum": [
+              "fresh",
+              "stale",
+              "missing",
+              "disabled",
+              "invalid"
+            ]
+          },
+          "gold_relation": {
+            "type": "string",
+            "enum": [
+              "supportive",
+              "adverse",
+              "neutral",
+              "uncertain"
+            ]
+          }
+        }
+      },
+      "MacroSnapshot": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "schema_version",
+          "revision",
+          "business_date",
+          "horizon",
+          "data_cutoff_at",
+          "published_at",
+          "valid_until",
+          "status",
+          "direction",
+          "summary",
+          "factors",
+          "content_sha256"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "schema_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "business_date": {
+            "$ref": "#/components/schemas/BusinessDate"
+          },
+          "horizon": {
+            "const": "medium_term"
+          },
+          "data_cutoff_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "published_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "valid_until": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "fresh",
+              "stale",
+              "partial",
+              "unavailable"
+            ]
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "supportive",
+              "adverse",
+              "neutral",
+              "uncertain"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000
+          },
+          "factors": {
+            "type": "array",
+            "maxItems": 128,
+            "items": {
+              "$ref": "#/components/schemas/MacroFactor"
+            }
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      },
+      "MacroSnapshotSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "schema_version",
+          "revision",
+          "business_date",
+          "horizon",
+          "data_cutoff_at",
+          "published_at",
+          "valid_until",
+          "status",
+          "direction",
+          "summary",
+          "factor_count",
+          "content_sha256"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "schema_version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "business_date": {
+            "$ref": "#/components/schemas/BusinessDate"
+          },
+          "horizon": {
+            "const": "medium_term"
+          },
+          "data_cutoff_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "published_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "valid_until": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "fresh",
+              "stale",
+              "partial",
+              "unavailable"
+            ]
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "supportive",
+              "adverse",
+              "neutral",
+              "uncertain"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 5000
+          },
+          "factor_count": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 128
+          },
+          "content_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      },
+      "MacroSnapshotResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/MacroSnapshot"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "MacroSnapshotListResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "items",
+              "next_cursor",
+              "has_more"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/MacroSnapshotSummary"
+                }
+              },
+              "next_cursor": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 2048
+              },
+              "has_more": {
+                "type": "boolean"
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "MacroSeriesPoint": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "code",
+          "observation_at",
+          "available_at",
+          "value",
+          "unit",
+          "freshness"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "observation_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "available_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "value": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "freshness": {
+            "type": "string",
+            "enum": [
+              "fresh",
+              "stale",
+              "missing",
+              "disabled",
+              "invalid"
+            ]
+          }
+        }
+      },
+      "MacroSeriesResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "items",
+              "next_cursor",
+              "has_more"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/MacroSeriesPoint"
+                }
+              },
+              "next_cursor": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 2048
+              },
+              "has_more": {
+                "type": "boolean"
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "EconomicCalendarEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "provider_event_id",
+          "country",
+          "currency",
+          "title",
+          "scheduled_at",
+          "time_precision",
+          "importance",
+          "period",
+          "unit",
+          "previous",
+          "consensus",
+          "actual",
+          "revised_previous",
+          "status",
+          "provider_updated_at",
+          "revision"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "provider_event_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 191
+          },
+          "country": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 16
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "scheduled_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "time_precision": {
+            "type": "string",
+            "enum": [
+              "exact",
+              "date_only",
+              "tentative"
+            ]
+          },
+          "importance": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "unknown"
+            ]
+          },
+          "period": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "unit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "previous": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "consensus": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "actual": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revised_previous": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "scheduled",
+              "released",
+              "revised",
+              "delayed",
+              "cancelled"
+            ]
+          },
+          "provider_updated_at": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UtcDateTime"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        }
+      },
+      "EconomicCalendarEventListResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "items",
+              "next_cursor",
+              "has_more"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/EconomicCalendarEvent"
+                }
+              },
+              "next_cursor": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 2048
+              },
+              "has_more": {
+                "type": "boolean"
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "EconomicCalendarEventResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/EconomicCalendarEvent"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "MacroMarketOverviewResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "snapshot",
+              "high_impact_events"
+            ],
+            "properties": {
+              "snapshot": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/MacroSnapshotSummary"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "high_impact_events": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                  "$ref": "#/components/schemas/EconomicCalendarEvent"
+                }
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "PendingOrder": {
+        "type": "object",
+        "required": [
+          "ticket",
+          "account_id",
+          "symbol",
+          "type",
+          "volume",
+          "price",
+          "stop_loss",
+          "take_profit",
+          "created_at",
+          "expires_at",
+          "source",
+          "signal_id",
+          "revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "ticket": {
+            "$ref": "#/components/schemas/Ticket"
+          },
+          "account_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "symbol": {
+            "$ref": "#/components/schemas/Symbol"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "buy_limit",
+              "sell_limit",
+              "buy_stop",
+              "sell_stop",
+              "buy_stop_limit",
+              "sell_stop_limit"
+            ]
+          },
+          "volume": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "price": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "stop_loss": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "take_profit": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "expires_at": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UtcDateTime"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "signal",
+              "unknown"
+            ]
+          },
+          "signal_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "domains": [
+    "common",
+    "auth",
+    "bridge",
+    "trading",
+    "execution",
+    "inference",
+    "risk",
+    "reviews",
+    "strategies",
+    "trade-history",
+    "audit",
+    "learning",
+    "commerce",
+    "settings"
+  ]
+}

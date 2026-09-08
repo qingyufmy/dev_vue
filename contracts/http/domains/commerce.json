@@ -1,0 +1,284 @@
+{
+  "paths": {
+    "/admin/referrals/rules": {
+      "get": {
+        "operationId": "listReferralRules",
+        "summary": "Read current administrator referral configuration and revisions",
+        "tags": [
+          "Referral Management"
+        ],
+        "description": "Admin host and admin-web session only. No query parameters. No synthetic default rules; disabled records are returned. Responses use Cache-Control: no-store.",
+        "responses": {
+          "200": {
+            "description": "Current configuration",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "rules"
+                      ],
+                      "properties": {
+                        "rules": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "rule_id",
+                              "plan",
+                              "period",
+                              "rate_bps",
+                              "enabled",
+                              "revision"
+                            ],
+                            "properties": {
+                              "rule_id": {
+                                "type": "string"
+                              },
+                              "revision": {
+                                "type": "string"
+                              },
+                              "plan": {
+                                "type": "string",
+                                "enum": [
+                                  "plus",
+                                  "pro"
+                                ]
+                              },
+                              "period": {
+                                "type": "string",
+                                "enum": [
+                                  "monthly",
+                                  "yearly"
+                                ]
+                              },
+                              "rate_bps": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "maximum": 10000
+                              },
+                              "enabled": {
+                                "type": "boolean"
+                              }
+                            }
+                          },
+                          "maxItems": 4
+                        }
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "required": [
+                        "request_id",
+                        "generated_at"
+                      ],
+                      "properties": {
+                        "request_id": {
+                          "type": "string"
+                        },
+                        "generated_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "421": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "put": {
+        "operationId": "updateReferralRules",
+        "summary": "Update referral rules atomically with revision checks and audit receipts",
+        "tags": [
+          "Referral Management"
+        ],
+        "description": "Admin host and admin-web session only. CSRF and Origin are checked. Reuse the same UUID and complete request after an uncertain result; a changed payload is rejected. Stored rule revisions are strings. This endpoint does not calculate or pay commission.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "changes"
+                ],
+                "properties": {
+                  "changes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 4,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "rule_id",
+                        "expected_revision",
+                        "rate_bps",
+                        "enabled"
+                      ],
+                      "properties": {
+                        "rule_id": {
+                          "type": "string",
+                          "pattern": "^[1-9][0-9]{0,9}$",
+                          "description": "Positive signed INT ID, at most 2147483647."
+                        },
+                        "expected_revision": {
+                          "type": "string",
+                          "pattern": "^[1-9][0-9]{0,19}$",
+                          "description": "Unsigned BIGINT revision below 18446744073709551615."
+                        },
+                        "rate_bps": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 10000
+                        },
+                        "enabled": {
+                          "type": "boolean"
+                        }
+                      }
+                    },
+                    "description": "Unique rule IDs; duplicates are rejected."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Committed result or verified replay",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "rules",
+                        "replayed"
+                      ],
+                      "properties": {
+                        "rules": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": [
+                              "rule_id",
+                              "revision"
+                            ],
+                            "properties": {
+                              "rule_id": {
+                                "type": "string"
+                              },
+                              "revision": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        }
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "required": [
+                        "request_id",
+                        "generated_at"
+                      ],
+                      "properties": {
+                        "request_id": {
+                          "type": "string"
+                        },
+                        "generated_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "421": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    }
+  },
+  "components": {}
+}

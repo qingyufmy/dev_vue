@@ -1,0 +1,268 @@
+{
+  "paths": {},
+  "components": {
+    "parameters": {
+      "ExpectedRevisionQuery": {
+        "name": "expected_revision",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Revision"
+        }
+      },
+      "PageSize": {
+        "name": "page_size",
+        "in": "query",
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "default": 50
+        }
+      },
+      "Cursor": {
+        "name": "cursor",
+        "in": "query",
+        "schema": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 2048
+        }
+      },
+      "Ticket": {
+        "name": "ticket",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Ticket"
+        }
+      },
+      "IdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 16,
+          "maxLength": 128
+        }
+      },
+      "IfMatch": {
+        "name": "If-Match",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 128
+        }
+      }
+    },
+    "headers": {
+      "ETag": {
+        "description": "Opaque resource revision as an HTTP entity tag",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "responses": {
+      "Problem": {
+        "description": "Problem details",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "OpaqueId": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 191
+      },
+      "Revision": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "Decimal": {
+        "type": "string",
+        "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$"
+      },
+      "BusinessDate": {
+        "type": "string",
+        "format": "date",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+      },
+      "PositiveDecimal": {
+        "type": "string",
+        "pattern": "^(?:(?:[1-9][0-9]*)(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)$"
+      },
+      "UtcDateTime": {
+        "type": "string",
+        "format": "date-time",
+        "pattern": "Z$"
+      },
+      "Symbol": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[A-Za-z0-9._-]+$"
+      },
+      "Ticket": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[0-9A-Za-z._:-]+$"
+      },
+      "Timeframe": {
+        "type": "string",
+        "enum": [
+          "M1",
+          "M5",
+          "M15",
+          "M30",
+          "H1",
+          "H4",
+          "D1"
+        ]
+      },
+      "Meta": {
+        "type": "object",
+        "required": [
+          "request_id",
+          "generated_at"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "generated_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          }
+        }
+      },
+      "PageMeta": {
+        "type": "object",
+        "required": [
+          "request_id",
+          "generated_at",
+          "page_size",
+          "next_cursor",
+          "has_more"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "generated_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 500
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "has_more": {
+            "type": "boolean"
+          }
+        }
+      },
+      "FieldProblem": {
+        "type": "object",
+        "required": [
+          "field",
+          "code",
+          "message"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "field": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "code": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 512
+          }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "required": [
+          "type",
+          "title",
+          "status",
+          "code",
+          "detail",
+          "instance",
+          "correlation_id",
+          "retryable"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "type": {
+            "type": "string",
+            "format": "uri-reference"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "status": {
+            "type": "integer",
+            "minimum": 400,
+            "maximum": 599
+          },
+          "code": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{1,127}$"
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "instance": {
+            "type": "string",
+            "maxLength": 2048
+          },
+          "correlation_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "retry_after_ms": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "errors": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "$ref": "#/components/schemas/FieldProblem"
+            }
+          }
+        }
+      }
+    }
+  }
+}

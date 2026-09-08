@@ -1,0 +1,377 @@
+{
+  "paths": {
+    "/admin/settings/value": {
+      "get": {
+        "operationId": "readAdminSystemSetting",
+        "summary": "Read one stored setting with secret redaction",
+        "tags": [
+          "Settings"
+        ],
+        "description": "Admin host and admin-web session only. Only namespace and key query parameters are accepted; value type is resolved by the server registry. Missing rows return 404, NULL and empty remain distinct. Protected credentials omit value entirely. No legacy fallback.",
+        "parameters": [
+          {
+            "name": "namespace",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored value or protected credential metadata; no synthetic defaults",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "oneOf": [
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "setting_id",
+                            "namespace",
+                            "key",
+                            "value_type",
+                            "sensitivity",
+                            "revision",
+                            "value_state",
+                            "protected"
+                          ],
+                          "properties": {
+                            "setting_id": {
+                              "type": "string"
+                            },
+                            "namespace": {
+                              "type": "string"
+                            },
+                            "key": {
+                              "type": "string"
+                            },
+                            "value_type": {
+                              "type": "string",
+                              "enum": [
+                                "string",
+                                "boolean",
+                                "integer",
+                                "enum",
+                                "json_array",
+                                "credential"
+                              ]
+                            },
+                            "sensitivity": {
+                              "type": "string",
+                              "enum": [
+                                "public",
+                                "restricted",
+                                "secret"
+                              ]
+                            },
+                            "revision": {
+                              "type": "string"
+                            },
+                            "value_state": {
+                              "type": "string",
+                              "enum": [
+                                "null",
+                                "empty",
+                                "text"
+                              ]
+                            },
+                            "protected": {
+                              "const": true
+                            }
+                          }
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "setting_id",
+                            "namespace",
+                            "key",
+                            "value_type",
+                            "sensitivity",
+                            "revision",
+                            "value_state",
+                            "protected",
+                            "value"
+                          ],
+                          "properties": {
+                            "setting_id": {
+                              "type": "string"
+                            },
+                            "namespace": {
+                              "type": "string"
+                            },
+                            "key": {
+                              "type": "string"
+                            },
+                            "value_type": {
+                              "type": "string",
+                              "enum": [
+                                "string",
+                                "boolean",
+                                "integer",
+                                "enum",
+                                "json_array"
+                              ]
+                            },
+                            "sensitivity": {
+                              "type": "string",
+                              "enum": [
+                                "public",
+                                "restricted"
+                              ]
+                            },
+                            "revision": {
+                              "type": "string"
+                            },
+                            "value_state": {
+                              "type": "string",
+                              "enum": [
+                                "null",
+                                "empty",
+                                "text"
+                              ]
+                            },
+                            "protected": {
+                              "const": false
+                            },
+                            "value": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            }
+                          }
+                        }
+                      ]
+                    },
+                    "meta": {
+                      "type": "object",
+                      "required": [
+                        "request_id",
+                        "generated_at"
+                      ],
+                      "properties": {
+                        "request_id": {
+                          "type": "string"
+                        },
+                        "generated_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem",
+            "description": "Known configuration key has no stored row"
+          },
+          "421": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "put": {
+        "operationId": "updateSystemSetting",
+        "summary": "Update an existing non-secret configuration value with a durable request receipt",
+        "tags": [
+          "Settings"
+        ],
+        "description": "Admin host and admin-web session only; CSRF and Origin checked. No query parameters. Exact string revisions and raw text values. Reuse the same UUID and complete body after an uncertain result. Credentials and service-owned fields are rejected. Domain-dependent settings remain unavailable until their semantic checks are provided. This endpoint does not create settings or migrate legacy values.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$",
+              "minLength": 36,
+              "maxLength": 36
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "namespace",
+                  "key",
+                  "value_type",
+                  "expected_revision",
+                  "value"
+                ],
+                "properties": {
+                  "namespace": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "key": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "value_type": {
+                    "type": "string",
+                    "enum": [
+                      "string",
+                      "boolean",
+                      "integer",
+                      "enum",
+                      "json_array"
+                    ]
+                  },
+                  "expected_revision": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]{0,19}$",
+                    "maxLength": 20
+                  },
+                  "value": {
+                    "type": "string",
+                    "description": "Original text; no implicit coercion, trimming or defaults."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Original durable result or newly committed version",
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "required": [
+                        "setting_id",
+                        "revision",
+                        "replayed"
+                      ],
+                      "properties": {
+                        "setting_id": {
+                          "type": "string"
+                        },
+                        "revision": {
+                          "type": "string"
+                        },
+                        "replayed": {
+                          "type": "boolean"
+                        }
+                      }
+                    },
+                    "meta": {
+                      "type": "object",
+                      "required": [
+                        "request_id",
+                        "generated_at"
+                      ],
+                      "properties": {
+                        "request_id": {
+                          "type": "string"
+                        },
+                        "generated_at": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "421": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem",
+            "description": "Configuration policy rejected"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    }
+  },
+  "components": {}
+}

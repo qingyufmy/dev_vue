@@ -1,0 +1,807 @@
+{
+  "paths": {
+    "/analysis-jobs": {
+      "post": {
+        "operationId": "createAnalysisJob",
+        "summary": "Create a manual analysis job",
+        "tags": [
+          "Analysis"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalysisJobCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Analysis accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalysisJobResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/market-analyses": {
+      "get": {
+        "operationId": "listMarketAnalyses",
+        "summary": "List market-analysis summaries owned by the current system user",
+        "tags": [
+          "Analysis"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/PageSize"
+          },
+          {
+            "$ref": "#/components/parameters/Cursor"
+          },
+          {
+            "$ref": "#/components/parameters/SymbolQueryOptional"
+          },
+          {
+            "name": "strategy_id",
+            "in": "query",
+            "schema": {
+              "$ref": "#/components/schemas/OpaqueId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Market-analysis summaries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketAnalysisListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/market-analyses/{analysis_id}": {
+      "get": {
+        "operationId": "getMarketAnalysis",
+        "summary": "Get one complete market analysis",
+        "tags": [
+          "Analysis"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AnalysisId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Complete structured analysis and user-facing reasoning",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketAnalysisDetailResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/market-analyses/{analysis_id}/trader-evaluations": {
+      "post": {
+        "operationId": "createTraderEvaluation",
+        "summary": "Explicitly submit one valid market analysis for one account evaluation",
+        "tags": [
+          "Trader"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AnalysisId"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TraderEvaluationCreate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Account evaluation durably queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TraderRunResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/trade-decisions": {
+      "get": {
+        "operationId": "listTradeDecisions",
+        "summary": "List AI trader decisions for one owned trading account",
+        "tags": [
+          "Trader"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AccountIdQuery"
+          },
+          {
+            "$ref": "#/components/parameters/PageSize"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Account decision summaries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradeDecisionListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/trade-decisions/{decision_id}": {
+      "get": {
+        "operationId": "getTradeDecision",
+        "summary": "Get one complete account-level AI trader decision",
+        "tags": [
+          "Trader"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/DecisionId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Complete trader decision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TradeDecisionDetailResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "AnalysisId": {
+        "name": "analysis_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/OpaqueId"
+        }
+      },
+      "DecisionId": {
+        "name": "decision_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/OpaqueId"
+        }
+      }
+    },
+    "schemas": {
+      "AnalysisJobCreate": {
+        "type": "object",
+        "required": [
+          "strategy_id",
+          "symbol",
+          "mode"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "strategy_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "symbol": {
+            "$ref": "#/components/schemas/Symbol"
+          },
+          "mode": {
+            "const": "manual"
+          }
+        }
+      },
+      "AnalysisJob": {
+        "type": "object",
+        "required": [
+          "analysis_id",
+          "strategy_id",
+          "strategy_version_id",
+          "symbol",
+          "trigger",
+          "status",
+          "created_at",
+          "updated_at",
+          "revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "analysis_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "strategy_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "strategy_version_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "symbol": {
+            "$ref": "#/components/schemas/Symbol"
+          },
+          "trigger": {
+            "type": "string",
+            "enum": [
+              "manual",
+              "scheduled",
+              "event"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled",
+              "expired"
+            ]
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        }
+      },
+      "AnalysisJobResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/AnalysisJob"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "MarketAnalysisSummary": {
+        "type": "object",
+        "required": [
+          "analysis_id",
+          "strategy_id",
+          "strategy_version_id",
+          "symbol",
+          "market_bias",
+          "opportunity",
+          "confidence",
+          "summary",
+          "analyzed_at",
+          "valid_until",
+          "revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "analysis_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "strategy_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "strategy_version_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "symbol": {
+            "$ref": "#/components/schemas/Symbol"
+          },
+          "market_bias": {
+            "type": "string",
+            "enum": [
+              "bullish",
+              "bearish",
+              "neutral",
+              "uncertain"
+            ]
+          },
+          "opportunity": {
+            "type": "string",
+            "enum": [
+              "none",
+              "long_setup",
+              "short_setup"
+            ]
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "analyzed_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "valid_until": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        }
+      },
+      "MarketAnalysisDetail": {
+        "type": "object",
+        "required": [
+          "summary",
+          "market_regime",
+          "supporting_evidence",
+          "counter_evidence",
+          "key_levels",
+          "invalidation",
+          "data_gaps",
+          "analysis_body",
+          "input_snapshot_hash"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "summary": {
+            "$ref": "#/components/schemas/MarketAnalysisSummary"
+          },
+          "market_regime": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "supporting_evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "counter_evidence": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "key_levels": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "invalidation": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "data_gaps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "analysis_body": {
+            "type": "string"
+          },
+          "input_snapshot_hash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      },
+      "MarketAnalysisListResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "items"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/MarketAnalysisSummary"
+                }
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "MarketAnalysisDetailResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/MarketAnalysisDetail"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "TraderEvaluationCreate": {
+        "type": "object",
+        "required": [
+          "trading_account_id",
+          "subscription_id",
+          "subscription_revision",
+          "trader_strategy_id",
+          "trader_strategy_version_id"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "trading_account_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "subscription_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "subscription_revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "trader_strategy_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "trader_strategy_version_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          }
+        }
+      },
+      "TraderRun": {
+        "type": "object",
+        "required": [
+          "trader_run_id",
+          "analysis_id",
+          "trading_account_id",
+          "strategy_id",
+          "strategy_version_id",
+          "task_mode",
+          "status",
+          "created_at",
+          "updated_at",
+          "revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "trader_run_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "analysis_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "trading_account_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "strategy_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "strategy_version_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "task_mode": {
+            "type": "string",
+            "enum": [
+              "entry",
+              "manage",
+              "both"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "succeeded",
+              "failed",
+              "cancelled",
+              "expired"
+            ]
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        }
+      },
+      "TraderRunResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/TraderRun"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "TradeDecisionSummary": {
+        "type": "object",
+        "required": [
+          "decision_id",
+          "analysis_id",
+          "trading_account_id",
+          "strategy_id",
+          "strategy_version_id",
+          "action",
+          "side",
+          "confidence",
+          "summary",
+          "status",
+          "stale_reason",
+          "created_at",
+          "revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "decision_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "analysis_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "trading_account_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "strategy_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "strategy_version_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "hold",
+              "market_order",
+              "pending_order",
+              "modify_position",
+              "close_position",
+              "modify_order",
+              "cancel_order"
+            ]
+          },
+          "side": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "buy",
+              "sell",
+              null
+            ]
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 100
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "proposed",
+              "stale",
+              "risk_rejected",
+              "accepted"
+            ]
+          },
+          "stale_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 128
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        }
+      },
+      "TradeDecisionDetail": {
+        "type": "object",
+        "required": [
+          "summary",
+          "actions",
+          "reasoning",
+          "input_snapshot_hash"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "summary": {
+            "$ref": "#/components/schemas/TradeDecisionSummary"
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "action_id",
+                "kind",
+                "parameters",
+                "expected_state"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "action_id": {
+                  "$ref": "#/components/schemas/OpaqueId"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "market_order",
+                    "pending_order",
+                    "modify_position",
+                    "close_position",
+                    "modify_order",
+                    "cancel_order"
+                  ]
+                },
+                "parameters": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "expected_state": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "reasoning": {
+            "type": "string"
+          },
+          "input_snapshot_hash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          }
+        }
+      },
+      "TradeDecisionListResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "items"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TradeDecisionSummary"
+                }
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "TradeDecisionDetailResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/TradeDecisionDetail"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      }
+    }
+  }
+}
