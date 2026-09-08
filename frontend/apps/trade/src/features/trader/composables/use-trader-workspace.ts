@@ -1,4 +1,4 @@
-import { tradingAccounts, tradingContext, applyTradingContext, applyTradingAccounts } from '~/features/trading-context'
+import { tradingAccounts, tradingContext, applyTradingContext, applyTradingAccounts, applyObserverChannels, createRequestScope } from '~/features/trading-context'
 import { applyAccountMetrics } from '~/lib/apply-account-metrics'
 import type {
   AccountSnapshot, OpenPosition, PendingOrder,
@@ -37,14 +37,17 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
   let generation = 0
   let realtimeController: ReturnType<typeof createTraderRealtime> | null = null
   let queuedAccountId: string | null = null
+  const requests = createRequestScope(() => JSON.stringify([generation, session.value?.user.id, session.value?.authenticated_at]))
 
-  const currentAccount = computed<TradingAccount | AccountSnapshot | null>(() => accountSnapshot.value
+  const currentAccount = computed<TradingAccount | AccountSnapshot | null>(() => (accountSnapshot.value?.id === activeAccountId.value ? accountSnapshot.value : null)
     ?? tradingAccounts.value.find((item) => item.id === activeAccountId.value)
     ?? null)
   const isObserver = computed(() => tradingContext.value?.mode === 'observer')
 
   async function load() {
-    const currentGeneration = ++generation
+    if (!session.value) return
+    ++generation
+    const current = requests.begin('load')
     stopRealtime()
     loading.value = true
     error.value = ''
@@ -52,7 +55,7 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
       const [contextResponse, accountsResponse, observersResponse, strategiesResponse] = await Promise.all([
         traderApi.getContext(), traderApi.listAccounts(), traderApi.listObservers(), traderApi.listStrategies(),
       ])
-      if (currentGeneration !== generation) return
+      if (!current()) return
       applyTradingContext(contextResponse.data)
       applyTradingAccounts(accountsResponse.data.items)
       strategies.value = strategiesResponse.data.items
@@ -67,24 +70,27 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
         clearWorkspace()
         return
       }
-      await loadAccount(accountId, observer?.id ?? null, currentGeneration)
+      await loadAccount(accountId, observer?.id ?? null, generation)
     } catch (reason) {
-      if (currentGeneration === generation) error.value = readableError(reason, 'AI 交易员工作区暂时无法读取')
+      if (current()) error.value = readableError(reason, 'AI 交易员工作区暂时无法读取')
     } finally {
-      if (currentGeneration === generation) loading.value = false
+      if (current()) loading.value = false
     }
   }
 
   async function loadAccount(accountId: string, observerId: string | null, currentGeneration = generation) {
+    if (currentGeneration !== generation) return
+    const current = requests.begin('workspace')
+    const currentDecisions = requests.begin('decisions')
     decisionsLoading.value = true
     decisionsError.value = ''
     const [workspaceResult, decisionsResult] = await Promise.allSettled([
       traderApi.getWorkspace(accountId, observerId),
       observerId ? Promise.resolve(null) : traderApi.listDecisions(accountId, 50),
     ])
-    if (currentGeneration !== generation) return
+    if (!current()) return
     if (workspaceResult.status === 'rejected') {
-      decisionsLoading.value = false
+      if (currentDecisions()) decisionsLoading.value = false
       throw workspaceResult.reason
     }
     const workspaceResponse = workspaceResult.value
@@ -95,21 +101,23 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
     resourceRevisions.value.account = workspaceResponse.data.snapshot?.revision ?? 0
     resourceRevisions.value.positions = workspaceResponse.data.positions.revision
     resourceRevisions.value.pendingOrders = workspaceResponse.data.pendingOrders.revision
-    if (decisionsResult.status === 'fulfilled') decisions.value = decisionsResult.value?.data.items ?? []
-    else {
-      decisions.value = []
-      decisionsError.value = readableError(decisionsResult.reason, 'AI 交易员记录暂时无法读取')
+    if (currentDecisions()) {
+      if (decisionsResult.status === 'fulfilled') decisions.value = decisionsResult.value?.data.items ?? []
+      else {
+        decisions.value = []
+        decisionsError.value = readableError(decisionsResult.reason, 'AI 交易员记录暂时无法读取')
+      }
+      decisionsLoading.value = false
+      normalizeDecisionSelection()
     }
-    decisionsLoading.value = false
-    normalizeDecisionSelection()
     startRealtime(accountId, observerId)
   }
 
   async function syncWorkspace() {
     if (!activeAccountId.value) return
-    const currentGeneration = generation
+    const current = requests.begin('workspace')
     const workspace = await traderApi.getWorkspace(activeAccountId.value, observerChannelId.value)
-    if (currentGeneration !== generation) return
+    if (!current()) return
     applyAccountSnapshot(workspace.data.snapshot)
     symbols.value = workspace.data.symbols
     openPositions.value = workspace.data.positions.items
@@ -121,33 +129,35 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
 
   async function refreshDecisions(preferredId = '') {
     if (!activeAccountId.value || observerChannelId.value) return
-    const currentGeneration = generation
+    const current = requests.begin('decisions')
     decisionsLoading.value = true
     decisionsError.value = ''
     try {
       const response = await traderApi.listDecisions(activeAccountId.value, 50)
-      if (currentGeneration !== generation) return
+      if (!current()) return
       decisions.value = response.data.items
       if (preferredId && decisions.value.some((item) => item.decisionId === preferredId)) selectDecision(preferredId)
       else normalizeDecisionSelection()
     } catch (reason) {
-      if (currentGeneration === generation) decisionsError.value = readableError(reason, 'AI 交易员记录暂时无法读取')
+      if (current()) decisionsError.value = readableError(reason, 'AI 交易员记录暂时无法读取')
     } finally {
-      if (currentGeneration === generation) decisionsLoading.value = false
+      if (current()) decisionsLoading.value = false
     }
   }
 
   async function refresh() {
     if (!activeAccountId.value) return
+    const current = requests.begin('refresh')
     refreshing.value = true
     error.value = ''
     try { await Promise.all([syncWorkspace(), refreshDecisions()]) }
-    catch (reason) { error.value = readableError(reason, '账户最新状态同步失败') }
-    finally { refreshing.value = false }
+    catch (reason) { if (current()) error.value = readableError(reason, '账户最新状态同步失败') }
+    finally { if (current()) refreshing.value = false }
   }
 
   async function selectAccount(accountId: string) {
     if (!session.value || !tradingContext.value) return
+    const switchingSession = session.value
     queuedAccountId = accountId
     if (switching.value) return
     switching.value = true
@@ -177,44 +187,49 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
         break
       }
     }
-    switching.value = false
+    if (session.value === switchingSession) switching.value = false
   }
 
   function startRealtime(accountId: string, observerId: string | null) {
     stopRealtime()
     if (!session.value) return
+    const current = requests.begin('realtime')
     realtimeController = createTraderRealtime({
       session: session.value,
       accountId,
       observerChannelId: observerId,
       positionsRevision: resourceRevisions.value.positions,
       pendingOrdersRevision: resourceRevisions.value.pendingOrders,
-      onState: (value) => { realtime.value = value },
-      onPositions: (items, revision) => { openPositions.value = items; resourceRevisions.value.positions = revision },
-      onPendingOrders: (items, revision) => { pendingOrders.value = items; resourceRevisions.value.pendingOrders = revision },
+      onState: (value) => { if (!current()) return; realtime.value = value },
+      onPositions: (items, revision) => { if (!current()) return; openPositions.value = items; resourceRevisions.value.positions = revision },
+      onPendingOrders: (items, revision) => { if (!current()) return; pendingOrders.value = items; resourceRevisions.value.pendingOrders = revision },
       onMetrics: (data, revision) => {
+        if (!current()) return
         if (!accountSnapshot.value || accountSnapshot.value.id !== accountId) return
         applyAccountSnapshot(applyAccountMetrics(accountSnapshot.value, data, revision))
         resourceRevisions.value.account = accountSnapshot.value.revision
       },
       onBridge: (data) => {
+        if (!current() || accountSnapshot.value?.id !== accountId) return
         if (accountSnapshot.value) applyAccountSnapshot({
           ...accountSnapshot.value,
           bridgeState: data.state,
           lastSeenAt: data.last_seen_at,
         })
       },
-      onDecisionChanged: (decisionId) => { void refreshDecisions(decisionId) },
+      onDecisionChanged: (decisionId) => { if (!current()) return; void refreshDecisions(decisionId) },
       onOperationChanged: (operationId) => {
+        if (!current()) return
         operationNotice.value = '交易执行状态已变化，账户资源已重新同步。'
         operationChanged?.(operationId)
         void Promise.all([syncWorkspace(), refreshDecisions()])
       },
-      resync: () => Promise.all([syncWorkspace(), refreshDecisions()]),
+      resync: () => current() ? Promise.all([syncWorkspace(), refreshDecisions()]) : Promise.resolve(),
     })
   }
 
   function stopRealtime() {
+    requests.invalidate('realtime')
     realtimeController?.stop()
     realtimeController = null
   }
@@ -228,18 +243,19 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
   }
 
   async function loadDetail(id: string) {
-    const currentGeneration = generation
+    const current = requests.begin('detail')
     detail.value = null
     detailError.value = ''
+    detailLoading.value = false
     if (!id || !decisions.value.some((item) => item.decisionId === id)) return
     detailLoading.value = true
     try {
       const response = await traderApi.getDecision(id)
-      if (currentGeneration === generation && selectedDecisionId.value === id) detail.value = response.data
+      if (current() && selectedDecisionId.value === id) detail.value = response.data
     } catch (reason) {
-      if (currentGeneration === generation && selectedDecisionId.value === id) detailError.value = readableError(reason, 'AI 交易决策详情暂时无法读取')
+      if (current() && selectedDecisionId.value === id) detailError.value = readableError(reason, 'AI 交易决策详情暂时无法读取')
     } finally {
-      if (currentGeneration === generation && selectedDecisionId.value === id) detailLoading.value = false
+      if (current() && selectedDecisionId.value === id) detailLoading.value = false
     }
   }
 
@@ -256,6 +272,22 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
     selectDecision('')
   }
 
+  watch(() => session.value, () => {
+    generation += 1
+    queuedAccountId = null
+    stopRealtime()
+    activeAccountId.value = null
+    observerChannelId.value = null
+    clearWorkspace()
+    applyTradingContext(null)
+    applyTradingAccounts([])
+    applyObserverChannels([])
+    strategies.value = []
+    loading.value = refreshing.value = switching.value = decisionsLoading.value = detailLoading.value = false
+    error.value = detailError.value = decisionsError.value = operationNotice.value = ''
+    realtime.value = 'idle'
+    if (session.value) void load()
+  }, { flush: 'sync' })
   watch(selectedDecisionId, (id) => { void loadDetail(id) })
   onMounted(() => { void load() })
   onBeforeUnmount(() => { generation += 1; stopRealtime() })

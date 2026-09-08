@@ -1,5 +1,6 @@
 import { computed, readonly, ref } from 'vue'
 import type { AccountSnapshot, ObserverChannel, TradingAccount, TradingContext } from '@aurum/contracts'
+export { createRequestScope } from './request-scope'
 
 const context = ref<TradingContext | null>(null)
 const accounts = ref<TradingAccount[]>([])

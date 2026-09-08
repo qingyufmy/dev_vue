@@ -1,5 +1,5 @@
 import { applyAccountSnapshot } from '~/features/trading-context'
-import { observerChannels, tradingAccounts, tradingContext, applyTradingContext, applyTradingAccounts, applyObserverChannels } from '~/features/trading-context'
+import { observerChannels, tradingAccounts, tradingContext, applyTradingContext, applyTradingAccounts, applyObserverChannels, createRequestScope } from '~/features/trading-context'
 import { ApiClientError, createApiClient } from '@aurum/api-client'
 import { computed, ref } from 'vue'
 import type { MarketAnalysisSummary, StrategySummary, Timeframe } from '@aurum/contracts'
@@ -26,6 +26,7 @@ export function useHomeWorkspace() {
   let snapshotRequest = 0
   let marketRequest = 0
   let contextRequest = 0
+  const requests = createRequestScope(() => JSON.stringify([scopeVersion, session.value?.user.id, session.value?.authenticated_at]))
 
   function stop() {
     scopeVersion += 1
@@ -158,6 +159,8 @@ export function useHomeWorkspace() {
   async function selectTimeframe(value: Timeframe) { timeframe.value = value; await loadMarket() }
 
   async function loadLatestAnalysis(includeStrategies = false) {
+    const current = requests.begin('analysis')
+    const currentStrategies = includeStrategies ? requests.begin('analysis-strategies') : null
     analysisLoading.value = true
     analysisError.value = ''
     try {
@@ -165,11 +168,12 @@ export function useHomeWorkspace() {
         client.listMarketAnalyses(1),
         includeStrategies ? client.listStrategies('analysis') : Promise.resolve(null),
       ])
+      if (strategies && currentStrategies?.()) analysisStrategies.value = strategies.data.items
+      if (!current()) return
       latestAnalysis.value = analyses.data.items[0] ?? null
-      if (strategies) analysisStrategies.value = strategies.data.items
     } catch (reason) {
-      analysisError.value = reason instanceof Error ? reason.message : '最新分析暂时无法读取'
-    } finally { analysisLoading.value = false }
+      if (current()) analysisError.value = reason instanceof Error ? reason.message : '最新分析暂时无法读取'
+    } finally { if (current()) analysisLoading.value = false }
   }
 
   return { loading, error, symbol, symbols, timeframe, marketHistoryVersion, accounts: tradingAccounts, observers: observerChannels, context: tradingContext,
