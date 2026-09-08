@@ -1232,3 +1232,9 @@ api-registration-series-20260909.json 实际路由匹配92/96，仍缺快照列�
 发现macroSnapshotFields和economicCalendarEventSchema沿用numericRevisionSchema将大整数转Number。仅这两类改为规范十进制文本，保留9007199254740993原值；其余域及实时协议不顺带修改。快照与日历未来消费者必须按文本比较revision，不做浮点运算。
 
 market-client-contract.test.mjs通过实际Fastify HTTP适配器消费全部七项路由，验证DTO转换、精确值、查询编码、404及取消信号。合同包实际执行53项全部通过（命令过滤未缩小执行范围，按真实结果记数）；四应用与共享包类型、前端边界0新增、生成类型及冻结321通过。此为客户端/HTTP联测，不是页面或真实浏览器验收；无数据库连接、部署或重启。后续按feature实现页面与实时失效流程，来源日历和发布链路待办保留。
+
+## 102. Market feature 请求生命周期（第一百七十二批）
+
+核对/market仍为占位路由后，新增独立feature及公开入口、README和createMarketWorkspace。概览与详情分离请求控制，取消与代次共同阻止迟到响应覆盖；会话reset清空数据，dispose清理且禁止再次读取；详情结果必须匹配所选ID。状态区分idle/loading/ready/error，合法空结果ready，错误文案不透传SQL等内部内容。
+
+四项行为测试通过，trade类型及前端边界通过。沿用ui-ux-pro-max/shadcn-vue指导现有设计系统，记录摘要优先、独立空/错/加载态、稳定刷新入口和北京时间；本批未新增UI或接路由，不能称页面、会话watch或卸载hook已经验收。下一批接概览与详情组件，并实际调用reset/dispose，随后响应式与浏览器验证。无依赖连接或服务重启。
