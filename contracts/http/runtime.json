@@ -1,3 +1,10 @@
 {
-  "operations": ["listAuditEvents", "getAuditEvent", "setLearningCompletion"]
+  "operations": [
+    "listAuditEvents",
+    "getAuditEvent",
+    "setLearningCompletion",
+    "getTradingContext",
+    "listTradingAccounts",
+    "listObserverChannels"
+  ]
 }

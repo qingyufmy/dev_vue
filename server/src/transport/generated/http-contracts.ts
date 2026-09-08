@@ -488,6 +488,54 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         ],
         "type": "object"
       },
+      "ObserverChannelListResponse": {
+        "description": "Authenticated active users only. Source/channel must be ready and aligned. Audience all, exact effective plus/pro plan, or an explicit active grant authorizes reading; pro does not inherit plus. This never grants trading rights. Observer HTTP reads return a sanitized publication, not operator metadata or private history.",
+        "properties": {
+          "data": {
+            "properties": {
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "active": {
+                      "type": "boolean"
+                    },
+                    "display_name": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "$ref": "#/components/schemas/OpaqueId"
+                    },
+                    "source_account_id": {
+                      "$ref": "#/components/schemas/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "display_name",
+                    "source_account_id",
+                    "active"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "items"
+            ],
+            "type": "object"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ],
+        "type": "object"
+      },
       "OpaqueId": {
         "maxLength": 191,
         "minLength": 1,
@@ -548,6 +596,187 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
           "instance",
           "correlation_id",
           "retryable"
+        ],
+        "type": "object"
+      },
+      "Revision": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "TradingAccount": {
+        "additionalProperties": false,
+        "properties": {
+          "bridge_state": {
+            "enum": [
+              "online",
+              "offline",
+              "paused",
+              "replaced",
+              "unauthorized"
+            ],
+            "type": "string"
+          },
+          "currency": {
+            "maxLength": 12,
+            "minLength": 3,
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "last_seen_at": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UtcDateTime"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "login": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "platform": {
+            "enum": [
+              "mt4",
+              "mt5"
+            ],
+            "type": "string"
+          },
+          "server": {
+            "maxLength": 191,
+            "type": "string"
+          },
+          "terminal_instance_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "terminal_profile_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trade_permission": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "platform",
+          "login",
+          "server",
+          "currency",
+          "terminal_profile_id",
+          "terminal_instance_id",
+          "bridge_state",
+          "trade_permission",
+          "last_seen_at"
+        ],
+        "type": "object"
+      },
+      "TradingAccountListResponse": {
+        "properties": {
+          "data": {
+            "properties": {
+              "items": {
+                "items": {
+                  "$ref": "#/components/schemas/TradingAccount"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "items"
+            ],
+            "type": "object"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ],
+        "type": "object"
+      },
+      "TradingContext": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mode": {
+            "enum": [
+              "full",
+              "observer",
+              "blocked"
+            ],
+            "type": "string"
+          },
+          "observer_channel_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "read_only": {
+            "type": "boolean"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          },
+          "user_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          }
+        },
+        "required": [
+          "mode",
+          "user_id",
+          "account_id",
+          "observer_channel_id",
+          "read_only",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "TradingContextResponse": {
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/TradingContext"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
         ],
         "type": "object"
       },
@@ -835,6 +1064,111 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
           "$ref": "#/components/schemas/LearningCompletionRequest"
         },
         "required": true
+      }
+    },
+    "listObserverChannels": {
+      "parameters": [],
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/ObserverChannelListResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      }
+    },
+    "listTradingAccounts": {
+      "parameters": [
+        {
+          "name": "access",
+          "location": "query",
+          "required": false,
+          "integerQuery": false,
+          "schema": {
+            "default": "current",
+            "enum": [
+              "current",
+              "history"
+            ],
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/TradingAccountListResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      }
+    },
+    "getTradingContext": {
+      "parameters": [],
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/TradingContextResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
       }
     }
   }

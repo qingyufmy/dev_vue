@@ -12117,6 +12117,18 @@
               }
             },
             "description": "Authorized observer channels"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "summary": "List observer channels authorized for the current user",
@@ -13881,6 +13893,18 @@
               }
             },
             "description": "Owned trading accounts"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "summary": "List trading accounts owned by the current system user",
@@ -14061,7 +14085,16 @@
             },
             "description": "Current user trading scope"
           },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
           "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         },

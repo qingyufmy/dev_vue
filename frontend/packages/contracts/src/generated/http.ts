@@ -5010,6 +5010,10 @@ export interface operations {
                     "application/json": components["schemas"]["ObserverChannelListResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     getOperation: {
@@ -6100,6 +6104,10 @@ export interface operations {
                     "application/json": components["schemas"]["TradingAccountListResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     createExecutionCommand: {
@@ -6213,7 +6221,10 @@ export interface operations {
                     "application/json": components["schemas"]["TradingContextResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     replaceTradingContext: {

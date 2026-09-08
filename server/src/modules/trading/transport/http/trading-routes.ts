@@ -1,3 +1,4 @@
+import { createTradingReadContract } from './trading-read-contract.js'
 import type { FastifyPluginAsync } from 'fastify'
 import type { ConnectionCapacityService, TradingService } from '../../application/trading-service.js'
 import { TradingAccessError } from '../../domain/trading.js'
@@ -36,9 +37,10 @@ function problem(error: unknown, request: { id: string; url: string }, reply: { 
 }
 
 export const tradingRoutes: FastifyPluginAsync<TradingRoutesOptions> = async (fastify, options) => {
+  const contract = createTradingReadContract()
   fastify.get('/trading-context', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); return response(request.id, contextDto(await options.service.context(userId))) }
-    catch (error) { return problem(error, request, reply) }
+    try { const { userId } = await options.auth.authenticate(request); contract.request('getTradingContext', request); return contract.response('getTradingContext', response(request.id, contextDto(await options.service.context(userId)))) }
+    catch (error) { return contract.problem('getTradingContext', error, request, reply) }
   })
   fastify.put<{ Body: { account_id?: string; observer_channel_id?: string; mode: 'full' | 'observer'; expected_revision?: string } }>('/trading-context', async (request, reply) => {
     try {
@@ -58,8 +60,8 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesOptions> = async (fa
     } catch (error) { return problem(error, request, reply) }
   })
   fastify.get<{ Querystring: { access?: TradingAccountAccess } }>('/trading-accounts', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); return response(request.id, { items: (await options.service.listAccounts(userId, request.query.access)).map(accountDto) }) }
-    catch (error) { return problem(error, request, reply) }
+    try { const { userId } = await options.auth.authenticate(request); contract.request('listTradingAccounts', request); return contract.response('listTradingAccounts', response(request.id, { items: (await options.service.listAccounts(userId, request.query.access)).map(accountDto) })) }
+    catch (error) { return contract.problem('listTradingAccounts', error, request, reply) }
   })
   fastify.get('/bridge/connection-capacity', async (request, reply) => {
     try { const { userId } = await options.auth.authenticate(request); return response(request.id, await options.capacity.summary(userId)) }
@@ -70,8 +72,8 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesOptions> = async (fa
     catch (error) { return problem(error, request, reply) }
   })
   fastify.get('/observer-channels', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); return response(request.id, { items: (await options.service.listObserverChannels(userId)).map(observerDto) }) }
-    catch (error) { return problem(error, request, reply) }
+    try { const { userId } = await options.auth.authenticate(request); contract.request('listObserverChannels', request); return contract.response('listObserverChannels', response(request.id, { items: (await options.service.listObserverChannels(userId)).map(observerDto) })) }
+    catch (error) { return contract.problem('listObserverChannels', error, request, reply) }
   })
   fastify.get<{ Params: { account_id: string }; Querystring: { observer_channel_id?: string } }>('/trading-accounts/:account_id/snapshot', async (request, reply) => {
     try {
