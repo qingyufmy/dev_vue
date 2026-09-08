@@ -1,0 +1,46 @@
+{
+  "kind": "local-account-sso/v1",
+  "observedAt": "2026-09-08T16:13:56.497Z",
+  "failed": false,
+  "phase": "account-reads",
+  "checks": [
+    {
+      "name": "password-login-through-auth-proxy",
+      "status": 200
+    },
+    {
+      "name": "code-exchange-through-trade-proxy",
+      "status": 302
+    },
+    {
+      "name": "authenticated-session-string-user-id",
+      "status": 200
+    },
+    {
+      "name": "/api/v4/trading-accounts",
+      "status": 200,
+      "items": 0
+    },
+    {
+      "name": "/api/v4/observer-channels",
+      "status": 200,
+      "items": 0
+    },
+    {
+      "name": "/api/v4/bridge/terminal-profiles",
+      "status": 200,
+      "items": 0
+    },
+    {
+      "name": "session-revocation-4174",
+      "logoutStatus": 204,
+      "replayStatus": 401
+    },
+    {
+      "name": "session-revocation-4176",
+      "logoutStatus": 204,
+      "replayStatus": 401
+    }
+  ],
+  "scope": "Real local Vite proxies, API, Redis and development MySQL using an existing synthetic user. Empty account reads only; no positive account/observer, browser, terminal or trading proof. Own sessions revoked; fixture and audit history retained."
+}

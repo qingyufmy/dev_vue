@@ -506,3 +506,11 @@ API启动与health/ready已接入trading composition提供的结构检查，验�
 本地Redis 8.2.6在127.0.0.1:16379运行，独立密码与SSO密钥保存在仓库外受限目录；API在127.0.0.1:3010运行，MySQL仍使用原env开发库。新增本地配置入口限制覆盖范围和回环端点，8项配置测试通过。
 
 真实HTTP的8项基础检查通过，包括live/ready、认证发现/公钥、错误Host拒绝、匿名会话拒绝、写入Redis的登录开始及不存在凭据拒绝。见[回执](architecture/local-account-api-smoke-20260909.json)及[本地运行说明](runbooks/local-account-api-20260909.md)。这尚不包含成功SSO、浏览器或账户命令。下一步补齐trade本地代理并用独立联调数据完成成功登录和账户/观摩/恢复流程；服务端110条边界债务、临时整表就绪耦合与全域后续阶段继续推进。
+
+## 29. 真实本地代理 SSO 通过（第九十九批，2026-09-09）
+
+trade Vite 已接入精确 API/SSO 路径代理，保留浏览器 Host、Origin、Cookie。网络回归验证重定向、Cookie 透传及错误前缀不代理；trade 类型检查、前端边界检查通过，已检测债务仍为 0，扫描盲点未改变。
+
+独立开发用户通过实际 auth/trade Vite 代理完成密码登录、授权码交换、字符串用户 ID 会话读取，以及账户/观摩/终端档案空列表读取。探针 finally 撤销本次两个会话并以旧 Cookie 验证 401，8 项检查通过，见[真实 SSO 回执](architecture/local-account-sso-20260909.json)。可重复探针为 `scripts/verify-local-account-sso.mjs`；命令、数据范围与限制见[运行说明](runbooks/local-account-api-20260909.md)。未创建交易账户、未修改真实用户；开发夹具及认证审计历史保留供后续验收。
+
+Chrome 已打开本地 trade 首页，页面显示待登录和默认 UTC+03:00；这仅证明页面可加载，不是浏览器成功登录或账户流程验收。下一步继续正向账户/观摩夹具、浏览器恢复与跨域依赖收口；P1 与整体 P0–P7 仍未完成。

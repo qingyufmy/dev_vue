@@ -28,3 +28,16 @@ Redis采用[redis-windows社区8.2.6发布](https://github.com/redis-windows/red
 本地环境覆盖8项单元测试通过。首次自动探针错误读取嵌套error.code而失败，实际认证合同为顶层code；失败回执保留在[2026-09-08记录](../architecture/local-account-api-smoke-20260908.json)，修正探针后通过。该故障不代表服务认证失败。
 
 下一步使用独立、可清理的本地联调数据验证成功SSO与账户命令，保留真实旧用户/账户数据；补齐trade开发代理并进行浏览器会话、切换、权限拒绝与未知结果恢复。成功登录、正向观摩、真实终端、交易及公网均未由本记录证明。
+# 成功 SSO 追加验证（2026-09-09）
+
+在现有本地 API/Redis 及 auth 4176、trade 4174 Vite 进程运行时执行：
+
+```powershell
+node scripts/verify-local-account-sso.mjs D:/dev_codex/.local-runtime/dev-vue/account-fixture.json D:/dev_codex/dev_vue/docs/architecture/local-account-sso-20260909.json
+```
+
+输出文件必须不存在；重复验证使用新的回执文件名。夹具文件必须是预先独立创建的 `local-account-fixture/v1` 开发用户，包含随机 example.invalid 邮箱、密码、用户 ID 和 dev_vue 身份信息；不得替换为现有真实用户。本脚本不创建用户、不运行 SQL、不打印凭据，只访问固定回环 Vite 端口。当前夹具保存在仓库外受限目录，不能提交。
+
+成功路径验证登录、代码交换、会话和三种空列表，最后通过各自 logout 接口撤销本次持有的两个会话，再发送旧 Cookie 验证拒绝。保留夹具用户、已撤销会话及审计历史，不能将其称为数据库零写入或夹具全清理；先前探针产生的会话不属于本次撤销范围。失败阶段与撤销失败分别记录，失败时应先核对回执再重试；未消费的登录事务由既有 Redis TTL 过期。
+
+本次回执 8 项通过；代理网络测试、trade 类型和前端边界检查通过。验证不包含正向账户授权、观摩、上下文写入、浏览器交互或终端交易。
