@@ -1,4 +1,5 @@
-import type { BrowserRealtimeSink, BrowserRealtimeTarget } from './browser-realtime-hub.js'
+import type { BrowserRealtimeTarget } from './browser-realtime-hub.js'
+import type { BrowserRealtimeSink, BrowserRealtimeConnection } from '../../application/browser-realtime-ports.js'
 import { BrowserRealtimeHub } from './browser-realtime-hub.js'
 
 interface Target {
@@ -11,11 +12,20 @@ interface Target {
   after_revision: string | null
 }
 
-export class BrowserRealtimeSession {
+export class BrowserRealtimeSession implements BrowserRealtimeConnection {
   private stops: Array<() => void> = []
-  constructor(private readonly userId: number, private readonly hub: BrowserRealtimeHub, private readonly sink: BrowserRealtimeSink) {}
+  private closed = false
+  private generation = 0
+  private readonly sink: BrowserRealtimeSink
+  constructor(private readonly userId: number, private readonly hub: BrowserRealtimeHub, sink: BrowserRealtimeSink) {
+    this.sink = {
+      send: message => { if (!this.closed) sink.send(message) },
+      close: (code, reason) => { if (!this.closed) { this.close(); sink.close(code, reason) } },
+    }
+  }
 
   async receive(raw: unknown) {
+    if (this.closed) return
     if (isPing(raw)) {
       this.sink.send({ v: 4, type: 'system.pong', request_id: raw.request_id, occurred_at: new Date().toISOString() })
       return
@@ -40,14 +50,21 @@ export class BrowserRealtimeSession {
         publicTarget: target as unknown as Record<string, unknown>,
       })
     }
-    const stop = await this.hub.subscribeTargets({ userId: this.userId, requestId: raw.request_id, targets, sink: this.sink })
+    const generation = this.generation
+    const sink: BrowserRealtimeSink = {
+      send: message => { if (generation === this.generation) this.sink.send(message) },
+      close: (code, reason) => { if (generation === this.generation) this.sink.close(code, reason) },
+    }
+    const stop = await this.hub.subscribeTargets({ userId: this.userId, requestId: raw.request_id, targets, sink })
     if (!stop) return
+    if (this.closed || generation !== this.generation) { stop(); return }
     const previous = this.stops.splice(0)
     this.stops.push(stop)
     for (const release of previous) release()
   }
 
-  closeSubscriptions() { for (const stop of this.stops.splice(0)) stop() }
+  close() { this.closed = true; this.closeSubscriptions() }
+  closeSubscriptions() { this.generation += 1; for (const stop of this.stops.splice(0)) stop() }
   private protocolError(code: string) { this.sink.send({ v: 4, type: 'protocol.error', request_id: null, code, message: code, retryable: false }) }
 }
 

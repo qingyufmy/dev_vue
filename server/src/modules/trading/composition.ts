@@ -1,3 +1,5 @@
+import type { BrowserRealtimePublication, BrowserRealtimeSessions } from './application/browser-realtime-ports.js'
+import { BrowserRealtimeSession } from './transport/realtime/browser-realtime-session.js'
 import type { AccountClockReader } from './application/account-clock-reader.js'
 import { readTransactionAccountClock } from './infrastructure/mysql-transaction-account-clock.js'
 import type { Pool, PoolConnection } from 'mysql2/promise'
@@ -69,7 +71,8 @@ export function createBridgeTradingModule(pool: Pool, cache: Redis, leases: Gate
 }
 
 export function createBrowserTradingModule(pool: Pool, leases: GatewayLeases, eventCache: Redis, onEvent: () => void, onInvalidEvent: (code: string) => void): {
-  hub: BrowserRealtimeHub
+  hub: BrowserRealtimePublication
+  sessions: BrowserRealtimeSessions
   events: Pick<RedisBrowserRealtimeSubscriber, 'start' | 'close'>
 } {
   const access = new MysqlObserverAccessReader(pool)
@@ -78,7 +81,7 @@ export function createBrowserTradingModule(pool: Pool, leases: GatewayLeases, ev
     publish(event) { hub.publish(event); onEvent() },
     invalidateObserverAuthorization(control) { hub.invalidateObserverAuthorization(control); onEvent() },
   }, undefined, onInvalidEvent)
-  return { hub, events }
+  return { hub, events, sessions: createBrowserRealtimeSessions(hub) }
 }
 
 export function createAccountRegistration(connection: PoolConnection): AccountRegistration {
@@ -87,4 +90,8 @@ export function createAccountRegistration(connection: PoolConnection): AccountRe
 
 export function createTransactionAccountClock(connection: PoolConnection): AccountClockReader {
   return { read: (userId, accountId) => readTransactionAccountClock(connection, userId, accountId) }
+}
+
+export function createBrowserRealtimeSessions(hub: BrowserRealtimeHub): BrowserRealtimeSessions {
+  return { open: (userId, sink) => new BrowserRealtimeSession(userId, hub, sink) }
 }

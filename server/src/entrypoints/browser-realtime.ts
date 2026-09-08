@@ -20,13 +20,13 @@ async function main() {
   const eventCache = createCacheRedis(runtime.cacheRedis)
   await Promise.all([pool.query('SELECT 1'), connectCacheRedis(ticketCache), connectCacheRedis(eventCache)])
 
-  const { hub, events } = createBrowserTradingModule(pool, new RedisBridgeGatewayLeaseStore(ticketCache), eventCache,
+  const { sessions, events } = createBrowserTradingModule(pool, new RedisBridgeGatewayLeaseStore(ticketCache), eventCache,
     () => health.workSucceeded(), code => health.workFailed(code))
   const app = Fastify({ logger: true, bodyLimit: 8 * 1024, trustProxy: true })
   const webSockets = new BrowserRealtimeWebSocketServer(
     app.server,
     createRealtimeTicketAuthenticator(pool, ticketCache),
-    hub,
+    sessions,
     web.tradeOrigin,
     web.secureCookies,
   )

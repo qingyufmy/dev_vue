@@ -1,6 +1,6 @@
 import type { Redis } from 'ioredis'
 import type { BrowserRealtimeEvent, BrowserRealtimeEventType, BrowserRealtimeResource } from '../application/trading-ports.js'
-import type { BrowserRealtimeHub } from '../transport/realtime/browser-realtime-hub.js'
+import type { BrowserRealtimePublication } from '../application/browser-realtime-ports.js'
 import { OBSERVER_CONTROL_CHANNEL, observerInvalidation } from '../application/observer-invalidation.js'
 import { BROWSER_REALTIME_EVENT_CHANNEL } from '../application/browser-realtime-protocol.js'
 
@@ -60,7 +60,7 @@ export class RedisBrowserRealtimeSubscriber {
 
   constructor(
     private readonly redis: Redis,
-    private readonly hub: Pick<BrowserRealtimeHub, 'publish' | 'invalidateObserverAuthorization'>,
+    private readonly hub: BrowserRealtimePublication,
     private readonly channel = BROWSER_REALTIME_EVENT_CHANNEL,
     private readonly onInvalidEvent: (code: string) => void = () => undefined,
   ) {}

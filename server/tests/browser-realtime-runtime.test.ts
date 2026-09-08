@@ -1,3 +1,4 @@
+import { BrowserRealtimeHub } from '../src/modules/trading/transport/realtime/browser-realtime-hub.js'
 import Fastify from 'fastify'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -7,12 +8,11 @@ import { WebSocket } from 'ws'
 import { afterEach, describe, expect, it } from 'vitest'
 import { cookieNameForClient, RealtimeTicketAuthenticator, type AuthRepository, type RealtimeTicketStore } from '../src/modules/auth/index.js'
 import {
-  BrowserRealtimeHub,
   type BrowserRealtimeEvent, type TradingReadRepository, type TradingRealtimeEvent,
 } from '../src/modules/trading/index.js'
 import { RedisBrowserRealtimeSubscriber, parseBrowserRealtimeEvent } from '../src/modules/trading/infrastructure/redis-browser-realtime-subscriber.js'
 import { BrowserRealtimeWebSocketServer } from '../src/transport/browser-realtime-websocket-server.js'
-import { createTradingHttp, createObserverManagementHttp } from '../src/modules/trading/composition.js'
+import { createTradingHttp, createObserverManagementHttp, createBrowserRealtimeSessions } from '../src/modules/trading/composition.js'
 import { exactTradeHostHook, exactAdminHostHook, registerApiV4Routes, type ApiV4RouteServices } from '../src/transport/api-v4-route-registrar.js'
 import { createAuditModule } from '../src/modules/audit/composition.js'
 import { createAuthHttp } from '../src/modules/auth/composition.js'
@@ -93,7 +93,7 @@ describe('V4 browser realtime runtime', () => {
     let used = false
     const gateway = new BrowserRealtimeWebSocketServer(http, {
       async consume() { if (used) return null; used = true; return { userId: 42, sessionId: 3, clientId: 'trade-web' } },
-    }, new BrowserRealtimeHub(repository()), origin, false)
+    }, createBrowserRealtimeSessions(new BrowserRealtimeHub(repository())), origin, false)
     gateway.start()
     closers.push(async () => { await gateway.close(); await closeServer(http) })
     const socket = new WebSocket(`${origin.replace('http:', 'ws:')}/realtime/v4`, 'aurum.realtime.v4', {
@@ -119,7 +119,7 @@ describe('V4 browser realtime runtime', () => {
     const address = http.address() as AddressInfo
     const origin = `http://127.0.0.1:${address.port}`
     let consumes = 0
-    const gateway = new BrowserRealtimeWebSocketServer(http, { async consume() { consumes += 1; return null } }, new BrowserRealtimeHub(repository()), origin, false)
+    const gateway = new BrowserRealtimeWebSocketServer(http, { async consume() { consumes += 1; return null } }, createBrowserRealtimeSessions(new BrowserRealtimeHub(repository())), origin, false)
     gateway.start()
     closers.push(async () => { await gateway.close(); await closeServer(http) })
     const base = origin.replace('http:', 'ws:')

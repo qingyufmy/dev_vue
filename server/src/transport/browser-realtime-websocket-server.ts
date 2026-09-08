@@ -2,7 +2,7 @@ import type { IncomingMessage, Server as HttpServer } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocket, WebSocketServer, type RawData } from 'ws'
 import type { RealtimeTicketClaims } from '../modules/auth/index.js'
-import { BrowserRealtimeSession, type BrowserRealtimeHub, type BrowserRealtimeSink } from '../modules/trading/index.js'
+import type { BrowserRealtimeSessions, BrowserRealtimeSink } from '../modules/trading/index.js'
 
 const REALTIME_PATH = '/realtime/v4'
 const REALTIME_PROTOCOL = 'aurum.realtime.v4'
@@ -34,7 +34,7 @@ export class BrowserRealtimeWebSocketServer {
   constructor(
     private readonly server: HttpServer,
     private readonly tickets: BrowserRealtimeTicketConsumer,
-    private readonly hub: BrowserRealtimeHub,
+    private readonly sessions: BrowserRealtimeSessions,
     tradeOrigin: string,
     secureCookies = true,
   ) {
@@ -106,7 +106,7 @@ export class BrowserRealtimeWebSocketServer {
       },
       close: (code, reason) => socket.close(normalizeCloseCode(code), reason.slice(0, 123)),
     }
-    const session = new BrowserRealtimeSession(claims.userId, this.hub, sink)
+    const session = this.sessions.open(claims.userId, sink)
     sink.send({
       v: 4,
       type: 'system.welcome',
@@ -130,8 +130,8 @@ export class BrowserRealtimeWebSocketServer {
         .catch(() => socket.close(4400, 'realtime_message_invalid'))
         .finally(() => { pending -= 1 })
     })
-    socket.once('close', () => { clearInterval(heartbeat); session.closeSubscriptions() })
-    socket.once('error', () => { clearInterval(heartbeat); session.closeSubscriptions() })
+    socket.once('close', () => { clearInterval(heartbeat); session.close() })
+    socket.once('error', () => { clearInterval(heartbeat); session.close() })
   }
 }
 

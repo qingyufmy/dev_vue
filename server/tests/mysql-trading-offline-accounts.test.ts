@@ -1,8 +1,9 @@
+import { BrowserRealtimeHub } from '../src/modules/trading/transport/realtime/browser-realtime-hub.js'
 import { readFile } from 'node:fs/promises'
 import type { Pool } from 'mysql2/promise'
 import { describe, expect, it, vi } from 'vitest'
 import type { BridgeGatewayRoute } from '../src/modules/bridge/index.js'
-import { BrowserRealtimeHub, type TradingReadRepository } from '../src/modules/trading/index.js'
+import { type TradingReadRepository } from '../src/modules/trading/index.js'
 import { MysqlTradingRepository } from '../src/modules/trading/infrastructure/mysql-trading-repository.js'
 
 type Row = Record<string, unknown>

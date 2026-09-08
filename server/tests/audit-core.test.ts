@@ -1,3 +1,5 @@
+import { BrowserRealtimeSession } from '../src/modules/trading/transport/realtime/browser-realtime-session.js'
+import { BrowserRealtimeHub } from '../src/modules/trading/transport/realtime/browser-realtime-hub.js'
 import Fastify from 'fastify'
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it, vi } from 'vitest'
@@ -6,7 +8,7 @@ import { AuditService } from '../src/modules/audit/application/audit-service.js'
 import type { AuditRepository } from '../src/modules/audit/application/audit-ports.js'
 import { auditRoutes } from '../src/modules/audit/transport/http/audit-routes.js'
 import { AuthError } from '../src/modules/auth/index.js'
-import { BrowserRealtimeHub, BrowserRealtimeSession } from '../src/modules/trading/index.js'
+import { } from '../src/modules/trading/index.js'
 
 const now = '2026-09-04T08:00:00.000Z'
 const event = {

@@ -1,6 +1,7 @@
+import { BrowserRealtimeHub } from '../src/modules/trading/transport/realtime/browser-realtime-hub.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  BrowserRealtimeHub, OBSERVER_AUTHORIZATION_TTL_MS,
+  OBSERVER_AUTHORIZATION_TTL_MS,
   type BrowserRealtimeEvent, type BrowserRealtimeSink, type ObserverAccessReader,
   type ObserverAuthorization, type TradingReadRepository,
 } from '../src/modules/trading/index.js'

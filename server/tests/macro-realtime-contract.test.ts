@@ -1,8 +1,8 @@
+import { BrowserRealtimeSession } from '../src/modules/trading/transport/realtime/browser-realtime-session.js'
+import { BrowserRealtimeHub } from '../src/modules/trading/transport/realtime/browser-realtime-hub.js'
 import { describe, expect, it } from 'vitest'
 import {
-  BrowserRealtimeHub,
-  BrowserRealtimeSession,
-} from '../src/modules/trading/index.js'
+  } from '../src/modules/trading/index.js'
 import { parseBrowserRealtimeEvent } from '../src/modules/trading/infrastructure/redis-browser-realtime-subscriber.js'
 
 const occurredAt = '2026-09-05T08:00:00.000Z'

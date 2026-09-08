@@ -1,5 +1,6 @@
+import { BrowserRealtimeHub } from '../src/modules/trading/transport/realtime/browser-realtime-hub.js'
 import { describe, expect, it, vi } from 'vitest'
-import { BrowserRealtimeHub, type BrowserRealtimeEvent, type BrowserRealtimeSink, type TradingAccountSummary, type TradingReadRepository } from '../src/modules/trading/index.js'
+import { type BrowserRealtimeEvent, type BrowserRealtimeSink, type TradingAccountSummary, type TradingReadRepository } from '../src/modules/trading/index.js'
 
 const ACCOUNT_ID = 'account-42'
 const FORMER_OWNER_ID = 7

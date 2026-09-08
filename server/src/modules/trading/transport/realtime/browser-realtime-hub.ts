@@ -6,10 +6,7 @@ import {
 } from '../../application/observer-ports.js'
 import type { BrowserRealtimeEvent, TradingReadRepository } from '../../application/trading-ports.js'
 
-export interface BrowserRealtimeSink {
-  send(message: unknown): void
-  close(code: number, reason: string): void
-}
+import type { BrowserRealtimeSink } from '../../application/browser-realtime-ports.js'
 
 export interface BrowserRealtimeTarget {
   accountId: string | null
