@@ -35,7 +35,10 @@ export function useHomeWorkspace() {
 
   function clearForbiddenSnapshot(reason: unknown, scope: number) {
     if (scope === scopeVersion && reason instanceof ApiClientError && (reason.status === 401 || reason.status === 403)) {
+      stop()
       clearAccountRuntime()
+      activeAccountId.value = null
+      symbol.value = ''; symbols.value = []
       error.value = '当前数据访问权限已失效，请重新选择账户或观摩频道'
     }
   }

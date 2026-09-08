@@ -212,11 +212,57 @@ describe('observer HTTP resync scope protection', () => {
   it('clears published account data when a current refresh loses authorization', async () => {
     const home = useHomeWorkspace()
     await home.load()
+    const resync = latestResync()
+    const stops = mocks.stop.mock.calls.length
     mocks.api.getTradingWorkspace.mockRejectedValueOnce(new ApiClientError(403, null))
     await expect(latestResync()()).rejects.toMatchObject({ status: 403 })
     expect(accountSnapshot.value).toBeNull()
     expect(marketQuote.value).toBeNull()
     expect(home.error.value).toContain('访问权限已失效')
+    expect(mocks.stop).toHaveBeenCalledTimes(stops + 1)
+    expect(home.hasAccount.value).toBe(false)
+    expect(home.symbol.value).toBe('')
+    expect(home.symbols.value).toEqual([])
+    const reads = mocks.api.getTradingWorkspace.mock.calls.length
+    await resync()
+    expect(mocks.api.getTradingWorkspace).toHaveBeenCalledTimes(reads)
+    home.stop()
+  })
+
+  it('discards a market response still in flight when snapshot access is revoked', async () => {
+    const home = useHomeWorkspace()
+    await home.load()
+    const pending = deferred<{ data: { accountId: string; symbol: string; revision: number } }>()
+    mocks.api.getMarketQuote.mockReturnValueOnce(pending.promise)
+    const market = home.selectSymbol('EURUSD')
+    mocks.api.getTradingWorkspace.mockRejectedValueOnce(new ApiClientError(403, null))
+    await expect(latestResync()()).rejects.toMatchObject({ status: 403 })
+    pending.resolve({ data: { accountId: '1', symbol: 'EURUSD', revision: 2 } })
+    await market
+    expect(marketQuote.value).toBeNull()
+    expect(home.hasAccount.value).toBe(false)
+    await home.selectAccount('2')
+    expect(home.hasAccount.value).toBe(true)
+    expect(accountSnapshot.value?.id).toBe('2')
+    expect(marketQuote.value?.accountId).toBe('2')
+    expect(home.error.value).toBe('')
+    home.stop()
+  })
+
+  it('does not stop the new account when an old observer request returns forbidden', async () => {
+    const home = useHomeWorkspace()
+    await home.load()
+    const pending = deferred<ReturnType<typeof workspace>>()
+    mocks.api.getTradingWorkspace.mockReturnValueOnce(pending.promise)
+    const oldRefresh = latestResync()()
+    await home.selectAccount('2')
+    const stops = mocks.stop.mock.calls.length
+    pending.reject(new ApiClientError(403, null))
+    await oldRefresh
+    expect(mocks.stop).toHaveBeenCalledTimes(stops)
+    expect(home.hasAccount.value).toBe(true)
+    expect(accountSnapshot.value?.id).toBe('2')
+    expect(home.error.value).toBe('')
     home.stop()
   })
 
