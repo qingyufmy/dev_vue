@@ -1,7 +1,7 @@
 {
   "version": 1,
   "scope": "server/src source candidates; not database or ownership verification",
-  "files": 236,
+  "files": 239,
   "limitations": [
     "Literal SQL candidates may be unused; writers describe source directories, not approved owners.",
     "Dynamic targets, CTEs, multi-table shapes and indirect execute/query calls require manual review.",
@@ -711,7 +711,7 @@
       "evidence": [
         {
           "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
-          "line": 104,
+          "line": 117,
           "writer": "bridge",
           "operation": "INSERT",
           "table": "bridge_connection_sessions",
@@ -720,7 +720,7 @@
         },
         {
           "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
-          "line": 144,
+          "line": 157,
           "writer": "bridge",
           "operation": "UPDATE",
           "table": "bridge_connection_sessions",
@@ -729,7 +729,7 @@
         },
         {
           "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
-          "line": 151,
+          "line": 164,
           "writer": "bridge",
           "operation": "UPDATE",
           "table": "bridge_connection_sessions",
@@ -738,7 +738,7 @@
         },
         {
           "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
-          "line": 172,
+          "line": 185,
           "writer": "bridge",
           "operation": "UPDATE",
           "table": "bridge_connection_sessions",
@@ -747,7 +747,7 @@
         },
         {
           "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
-          "line": 201,
+          "line": 214,
           "writer": "bridge",
           "operation": "UPDATE",
           "table": "bridge_connection_sessions",
@@ -2759,7 +2759,7 @@
       "evidence": [
         {
           "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
-          "line": 396,
+          "line": 409,
           "writer": "bridge",
           "operation": "UPDATE",
           "table": "terminal_account_bindings",
@@ -2768,7 +2768,7 @@
         },
         {
           "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
-          "line": 399,
+          "line": 412,
           "writer": "bridge",
           "operation": "INSERT",
           "table": "terminal_account_bindings",
@@ -2819,7 +2819,7 @@
       "evidence": [
         {
           "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
-          "line": 348,
+          "line": 361,
           "writer": "bridge",
           "operation": "UPDATE",
           "table": "terminal_profiles",
@@ -2828,7 +2828,7 @@
         },
         {
           "file": "server/src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.ts",
-          "line": 357,
+          "line": 370,
           "writer": "bridge",
           "operation": "INSERT",
           "table": "terminal_profiles",
@@ -2946,13 +2946,13 @@
     {
       "table": "trading_account_ownership_intervals",
       "writers": [
-        "bridge"
+        "trading"
       ],
       "evidence": [
         {
-          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-first-account-claim.ts",
-          "line": 25,
-          "writer": "bridge",
+          "file": "server/src/modules/trading/infrastructure/mysql-account-registration.ts",
+          "line": 22,
+          "writer": "trading",
           "operation": "INSERT",
           "table": "trading_account_ownership_intervals",
           "review": null,
@@ -2963,13 +2963,13 @@
     {
       "table": "trading_account_ownerships",
       "writers": [
-        "bridge"
+        "trading"
       ],
       "evidence": [
         {
-          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-first-account-claim.ts",
-          "line": 30,
-          "writer": "bridge",
+          "file": "server/src/modules/trading/infrastructure/mysql-account-registration.ts",
+          "line": 27,
+          "writer": "trading",
           "operation": "INSERT",
           "table": "trading_account_ownerships",
           "review": null,
@@ -2980,13 +2980,13 @@
     {
       "table": "trading_accounts",
       "writers": [
-        "bridge"
+        "trading"
       ],
       "evidence": [
         {
-          "file": "server/src/modules/bridge/infrastructure/mysql-bridge-first-account-claim.ts",
-          "line": 12,
-          "writer": "bridge",
+          "file": "server/src/modules/trading/infrastructure/mysql-account-registration.ts",
+          "line": 9,
+          "writer": "trading",
           "operation": "INSERT",
           "table": "trading_accounts",
           "review": null,

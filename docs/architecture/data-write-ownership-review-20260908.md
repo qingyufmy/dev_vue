@@ -2,6 +2,8 @@
 
 日期：2026-09-08。P0 源码清单与首轮语义核查，未完成全表所有权验收。
 
+第二十批更新：账户实体及两张归属表的首次登记写入已迁入trading；Bridge使用运行入口注入、绑定现有事务连接的登记端口。当前清单239个源文件、264个候选、92张静态目标表、6张多模块写入表；三张账户根表的静态写入者均为trading。账户读取/授权投影与完整数据库表对齐仍待完成。
+
 第十九批更新：认证模块的 Bridge 凭据撤销实现已迁入 bridge，运行入口通过受限 composition 入口创建并注入 auth；auth 不再直接写这两张 Bridge 表。当前 JSON 已刷新为236个源文件、264个候选、92张静态目标表、6张多模块写入表；5处未解析候选和114处间接调用保持。下文首轮统计为改造前证据。
 
 ## 证据与复现
@@ -20,7 +22,7 @@
 
 | 表 | 当前源码写入者 | 目标职责与处理方式 | 阶段 |
 | --- | --- | --- | --- |
-| `trading_accounts`、`trading_account_ownership_intervals`、`trading_account_ownerships` | bridge | 账户实体与归属属于 trading。Bridge 首次认领通过 trading 的事务内公开能力完成；账户创建、归属、凭据重查、绑定和连接登记保留同一提交边界 | P1 |
+| `trading_accounts`、`trading_account_ownership_intervals`、`trading_account_ownerships` | trading（第二十批已移除 bridge 直接写入） | Bridge 首次认领通过交易账户登记端口完成；运行入口注入绑定现有连接的trading适配器。账户创建、归属、凭据重查、绑定和连接登记保留同一提交边界 | P1，首次登记写入归位已实现 |
 | `terminal_profiles`、`terminal_account_bindings`、`bridge_connection_sessions` | bridge | 设备档案、精确绑定和连接生命周期由 bridge 管理；trading 通过声明的查询能力取得账户连接投影 | P1 |
 | `bridge_refresh_sessions`、`bridge_v4_pairing_requests` | bridge（第十九批已移除 auth 直接写入） | 凭据与配对撤销实现由 bridge 拥有，运行入口注入 auth 所需的撤销端口。原用户锁、配对/凭据同一事务以及设备撤销完成后再退出网页的顺序保留；失败继续向上传播 | P1/P6，当前端口收口已实现 |
 | `subscription_schedules` | strategies、inference | 区分订阅配置变更与调度游标推进，通过所属域的比较并更新能力协作；不得以两个模块分别控制部分字段替代唯一所有者。最终归属结合 P3/P4 用例复审确定 | P3/P4 |
@@ -29,7 +31,7 @@
 | `risk_reservations_v4`、`risk_reservation_events_v4` | execution、trading | 预留预算规则与生命周期归 risk，执行流程和可信投影通过专用能力预留、提交、过期或吸收；不根据表当前所在文件确定归属 | P5 |
 | `outbox_events` | outbox、execution、inference、reviews、risk、trade-history、trading | outbox 提供受限的事务内追加能力和投递状态管理；业务域仍在自己的事务内追加事件。不能改为先提交业务、再独立插入事件，也不把多生产者当成可删除的重复写入 | P0/P1–P6 |
 
-特别注意：账户三张根表目前扫描为单一写入者 bridge，仍存在业务归属问题；“多写入者数量为零”不能作为所有权完成判据。
+特别注意：账户三张根表初次扫描为单一写入者 bridge，仍存在业务归属问题；第二十批已归位trading。这说明“多写入者数量为零”不能作为所有权完成判据。
 
 ## 五处未解析 SQL 的人工核查
 

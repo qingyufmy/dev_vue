@@ -9,9 +9,11 @@ import {
 } from '../modules/execution/index.js'
 import {
   BridgeGatewayCommandTransport, BridgeGatewayService, BridgeTradeProjectionDecoder, BridgeV4StreamIngestor,
-  BridgeGatewayQueryTransport, InProcessBridgeGatewayDirectory, MysqlBridgeGatewayRouteRepository, RedisBridgeGatewayLeaseStore,
+  BridgeGatewayQueryTransport, InProcessBridgeGatewayDirectory, RedisBridgeGatewayLeaseStore,
   RedisBridgeSessionTicketStore,
 } from '../modules/bridge/index.js'
+import { createBridgeGatewayRoutes } from '../modules/bridge/composition.js'
+import { createAccountRegistration } from '../modules/trading/composition.js'
 import {
   BridgeStreamProjector, MysqlTradingRepository, RedisBrowserRealtimePublisher,
 } from '../modules/trading/index.js'
@@ -39,7 +41,7 @@ async function main() {
   const projector = new BridgeStreamProjector(trading, publisher)
   const streams = new BridgeV4StreamIngestor(new BridgeTradeProjectionDecoder(), projector)
   const directory = new InProcessBridgeGatewayDirectory()
-  const routes = new MysqlBridgeGatewayRouteRepository(pool)
+  const routes = createBridgeGatewayRoutes(pool, createAccountRegistration)
   const transport = new BridgeGatewayCommandTransport(leases, directory, routes)
   const queries = new BridgeGatewayQueryTransport(leases, directory, routes)
   const historyCollector = new TradeHistoryCollector(new MysqlTradeHistoryCollectorRepository(pool), queries)

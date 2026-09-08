@@ -3,10 +3,13 @@ import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import type { BridgeGatewayRoute, BridgeSessionHelloEnvelope } from '../src/modules/bridge/domain/bridge-gateway.js'
 import { assertSessionHello, BridgeGatewayError } from '../src/modules/bridge/domain/bridge-gateway.js'
-import { MysqlBridgeGatewayRouteRepository } from '../src/modules/bridge/infrastructure/mysql-bridge-gateway-route-repository.js'
+import { createBridgeGatewayRoutes } from '../src/modules/bridge/composition.js'
+import { createAccountRegistration } from '../src/modules/trading/composition.js'
 import { MysqlBridgeCredentialRepository } from '../src/modules/bridge/infrastructure/mysql-bridge-credential-repository.js'
 import { RedisBridgeSessionTicketStore } from '../src/modules/bridge/infrastructure/redis-bridge-session-ticket-store.js'
 import type { Redis } from 'ioredis'
+
+const createRoutes = (pool: Pool) => createBridgeGatewayRoutes(pool, createAccountRegistration)
 
 const NOW = '2026-09-06T00:00:00.000Z'
 const LATER = '2026-09-06T00:01:00.000Z'
@@ -459,7 +462,7 @@ function registrationInput(options: InputOptions = {}) {
   }
 }
 
-async function open(repository: MysqlBridgeGatewayRouteRepository, options: InputOptions = {}) {
+async function open(repository: ReturnType<typeof createRoutes>, options: InputOptions = {}) {
   return repository.authorizeAndOpen(registrationInput(options))
 }
 
@@ -478,7 +481,7 @@ function addAccount(pool: FakePool, id: string, login: string, revision: string,
 describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
   it('rejects pre-revocation tickets and all old route proofs after exact credential revocation, preserving account history', async () => {
     const pool = new FakePool()
-    const repository = new MysqlBridgeGatewayRouteRepository(pool.asPool())
+    const repository = createRoutes(pool.asPool())
     const active = await open(repository)
     await repository.activate(active, NOW)
     const pending = await open(repository, { epoch: 2, connectionId: 'connection-2' })
@@ -519,7 +522,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
     const pool = new FakePool()
     pool.state.accounts = []
     pool.state.ownerships = []
-    const repository = new MysqlBridgeGatewayRouteRepository(pool.asPool())
+    const repository = createRoutes(pool.asPool())
     const input = firstInput()
     input.hello.payload.terminals[0]!.account_facts!.observed_at_utc_msc -= 59_000
     const route = await repository.authorizeAndOpen(input)
@@ -542,7 +545,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
       if (kind === 'revoked') pool.state.ownerships[0]!.revokedAt = NOW
       if (kind === 'other') pool.state.ownerships[0]!.userId = 8
       const before = structuredClone(pool.state)
-      await expect(new MysqlBridgeGatewayRouteRepository(pool.asPool()).authorizeAndOpen(firstInput()))
+      await expect(createRoutes(pool.asPool()).authorizeAndOpen(firstInput()))
         .rejects.toMatchObject({ code: 'bridge_route_binding_invalid', status: 403 })
       expect(pool.state).toEqual(before)
     }
@@ -552,7 +555,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
     const pool = new FakePool()
     pool.state.accounts = []
     pool.state.ownerships = []
-    const repository = new MysqlBridgeGatewayRouteRepository(pool.asPool())
+    const repository = createRoutes(pool.asPool())
     await repository.authorizeAndOpen(firstInput())
     pool.state.credentials.push({ ...pool.state.credentials[0]!, userId: 8, profileId: 'profile-2' })
     const before = structuredClone(pool.state)
@@ -570,7 +573,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
       if (kind === 'deleted') pool.state.accounts[0]!.deletedAt = NOW
       const before = structuredClone(pool.state)
       const input = firstInput(kind === 'case' ? { brokerServer: 'dprime-demo 5' } : {})
-      await expect(new MysqlBridgeGatewayRouteRepository(pool.asPool()).authorizeAndOpen(input))
+      await expect(createRoutes(pool.asPool()).authorizeAndOpen(input))
         .rejects.toMatchObject({ code: 'bridge_route_conflict', status: 409 })
       expect(pool.state).toEqual(before)
     }
@@ -579,7 +582,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
   it('requires first-account facts and rejects malformed, mismatched and stale facts even for existing owners', async () => {
     const pool = new FakePool()
     pool.state.accounts = []
-    await expect(open(new MysqlBridgeGatewayRouteRepository(pool.asPool())))
+    await expect(open(createRoutes(pool.asPool())))
       .rejects.toMatchObject({ code: 'bridge_route_account_not_found' })
     const cases = [
       { currency: undefined }, { currency: '' }, { currency: 'USD\n' }, { currency: '1234567890123' }, { currency: '欧元' },
@@ -591,7 +594,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
       const existing = new FakePool()
       const input = firstInput()
       Object.assign(input.hello.payload.terminals[0]!.account_facts!, patch)
-      await expect(new MysqlBridgeGatewayRouteRepository(existing.asPool()).authorizeAndOpen(input)).rejects.toBeInstanceOf(BridgeGatewayError)
+      await expect(createRoutes(existing.asPool()).authorizeAndOpen(input)).rejects.toBeInstanceOf(BridgeGatewayError)
       expect(existing.calls).toHaveLength(0)
       if ('currency' in patch) expect(() => assertSessionHello(input.hello)).toThrow(BridgeGatewayError)
     }
@@ -602,7 +605,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
       const pool = new FakePool()
       const input = firstInput()
       input.hello.payload.terminals[0]!.account_facts!.observed_at_utc_msc += offset
-      await expect(new MysqlBridgeGatewayRouteRepository(pool.asPool()).authorizeAndOpen(input)).resolves.toMatchObject({ accountId: '42' })
+      await expect(createRoutes(pool.asPool()).authorizeAndOpen(input)).resolves.toMatchObject({ accountId: '42' })
     }
   })
 
@@ -630,7 +633,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
       if (kind === 'owner') pool.failOn = 'INSERT INTO trading_account_ownerships'
       if (kind === 'session') pool.failOn = 'INSERT INTO bridge_connection_sessions'
       const before = structuredClone(pool.state)
-      await expect(new MysqlBridgeGatewayRouteRepository(pool.asPool()).authorizeAndOpen(firstInput())).rejects.toBeInstanceOf(BridgeGatewayError)
+      await expect(createRoutes(pool.asPool()).authorizeAndOpen(firstInput())).rejects.toBeInstanceOf(BridgeGatewayError)
       expect(pool.state).toEqual(before)
       expect(pool.transactions).toEqual(['begin', 'rollback', 'release'])
     }
@@ -643,7 +646,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
       pool.state.ownerships = []
       pool.failOn = 'INSERT INTO trading_accounts'
       pool.failureCode = code
-      await expect(new MysqlBridgeGatewayRouteRepository(pool.asPool()).authorizeAndOpen(firstInput())).rejects.toMatchObject({ status })
+      await expect(createRoutes(pool.asPool()).authorizeAndOpen(firstInput())).rejects.toMatchObject({ status })
       expect(pool.state.accounts).toHaveLength(0)
       expect(pool.state.ownerships).toHaveLength(0)
       expect(pool.calls.filter(call => call.sql.includes('INSERT INTO trading_accounts'))).toHaveLength(1)
@@ -651,9 +654,30 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
     }
   })
 
+  it('maps registration port failures to existing errors and rolls back the same transaction', async () => {
+    for (const stage of ['create', 'grant'] as const) {
+      for (const reason of ['storage_invalid', 'storage_unavailable'] as const) {
+        const pool = new FakePool()
+        pool.state.accounts = []
+        pool.state.ownerships = []
+        const before = structuredClone(pool.state)
+        const repository = createBridgeGatewayRoutes(pool.asPool(), connection => {
+          const registration = createAccountRegistration(connection)
+          return {
+            createAccount: stage === 'create' ? async () => ({ ok: false as const, reason }) : registration.createAccount.bind(registration),
+            grantFirstOwnership: stage === 'grant' ? async () => ({ ok: false as const, reason }) : registration.grantFirstOwnership.bind(registration),
+          }
+        })
+        await expect(repository.authorizeAndOpen(firstInput())).rejects.toMatchObject({ code: `bridge_route_${reason}`, status: 503 })
+        expect(pool.state).toEqual(before)
+        expect(pool.transactions).toEqual(['begin', 'rollback', 'release'])
+      }
+    }
+  })
+
   it('registers a first profile and owner binding, then returns frozen proof', async () => {
     const pool = new FakePool()
-    const route = await open(new MysqlBridgeGatewayRouteRepository(pool.asPool()))
+    const route = await open(createRoutes(pool.asPool()))
 
     expect(route).toMatchObject({ userId: 7, accountId: '42', platform: 'mt5', brokerServer: 'DPrime-Demo 5',
       login: '8950701', terminalProfileId: 'profile-1', installationId: 'install-1', credentialGeneration: 2,
@@ -687,7 +711,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
 
   it('does not duplicate an identical binding on reconnect', async () => {
     const pool = new FakePool()
-    const repository = new MysqlBridgeGatewayRouteRepository(pool.asPool())
+    const repository = createRoutes(pool.asPool())
     await open(repository)
     await open(repository, { epoch: 2, connectionId: 'connection-2', sessionId: 'session-2' })
     expect(pool.state.bindings).toHaveLength(1)
@@ -698,7 +722,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
   it('closes the old binding and preserves its history when changing accounts', async () => {
     const pool = new FakePool()
     addAccount(pool, '43', '8950702', '4')
-    const repository = new MysqlBridgeGatewayRouteRepository(pool.asPool())
+    const repository = createRoutes(pool.asPool())
     await open(repository)
     await open(repository, { login: '8950702', epoch: 2, connectionId: 'connection-2', sessionId: 'session-2' })
     expect(pool.state.bindings).toHaveLength(2)
@@ -720,7 +744,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
     for (const value of cases) {
       const pool = new FakePool()
       value.prepare?.(pool)
-      await expect(open(new MysqlBridgeGatewayRouteRepository(pool.asPool()), value.options), value.name)
+      await expect(open(createRoutes(pool.asPool()), value.options), value.name)
         .rejects.toSatisfy(error => errorCode(error) === value.expected)
     }
   })
@@ -737,14 +761,14 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
     for (const value of cases) {
       const pool = new FakePool()
       value.mutate(pool)
-      await expect(open(new MysqlBridgeGatewayRouteRepository(pool.asPool())), value.name)
+      await expect(open(createRoutes(pool.asPool())), value.name)
         .rejects.toSatisfy(error => errorCode(error) === 'bridge_route_binding_invalid')
     }
   })
 
   it('rejects a stale profile epoch before changing bindings', async () => {
     const pool = new FakePool()
-    const repository = new MysqlBridgeGatewayRouteRepository(pool.asPool())
+    const repository = createRoutes(pool.asPool())
     await open(repository, { epoch: 4 })
     const before = { profiles: pool.state.profiles.length, bindings: pool.state.bindings.length, sessions: pool.state.sessions.length }
     await expect(open(repository, { epoch: 3, connectionId: 'connection-3', sessionId: 'session-3' }))
@@ -766,7 +790,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
     ]
     for (const value of pendingCases) {
       const pool = new FakePool()
-      const repository = new MysqlBridgeGatewayRouteRepository(pool.asPool())
+      const repository = createRoutes(pool.asPool())
       const route = await open(repository)
       value.mutate(pool)
       await expect(repository.activate(route, LATER), value.name)
@@ -785,7 +809,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
     ]
     for (const value of activeCases) {
       const pool = new FakePool()
-      const repository = new MysqlBridgeGatewayRouteRepository(pool.asPool())
+      const repository = createRoutes(pool.asPool())
       const route = await open(repository)
       await repository.activate(route, LATER)
       value.mutate(pool)
@@ -812,14 +836,14 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
     for (const value of cases) {
       const pool = new FakePool()
       const options = value.prepare(pool)
-      await expect(open(new MysqlBridgeGatewayRouteRepository(pool.asPool()), options), value.name)
+      await expect(open(createRoutes(pool.asPool()), options), value.name)
         .rejects.toSatisfy(error => errorCode(error) === 'bridge_route_binding_invalid')
     }
   })
 
   it('switches an owned MT5 profile to an owned MT4 account without replacing its credential', async () => {
     const pool = new FakePool()
-    const repository = new MysqlBridgeGatewayRouteRepository(pool.asPool())
+    const repository = createRoutes(pool.asPool())
     const old = await open(repository)
     await repository.activate(old, NOW)
     pool.state.accounts.push({ id: '44', platform: 'mt4', brokerServer: 'DPrime-Demo 5', login: '8950704', deletedAt: null, ownershipRevision: '1' })
@@ -837,7 +861,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
 
   it('rolls back a platform change when a later epoch check fails', async () => {
     const pool = new FakePool()
-    const repository = new MysqlBridgeGatewayRouteRepository(pool.asPool())
+    const repository = createRoutes(pool.asPool())
     await open(repository, { epoch: 5 })
     pool.state.accounts.push({ id: '44', platform: 'mt4', brokerServer: 'DPrime-Demo 5', login: '8950704', deletedAt: null, ownershipRevision: '1' })
     pool.state.ownerships.push({ ...pool.state.ownerships[0]!, accountId: '44', revision: '1', intervalId: 'interval-44' })
@@ -849,7 +873,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
   it('rolls back profile/binding/session writes on a mid-transaction storage error', async () => {
     const pool = new FakePool()
     pool.failOn = 'INSERT INTO bridge_connection_sessions'
-    await expect(open(new MysqlBridgeGatewayRouteRepository(pool.asPool())))
+    await expect(open(createRoutes(pool.asPool())))
       .rejects.toMatchObject({ code: 'bridge_route_storage_unavailable', status: 503 })
     expect(pool.state.profiles).toHaveLength(0)
     expect(pool.state.bindings).toHaveLength(0)
@@ -859,7 +883,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
 
   it('activates only the latest pending proof and replaces the prior active session', async () => {
     const pool = new FakePool()
-    const repository = new MysqlBridgeGatewayRouteRepository(pool.asPool())
+    const repository = createRoutes(pool.asPool())
     const first = await open(repository)
     await repository.activate(first, LATER)
     expect(pool.state.sessions[0]).toMatchObject({ disconnectedAt: null, reason: null })
@@ -874,7 +898,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
 
   it('touches and authorizes an active route, then fails closed after binding revocation', async () => {
     const pool = new FakePool()
-    const repository = new MysqlBridgeGatewayRouteRepository(pool.asPool())
+    const repository = createRoutes(pool.asPool())
     const route = await open(repository)
     await repository.activate(route, LATER)
     await expect(repository.touch(route, LATER)).resolves.toBe(true)
@@ -891,7 +915,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
 
   it('scopes epochs to user/profile: a new profile may start at a low epoch', async () => {
     const pool = new FakePool()
-    const repository = new MysqlBridgeGatewayRouteRepository(pool.asPool())
+    const repository = createRoutes(pool.asPool())
     await open(repository, { epoch: 9 })
     pool.state.credentials.push({ ...pool.state.credentials[0]!, installationId: 'install-2', profileId: 'profile-2' })
     const second = await open(repository, { profileId: 'profile-2', installationId: 'install-2', epoch: 1,
@@ -907,7 +931,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
   it('translates database failures and always releases the transaction connection', async () => {
     const pool = new FakePool()
     pool.failOn = 'SELECT CAST(a.id AS CHAR) id'
-    await expect(open(new MysqlBridgeGatewayRouteRepository(pool.asPool())))
+    await expect(open(createRoutes(pool.asPool())))
       .rejects.toMatchObject({ code: 'bridge_route_storage_unavailable', status: 503 })
     expect(pool.transactions).toEqual(['begin', 'rollback', 'release'])
   })
