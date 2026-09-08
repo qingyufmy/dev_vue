@@ -1,0 +1,103 @@
+{
+  "kind": "local-observer-account-context-http/v1",
+  "observedAt": "2026-09-08T18:54:49.599Z",
+  "failed": false,
+  "phase": "observer-context-commands",
+  "checks": [
+    {
+      "name": "password-login-through-auth-proxy",
+      "status": 200
+    },
+    {
+      "name": "code-exchange-through-trade-proxy",
+      "status": 302
+    },
+    {
+      "name": "authenticated-session-string-user-id",
+      "status": 200
+    },
+    {
+      "name": "/api/v4/trading-accounts",
+      "status": 200,
+      "items": 2
+    },
+    {
+      "name": "/api/v4/observer-channels",
+      "status": 200,
+      "items": 1
+    },
+    {
+      "name": "/api/v4/bridge/terminal-profiles",
+      "status": 200,
+      "items": 0
+    },
+    {
+      "name": "owned-switch-requires-csrf-without-changing-context",
+      "passed": true
+    },
+    {
+      "name": "select-first-owned-account-and-replay-one-revision",
+      "passed": true
+    },
+    {
+      "name": "changed-account-body-and-stale-revision-rejected",
+      "passed": true
+    },
+    {
+      "name": "switch-second-account-and-keep-historical-receipt-separate",
+      "passed": true
+    },
+    {
+      "name": "concurrent-account-switches-have-one-winner",
+      "passed": true
+    },
+    {
+      "name": "observer-grant-does-not-confer-source-ownership",
+      "passed": true
+    },
+    {
+      "name": "enter-assigned-observer-and-replay-same-command",
+      "passed": true
+    },
+    {
+      "name": "observer-publication-matches-exact-source-and-is-read-only",
+      "passed": true
+    },
+    {
+      "name": "leave-observer-restores-owned-context-without-replaying-old-result",
+      "passed": true
+    },
+    {
+      "name": "session-revocation-4174",
+      "logoutStatus": 204,
+      "replayStatus": 401
+    },
+    {
+      "name": "session-revocation-4176",
+      "logoutStatus": 204,
+      "replayStatus": 401
+    }
+  ],
+  "contextResult": {
+    "owned": {
+      "priorRevision": "12",
+      "finalRevision": "15",
+      "committedCommands": 3,
+      "accountIds": [
+        "4",
+        "5"
+      ],
+      "finalAccountId": "4",
+      "retained": "synthetic offline accounts, context and command receipts"
+    },
+    "observer": {
+      "priorRevision": "15",
+      "finalRevision": "17",
+      "committedCommands": 2,
+      "channelId": "1",
+      "sourceAccountId": "6",
+      "restoredAccountId": "4"
+    }
+  },
+  "scope": "Real local HTTP/API/Redis/dev_vue: owned account switching plus assigned observer entry/exit, source ownership rejection and publication scope isolation. Synthetic data and receipts retained; sessions revoked. No revocation, browser, lost commit ACK or terminal proof."
+}

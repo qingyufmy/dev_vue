@@ -1,0 +1,11 @@
+{
+  "kind": "local-observer-clock-comparison/v1",
+  "observedAt": "2026-09-08T18:57:11.064Z",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "dbMinusClientMinMs": 4717,
+  "dbMinusClientMaxMs": 4737,
+  "scope": "Read-only clock comparison. New DB grants may be future-dated on the application clock; authorization remains fail-closed. No time configuration changes."
+}

@@ -1,0 +1,62 @@
+{
+  "kind": "local-observer-fixture/v1",
+  "observedAt": "2026-09-08T18:53:11.099Z",
+  "passed": true,
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "viewerUserId": 31,
+  "actorUserId": 32,
+  "accountId": "6",
+  "sourceId": "1",
+  "channelId": "1",
+  "accessRevision": 1,
+  "checks": [
+    "separate-synthetic-operator-and-owned-offline-account",
+    "domain-management-creates-disabled-then-activates-assigned-channel-and-grants-viewer",
+    "viewer-can-observe-but-does-not-own-source-and-unassigned-operator-cannot-observe"
+  ],
+  "operations": [
+    {
+      "phase": "source-create",
+      "operation_id": "4f497e4b-b684-4a45-bd30-0680526e1738",
+      "target_id": "1",
+      "revision": 1,
+      "registry_revision": 1
+    },
+    {
+      "phase": "source-activate",
+      "operation_id": "bf5a5e70-6607-40c0-93cd-814d310a31bd",
+      "target_id": "1",
+      "revision": 2,
+      "registry_revision": 2
+    },
+    {
+      "phase": "channel-create",
+      "operation_id": "e502fde1-2431-462b-8411-faf346441fcc",
+      "target_id": "1",
+      "revision": 1,
+      "registry_revision": 3
+    },
+    {
+      "phase": "channel-activate",
+      "operation_id": "fb7325c6-b82e-49ce-b3df-01d4566e318c",
+      "target_id": "1",
+      "revision": 2,
+      "registry_revision": 4
+    },
+    {
+      "phase": "viewer-grant",
+      "operation_id": "13f547bb-c9ce-48c1-a27a-91b39022efd4",
+      "target_id": "1",
+      "revision": 1,
+      "registry_revision": 5
+    }
+  ],
+  "commitState": "previously_confirmed",
+  "eligibilityWaitMs": 0,
+  "retained": "Synthetic operator, owned account, source, assigned channel, grant, receipts and outbox events; private intent journal retained. No usable operator password retained.",
+  "scope": "Compiled domain management and readback on current full dev_vue schema. No fabricated terminal profile, online state, prices, positions or commands. HTTP/browser observer flow not covered."
+}

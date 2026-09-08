@@ -8,7 +8,7 @@ function schemaHash(ddl: string): string {
     .replace(/(\) ENGINE=[^\n]*?) AUTO_INCREMENT=\d+(?= |$)/, '$1')).digest('hex')
 }
 
-// Current supported upgrade profile. Metadata only: never count rows, migrate or populate tables.
+// Current supported upgrade profile plus the required management singleton. Never writes or populates data.
 // Future compatible steps are allowed; any unfinished step or consumed-schema drift rejects readiness.
 export async function assertMysqlTradingSchemaReady(pool: Pick<Pool, 'getConnection'>,
   principalReadSchema?: (connection: Pick<PoolConnection, 'query'>) => Promise<void>): Promise<void> {
@@ -37,6 +37,11 @@ export async function assertMysqlTradingSchemaReady(pool: Pick<Pool, 'getConnect
       'SELECT EVENT_OBJECT_TABLE tableName FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA=DATABASE()')
     const guarded = new Set<string>(inplaceAccountSchema.tables.map(row => row.table))
     if (triggers.some(row => guarded.has(row.tableName))) throw Error('trigger')
+    const [registry] = await connection.query<RowDataPacket[]>(
+      'SELECT CAST(revision AS CHAR) revision FROM observer_management_registry WHERE id=1 LIMIT 1')
+    const revision = registry[0]?.revision
+    if (registry.length !== 1 || typeof revision !== 'string' || !/^(0|[1-9][0-9]*)$/.test(revision)
+      || BigInt(revision) >= BigInt(Number.MAX_SAFE_INTEGER)) throw Error('observer_registry')
   } catch {
     // Do not expose SQL, connection strings or driver messages through health/startup errors.
     throw Error('trading_schema_not_ready')

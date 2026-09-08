@@ -1164,3 +1164,22 @@ verify-local-account-sso.mjs 增加显式 --owned-accounts 模式，保留原空
 Chrome 访问本地交易端登录页成功，点击安全登录后在身份中心授权地址出现 ERR_BLOCKED_BY_CLIENT；刷新后仍拦截，未输入凭据，已关闭本次标签。此结果不证明应用登录故障的根因，也不算正向浏览器验收通过；不修改浏览器安全设置绕过。下一批需排查该拦截并继续浏览器账户切换、正向观摩、权限撤销与异常恢复。
 
 本批脚本语法、diff 检查和 321 个冻结输入验证通过；没有修改应用代码或重启角色。服务端边界债务仍为 64，P1 和全栈整体未完成。已建立的两个永久合成账户使原空账户 SSO/观摩快照探针的前置条件不再成立，后续应显式使用正向模式，不能将空列表断言改成宽松通过。
+
+
+## 67. 观摩管理升级缺口补正与正向 HTTP 验收（第一百三十七批）
+
+正向夹具首次创建发现 observer_management_registry 的 id=1 缺失：标准 20260905_022 迁移含初始化 INSERT，原地 025 只提取结构，导致管理用例直接返回 storage_unavailable。首次已提交的合成运营者 32 和离线账户 6 保留；源和管理回执当时均未写入。失败报告 local-observer-fixture-20260909.json 保留，未重复创建身份或账户。
+
+按 architecture/observer-registry-seed-correction-20260909.md 两轮复审，追加 042_observer_registry_seed.sql、版本化步骤及协调器。只有无 seed 且源/频道/授权/操作/相关 outbox 全空时才初始化；已有 revision 保持原值，历史非空但行缺失时拒绝猜测。seed 和新账本同一 InnoDB 事务提交；现有升级锁和 registry 行/间隙锁保持串行。新增就绪检查只读必需初始行，缺失或版本耗尽拒绝启动，不在启动时修库。
+
+当前 dev_vue 真实 inspect→失败注入回滚→apply→inspect 均通过，账本 165→166，新增一个初始行与一条步骤回执。回滚演练确认 seed 和账本一同撤销、原快照一致；后续在管理 revision 已推进到 5 时重复 apply，inserted=false、journalWritten=false，revision=5 保持。回执为 architecture/observer-registry-seed-{before,rehearsal,apply,after,replay}-20260909.json。未改写历史迁移、账户历史或 UTC 数据。
+
+新增 provision-local-observer-channel.mjs 的仓库外持久意图/操作日志；--resume 核对原运营者、账户、原 key/body 和数据库回执后，经原管理幂等入口恢复，不创建第二份身份。完成源停用创建→启用、assigned 频道创建→启用、仅向合成用户 31 授权，形成 5 个管理操作和 5 个 outbox 事件；运营者无保留的可登录密码，账户离线且无交易权限。源/频道均为 1，源账户 6，读回证明用户 31 可观摩但不拥有账户 6，未获授权的运营者无观摩目录。最终回执 local-observer-fixture-verified-20260909.json。
+
+一次立即读回未通过，随后测得 VM 数据库时钟比本机快约 4.7 秒（local-observer-clock-comparison-20260909.json）；新 grant 的数据库时间可能暂时晚于应用时间。保留失败回执 local-observer-fixture-resumed-20260909.json，不将该失败单独认定为时钟根因。夹具验证增加最多 10 秒的显式生效时间等待，超限拒绝；生产授权规则及机器时钟配置不改动。再次使用相同 key/body 恢复并读回通过，没有重复管理操作。
+
+verify-local-account-sso 增加显式 --observer-channel 模式，17 项实际 HTTP 检查通过：自有账户切换、源账户所有权拒绝、指定频道进入/退出与幂等回执、源账户只读发布、错误账户与频道组合拒绝及独立会话撤销。第一次上下文 12→17；更新本地 API 后重复验收 17→22，最终恢复自有账户 4。报告 local-observer-account-context-http-20260909.json、local-observer-seeded-http-20260909.json；共保留相应命令历史。
+
+迁移协议 6 项、就绪回归 21 项、server 类型与构建检查通过；服务端债务仍 64 条，运行登记仍 14 项，321 个冻结输入不变。编译后真实 MySQL 就绪检查通过（observer-registry-seeded-readiness-20260909.json）。本地 API 更新到本批应用构建，可见 PowerShell 43996、Node 43444、3010 端口；8 项基础探针及上述 17 项 HTTP 通过，Redis/MySQL 地址保持原开发配置。
+
+Chrome 再次在授权地址报 ERR_BLOCKED_BY_CLIENT；独立无会话 HTTP 跳转链为 302→302→登录页 200，具体客户端拦截原因未确认，本次标签已关闭。没有浏览器正向切换、实时权限撤销/重连、真实终端或交易证明。下一步继续夹具精确退役机制、权限撤销与恢复，以及浏览器拦截诊断；P1 和整体重构均未完成。

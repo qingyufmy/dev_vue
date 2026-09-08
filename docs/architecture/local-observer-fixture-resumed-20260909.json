@@ -1,0 +1,48 @@
+{
+  "passed": false,
+  "phase": "readback",
+  "commitState": "previously_confirmed",
+  "actorUserId": 32,
+  "accountId": "6",
+  "sourceId": "1",
+  "channelId": "1",
+  "operations": [
+    {
+      "phase": "source-create",
+      "operation_id": "4f497e4b-b684-4a45-bd30-0680526e1738",
+      "target_id": "1",
+      "revision": 1,
+      "registry_revision": 1
+    },
+    {
+      "phase": "source-activate",
+      "operation_id": "bf5a5e70-6607-40c0-93cd-814d310a31bd",
+      "target_id": "1",
+      "revision": 2,
+      "registry_revision": 2
+    },
+    {
+      "phase": "channel-create",
+      "operation_id": "e502fde1-2431-462b-8411-faf346441fcc",
+      "target_id": "1",
+      "revision": 1,
+      "registry_revision": 3
+    },
+    {
+      "phase": "channel-activate",
+      "operation_id": "fb7325c6-b82e-49ce-b3df-01d4566e318c",
+      "target_id": "1",
+      "revision": 2,
+      "registry_revision": 4
+    },
+    {
+      "phase": "viewer-grant",
+      "operation_id": "13f547bb-c9ce-48c1-a27a-91b39022efd4",
+      "target_id": "1",
+      "revision": 1,
+      "registry_revision": 5
+    }
+  ],
+  "code": "local_observer_fixture_failed",
+  "recovery": "Do not create new identities. After diagnosing the failure, --resume verifies the durable intent and existing identity/account, inspects receipts, then reuses each exact original key/body through management idempotency. All history is retained."
+}

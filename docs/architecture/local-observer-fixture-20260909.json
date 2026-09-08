@@ -1,0 +1,11 @@
+{
+  "passed": false,
+  "phase": "source-create",
+  "commitState": "confirmed",
+  "actorUserId": 32,
+  "accountId": "6",
+  "operations": [],
+  "code": "local_observer_fixture_failed",
+  "detailCode": "observer_management_storage_unavailable",
+  "recovery": "Do not rerun creation. Inspect the durable intent/operation journal and exact database receipts before any follow-up; confirmed and uncertain changes are retained."
+}

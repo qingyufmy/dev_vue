@@ -1,0 +1,36 @@
+{
+  "kind": "local-observer-registry-upgrade/v1",
+  "observedAt": "2026-09-08T18:49:49.025Z",
+  "passed": true,
+  "mode": "--apply",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "result": {
+    "state": "complete",
+    "inserted": true,
+    "journalWritten": true,
+    "revision": "0",
+    "counts": {
+      "sources": "0",
+      "channels": "0",
+      "grants": "0",
+      "operations": "0",
+      "events": "0"
+    },
+    "priorHistoryHash": "2105accc20a9b600afab7ae0fc842b6845f3b51187f67fbbf283ce49be79d582",
+    "completedSteps": 166
+  },
+  "commitState": "confirmed",
+  "step": {
+    "id": "inplace_042_01_observer_management_registry_seed",
+    "sql": "INSERT INTO observer_management_registry (id,revision) VALUES (1,0)",
+    "protocol": "observer-registry-seed/v1",
+    "priorRegistryHash": "c600028bf22dfb26fc0b94b7500f7421986703c6e6af05f7ddd213112a720047",
+    "checksum": "ff7ce1e81d6bbf7d6650930f200b865613eb35fcb972ae87206d43dbc0d95bfe"
+  },
+  "frozenInputs": 321,
+  "scope": "Single required seed plus atomic append-only migration ledger. Existing revisions and all business/history rows preserved. No DDL, runtime startup or terminal action."
+}
