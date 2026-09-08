@@ -1,0 +1,85 @@
+{
+  "kind": "current-account-wave-result/v1",
+  "observedAt": "2026-09-08T14:02:45.614Z",
+  "mode": "--inspect",
+  "manifestHash": "69b520257fc9101e9a34c1329bbc2d311935ddfacd6898f4af04a7647aa57936",
+  "target": "dev_vue",
+  "before": {
+    "protectedTables": 212,
+    "priorLedgerTablesPreserved": 6,
+    "projections": [
+      {
+        "table": "trading_accounts_v4_build",
+        "rows": 0,
+        "expectedRows": 3,
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      {
+        "table": "user_trading_account_settings_v4_build",
+        "rows": 0,
+        "expectedRows": 4,
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      {
+        "table": "trading_account_ownership_intervals_v4_build",
+        "rows": 0,
+        "expectedRows": 274,
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      {
+        "table": "trading_account_ownerships_v4_build",
+        "rows": 0,
+        "expectedRows": 4,
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      }
+    ]
+  },
+  "after": {
+    "protectedTables": 212,
+    "priorLedgerTablesPreserved": 6,
+    "projections": [
+      {
+        "table": "trading_accounts_v4_build",
+        "rows": 0,
+        "expectedRows": 3,
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      {
+        "table": "user_trading_account_settings_v4_build",
+        "rows": 0,
+        "expectedRows": 4,
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      {
+        "table": "trading_account_ownership_intervals_v4_build",
+        "rows": 0,
+        "expectedRows": 274,
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      },
+      {
+        "table": "trading_account_ownerships_v4_build",
+        "rows": 0,
+        "expectedRows": 4,
+        "sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+      }
+    ]
+  },
+  "batches": [],
+  "tools": [
+    {
+      "path": "scripts/execute-current-account-wave-local.mjs",
+      "sha256": "756d28084bd367bf3a815d72a3a29ffb61d4d1c3694471b4e713c5e1b396d7e7"
+    },
+    {
+      "path": "scripts/lib/current-account-wave-runtime.mjs",
+      "sha256": "3e2160466de6eb214a3f1101ab584be1f7d499a50a72c81c1c408ed902ba2633"
+    },
+    {
+      "path": "scripts/lib/current-account-wave-state.mjs",
+      "sha256": "33684b397078352df2b276703fee2dbace9fb3a10b8b3617eedeecd211b87f11"
+    }
+  ],
+  "complete": false,
+  "schemaPromoted": false,
+  "scope": "Four build tables and six migration ledger tables only; protected original rows and prior ledger rows reconciled. No root table promotion or runtime activation."
+}
