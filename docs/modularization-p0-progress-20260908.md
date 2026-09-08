@@ -660,3 +660,10 @@ getTradingContext/listTradingAccounts/listObserverChannels接入同源运行校�
 新增MysqlContextCommands和回执校验，活动用户锁→原回执→上下文CAS→同连接目标解析→上下文/回执写入→回读校验→commit。相同键/正文重放历史结果，异体409；回执失败回滚；commit确认丢失销毁连接并允许后续读取原回执。旧请求历史结果不覆盖后来已变更的上下文。
 
 8项适配器及3项命令测试共11项通过，完整server类型检查通过，存量债务110、运行合同8项不变。两轮复核见[写入合同](architecture/trading-context-write-contract-20260908.md)。这是连接fixture验证；未连接数据库、未执行165步。目标解析器、独立写端口接线、旧写入口移除、HTTP幂等键及前端确认继续待办。
+
+
+## 第七十二批：真实账户与观摩目标解析
+
+新增prepareMysqlContextTarget：外部route在事务前采集，事务内锁定当前所有权与区间并复用原repository终端/投影校验；观摩使用authorizeOn同连接复核。退出观摩保留最小账户ID顺序，无账户blocked，候选变化409。route快照不替代交易执行时的实时授权。
+
+6项新测试与既有离线账户、观摩及命令事务共30项通过，完整server类型检查通过，边界110无新增。两轮复核和证据限制见[写入合同](architecture/trading-context-write-contract-20260908.md)。未连接数据库或启用新写入；接下来完成迁移执行与组装，移除旧写入口，接通HTTP和前端幂等恢复。
