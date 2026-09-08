@@ -1,0 +1,54 @@
+{
+  "kind": "local-chrome-positive-account-flow/v1",
+  "observedAt": "2026-09-08T20:03:51.412Z",
+  "sourceCommit": "0ec07bf2",
+  "browser": "Chrome user1",
+  "entry": "authorize navigation blocked; manually navigated to server-defined login route with the same unmodified authorization parameters",
+  "checks": [
+    "credential-login-and-normal-callback",
+    "select-second-owned-account",
+    "reload-retains-second-account",
+    "enter-assigned-observer-read-only",
+    "reload-retains-observer",
+    "leave-observer-restores-first-owned-account",
+    "logout-trade-returns-login",
+    "test-tab-closed"
+  ],
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "contexts": [
+    {
+      "mode": "full",
+      "accountId": "4",
+      "observerChannelId": null,
+      "readOnly": 1,
+      "revision": "47"
+    }
+  ],
+  "sessions": [
+    {
+      "clientId": "auth",
+      "activeCount": "2"
+    },
+    {
+      "clientId": "trade-web",
+      "activeCount": "1"
+    }
+  ],
+  "limitations": [
+    "automatic /oauth/authorize navigation remains ERR_BLOCKED_BY_CLIENT",
+    "identity-center session is independent of trade logout",
+    "offline fixtures without terminal market data; no realtime disconnect proof",
+    "no responsive or visual acceptance",
+    "inference_unavailable visible on latest analysis card",
+    "API process unchanged since prior runtime acceptance; newer domain composition changes not runtime-tested"
+  ],
+  "runtimePids": {
+    "api": 42252,
+    "realtime": 32740,
+    "trade": 448,
+    "auth": 11240
+  }
+}
