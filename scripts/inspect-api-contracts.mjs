@@ -4,6 +4,7 @@ import { registerApiV4Routes } from '../server/dist-v4/transport/api-v4-route-re
 import { cookieNameForClient } from '../server/dist-v4/modules/auth/index.js'
 import { createAuthHttp } from '../server/dist-v4/modules/auth/composition.js'
 import { createLearningHttp } from '../server/dist-v4/modules/learning/composition.js'
+import { createSettingsHttp } from '../server/dist-v4/modules/settings/composition.js'
 import { createAuditModule } from '../server/dist-v4/modules/audit/composition.js'
 import { compareApiRoutes } from './lib/api-route-coverage.mjs'
 
@@ -20,11 +21,12 @@ const stub = new Proxy({}, { get: (_target, name) => name === 'then' ? undefined
 const services = Object.fromEntries([
   'bridgeCredentials', 'bridgePairing', 'trading', 'connectionCapacity',
   'inference', 'strategies', 'risk', 'reviews', 'execution', 'userExecution', 'executionDistribution',
-  'tradeHistory', 'tradeAuth', 'settingReader', 'settings', 'referralRules', 'observerManagement', 'observerAdminAuth',
+  'tradeHistory', 'tradeAuth', 'referralRules', 'observerManagement', 'observerAdminAuth',
 ].map(name => [name, stub]))
 services.auth = { cookieName: cookieNameForClient }
 services.authHttp = createAuthHttp(services.auth, false)
 services.learningHttp = createLearningHttp({ read: stub, completion: stub }, services.auth, { wwwOrigin: 'https://www.example.test', secureCookies: false })
+services.settingsHttp = createSettingsHttp({ read: stub, write: stub }, stub)
 services.auditHttp = createAuditModule({ ownsAccount: unavailable, list: unavailable, find: unavailable }, { authenticate: unavailable }).http
 try {
   await registerApiV4Routes(app, services, { tradeOrigin: 'https://trade.example.test', adminOrigin: 'https://admin.example.test' })

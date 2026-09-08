@@ -1,5 +1,5 @@
 import type { PoolConnection, RowDataPacket, ResultSetHeader } from 'mysql2/promise'
-import type { SettingType } from './mysql-setting-reader.js'
+import type { SettingType } from '../domain/setting-read.js'
 
 export interface SettingUpdate {
   namespace: string; key: string; expectedType: Exclude<SettingType, 'credential'>

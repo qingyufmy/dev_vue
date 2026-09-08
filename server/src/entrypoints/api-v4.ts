@@ -1,6 +1,6 @@
 import { createMysqlLearningService, createMysqlLearningCompletionService, createLearningHttp } from '../modules/learning/composition.js'
 import { MysqlLearningMembershipReader } from '../modules/commerce/index.js'
-import { validateSettingMenu,AdminSettingReader,MysqlAdminSettingReader,SettingManagementService,MysqlSettingManagement } from '../modules/settings/management.js'
+import { createMysqlSettingsModule } from '../modules/settings/composition.js'
 import { ReferralRuleManagementService, MysqlReferralRuleManagement } from '../modules/commerce/index.js'
 import Fastify from 'fastify'
 import { createMysqlAuditModule } from '../modules/audit/composition.js'
@@ -43,6 +43,7 @@ async function main() {
 
   const auth = createAuthModule(pool, cache, web.auth, createBridgeDeviceRevoker(pool))
   const tradeAuth = new AuthTradeRequestAdapter(auth)
+  const observerAdminAuth = new AuthObserverAdminAdapter(auth)
   const observerAccess = new MysqlObserverAccessReader(pool)
   const tradingRepository = new MysqlTradingRepository(pool, new RedisBridgeGatewayLeaseStore(cache), observerAccess)
   const userExecution = new UserExecutionCommandService(new MysqlUserExecutionCommandRepository(pool))
@@ -73,11 +74,10 @@ async function main() {
     tradeHistory: new TradeHistoryService(new MysqlTradeHistoryRepository(pool)),
     auditHttp: createMysqlAuditModule(pool, tradeAuth).http,
     tradeAuth,
-    settingReader: new AdminSettingReader(new MysqlAdminSettingReader(pool)),
-    settings: new SettingManagementService(new MysqlSettingManagement(pool,validateSettingMenu)),
+    settingsHttp: createMysqlSettingsModule(pool, observerAdminAuth).http,
     referralRules: new ReferralRuleManagementService(new MysqlReferralRuleManagement(pool)),
     observerManagement: new ObserverManagementService(new MysqlObserverManagementRepository(pool)),
-    observerAdminAuth: new AuthObserverAdminAdapter(auth),
+    observerAdminAuth,
   }, { tradeOrigin: web.auth.tradeOrigin, adminOrigin: web.auth.adminOrigin })
 
   app.get('/health/live', async () => ({ status: 'ok', ...health.snapshot() }))

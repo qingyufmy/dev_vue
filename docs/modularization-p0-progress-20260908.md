@@ -220,3 +220,11 @@ learning新增composition入口，查询服务、完成写入服务和HTTP插件
 SSO的两种Cookie课程解锁与完成写入用例改经实际HTTP工厂；学习查询/事务、认证及浏览器运行41项测试通过，完整类型检查与构建通过。实际87个业务路由保持，8项缺失、未声明/参数差异及协议路由按method/path逐项一致。原MySQL事务和提交未知处理未改；只读开发库探针更新工厂导入后仅做语法检查，未执行探针。
 
 [Learning README](../server/src/modules/learning/README.md)明确进度两表写入归属、内容读取及会员依赖。240文件边界存量124条，只删除4条已消除例外；SQL清单只刷新文件数。真实数据、课程管理全功能、剩余模块与P0/P1–P7验收继续。
+
+## 第二十四批：设置模块统一公开入口
+
+移除settings/management第二入口，index仅公开领域读取类型/端口和管理用例；composition绑定内部读取、管理读写和HTTP，生产工厂固定保留validateSettingMenu。API入口注入既有管理员认证适配器，管理路由仍位于精确admin host检查下。读取类型从MySQL文件迁入domain，写入适配器同步引用，无SQL或事务行为变更。
+
+39项读写、值/菜单策略、管理HTTP及运行注册测试通过；完整服务端类型检查和构建通过。实际87个业务接口及既有8项缺失、参数/未声明差异和协议路由逐项保持。Secret遮蔽、NULL/空字符串区分、管理员资格、revision、幂等和提交未知继续由既有行为测试验证。
+
+[Settings README](../server/src/modules/settings/README.md)登记三表写入、事务锁序、内部读取与HTTP权限差异。241文件存量123条，无新增，只删除1条已检测的index导出例外；原management导出未计入旧扫描，明确保留多入口覆盖缺口。未修改真实配置或连接数据库；整体方案继续。

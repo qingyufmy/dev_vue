@@ -1,10 +1,6 @@
 import type { PoolConnection, RowDataPacket } from 'mysql2/promise'
 
-export type SettingType = 'string' | 'boolean' | 'integer' | 'enum' | 'json_array' | 'credential'
-interface Metadata { id: string; namespace: string; key: string; type: SettingType; sensitivity: 'public' | 'restricted' | 'secret'; revision: string }
-export type SettingLookup = { status: 'missing' }
-  | { status: 'protected'; metadata: Metadata; valueState: 'null' | 'empty' | 'text' }
-  | { status: 'found'; metadata: Metadata; valueState: 'null' | 'empty' | 'text'; rawValue: string | null }
+import type { SettingType, SettingLookup, SettingMetadata as Metadata } from '../domain/setting-read.js'
 interface SettingRow extends RowDataPacket {
   id: string; namespace: string; setting_key: string; value_type: SettingType; sensitivity: Metadata['sensitivity']; revision: string
   value_state: 'null' | 'empty' | 'text'; readable_value: string | null

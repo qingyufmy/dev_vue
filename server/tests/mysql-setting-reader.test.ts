@@ -1,6 +1,8 @@
 import { expect,it,vi } from 'vitest'
 import type { PoolConnection } from 'mysql2/promise'
-import { readSetting } from '../src/modules/settings/index.js'
+import { createSettingReader } from '../src/modules/settings/composition.js'
+import type { SettingReader } from '../src/modules/settings/index.js'
+const readSetting=(connection:Pick<PoolConnection,'execute'>,input:Parameters<SettingReader['read']>[0])=>createSettingReader(connection).read(input)
 const row=()=>({id:'1',namespace:'fixture',setting_key:'key',value_type:'string',sensitivity:'restricted',revision:'9007199254740993',value_state:'text',readable_value:'value'})
 function fixture(rows: unknown[]) {const execute=vi.fn(async()=>[rows,[]]);return {execute,c:{execute} as unknown as Pick<PoolConnection,'execute'>}}
 const input={namespace:'fixture',key:'key',expectedType:'string' as const}

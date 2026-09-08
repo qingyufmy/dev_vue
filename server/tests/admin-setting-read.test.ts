@@ -1,7 +1,9 @@
 import Fastify from 'fastify'
 import type { Pool } from 'mysql2/promise'
 import { expect,it,vi } from 'vitest'
-import { AdminSettingReader,MysqlAdminSettingReader,adminSettingReadRoutes } from '../src/modules/settings/management.js'
+import { AdminSettingReader } from '../src/modules/settings/index.js'
+import { MysqlAdminSettingReader } from '../src/modules/settings/infrastructure/mysql-admin-setting-reader.js'
+import { adminSettingReadRoutes } from '../src/modules/settings/transport/http/admin-setting-read-routes.js'
 const metadata={id:'1',namespace:'smtp',key:'port',type:'integer',sensitivity:'restricted',revision:'9007199254740993'}
 async function fixture() {
  const read=vi.fn().mockResolvedValue({status:'found',metadata,valueState:'text',rawValue:'465'})

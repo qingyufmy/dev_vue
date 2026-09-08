@@ -1,14 +1,15 @@
 import Fastify from 'fastify'
 import { expect,it,vi } from 'vitest'
 import { AuthError } from '../src/modules/auth/index.js'
-import { SettingManagementService,settingRoutes } from '../src/modules/settings/management.js'
+import { SettingManagementService, AdminSettingReader } from '../src/modules/settings/index.js'
+import { createSettingsHttp } from '../src/modules/settings/composition.js'
 import { exactAdminHostHook } from '../src/transport/api-v4-route-registrar.js'
 const body={namespace:'smtp',key:'port',value_type:'integer',expected_revision:'9007199254740993',value:'465'}
 async function fixture() {
  const execute=vi.fn().mockResolvedValue({id:'1',revision:'9007199254740994',replayed:false})
- const auth={assertWrite:vi.fn().mockResolvedValue({userId:1,role:'admin'})}
+ const auth={assertWrite:vi.fn().mockResolvedValue({userId:1,role:'admin'}),authenticate:vi.fn().mockResolvedValue({userId:1,role:'admin'})}
  const app=Fastify();app.addHook('onRequest',exactAdminHostHook('https://admin.example.test'))
- await app.register(settingRoutes,{prefix:'/api/v4/admin/settings',service:new SettingManagementService({execute}),auth})
+ await app.register(createSettingsHttp({read:new AdminSettingReader({read:async()=>({status:'missing'})}),write:new SettingManagementService({execute})},auth))
  const send=(payload:unknown=body,headers={},suffix='')=>app.inject({method:'PUT',url:'/api/v4/admin/settings/value'+suffix,
   headers:{host:'admin.example.test','idempotency-key':'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',...headers},payload:payload as object})
  return {app,send,execute,auth}
