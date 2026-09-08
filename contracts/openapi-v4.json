@@ -10931,6 +10931,18 @@
               }
             },
             "description": "Connection capacity"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "summary": "Get included, purchased and currently used trading-account connection capacity",
@@ -11199,6 +11211,18 @@
               }
             },
             "description": "Terminal profiles"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         },
         "summary": "List replaceable MT4 and MT5 terminal profiles without counting offline profiles as capacity",

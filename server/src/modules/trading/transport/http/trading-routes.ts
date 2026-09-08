@@ -83,12 +83,12 @@ export const tradingRoutes: FastifyPluginAsync<TradingRoutesOptions> = async (fa
     catch (error) { return contract.problem('listTradingAccounts', error, request, reply) }
   })
   fastify.get('/bridge/connection-capacity', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); return response(request.id, await options.capacity.summary(userId)) }
-    catch (error) { return problem(error, request, reply) }
+    try { const { userId } = await options.auth.authenticate(request); contract.request('getBridgeConnectionCapacity', request); return contract.response('getBridgeConnectionCapacity', response(request.id, await options.capacity.summary(userId))) }
+    catch (error) { return contract.problem('getBridgeConnectionCapacity', error, request, reply) }
   })
   fastify.get('/bridge/terminal-profiles', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); return response(request.id, { items: (await options.service.listTerminalProfiles(userId)).map(profileDto) }) }
-    catch (error) { return problem(error, request, reply) }
+    try { const { userId } = await options.auth.authenticate(request); contract.request('listTerminalProfiles', request); return contract.response('listTerminalProfiles', response(request.id, { items: (await options.service.listTerminalProfiles(userId)).map(profileDto) })) }
+    catch (error) { return contract.problem('listTerminalProfiles', error, request, reply) }
   })
   fastify.get('/observer-channels', async (request, reply) => {
     try { const { userId } = await options.auth.authenticate(request); contract.request('listObserverChannels', request); return contract.response('listObserverChannels', response(request.id, { items: (await options.service.listObserverChannels(userId)).map(observerDto) })) }

@@ -378,6 +378,51 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         ],
         "type": "object"
       },
+      "ConnectionCapacityResponse": {
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "active": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "available": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "included": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "purchased": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "total": {
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "included",
+              "purchased",
+              "total",
+              "active",
+              "available"
+            ],
+            "type": "object"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ],
+        "type": "object"
+      },
       "FieldProblem": {
         "additionalProperties": false,
         "properties": {
@@ -603,6 +648,88 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         "maxLength": 128,
         "minLength": 1,
         "type": "string"
+      },
+      "TerminalProfileListResponse": {
+        "properties": {
+          "data": {
+            "properties": {
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "account_id": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/OpaqueId"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "connection_state": {
+                      "enum": [
+                        "online",
+                        "offline",
+                        "paused"
+                      ],
+                      "type": "string"
+                    },
+                    "display_name": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "$ref": "#/components/schemas/OpaqueId"
+                    },
+                    "installation_id": {
+                      "$ref": "#/components/schemas/OpaqueId"
+                    },
+                    "last_seen_at": {
+                      "oneOf": [
+                        {
+                          "$ref": "#/components/schemas/UtcDateTime"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "platform": {
+                      "enum": [
+                        "mt4",
+                        "mt5"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "display_name",
+                    "platform",
+                    "installation_id",
+                    "account_id",
+                    "connection_state",
+                    "last_seen_at"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "items"
+            ],
+            "type": "object"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ],
+        "type": "object"
       },
       "TradingAccount": {
         "additionalProperties": false,
@@ -1107,6 +1234,66 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
           }
         },
         "404": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      }
+    },
+    "getBridgeConnectionCapacity": {
+      "parameters": [],
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/ConnectionCapacityResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      }
+    },
+    "listTerminalProfiles": {
+      "parameters": [],
+      "responses": {
+        "200": {
+          "application/json": {
+            "$ref": "#/components/schemas/TerminalProfileListResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
           "application/problem+json": {
             "$ref": "#/components/schemas/Problem"
           }

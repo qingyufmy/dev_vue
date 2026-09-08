@@ -568,3 +568,11 @@ trading声明只读AccountLiveRouteReader，替代对BridgeGatewayLeaseStore及�
 新增真实MySQL探针，从当前四张正式表LIKE复制连接私有临时结构，执行实际applyProjection。首次同名源/目标LIKE被MySQL拒绝，未进入DML，见[准备失败回执](architecture/projection-times-mysql-20260909.json)；改为先建立临时中间副本，再建立同名遮蔽表后，[真实回执](architecture/projection-times-mysql-verified-20260909.json)验证账户/报价/K线的UTC毫秒读回、重复revision不写、非法时间回滚。连接销毁，永久业务表写入0。
 
 LIKE复制列及索引但不复制外键，未运行可信路由/来源证明/ticket完整链路或真实终端，不能扩大为完整投影验收。后续仍需正向账户/观摩、可信投影端到端及结构就绪耦合收口，整体P0–P7未完成。
+
+## 37. 连接额度与终端档案 API 运行合同（第一百零七批）
+
+两项已有账户入口读取补充400/401/403/503错误合同，登记运行校验并接入路由，先认证再校验，非法成功数据返回经过校验的api_response_invalid。域源、OpenAPI聚合、前端传输类型和运行schema同步生成，运行登记9→11，业务操作总数不因补校验而增加。
+
+32项定向测试通过，包含实际API客户端经Fastify inject消费两项成功响应及非法额度标准错误；权限失败不访问业务读取。server类型/构建、API客户端类型及API生成/类型一致性通过，104条债务和321个冻结输入不变。跨端测试为.mjs，测试发现规则新增相应路径；没有改动两侧编译模式或关闭类型检查。
+
+本批无数据库写入或进程重启，不将上一版本运行的HTTP证据当成本批验证。其余API同源校验、账户完整流程、结构就绪耦合仍需继续，P0–P7未完成。

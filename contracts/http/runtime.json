@@ -8,6 +8,8 @@
     "listObserverChannels",
     "replaceTradingContext",
     "leaveObserverMode",
-    "getTradingContextReceipt"
+    "getTradingContextReceipt",
+    "getBridgeConnectionCapacity",
+    "listTerminalProfiles"
   ]
 }

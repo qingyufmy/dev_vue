@@ -876,3 +876,9 @@ trading不再导入Bridge租约存储和路由类型，只依赖AccountLiveRoute
 五处投影时间参数改用Date，32项定向测试及server类型/构建通过。真实当前表结构临时副本验证三个投影UTC毫秒读回、重复不写及非法时间回滚；四个源表未写入，八张临时表随连接销毁。
 
 首次CREATE TEMPORARY TABLE同名LIKE报ER_NONUNIQ_TABLE，准备阶段退出且未写业务数据；经临时中间表复制修正后通过。失败及成功回执保留，总方案第36节明确证据范围。债务104、321个冻结输入未变，无进程重启或终端交易。
+
+## 第一百零七批：账户连接读取 API 合同
+
+getBridgeConnectionCapacity/listTerminalProfiles补标准错误声明与运行校验，运行登记11项，32项定向测试及两侧独立类型/server构建通过。真实API客户端消费Fastify注入响应，不等于浏览器或MySQL/Redis端到端验收。冻结321项不变，债务104。
+
+跨端TS测试首次引入两种模块解析模式导致server类型失败，改为独立.mjs运行测试；原测试发现规则不包含.mjs，补充明确后实际运行验证。客户端错误断言按既有ApiClientError.problem.code修正，不修改客户端错误合同。两侧编译配置保持，生成文件由工具更新。见总方案第37节。

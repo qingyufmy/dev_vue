@@ -4230,6 +4230,10 @@ export interface operations {
                     "application/json": components["schemas"]["ConnectionCapacityResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     revokeBridgeDeviceCredential: {
@@ -4399,6 +4403,10 @@ export interface operations {
                     "application/json": components["schemas"]["TerminalProfileListResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     createExecutionDistribution: {

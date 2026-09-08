@@ -11,15 +11,32 @@ async function fixture() {
     listAccounts: vi.fn(async () => [{ id: '7', platform: 'mt5', login: '100', server: 'demo', currency: 'USD',
       terminalProfileId: null, terminalInstanceId: null, bridgeState: 'offline', tradePermission: false, lastSeenAt: null }]),
     listObserverChannels: vi.fn(async () => [{ id: 'observer-1', displayName: 'Observation', sourceAccountId: '7', active: true }]),
+    listTerminalProfiles: vi.fn(async () => [{ id: 'profile-1', displayName: 'Terminal', platform: 'mt5', installationId: 'installation-1', accountId: null, connectionState: 'offline', lastSeenAt: null }]),
   }
+  const capacity = { summary: vi.fn(async () => ({ included: 1, purchased: 2, total: 3, active: 1, available: 2 })) }
   const authenticate = vi.fn(async () => ({ userId: 42 }))
   const app = Fastify()
   await app.register(tradingRoutes, { prefix: '/api/v4', service: new TradingService(repository as unknown as TradingReadRepository),
-    contextCommands: { async execute() { throw Error('unexpected-write') }, async receipt() { throw Error('unexpected-receipt') } }, capacity: {} as ConnectionCapacityService, auth: { authenticate, assertWrite: authenticate } })
-  return { app, repository, authenticate }
+    contextCommands: { async execute() { throw Error('unexpected-write') }, async receipt() { throw Error('unexpected-receipt') } }, capacity: capacity as unknown as ConnectionCapacityService, auth: { authenticate, assertWrite: authenticate } })
+  return { app, repository, authenticate, capacity }
 }
 
 describe('account entry read contracts', () => {
+  it('rejects malformed capacity and profile output without leaking provider values', async () => {
+    const { app, repository, capacity } = await fixture()
+    capacity.summary.mockResolvedValue({ included: 1, purchased: 0, total: 1, active: -1, available: 2 })
+    repository.listTerminalProfiles.mockResolvedValue([{ id: 'secret-invalid-profile' }] as never)
+    try {
+      for (const path of ['/bridge/connection-capacity', '/bridge/terminal-profiles']) {
+        const result = await app.inject('/api/v4' + path)
+        expect(result.statusCode).toBe(503)
+        expect(result.headers['content-type']).toContain('application/problem+json')
+        expect(result.json().code).toBe('api_response_invalid')
+        expect(result.body).not.toContain('secret-invalid-profile')
+      }
+    } finally { await app.close() }
+  })
+
   it('returns blocked initial context and authorized lists with the authenticated user scope', async () => {
     const { app, repository } = await fixture()
     try {
@@ -52,7 +69,7 @@ describe('account entry read contracts', () => {
     const { app, repository, authenticate } = await fixture()
     authenticate.mockRejectedValue(new AuthError('session_unavailable', status))
     try {
-      for (const url of ['/trading-context', '/trading-accounts?access=bad', '/observer-channels']) {
+      for (const url of ['/trading-context', '/trading-accounts?access=bad', '/observer-channels', '/bridge/connection-capacity', '/bridge/terminal-profiles']) {
         const result = await app.inject('/api/v4' + url)
         expect(result.statusCode).toBe(status)
         expect(result.json()).toMatchObject({ status, code: 'session_unavailable' })

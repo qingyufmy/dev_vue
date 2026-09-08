@@ -11,7 +11,7 @@ class ContextWriteResultUnknown extends Error {
 }
 
 export function createTradingHttpContract() {
-  const contract = createHttpContractValidator(httpRuntimeContracts, ['getTradingContext', 'listTradingAccounts', 'listObserverChannels', 'replaceTradingContext', 'leaveObserverMode', 'getTradingContextReceipt'])
+  const contract = createHttpContractValidator(httpRuntimeContracts, ['getTradingContext', 'listTradingAccounts', 'listObserverChannels', 'replaceTradingContext', 'leaveObserverMode', 'getTradingContextReceipt', 'getBridgeConnectionCapacity', 'listTerminalProfiles'])
   return {
     ...contract,
     contextWriteResponse<T>(operation: string, value: () => T): T {

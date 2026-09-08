@@ -35,7 +35,9 @@ contracts包公开ApiWireSchemas、ApiPaths、ApiOperations供业务使用；登
 
 ## 服务端运行校验
 
-runtime.json显式列出已接入操作，当前为listAuditEvents/getAuditEvent/setLearningCompletion/getTradingContext/listTradingAccounts/listObserverChannels/replaceTradingContext/leaveObserverMode。generate:api-runtime按合同提取参数、JSON请求体、各明确状态码下的JSON/problem响应及引用模型闭包，输出server/src/transport/generated/http-contracts.ts；verify:api-runtime拒绝漂移，已接入服务端类型检查和构建。Ajv和格式库是生产依赖；部署产物不依赖仓库contracts目录。各模块只编译自己选择的操作，登记缺失直接失败。
+runtime.json显式列出已接入操作，当前11项：listAuditEvents/getAuditEvent/setLearningCompletion/getTradingContext/listTradingAccounts/listObserverChannels/replaceTradingContext/leaveObserverMode/getTradingContextReceipt/getBridgeConnectionCapacity/listTerminalProfiles。generate:api-runtime按合同提取参数、JSON请求体、各明确状态码下的JSON/problem响应及引用模型闭包，输出server/src/transport/generated/http-contracts.ts；verify:api-runtime拒绝漂移，已接入服务端类型检查和构建。Ajv和格式库是生产依赖；部署产物不依赖仓库contracts目录。各模块只编译自己选择的操作，登记缺失直接失败。
+
+连接额度与终端档案读取先认证，随后校验请求、成功和400/401/403/503错误响应；非法提供者数据收敛为api_response_invalid，未知错误不暴露内部正文。trading-client-contract.test.mjs用真实API客户端经Fastify inject消费成功/失败响应；独立运行测试避免混用前端Bundler与服务端NodeNext类型图，两侧类型检查仍分别执行。这不是浏览器或真实依赖联合验收。
 
 当前适配器支持GET/PUT/POST/PATCH/DELETE的path/query/header、单一application/json请求体及明确状态码的application/json、application/problem+json响应。写请求体须明确禁止未知字段；其它媒体类型、default状态和空响应需先扩展并验证，生成器不会猜测。header使用Fastify提供的小写键，字符串头不做数字转换。路由先认证和CSRF授权，再校验输入，再调用应用用例，最后校验DTO。整数query只接受规范非负十进制字符串并在校验副本上转换；原请求不修改，不删除字段、不填默认值。审计未声明query保持既有忽略语义，学习完成保持既有全部query拒绝规则。
 
