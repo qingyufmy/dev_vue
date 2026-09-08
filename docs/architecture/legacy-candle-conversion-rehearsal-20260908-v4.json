@@ -1,0 +1,70 @@
+{
+  "kind": "legacy-candle-conversion-rehearsal/v1",
+  "observedAt": "2026-09-08T10:10:13.535Z",
+  "identity": {
+    "databaseName": "dev_vue_m1_source_20260907_02",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "registrySteps": 160,
+  "sourcePlan": {
+    "kind": "legacy-candle-source-plan/v1",
+    "accountMappingHash": "e3446474af9da37b9935f8ffe3f7237d180d42b9f383069ad05f1217458de575",
+    "mappings": [
+      {
+        "sourceId": "1",
+        "targetAccountId": "1",
+        "platform": "mt5",
+        "sourceHash": "6aa948e47c2e3aac444c9875f339808a3e986955f311e364f3c78b6945752991",
+        "accountCandidateKey": "5358ac274d1a98ae857cd3dc1d632f35e55a8e4c8edd372c8f3029670ab5c46e",
+        "legacyAccountIds": [
+          "1"
+        ]
+      },
+      {
+        "sourceId": "9311",
+        "targetAccountId": "1",
+        "platform": "mt5",
+        "sourceHash": "689fbb1d4624763a112f0bbde9ed31cea473f53c7e1cb4330dd9cfff39ec7f6e",
+        "accountCandidateKey": "5358ac274d1a98ae857cd3dc1d632f35e55a8e4c8edd372c8f3029670ab5c46e",
+        "legacyAccountIds": [
+          "1"
+        ]
+      },
+      {
+        "sourceId": "9334",
+        "targetAccountId": "2",
+        "platform": "mt5",
+        "sourceHash": "48ad3ddb5ef24c6d2b24a6539153608368a0954ea4af0ca1fecd9f4ca637efe4",
+        "accountCandidateKey": "e931a652de55c61fd1544feaaae888aa27302cf191dea546cf3704b802d769b7",
+        "legacyAccountIds": [
+          "2"
+        ]
+      }
+    ],
+    "planHash": "52255a5e37243a4de10083d355578626c40fbd84b89adf9aae2bad6163e0f44b"
+  },
+  "conversion": {
+    "kind": "legacy-candle-conversion/v1",
+    "sourcePlanHash": "52255a5e37243a4de10083d355578626c40fbd84b89adf9aae2bad6163e0f44b",
+    "basis": {
+      "closedPolicy": "legacy-closed-writer/v1",
+      "symbolPolicy": "stored-standard-symbol/v1",
+      "writerHash": "7e2c0943db1f514f98e6a4837570f215c5a6d7a0368bb898f57df1de4f4ac697",
+      "revision": "1"
+    },
+    "inputRows": 35725,
+    "outputRows": 30226,
+    "duplicateRows": 5499,
+    "mappingHash": "04f5634058da85398e5952874236f5584e2fa162d106b05cd3f7ea85b6775056",
+    "projectionHash": "0adb0d7f5e983f0677161502be5b94b358e389ea8e0689cd8fddf9048f42db51",
+    "sourceRowsHash": "355dc4e8202d81c6ba363561f6e8a4132c4edb4a89e7a61c9de62b19b6c0f2e6",
+    "planHash": "ad02ff50e68a322d1c572a2b8276e15aeadfe6ef77a4c532590892541d5b3933"
+  },
+  "snapshotHash": "9d34b6c2a728fa04c8eb9374b00d71e4aa3206836da53c46e5ac1170a9238fd3",
+  "historyHash": "cfa5353633014bdfdacb9185058b7f65cdc27b84074f2e0e43288373de370fc0",
+  "conversionToolHash": "9e96ca8dafce2cd503e875f7e69ee7e378262658a63399413ce56d54aba41bb4",
+  "captureToolHash": "7ab6eaf8b1433e786779298b76ee343121043b56dd8e63052f76c81dea3ee6fc",
+  "databaseWrites": 0,
+  "scope": "Read-only conversion of restored legacy rows; no persisted backfill, table promotion, authorization grant or live market trust."
+}

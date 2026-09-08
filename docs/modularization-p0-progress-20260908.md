@@ -546,3 +546,11 @@ loadObserverContextMigration复用完整150步并追加四项checksum，总定�
 重新构建服务端通过，边界债务110无增减，合同生成及3项运行时合同检查通过。新增固定恢复库只读EXPLAIN探针，14条捕获SQL中12条通过；symbols的UNION与candles两条都由旧market_candles缺少V4列阻止，见[读取报告](architecture/account-readiness-restored-probe-20260908.json)。源码/构建摘要及查询保留，未读取业务行；空结果路径不覆盖非空投影、所有权授权或全链路。
 
 职责/异常复核保持投影唯一业务写入口、空初始事实、旧表/日志完整保留和未知响应恢复。当前dev_vue没有执行本批升级，数据库连接及SSH隧道已关闭。下一步集中推进旧K线source→账户/品种映射、closed/revision依据、原始字段保全及正式名称切换，然后补齐非空账户用例与当前库专属升级。
+
+## 第五十八批：旧K线全量只读转换演练
+
+新增legacy-candle-conversion纯函数及固定恢复副本入口。重建已审查账户mappingHash，用terminal平台和主体设置明确3个source；按stored标准品种、UTC原值、精确DECIMAL及legacy-closed-writer合同生成目标投影，每条旧记录保留映射摘要。历史行情形成可早于开户，修正逐K线开盘时所有权要求，交易记录归属规则不变。
+
+18项行为测试通过。真实MySQL演练先校验160步完整历史，随后只读事务全量分页：35725输入、30226目标键、5499重复行，未发现目标payload冲突。首次分页被计数检查拒绝，原因是ORDER BY引用字符CAST别名；改为原表数值列后全量通过。前后完整表快照及迁移日志一致，数据库写入0。最终[回执](architecture/legacy-candle-conversion-rehearsal-20260908-v4.json)绑定源/工具摘要，详细语义和两轮复核见[合同](architecture/account-projection-incremental-contract-20260908.md)。
+
+保留旧表和全部原始字段，未执行回填或切表，没有修改当前dev_vue。数据库连接和SSH隧道已关闭。下一步实施K线构建表、持久化映射/检查点、对账及正式名称提升，补齐历史验证适配后继续当前库专属升级和账户全栈流程。

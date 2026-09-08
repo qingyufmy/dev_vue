@@ -56,7 +56,7 @@ timezone_offset_minutes和clock_status沿用服务端可信时钟流程；UTC+3�
 
 [真实参考证据](account-projection-reference-20260908.json)已记录六表规范SHOW CREATE及20项MySQL检查：金额/报价精度、UTC毫秒、权限默认值、跨账户键、JSON/ticket、溢出/非法JSON拒绝，以及provenance复合FK、主体/区间/档案FK和kind CHECK。四个最小父键逐项匹配恢复副本，测试事务回滚后十张表均空，参考库已删除；恢复副本结构/行摘要和154条历史前后不变。它不证明会话epoch或projection_revision一致性由数据库自行强制，这些仍归应用事务校验。
 
-[旧K线候选调查](legacy-candle-mapping-probe-20260908-v2.json)在恢复副本只读一致性事务内执行：35,725行、3个来源，无孤立source、空标准品种或不支持周期。按规范化server/login比较，三来源各有一个账户候选，历史owner也各匹配一个；尚未证明平台身份及逐K线时刻归属，因此不是已批准回填映射。
+[旧K线候选调查](legacy-candle-mapping-probe-20260908-v2.json)在恢复副本只读一致性事务内执行：35,725行、3个来源，无孤立source、空标准品种或不支持周期。按规范化server/login比较，三来源各有一个账户候选，历史owner也各匹配一个；该批尚未证明平台身份和采集主体映射，因此不是已批准回填映射。第五十八批修正归属判据：历史行情可能早于开户形成，不要求逐K线开盘时已持有账户；交易记录仍遵守历史归属区间。
 
 按候选账户、二进制标准品种、周期、UTC毫秒键分组发现5,499组跨来源重复，涉及10,998行；这些组的OHLC及tick_volume全部一致，未发现这些字段的冲突。若后续确认该账户/品种映射，可通过多旧行→同一新键的映射保留来源，而不是由upsert顺序决定结果；不能据此丢掉原broker_time、spread等未比较字段。closed来源和revision初始化、旧消费者处理、构建表与提升校验继续待做。
 
@@ -79,3 +79,17 @@ rehearse-account-projection-migration-local.mjs仅支持固定恢复副本，提
 恢复副本实际160步已完成：首次创建账户快照后模拟响应丢失，只读识别reconcile/pending，恢复仅执行剩余五条DDL，再次执行零DDL，六表0行；每次旧228表快照及154条历史摘要一致。[再次执行回执](account-projection-registered-repeat-20260908.json)保留该证据。
 
 重新构建服务端后，[恢复副本账户读取探针](account-readiness-restored-probe-20260908.json)捕获14条SELECT，12条EXPLAIN通过；symbols的UNION和candles两条均因旧market_candles缺symbol/trading_account_id阻止。此探针只覆盖空结果路径，不验证非空投影/来源、授权、事务、Bridge或浏览器。剩余已观察结构缺口集中于旧K线表，不表示未访问分支已经就绪。
+
+## 第五十八批：旧K线转换合同与只读演练
+
+新增纯转换器legacy-candle-conversion.mjs和固定恢复副本只读入口。来源映射重建旧账户、terminal session及binding证据，要求与已审查账户mappingHash一致，再按server/login唯一候选核对平台和采集主体对应的旧账户设置。缺平台、主体无映射或多平台歧义均拒绝。采集主体不是K线开盘时的账户所有权事件，此转换不增加任何历史访问授权。
+
+转换规则固定为：保留stored standard_symbol的二进制含义；UTC毫秒原值转ISO，不平移；价格DECIMAL(24,10)、量DECIMAL(24,8)保持精确文本；revision初始化1。closed采用legacy-closed-writer/v1，绑定server/routes/ai/platform-market-data.js的SHA-256：257处splitRatesByClosure排除未收线尾柱，772处persistClosedCandles只接收closedRates；普通、精确区间及fallback写入经相同闭合窗口入口。该政策是迁移时继承旧存储语义，不证明每条历史行由当前文件版本写入，也不赋予实时Bridge来源、会话epoch或执行时钟可信度。
+
+新键为账户/标准品种/周期/UTC时刻。相同键只有OHLC、量及目标字段全部一致才能合并；代表行取数值最小legacy ID，不依赖输入顺序。每条旧行保留legacy ID、source ID、目标键和payload/source摘要；旧表保留broker_symbol、broker_time、spread、updated_at等完整原事实。任一冲突或精度不可表示立即失败，不能通过upsert覆盖。
+
+[实际只读演练](legacy-candle-conversion-rehearsal-20260908-v4.json)先验证恢复副本完整160步，再在只读一致性事务内每页500行、最多100000行读取。35725行全部转换，30226个目标键，5499行重复，转换planHash为ad02ff50e68a322d1c572a2b8276e15aeadfe6ef77a4c532590892541d5b3933。前后全表快照和迁移日志摘要一致；数据库写入0。报告绑定转换器/采集脚本和旧writer摘要，未把全部账户登录信息或价格明细写入报告。
+
+真实演练暴露并修正分页缺陷：ORDER BY id解析到CAST后的字符别名，仅读18132行即被总数检查拒绝；改为ORDER BY market_candles.id后完整读取35725行。失败发生在纯读取阶段，没有接受部分转换。18项行为测试覆盖重复冲突、确定性代表行、超大ID、二进制品种、UTC毫秒、DECIMAL溢出及来源拒绝；语法和差异检查通过。
+
+第一轮复核：来源主体和历史交易所有权分开，标准品种不重新猜测，重复行保持可追溯，不新增授权或实时事实。第二轮复核：核实数值游标、全量计数、只读事务、完整旧历史检查、输入上限和前后摘要；旧文件checksum不修改。尚需实现构建表、持久化逐行映射/检查点、实际回填对账、正式名称提升及历史验证适配，当前dev_vue升级和账户全栈验收仍未完成。
