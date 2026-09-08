@@ -474,3 +474,13 @@ loadObserverContextMigration复用完整150步并追加四项checksum，总定�
 [正式合同](architecture/observer-context-incremental-contract-20260908.md)记录实际写入归trading的两个repository；GET无上下文返回只读blocked，不初始化授权。两轮复核明确空结构与旧配置迁移不同，后续旧受众/来源映射仍需对账；固定150步工具和演练证据不修改，新执行协调器须独立保护四张新增表后复用旧校验。
 
 本批未连接或写入数据库；当前库仍待专属升级，恢复副本本批未从150推进。下一步采集037实际规范DDL并验证FK、生成列唯一性和上下文CHECK，接入150→154的持久化计划/恢复演练；账户行情投影及旧market_candles同名结构仍属后续依赖。
+
+## 第五十一批：037真实MySQL规范结构与约束行为
+
+新增capture-observer-context-reference-local.mjs及独立约束助手。先通过固定恢复副本的150步只读验证，核对users/trading_accounts/strategies父键类型；在随机独立参考库创建三个最小父表和037四表，读取规范SHOW CREATE。未修改原036冻结工具或迁移。
+
+真实MySQL执行18项检查：源disabled/pending默认值、ready需要账户、来源账户/策略外键，频道assigned/禁用默认值、多个非默认、单个默认及转移、default布尔约束和来源外键，授权频道/授予人外键，blocked/observer只读、full目标要求/排除频道，以及上下文主体/频道外键与合法目标切换。预期拒绝精确检查1452/3819/1062错误码；测试事务已回滚，七表行数为0后删除参考库。
+
+[规范证据](architecture/observer-context-reference-20260908.json)记录父键、四个DDL、18项结果、采集/助手hash和恢复副本前后相同的快照及历史摘要；proofHash=3e61cebc7a293edfea769b884de25f0ecfe98b219d399e7d41aaed2f993597d7。当前dev_vue没有写入，恢复副本仅检查仍为150步；数据库连接及SSH隧道已关闭。
+
+3项本地助手测试验证拒绝业务库名、连接库不匹配时不开事务、意外fixture失败回滚，连同注册兼容测试共4项通过。语法、证据hash和差异检查通过。职责/异常复核见增量合同，真实约束通过不代替观摩应用授权。下一步完成新增四步的持久化计划、协调器与150→154副本恢复演练，再接续行情投影及当前库升级。

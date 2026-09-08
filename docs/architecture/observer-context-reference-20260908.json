@@ -1,0 +1,160 @@
+{
+  "kind": "observer-context-reference/v1",
+  "observedAt": "2026-09-08T09:18:21.891Z",
+  "identity": {
+    "database": "dev_vue_m1_source_20260907_02",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "mysqlVersion": "8.4.8",
+  "priorProofHash": "395ac574ff633956e0669d069cfb152e751a3a360bf860c03e79207304389de1",
+  "registryHash": "abeec7591065a3f5db7d4bb91ffb8eca0e5541017ee5b1aec6dd92f02a7dfb65",
+  "reference": "dev_vue_observer_reference_9b46dc40d6b7082104b09544",
+  "referenceRemoved": true,
+  "parentDefinitions": [
+    {
+      "table": "users",
+      "id": {
+        "columnType": "int",
+        "charset": null,
+        "collation": null
+      }
+    },
+    {
+      "table": "trading_accounts",
+      "id": {
+        "columnType": "bigint unsigned",
+        "charset": null,
+        "collation": null
+      }
+    },
+    {
+      "table": "strategies",
+      "id": {
+        "columnType": "bigint unsigned",
+        "charset": null,
+        "collation": null
+      }
+    }
+  ],
+  "definitions": [
+    {
+      "table": "observer_sources",
+      "sourceSqlHash": "7e2d154f7175f7b146913a9fc7a40b84a8245f58340442d40d72bca0e707c35e",
+      "ddl": "CREATE TABLE `observer_sources` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `display_name` varchar(80) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `notes` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `operator_user_id` int NOT NULL,\n  `trading_account_id` bigint unsigned DEFAULT NULL,\n  `analysis_strategy_id` bigint unsigned DEFAULT NULL,\n  `status` enum('active','disabled') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'disabled',\n  `configuration_status` enum('pending','ready') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',\n  `created_by_user_id` int NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  PRIMARY KEY (`id`),\n  KEY `idx_observer_source_operator` (`operator_user_id`,`id`),\n  KEY `idx_observer_source_account` (`trading_account_id`,`id`),\n  KEY `fk_observer_source_strategy` (`analysis_strategy_id`),\n  KEY `fk_observer_source_creator` (`created_by_user_id`),\n  CONSTRAINT `fk_observer_source_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_observer_source_creator` FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_observer_source_operator` FOREIGN KEY (`operator_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_observer_source_strategy` FOREIGN KEY (`analysis_strategy_id`) REFERENCES `strategies` (`id`),\n  CONSTRAINT `chk_observer_source_ready` CHECK (((`configuration_status` <> _utf8mb4'ready') or (`trading_account_id` is not null)))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "schemaHash": "cd5f67cfbec4eed3fdc9fe2d1526ecfa9f8cfa96aaaca5b37a27ccba871713b5"
+    },
+    {
+      "table": "observer_channels",
+      "sourceSqlHash": "8349bef1dbe89094e7df954eaab7bcb26344710ef39f956ea64656e00f5c88fc",
+      "ddl": "CREATE TABLE `observer_channels` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `source_trading_account_id` bigint unsigned DEFAULT NULL,\n  `display_name` varchar(128) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `active` tinyint(1) NOT NULL DEFAULT '0',\n  `created_by_user_id` int NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `source_id` bigint unsigned DEFAULT NULL,\n  `slug` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `description` varchar(255) COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `audience` enum('all','plus','pro','assigned') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'assigned',\n  `is_default` tinyint(1) NOT NULL DEFAULT '0',\n  `default_slot` tinyint GENERATED ALWAYS AS ((case when (`is_default` = 1) then 1 else NULL end)) STORED,\n  `sort_order` int NOT NULL DEFAULT '0',\n  `updated_at_utc` datetime(3) DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_observer_channel_slug` (`slug`),\n  UNIQUE KEY `uk_observer_channel_default` (`default_slot`),\n  KEY `idx_observer_channels_active` (`active`,`id`),\n  KEY `idx_observer_channel_source` (`source_id`,`id`),\n  KEY `fk_observer_channel_account` (`source_trading_account_id`),\n  KEY `fk_observer_channel_creator` (`created_by_user_id`),\n  CONSTRAINT `fk_observer_channel_account` FOREIGN KEY (`source_trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_observer_channel_creator` FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_observer_channel_source` FOREIGN KEY (`source_id`) REFERENCES `observer_sources` (`id`),\n  CONSTRAINT `chk_observer_channel_default` CHECK ((`is_default` in (0,1)))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "schemaHash": "a504beeb48f5fe10ad99b276e918ba3060b827ffad1e059db5210c07e32bf985"
+    },
+    {
+      "table": "observer_channel_accesses",
+      "sourceSqlHash": "4b2493f8def6f05dfadaeb798f9e21706fd1418e0882fd6b41f75d06d53f8d90",
+      "ddl": "CREATE TABLE `observer_channel_accesses` (\n  `observer_channel_id` bigint unsigned NOT NULL,\n  `user_id` int NOT NULL,\n  `granted_at_utc` datetime(3) NOT NULL,\n  `revoked_at_utc` datetime(3) DEFAULT NULL,\n  `granted_by_user_id` int DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  PRIMARY KEY (`observer_channel_id`,`user_id`),\n  KEY `idx_observer_access_user` (`user_id`,`revoked_at_utc`,`observer_channel_id`),\n  KEY `fk_observer_access_granter` (`granted_by_user_id`),\n  CONSTRAINT `fk_observer_access_channel` FOREIGN KEY (`observer_channel_id`) REFERENCES `observer_channels` (`id`),\n  CONSTRAINT `fk_observer_access_granter` FOREIGN KEY (`granted_by_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_observer_access_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "schemaHash": "66fa22bcbc88e84aaaaa2eb3f6099cc54be9220a5dd4ee175671eb5eb0ba0122"
+    },
+    {
+      "table": "trading_contexts",
+      "sourceSqlHash": "a348dbe7c36ba9ac7052114f6972910757419a349a1b41b31009b77cfbfacadb",
+      "ddl": "CREATE TABLE `trading_contexts` (\n  `user_id` int NOT NULL,\n  `mode` enum('full','observer','blocked') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `trading_account_id` bigint unsigned DEFAULT NULL,\n  `observer_channel_id` bigint unsigned DEFAULT NULL,\n  `read_only` tinyint(1) NOT NULL DEFAULT '1',\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `updated_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`user_id`),\n  KEY `idx_trading_context_account` (`trading_account_id`,`user_id`),\n  KEY `fk_trading_context_observer` (`observer_channel_id`),\n  CONSTRAINT `fk_trading_context_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_trading_context_observer` FOREIGN KEY (`observer_channel_id`) REFERENCES `observer_channels` (`id`),\n  CONSTRAINT `fk_trading_context_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_trading_context_target` CHECK ((((`mode` = _utf8mb4'full') and (`trading_account_id` is not null) and (`observer_channel_id` is null)) or ((`mode` = _utf8mb4'observer') and (`trading_account_id` is null) and (`observer_channel_id` is not null) and (`read_only` = 1)) or ((`mode` = _utf8mb4'blocked') and (`trading_account_id` is null) and (`observer_channel_id` is null) and (`read_only` = 1))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "schemaHash": "5d37635fa64a607331206ce05fe8cdfaa42af3692acccb8c684fd7ac42c3c7b7"
+    }
+  ],
+  "constraintChecks": [
+    {
+      "name": "source_disabled_pending_defaults",
+      "passed": true
+    },
+    {
+      "name": "source_ready_requires_account",
+      "expectedErrno": 3819,
+      "passed": true
+    },
+    {
+      "name": "source_strategy_foreign_key",
+      "expectedErrno": 1452,
+      "passed": true
+    },
+    {
+      "name": "source_account_foreign_key",
+      "expectedErrno": 1452,
+      "passed": true
+    },
+    {
+      "name": "channels_inactive_assigned_multiple_nondefault",
+      "passed": true
+    },
+    {
+      "name": "only_one_default_channel",
+      "expectedErrno": 1062,
+      "passed": true
+    },
+    {
+      "name": "default_flag_boolean",
+      "expectedErrno": 3819,
+      "passed": true
+    },
+    {
+      "name": "channel_source_foreign_key",
+      "expectedErrno": 1452,
+      "passed": true
+    },
+    {
+      "name": "default_channel_can_transfer",
+      "passed": true
+    },
+    {
+      "name": "access_channel_foreign_key",
+      "expectedErrno": 1452,
+      "passed": true
+    },
+    {
+      "name": "access_granter_foreign_key",
+      "expectedErrno": 1452,
+      "passed": true
+    },
+    {
+      "name": "blocked_context_read_only",
+      "expectedErrno": 3819,
+      "passed": true
+    },
+    {
+      "name": "full_context_requires_account",
+      "expectedErrno": 3819,
+      "passed": true
+    },
+    {
+      "name": "full_context_excludes_channel",
+      "expectedErrno": 3819,
+      "passed": true
+    },
+    {
+      "name": "observer_context_read_only",
+      "expectedErrno": 3819,
+      "passed": true
+    },
+    {
+      "name": "context_user_foreign_key",
+      "expectedErrno": 1452,
+      "passed": true
+    },
+    {
+      "name": "context_channel_foreign_key",
+      "expectedErrno": 1452,
+      "passed": true
+    },
+    {
+      "name": "valid_full_and_observer_contexts",
+      "passed": true
+    }
+  ],
+  "sourceSnapshotHash": "e52f6efe81f11e86091f4dd08a3e10e074549e11c59e242560584a0cccc28ccd",
+  "sourceHistoryHash": "76dd1a2ee7289fac945bcf97e27cb108e74f8abf6f4a1bdb0dd49f341fc9d7e4",
+  "captureToolHash": "d77528eb9688e4d7707256e2eb22df7f601a92b694d3980bae6d984e8158cbfe",
+  "constraintToolHash": "0b55d0d72b61e59026482414b4f4c1d6f18494f329ed2beb0b0d747107a24e1d",
+  "sourceWritten": false,
+  "currentDevVueWritten": false,
+  "proofHash": "3e61cebc7a293edfea769b884de25f0ecfe98b219d399e7d41aaed2f993597d7"
+}
