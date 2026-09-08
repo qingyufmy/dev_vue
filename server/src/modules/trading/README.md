@@ -37,6 +37,10 @@
 
 ## 当前账户结构就绪检查
 
+投影中的账户观察时间、报价观察时间、K线开盘时间、来源证明和精确ticket观察时间在MySQL绑定处转换为Date，由UTC驱动序列化；JSON payload内的ISO时间保持原合同。非法时间抛出trading_context_invalid并回滚。
+
+真实时间验证：构建后运行`node scripts/verify-projection-times-mysql.mjs <新的绝对路径回执>`。脚本在独立连接复制当前四表为临时表，执行applyProjection验证账户/报价/K线毫秒UTC读回、重复revision和非法时间回滚，结束销毁连接。LIKE不复制外键，因此它不证明FK、可信路由、来源证明或ticket完整链路。正式业务数据写入0。
+
 `assertTradingSchemaReady`只从composition向API运行组装公开。API启动前及`/health/ready`调用它；检查失败不会监听启动端口，运行中的健康检查返回不就绪。它不自动迁移、不证明所有API/其它业务域就绪，也不代替停写窗口或逐请求授权。
 
 当前支持`inplace-account-165/v1`升级档案：165条登记checksum全部完成，后续新增步骤允许存在但必须完成；23张账户读取/上下文/投影依赖表的规范化DDL与触发器检查一致。依赖表检查不改变其业务写入所有者。新建库使用其它迁移账本、升级改变这些表、或MySQL产生非等价DDL时均失败关闭，须补充已验证的兼容档案，不得跳过检查。自增计数及等价utf8mb4显式字符集写法不属于结构漂移。

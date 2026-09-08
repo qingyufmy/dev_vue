@@ -1,0 +1,29 @@
+{
+  "kind": "projection-times-mysql/v1",
+  "observedAt": "2026-09-08T16:43:06.915Z",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "checks": [
+    {
+      "resource": "account.metrics",
+      "utcReadback": "2026-09-09T00:01:02.345Z",
+      "duplicateApplied": false
+    },
+    {
+      "resource": "market.quote",
+      "utcReadback": "2026-09-09T00:01:02.345Z",
+      "duplicateApplied": false
+    },
+    {
+      "resource": "market.candle",
+      "utcReadback": "2026-09-09T00:01:02.345Z",
+      "duplicateApplied": false
+    }
+  ],
+  "invalidTimeRolledBack": true,
+  "permanentBusinessWrites": 0,
+  "scope": "Compiled applyProjection against connection-private LIKE copies of four current tables. Verifies column/index compatibility and UTC milliseconds, not FKs, trusted route/provenance/ticket writes, concurrency or terminal integration."
+}

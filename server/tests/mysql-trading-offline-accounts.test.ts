@@ -306,7 +306,7 @@ describe('MysqlTradingRepository P3 offline account read model', () => {
     }
     await expect(repository.applyTrustedProjection({ route: route(), projection })).resolves.toMatchObject({ applied: true, absorbedReservationIds: [] })
     const provenance = pool.calls.find(call => call.sql.includes('INSERT INTO trading_projection_provenance_v4'))
-    expect(provenance?.params).toEqual(['42', 'account.metrics', 'current', 7, 'interval-a', '3', 'profile-a', 'instance-a', 4, 4, '2026-09-05T08:00:00.000Z'])
+    expect(provenance?.params).toEqual(['42', 'account.metrics', 'current', 7, 'interval-a', '3', 'profile-a', 'instance-a', 4, 4, new Date('2026-09-05T08:00:00.000Z')])
 
     const positions = {
       accountId: '42', resource: 'positions' as const, resourceId: 'open' as const, revision: 4, data: [],

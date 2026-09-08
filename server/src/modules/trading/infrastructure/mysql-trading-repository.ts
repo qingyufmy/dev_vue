@@ -470,6 +470,12 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
   }
 }
 
+function projectionTime(value: string): Date {
+  const result = new Date(value)
+  if (!Number.isFinite(result.getTime())) throw new TradingAccessError('trading_context_invalid', 400)
+  return result
+}
+
 function parsePayload<T>(value: string | object): T { return (typeof value === 'string' ? JSON.parse(value) : value) as T }
 function projectionSourceMatches(source: ProjectionSourceRow, context: CurrentProjectionContext) {
   const revision = Number(source.revision)
@@ -521,7 +527,7 @@ async function writeProjectionProvenance(
       projection_revision=VALUES(projection_revision),observed_at_utc=VALUES(observed_at_utc)`, [
     input.projection.accountId, resource, input.projection.resourceId, input.route.userId, ownership.intervalId,
     ownership.ownershipRevision, input.route.terminalProfileId, input.route.terminalInstanceId,
-    input.route.connectionEpoch, input.projection.revision, observedAt,
+    input.route.connectionEpoch, input.projection.revision, projectionTime(observedAt),
   ])
 }
 async function replaceCollection(connection: PoolConnection, table: 'open_position_snapshots' | 'pending_order_snapshots', accountId: string, revision: number, items: Array<OpenPosition | PendingOrder>) {
@@ -538,13 +544,13 @@ async function lockProjectionRevision(connection: PoolConnection, input: Trading
 async function writeLockedProjection(connection: PoolConnection, input: TradingProjectionWrite) {
   switch (input.resource) {
     case 'account.metrics':
-      await connection.execute(`INSERT INTO account_runtime_snapshots (trading_account_id,balance,equity,margin_amount,free_margin,floating_profit,leverage,timezone_offset_minutes,clock_status,trade_permission,observed_at_utc,revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE balance=VALUES(balance),equity=VALUES(equity),margin_amount=VALUES(margin_amount),free_margin=VALUES(free_margin),floating_profit=VALUES(floating_profit),leverage=VALUES(leverage),timezone_offset_minutes=VALUES(timezone_offset_minutes),clock_status=VALUES(clock_status),trade_permission=VALUES(trade_permission),observed_at_utc=VALUES(observed_at_utc),revision=VALUES(revision)`, [input.data.id, input.data.balance, input.data.equity, input.data.margin, input.data.freeMargin, input.data.floatingProfit, input.data.leverage, input.data.timezoneOffsetMinutes, input.data.clockStatus, input.data.tradePermission ? 1 : 0, input.data.observedAt, input.data.revision])
+      await connection.execute(`INSERT INTO account_runtime_snapshots (trading_account_id,balance,equity,margin_amount,free_margin,floating_profit,leverage,timezone_offset_minutes,clock_status,trade_permission,observed_at_utc,revision) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE balance=VALUES(balance),equity=VALUES(equity),margin_amount=VALUES(margin_amount),free_margin=VALUES(free_margin),floating_profit=VALUES(floating_profit),leverage=VALUES(leverage),timezone_offset_minutes=VALUES(timezone_offset_minutes),clock_status=VALUES(clock_status),trade_permission=VALUES(trade_permission),observed_at_utc=VALUES(observed_at_utc),revision=VALUES(revision)`, [input.data.id, input.data.balance, input.data.equity, input.data.margin, input.data.freeMargin, input.data.floatingProfit, input.data.leverage, input.data.timezoneOffsetMinutes, input.data.clockStatus, input.data.tradePermission ? 1 : 0, projectionTime(input.data.observedAt), input.data.revision])
       break
     case 'market.quote':
-      await connection.execute(`INSERT INTO market_quotes (trading_account_id,symbol,bid,ask,last_price,spread,trade_mode,observed_at_utc,revision) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE bid=VALUES(bid),ask=VALUES(ask),last_price=VALUES(last_price),spread=VALUES(spread),trade_mode=VALUES(trade_mode),observed_at_utc=VALUES(observed_at_utc),revision=VALUES(revision)`, [input.data.accountId, input.data.symbol, input.data.bid, input.data.ask, input.data.last, input.data.spread, input.data.tradeMode, input.data.observedAt, input.data.revision])
+      await connection.execute(`INSERT INTO market_quotes (trading_account_id,symbol,bid,ask,last_price,spread,trade_mode,observed_at_utc,revision) VALUES (?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE bid=VALUES(bid),ask=VALUES(ask),last_price=VALUES(last_price),spread=VALUES(spread),trade_mode=VALUES(trade_mode),observed_at_utc=VALUES(observed_at_utc),revision=VALUES(revision)`, [input.data.accountId, input.data.symbol, input.data.bid, input.data.ask, input.data.last, input.data.spread, input.data.tradeMode, projectionTime(input.data.observedAt), input.data.revision])
       break
     case 'market.candle':
-      await connection.execute(`INSERT INTO market_candles (trading_account_id,symbol,timeframe,open_time_utc,open_price,high_price,low_price,close_price,tick_volume,closed,revision) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE high_price=VALUES(high_price),low_price=VALUES(low_price),close_price=VALUES(close_price),tick_volume=VALUES(tick_volume),closed=VALUES(closed),revision=VALUES(revision)`, [input.data.accountId, input.data.symbol, input.data.timeframe, input.data.openTime, input.data.open, input.data.high, input.data.low, input.data.close, input.data.tickVolume, input.data.closed ? 1 : 0, input.data.revision])
+      await connection.execute(`INSERT INTO market_candles (trading_account_id,symbol,timeframe,open_time_utc,open_price,high_price,low_price,close_price,tick_volume,closed,revision) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE high_price=VALUES(high_price),low_price=VALUES(low_price),close_price=VALUES(close_price),tick_volume=VALUES(tick_volume),closed=VALUES(closed),revision=VALUES(revision)`, [input.data.accountId, input.data.symbol, input.data.timeframe, projectionTime(input.data.openTime), input.data.open, input.data.high, input.data.low, input.data.close, input.data.tickVolume, input.data.closed ? 1 : 0, input.data.revision])
       break
     case 'positions': await replaceCollection(connection, 'open_position_snapshots', input.accountId, input.revision, input.data); break
     case 'pending_orders': await replaceCollection(connection, 'pending_order_snapshots', input.accountId, input.revision, input.data); break
@@ -561,7 +567,7 @@ async function replaceExactTradeStates(connection: PoolConnection, accountId: st
     await connection.execute(`INSERT INTO bridge_trade_state_snapshots_v4
       (trading_account_id,entity_kind,ticket,terminal_instance_id,connection_epoch,projection_revision,state_json,state_sha256,observed_at_utc,updated_at_utc)
       VALUES (?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP(3))`, [
-      accountId, entityKind, state.ticket, terminalInstanceId, connectionEpoch, revision, stateJson, sha256Canonical(state), observedAt,
+      accountId, entityKind, state.ticket, terminalInstanceId, connectionEpoch, revision, stateJson, sha256Canonical(state), projectionTime(observedAt),
     ])
   }
 }

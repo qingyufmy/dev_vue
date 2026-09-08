@@ -560,3 +560,11 @@ trading声明只读AccountLiveRouteReader，替代对BridgeGatewayLeaseStore及�
 适配器将now解析为Date并校验有效性，由UTC驱动序列化；19项定向测试及server类型/构建通过，债务104、冻结输入321项不变。修复后[事务回执](architecture/projection-absorption-mysql-fixed-20260909.json)与补充时间读回的[UTC回执](architecture/projection-absorption-mysql-utc-20260909.json)均4项通过：旧revision/时间拒绝、提交及审计、重复无操作、审计重复键失败后预留和同行为事务写入共同回滚；三个DATETIME字段读回与输入UTC一致。
 
 这证明真实MySQL驱动和临时InnoDB事务中的该适配器行为，不证明正式业务schema/FK、完整投影用例、并发锁或未知提交恢复。没有重启服务或运行终端。下一步应核查完整投影路径其它时间绑定，再继续真实账户/观摩流程及结构就绪耦合收口，不能把本批扩大为全域时间兼容完成。
+
+## 36. 账户/行情投影 UTC 参数修复（第一百零六批）
+
+修复mysql-trading-repository五处ISO字符串直绑：账户指标、报价、K线、来源证明和精确ticket观察时间改为有效Date；JSON数据及业务UTC字符串合同不变，非法时间拒绝并回滚。32项账户/实时测试、server类型/构建、104条边界门禁通过，321项冻结输入相等。
+
+新增真实MySQL探针，从当前四张正式表LIKE复制连接私有临时结构，执行实际applyProjection。首次同名源/目标LIKE被MySQL拒绝，未进入DML，见[准备失败回执](architecture/projection-times-mysql-20260909.json)；改为先建立临时中间副本，再建立同名遮蔽表后，[真实回执](architecture/projection-times-mysql-verified-20260909.json)验证账户/报价/K线的UTC毫秒读回、重复revision不写、非法时间回滚。连接销毁，永久业务表写入0。
+
+LIKE复制列及索引但不复制外键，未运行可信路由/来源证明/ticket完整链路或真实终端，不能扩大为完整投影验收。后续仍需正向账户/观摩、可信投影端到端及结构就绪耦合收口，整体P0–P7未完成。
