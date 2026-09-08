@@ -2,7 +2,7 @@ import { open, readFile } from 'node:fs/promises'
 import { isAbsolute } from 'node:path'
 import mysql from 'mysql2/promise'
 import { loadSettingsMigrationEnvironment, settingsMigrationConnectionOptions } from './lib/settings-migration-environment.mjs'
-import { loadTemporalPrecisionCoordinator } from './lib/inplace-temporal-precision-schema.mjs'
+import { loadModelCapacityCoordinator } from './lib/inplace-model-capacity-schema.mjs'
 import { coordinateInplaceSchema } from './lib/inplace-schema-coordinator.mjs'
 import { withInplaceUpgradeLock, verifyInplaceJournal } from './lib/mysql-inplace-column-store.mjs'
 import { sha256 } from './lib/v4-migration-plan.mjs'
@@ -25,26 +25,28 @@ try {
   const inventory = JSON.parse(bytes)
   check(inventory.kind === 'database-structure-remaining-work/v1' && Array.isArray(inventory.typeDifferences)
     && inventory.identity.database_name === identity.db && inventory.identity.server_uuid === identity.uuid, 'inventory')
+  const candidates = [...new Map([...inventory.typeDifferences, ...(inventory.nullabilityDifferences ?? [])]
+    .map(field => [`${field.table}.${field.column}`, field])).values()]
   const result = await withInplaceUpgradeLock(connection, identity.db, async () => {
     await connection.query('START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY')
     try {
       check(await verifyInplaceJournal(connection), 'journal')
-      const plan = await loadTemporalPrecisionCoordinator(root)
+      const plan = await loadModelCapacityCoordinator(root)
       check(JSON.stringify(inventory.schemaSteps) === JSON.stringify(plan.steps.map(row => ({ id: row.id, status: 'completed' }))), 'inventory_version')
       check((await coordinateInplaceSchema(plan.store(connection), plan)).structureComplete, 'schema')
       const tables = [], fields = []
-      for (const name of [...new Set(inventory.typeDifferences.map(row => row.table))]) {
+      for (const name of [...new Set(candidates.map(row => row.table))]) {
         const [[definition]] = await connection.query(`SHOW CREATE TABLE ${quote(name)}`)
         tables.push({ name, definition: definition['Create Table'], sha256: sha256(definition['Create Table']) })
       }
-      for (const field of inventory.typeDifferences) {
+      for (const field of candidates) {
         const [metadata] = await connection.execute(`SELECT COLUMN_TYPE type,IS_NULLABLE nullable,COLUMN_DEFAULT defaultValue,EXTRA extra,
           COLLATION_NAME collation,DATETIME_PRECISION datetime_precision FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?`, [field.table, field.column])
         check(metadata.length === 1 && metadata[0].type === field.actualType, 'column_drift')
         const column = quote(field.column), table = quote(field.table)
         const parts = ['CAST(COUNT(*) AS CHAR) row_count', `CAST(COALESCE(SUM(${column} IS NULL),0) AS CHAR) null_count`]
         let category
-        if (field.actualType === 'datetime') {
+        if (/^datetime(?:\(\d+\))?$/.test(field.actualType)) {
           category = 'datetime_precision'
           parts.push(`CAST(COALESCE(SUM(${column} IS NOT NULL AND (YEAR(${column})=0 OR MONTH(${column})=0 OR DAYOFMONTH(${column})=0)),0) AS CHAR) incomplete_dates`,
             `CAST(MIN(${column}) AS CHAR) min_value`, `CAST(MAX(${column}) AS CHAR) max_value`)

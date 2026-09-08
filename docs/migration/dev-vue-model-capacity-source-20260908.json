@@ -1,0 +1,780 @@
+{
+  "kind": "database-type-data-review/v1",
+  "observedAt": "2026-09-08T01:20:10.932Z",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "sql_mode": "IGNORE_SPACE,STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION"
+  },
+  "inventorySha256": "742deaf671b0a87b7596f962162a1cd89c9fd6209e8c44d9ad8b13a083a2de11",
+  "schemaSteps": 91,
+  "databaseWrites": 0,
+  "tables": [
+    {
+      "name": "ai_model_profiles",
+      "definition": "CREATE TABLE `ai_model_profiles` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `owner_user_id` int NOT NULL DEFAULT '0',\n  `scope` enum('user','platform') NOT NULL DEFAULT 'user',\n  `provider` varchar(32) NOT NULL DEFAULT 'deepseek',\n  `model_name` varchar(128) NOT NULL DEFAULT 'deepseek-chat',\n  `api_base_url` varchar(512) DEFAULT NULL,\n  `api_key_encrypted` text,\n  `key_version` varchar(32) DEFAULT NULL,\n  `temperature` decimal(3,2) DEFAULT '0.30',\n  `max_tokens` int DEFAULT '2000',\n  `thinking_enabled` tinyint NOT NULL DEFAULT '1',\n  `reasoning_effort` varchar(16) DEFAULT 'max',\n  `request_timeout_ms` int DEFAULT NULL,\n  `is_default` tinyint NOT NULL DEFAULT '0',\n  `status` varchar(16) NOT NULL DEFAULT 'active',\n  `created_at` datetime(3) NOT NULL,\n  `updated_at` datetime(3) NOT NULL,\n  `deleted_at` datetime(3) DEFAULT NULL,\n  `active_default_owner_key` int GENERATED ALWAYS AS ((case when ((`is_default` = 1) and (`status` = _utf8mb4'active') and (`deleted_at` is null)) then `owner_user_id` else NULL end)) STORED /*!80023 INVISIBLE */,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_model_active_default_owner` (`active_default_owner_key`),\n  KEY `idx_model_profiles_owner` (`owner_user_id`,`deleted_at`),\n  KEY `idx_model_profiles_scope` (`scope`,`status`,`deleted_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+      "sha256": "b64d3a087b3e141cccebc9645e37893035a54335f878a5c9f18e88158009eee1"
+    },
+    {
+      "name": "platform_model_usage_policy",
+      "definition": "CREATE TABLE `platform_model_usage_policy` (\n  `id` int NOT NULL DEFAULT '1',\n  `share_for_manual` tinyint NOT NULL DEFAULT '0',\n  `share_for_auto` tinyint NOT NULL DEFAULT '0',\n  `share_for_review` tinyint NOT NULL DEFAULT '0',\n  `share_for_memory_compression` tinyint NOT NULL DEFAULT '0',\n  `allowed_plans` json DEFAULT NULL,\n  `daily_requests_per_user` int NOT NULL DEFAULT '100',\n  `daily_tokens_per_user` int NOT NULL DEFAULT '500000',\n  `updated_at` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+      "sha256": "bfe8da14aefbc2c70aab698bef97d1ff66c3ca9be2e866ff808f21ba0ddc5ee2"
+    },
+    {
+      "name": "ai_model_usage_logs",
+      "definition": "CREATE TABLE `ai_model_usage_logs` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `model_profile_id` int DEFAULT NULL,\n  `credential_source` varchar(32) NOT NULL DEFAULT 'user',\n  `usage` varchar(32) NOT NULL,\n  `request_phase` varchar(16) NOT NULL DEFAULT 'request',\n  `strategy_id` int DEFAULT NULL,\n  `token_count` int NOT NULL DEFAULT '0',\n  `request_status` varchar(16) NOT NULL DEFAULT 'success',\n  `error_code` varchar(128) DEFAULT NULL,\n  `created_at` datetime(3) NOT NULL,\n  `request_bytes` bigint NOT NULL DEFAULT '0',\n  `response_bytes` bigint NOT NULL DEFAULT '0',\n  `duration_ms` int NOT NULL DEFAULT '0',\n  `input_tokens` int NOT NULL DEFAULT '0',\n  `output_tokens` int NOT NULL DEFAULT '0',\n  `reasoning_tokens` int NOT NULL DEFAULT '0',\n  `cached_tokens` int NOT NULL DEFAULT '0',\n  `provider_request_id` varchar(191) DEFAULT NULL,\n  `finish_reason` varchar(64) DEFAULT NULL,\n  `incomplete_details_json` text,\n  `accounting_status` varchar(24) NOT NULL DEFAULT 'estimated',\n  PRIMARY KEY (`id`),\n  KEY `idx_usage_logs_user` (`user_id`,`created_at`),\n  KEY `idx_usage_logs_usage` (`usage`,`created_at`),\n  KEY `idx_usage_provider_request` (`provider_request_id`)\n) ENGINE=InnoDB AUTO_INCREMENT=12140 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+      "sha256": "9460509174c9b27a9653c91aa9a98e817916ade4eb0339dd342d087568de8ae9"
+    },
+    {
+      "name": "trading_accounts",
+      "definition": "CREATE TABLE `trading_accounts` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `broker_server` varchar(100) NOT NULL DEFAULT '',\n  `login_account` varchar(50) NOT NULL DEFAULT '',\n  `nickname` varchar(100) DEFAULT '',\n  `margin_mode` varchar(20) NOT NULL DEFAULT 'netting',\n  `review_status` varchar(20) NOT NULL DEFAULT 'pending',\n  `observe_status` varchar(20) NOT NULL DEFAULT 'active',\n  `is_deleted` tinyint NOT NULL DEFAULT '0',\n  `created_at` datetime NOT NULL DEFAULT (now()),\n  `updated_at` datetime NOT NULL DEFAULT (now()),\n  `observed_until` datetime DEFAULT NULL,\n  `identity_verified_at` datetime DEFAULT NULL,\n  `first_verified_at` datetime DEFAULT NULL,\n  `anomaly_code` varchar(64) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_trading_account_identity` (`user_id`,`broker_server`,`login_account`),\n  KEY `idx_ta_user` (`user_id`,`is_deleted`)\n) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+      "sha256": "5c123a03323a8b5c2d9912b116a72ce4730bdba2da29e96e214a27c9f8c98847"
+    },
+    {
+      "name": "market_candles",
+      "definition": "CREATE TABLE `market_candles` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `source_id` bigint unsigned NOT NULL,\n  `broker_symbol` varchar(64) NOT NULL,\n  `standard_symbol` varchar(64) NOT NULL,\n  `timeframe` varchar(8) NOT NULL,\n  `open_time_utc_msc` bigint NOT NULL,\n  `broker_time` varchar(32) NOT NULL,\n  `open_price` decimal(24,10) NOT NULL,\n  `high_price` decimal(24,10) NOT NULL,\n  `low_price` decimal(24,10) NOT NULL,\n  `close_price` decimal(24,10) NOT NULL,\n  `tick_volume` bigint NOT NULL DEFAULT '0',\n  `spread` int NOT NULL DEFAULT '0',\n  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_market_candle` (`source_id`,`broker_symbol`,`timeframe`,`open_time_utc_msc`),\n  KEY `idx_market_candle_lookup` (`source_id`,`standard_symbol`,`timeframe`,`open_time_utc_msc`)\n) ENGINE=InnoDB AUTO_INCREMENT=3530428 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+      "sha256": "4c36485114d15c8ab183316910105b98730ee397d6088053305b81cbc85500e5"
+    },
+    {
+      "name": "strategy_subscriptions",
+      "definition": "CREATE TABLE `strategy_subscriptions` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `trading_account_id` int NOT NULL,\n  `strategy_id` int NOT NULL,\n  `risk_profile_id` int DEFAULT NULL,\n  `symbols_json` text,\n  `execution_enabled` tinyint NOT NULL DEFAULT '0',\n  `memory_mode` varchar(20) NOT NULL DEFAULT 'shared',\n  `conflicting_strategy_id` int DEFAULT NULL,\n  `is_deleted` tinyint NOT NULL DEFAULT '0',\n  `created_at` datetime NOT NULL DEFAULT (now()),\n  `updated_at` datetime NOT NULL DEFAULT (now()),\n  `schedule_enabled` tinyint NOT NULL DEFAULT '0',\n  `schedule_timezone` varchar(64) NOT NULL DEFAULT 'terminal_server',\n  `schedule_weekdays_json` varchar(64) NOT NULL DEFAULT '[1,2,3,4,5]',\n  `schedule_windows_json` text,\n  `outside_window_behavior` varchar(24) NOT NULL DEFAULT 'pause_all',\n  `take_profit_mode` varchar(24) NOT NULL DEFAULT 'ai_recommended',\n  `active_execution_user_key` int GENERATED ALWAYS AS ((case when ((`execution_enabled` = 1) and (`is_deleted` = 0)) then `user_id` else NULL end)) STORED /*!80023 INVISIBLE */,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_subscription_active_execution_user` (`active_execution_user_key`),\n  KEY `idx_ss_user_strategy` (`user_id`,`strategy_id`,`is_deleted`),\n  KEY `idx_ss_account_strategy` (`trading_account_id`,`strategy_id`,`is_deleted`),\n  KEY `idx_ss_account_exec` (`trading_account_id`,`execution_enabled`,`is_deleted`)\n) ENGINE=InnoDB AUTO_INCREMENT=6 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+      "sha256": "185e8bf7ce7cecb5dbacafbd8a4589341fd7933b138bafcf9346f20e14e573a8"
+    },
+    {
+      "name": "inference_snapshots",
+      "definition": "CREATE TABLE `inference_snapshots` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `signal_id` bigint DEFAULT NULL,\n  `strategy_id` int DEFAULT NULL,\n  `strategy_version` int NOT NULL DEFAULT '1',\n  `strategy_scope` varchar(20) NOT NULL,\n  `owner_user_id` int NOT NULL DEFAULT '0',\n  `standard_symbol` varchar(64) NOT NULL,\n  `market_source` varchar(64) NOT NULL,\n  `system_prompt` longtext NOT NULL,\n  `user_prompt` longtext NOT NULL,\n  `prompt_hash` char(64) NOT NULL,\n  `model_profile_id` int DEFAULT NULL,\n  `provider` varchar(50) DEFAULT NULL,\n  `model_name` varchar(150) DEFAULT NULL,\n  `credential_source` varchar(32) NOT NULL,\n  `output_schema_version` char(64) NOT NULL,\n  `klines_json` longtext,\n  `market_snapshot_json` longtext NOT NULL,\n  `strategy_runtime_json` longtext,\n  `memory_mode` varchar(20) NOT NULL DEFAULT 'off',\n  `evidence_status` varchar(24) NOT NULL DEFAULT 'complete',\n  `omitted_fields_json` text,\n  `content_hash` char(64) NOT NULL,\n  `byte_size` int NOT NULL,\n  `created_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_inference_snapshot_signal` (`signal_id`),\n  KEY `idx_inference_snapshot_strategy` (`strategy_id`,`created_at`),\n  KEY `idx_inference_snapshot_owner` (`owner_user_id`,`created_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=10272 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+      "sha256": "885e5b27c06f37f57cc2cf82ffa0ed6dd28197cf0615a042c4abdf858d64eb6c"
+    },
+    {
+      "name": "ai_model_tasks",
+      "definition": "CREATE TABLE `ai_model_tasks` (\n  `task_id` char(36) NOT NULL,\n  `task_kind` varchar(48) NOT NULL,\n  `queue_class` varchar(24) NOT NULL DEFAULT 'background',\n  `owner_user_id` int NOT NULL DEFAULT '0',\n  `strategy_id` int DEFAULT NULL,\n  `domain_type` varchar(48) DEFAULT NULL,\n  `domain_id` varchar(191) DEFAULT NULL,\n  `idempotency_key` varchar(191) DEFAULT NULL,\n  `snapshot_hash` char(64) DEFAULT NULL,\n  `input_hash` char(64) DEFAULT NULL,\n  `prompt_hash` char(64) DEFAULT NULL,\n  `output_contract_hash` char(64) DEFAULT NULL,\n  `frozen_provider` varchar(64) DEFAULT NULL,\n  `frozen_model` varchar(191) DEFAULT NULL,\n  `frozen_model_profile_id` int DEFAULT NULL,\n  `frozen_protocol` varchar(32) DEFAULT NULL,\n  `frozen_credential_source` varchar(32) DEFAULT NULL,\n  `frozen_context_json` longtext,\n  `status` varchar(32) NOT NULL DEFAULT 'queued',\n  `priority` int NOT NULL DEFAULT '0',\n  `attempt_count` int NOT NULL DEFAULT '0',\n  `max_attempts` int NOT NULL DEFAULT '1',\n  `scheduled_at_utc_msc` bigint NOT NULL,\n  `task_deadline_at_utc_msc` bigint DEFAULT NULL,\n  `result_valid_until_utc_msc` bigint DEFAULT NULL,\n  `lease_token` char(36) DEFAULT NULL,\n  `fencing_token` bigint NOT NULL DEFAULT '0',\n  `lease_owner` varchar(191) DEFAULT NULL,\n  `lease_expires_at_utc_msc` bigint DEFAULT NULL,\n  `last_activity_at_utc_msc` bigint DEFAULT NULL,\n  `estimated_input_tokens` int NOT NULL DEFAULT '0',\n  `selected_output_budget` int NOT NULL DEFAULT '0',\n  `schema_need_tokens` int NOT NULL DEFAULT '0',\n  `context_window_tokens` int DEFAULT NULL,\n  `provider_max_input_tokens` int DEFAULT NULL,\n  `context_limit_semantics` varchar(24) DEFAULT NULL,\n  `token_limits_source` varchar(32) DEFAULT NULL,\n  `token_limits_status` varchar(32) DEFAULT NULL,\n  `token_limits_updated_at_utc_msc` bigint DEFAULT NULL,\n  `provider_output_cap` int DEFAULT NULL,\n  `result_ref` varchar(255) DEFAULT NULL,\n  `result_hash` char(64) DEFAULT NULL,\n  `finish_reason` varchar(64) DEFAULT NULL,\n  `incomplete_details_json` text,\n  `error_code` varchar(128) DEFAULT NULL,\n  `error_message` varchar(512) DEFAULT NULL,\n  `completed_at_utc_msc` bigint DEFAULT NULL,\n  `created_at_utc_msc` bigint NOT NULL,\n  `updated_at_utc_msc` bigint NOT NULL,\n  PRIMARY KEY (`task_id`),\n  UNIQUE KEY `uk_model_task_idempotency` (`task_kind`,`idempotency_key`),\n  KEY `idx_model_task_claim` (`queue_class`,`status`,`priority`,`scheduled_at_utc_msc`),\n  KEY `idx_model_task_lease` (`status`,`lease_expires_at_utc_msc`),\n  KEY `idx_model_task_owner` (`owner_user_id`,`created_at_utc_msc`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+      "sha256": "34d4831dae971bc72129a7879eb19421f98747c3099124b616abf664bcd615eb"
+    }
+  ],
+  "fields": [
+    {
+      "table": "ai_model_profiles",
+      "column": "provider",
+      "actualType": "varchar(32)",
+      "actualNullable": "NO",
+      "targetDeclaration": "VARCHAR(64) NOT NULL",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "category": "text_capacity_or_semantics",
+      "metadata": {
+        "type": "varchar(32)",
+        "nullable": "NO",
+        "defaultValue": "deepseek",
+        "extra": "",
+        "collation": "utf8mb4_0900_ai_ci",
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "6",
+        "null_count": "0",
+        "max_characters": "21",
+        "max_bytes": "21"
+      },
+      "relations": []
+    },
+    {
+      "table": "ai_model_profiles",
+      "column": "model_name",
+      "actualType": "varchar(128)",
+      "actualNullable": "NO",
+      "targetDeclaration": "VARCHAR(191) NOT NULL",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "category": "text_capacity_or_semantics",
+      "metadata": {
+        "type": "varchar(128)",
+        "nullable": "NO",
+        "defaultValue": "deepseek-chat",
+        "extra": "",
+        "collation": "utf8mb4_0900_ai_ci",
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "6",
+        "null_count": "0",
+        "max_characters": "22",
+        "max_bytes": "22"
+      },
+      "relations": []
+    },
+    {
+      "table": "ai_model_profiles",
+      "column": "max_tokens",
+      "actualType": "int",
+      "actualNullable": "YES",
+      "targetDeclaration": "INT UNSIGNED NULL",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "int",
+        "nullable": "YES",
+        "defaultValue": "2000",
+        "extra": "",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "6",
+        "null_count": "0",
+        "negative_count": "0",
+        "min_value": "2000",
+        "max_value": "30000"
+      },
+      "relations": []
+    },
+    {
+      "table": "ai_model_profiles",
+      "column": "request_timeout_ms",
+      "actualType": "int",
+      "actualNullable": "YES",
+      "targetDeclaration": "INT UNSIGNED NULL",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "int",
+        "nullable": "YES",
+        "defaultValue": null,
+        "extra": "",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "6",
+        "null_count": "2",
+        "negative_count": "0",
+        "min_value": "180000",
+        "max_value": "300000"
+      },
+      "relations": []
+    },
+    {
+      "table": "platform_model_usage_policy",
+      "column": "daily_requests_per_user",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "INT UNSIGNED NOT NULL DEFAULT 0",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "int",
+        "nullable": "NO",
+        "defaultValue": "100",
+        "extra": "",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "1",
+        "null_count": "0",
+        "negative_count": "0",
+        "min_value": "100",
+        "max_value": "100"
+      },
+      "relations": []
+    },
+    {
+      "table": "platform_model_usage_policy",
+      "column": "daily_tokens_per_user",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "int",
+        "nullable": "NO",
+        "defaultValue": "500000",
+        "extra": "",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "1",
+        "null_count": "0",
+        "negative_count": "0",
+        "min_value": "500000",
+        "max_value": "500000"
+      },
+      "relations": []
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "id",
+      "actualType": "bigint",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL AUTO_INCREMENT",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "bigint",
+        "nullable": "NO",
+        "defaultValue": null,
+        "extra": "auto_increment",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "12139",
+        "null_count": "0",
+        "negative_count": "0",
+        "min_value": "1",
+        "max_value": "12139"
+      },
+      "relations": [
+        {
+          "table_name": "ai_model_usage_logs",
+          "column_name": "id",
+          "constraint_name": "PRIMARY",
+          "parent_table": null,
+          "parent_column": null
+        }
+      ]
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "strategy_id",
+      "actualType": "int",
+      "actualNullable": "YES",
+      "targetDeclaration": "BIGINT UNSIGNED NULL",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "int",
+        "nullable": "YES",
+        "defaultValue": null,
+        "extra": "",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "12139",
+        "null_count": "1",
+        "negative_count": "0",
+        "min_value": "1",
+        "max_value": "3"
+      },
+      "relations": []
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "token_count",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "int",
+        "nullable": "NO",
+        "defaultValue": "0",
+        "extra": "",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "12139",
+        "null_count": "0",
+        "negative_count": "0",
+        "min_value": "0",
+        "max_value": "624996"
+      },
+      "relations": []
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "request_bytes",
+      "actualType": "bigint",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "bigint",
+        "nullable": "NO",
+        "defaultValue": "0",
+        "extra": "",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "12139",
+        "null_count": "0",
+        "negative_count": "0",
+        "min_value": "0",
+        "max_value": "1581124"
+      },
+      "relations": []
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "response_bytes",
+      "actualType": "bigint",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "bigint",
+        "nullable": "NO",
+        "defaultValue": "0",
+        "extra": "",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "12139",
+        "null_count": "0",
+        "negative_count": "0",
+        "min_value": "0",
+        "max_value": "7593718"
+      },
+      "relations": []
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "duration_ms",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "int",
+        "nullable": "NO",
+        "defaultValue": "0",
+        "extra": "",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "12139",
+        "null_count": "0",
+        "negative_count": "0",
+        "min_value": "0",
+        "max_value": "599894"
+      },
+      "relations": []
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "input_tokens",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "int",
+        "nullable": "NO",
+        "defaultValue": "0",
+        "extra": "",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "12139",
+        "null_count": "0",
+        "negative_count": "0",
+        "min_value": "0",
+        "max_value": "620520"
+      },
+      "relations": []
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "output_tokens",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "int",
+        "nullable": "NO",
+        "defaultValue": "0",
+        "extra": "",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "12139",
+        "null_count": "0",
+        "negative_count": "0",
+        "min_value": "0",
+        "max_value": "33147"
+      },
+      "relations": []
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "reasoning_tokens",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "int",
+        "nullable": "NO",
+        "defaultValue": "0",
+        "extra": "",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "12139",
+        "null_count": "0",
+        "negative_count": "0",
+        "min_value": "0",
+        "max_value": "31151"
+      },
+      "relations": []
+    },
+    {
+      "table": "ai_model_usage_logs",
+      "column": "cached_tokens",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL DEFAULT 0",
+      "source": "bootstrap/v4-foundation-v1.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "int",
+        "nullable": "NO",
+        "defaultValue": "0",
+        "extra": "",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "12139",
+        "null_count": "0",
+        "negative_count": "0",
+        "min_value": "0",
+        "max_value": "614400"
+      },
+      "relations": []
+    },
+    {
+      "table": "trading_accounts",
+      "column": "id",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL AUTO_INCREMENT",
+      "source": "20260903_003_trading_context_and_market_projection.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "int",
+        "nullable": "NO",
+        "defaultValue": null,
+        "extra": "auto_increment",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "4",
+        "null_count": "0",
+        "negative_count": "0",
+        "min_value": "1",
+        "max_value": "4"
+      },
+      "relations": [
+        {
+          "table_name": "trading_accounts",
+          "column_name": "id",
+          "constraint_name": "PRIMARY",
+          "parent_table": null,
+          "parent_column": null
+        }
+      ]
+    },
+    {
+      "table": "trading_accounts",
+      "column": "broker_server",
+      "actualType": "varchar(100)",
+      "actualNullable": "NO",
+      "targetDeclaration": "VARCHAR(191) NOT NULL",
+      "source": "20260903_003_trading_context_and_market_projection.sql",
+      "category": "text_capacity_or_semantics",
+      "metadata": {
+        "type": "varchar(100)",
+        "nullable": "NO",
+        "defaultValue": "",
+        "extra": "",
+        "collation": "utf8mb4_0900_ai_ci",
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "4",
+        "null_count": "0",
+        "max_characters": "18",
+        "max_bytes": "18"
+      },
+      "relations": [
+        {
+          "table_name": "trading_accounts",
+          "column_name": "broker_server",
+          "constraint_name": "uk_trading_account_identity",
+          "parent_table": null,
+          "parent_column": null
+        }
+      ]
+    },
+    {
+      "table": "market_candles",
+      "column": "timeframe",
+      "actualType": "varchar(8)",
+      "actualNullable": "NO",
+      "targetDeclaration": "ENUM('M1','M5','M15','M30','H1','H4','D1') NOT NULL",
+      "source": "20260903_003_trading_context_and_market_projection.sql",
+      "category": "text_capacity_or_semantics",
+      "metadata": {
+        "type": "varchar(8)",
+        "nullable": "NO",
+        "defaultValue": null,
+        "extra": "",
+        "collation": "utf8mb4_0900_ai_ci",
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "35725",
+        "null_count": "0",
+        "max_characters": "3",
+        "max_bytes": "3"
+      },
+      "relations": [
+        {
+          "table_name": "market_candles",
+          "column_name": "timeframe",
+          "constraint_name": "uk_market_candle",
+          "parent_table": null,
+          "parent_column": null
+        }
+      ]
+    },
+    {
+      "table": "market_candles",
+      "column": "tick_volume",
+      "actualType": "bigint",
+      "actualNullable": "NO",
+      "targetDeclaration": "DECIMAL(24,8) NOT NULL",
+      "source": "20260903_003_trading_context_and_market_projection.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "bigint",
+        "nullable": "NO",
+        "defaultValue": "0",
+        "extra": "",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "35725",
+        "null_count": "0",
+        "negative_count": "0",
+        "min_value": "2",
+        "max_value": "293617"
+      },
+      "relations": []
+    },
+    {
+      "table": "strategy_subscriptions",
+      "column": "id",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL AUTO_INCREMENT",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "int",
+        "nullable": "NO",
+        "defaultValue": null,
+        "extra": "auto_increment",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "5",
+        "null_count": "0",
+        "negative_count": "0",
+        "min_value": "1",
+        "max_value": "5"
+      },
+      "relations": [
+        {
+          "table_name": "strategy_subscriptions",
+          "column_name": "id",
+          "constraint_name": "PRIMARY",
+          "parent_table": null,
+          "parent_column": null
+        }
+      ]
+    },
+    {
+      "table": "strategy_subscriptions",
+      "column": "trading_account_id",
+      "actualType": "int",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "int",
+        "nullable": "NO",
+        "defaultValue": null,
+        "extra": "",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "5",
+        "null_count": "0",
+        "negative_count": "0",
+        "min_value": "1",
+        "max_value": "4"
+      },
+      "relations": []
+    },
+    {
+      "table": "inference_snapshots",
+      "column": "id",
+      "actualType": "bigint",
+      "actualNullable": "NO",
+      "targetDeclaration": "CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "bigint",
+        "nullable": "NO",
+        "defaultValue": null,
+        "extra": "auto_increment",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "789",
+        "null_count": "0",
+        "negative_count": "0",
+        "min_value": "10",
+        "max_value": "10271"
+      },
+      "relations": [
+        {
+          "table_name": "inference_snapshots",
+          "column_name": "id",
+          "constraint_name": "PRIMARY",
+          "parent_table": null,
+          "parent_column": null
+        }
+      ]
+    },
+    {
+      "table": "inference_snapshots",
+      "column": "strategy_id",
+      "actualType": "int",
+      "actualNullable": "YES",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "int",
+        "nullable": "YES",
+        "defaultValue": null,
+        "extra": "",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "789",
+        "null_count": "0",
+        "negative_count": "0",
+        "min_value": "1",
+        "max_value": "3"
+      },
+      "relations": []
+    },
+    {
+      "table": "ai_model_tasks",
+      "column": "status",
+      "actualType": "varchar(32)",
+      "actualNullable": "NO",
+      "targetDeclaration": "ENUM('queued','running','succeeded','failed','cancelled','expired') NOT NULL",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "category": "text_capacity_or_semantics",
+      "metadata": {
+        "type": "varchar(32)",
+        "nullable": "NO",
+        "defaultValue": "queued",
+        "extra": "",
+        "collation": "utf8mb4_0900_ai_ci",
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "9317",
+        "null_count": "0",
+        "max_characters": "15",
+        "max_bytes": "15"
+      },
+      "relations": []
+    },
+    {
+      "table": "ai_model_tasks",
+      "column": "fencing_token",
+      "actualType": "bigint",
+      "actualNullable": "NO",
+      "targetDeclaration": "BIGINT UNSIGNED NOT NULL",
+      "source": "20260903_004_ai_strategy_and_inference_core.sql",
+      "category": "numeric_range",
+      "metadata": {
+        "type": "bigint",
+        "nullable": "NO",
+        "defaultValue": "0",
+        "extra": "",
+        "collation": null,
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "9317",
+        "null_count": "0",
+        "negative_count": "0",
+        "min_value": "0",
+        "max_value": "609"
+      },
+      "relations": []
+    },
+    {
+      "table": "ai_model_tasks",
+      "column": "lease_owner",
+      "actualType": "varchar(191)",
+      "actualNullable": "YES",
+      "targetDeclaration": "VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NULL AFTER fencing_token",
+      "source": "20260903_005_analysis_scheduler_and_account_fanout.sql",
+      "category": "text_capacity_or_semantics",
+      "metadata": {
+        "type": "varchar(191)",
+        "nullable": "YES",
+        "defaultValue": null,
+        "extra": "",
+        "collation": "utf8mb4_0900_ai_ci",
+        "datetime_precision": null
+      },
+      "data": {
+        "row_count": "9317",
+        "null_count": "108",
+        "max_characters": "55",
+        "max_bytes": "55"
+      },
+      "relations": []
+    }
+  ],
+  "summary": {
+    "reviewedFields": 27,
+    "datetimeFields": 0,
+    "negativeNumericFields": [],
+    "incompleteDateFields": []
+  },
+  "scope": "Read-only ranges, nullability, defaults and FK references. Does not approve root ID remapping or state/ownership semantics."
+}

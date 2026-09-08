@@ -1,6 +1,6 @@
 # 数据库逐表迁移矩阵
 
-> 当前结构进度（2026-09-08）：dev_vue 已91步/222表，原165表和原字段保留；详细剩余缺表、字段及类型差异以[实际目录v2](migration/dev-vue-structure-remaining-work-20260908-v2.json)为准。本表承担旧源业务处置设计，不代表当前安装/回填状态；后续按[结构收口方案](database-structure-completion-plan-20260908.md)推进。
+> 当前结构进度（2026-09-08）：dev_vue 已105步/222表，原165表和原字段保留；详细剩余缺表、字段、类型及可空性差异以[实际目录v3](migration/dev-vue-structure-remaining-work-20260908-v3.json)为准。本表承担旧源业务处置设计，不代表当前安装/回填状态；后续按[结构收口方案](database-structure-completion-plan-20260908.md)推进。
 
 > 2026-09-06 全面规范化接续方案：[数据库结构优化与全面规范化实施方案](database-standardization-execution-plan-20260906.md)。原始观测和历史设计保留；新实施以实际结构复核、全量字段合同及追加迁移为准。
 

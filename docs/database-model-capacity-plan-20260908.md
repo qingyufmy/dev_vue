@@ -1,0 +1,11 @@
+# 模型配置与用量字段结构升级
+
+当前91步真实复核后，从27项类型差异中选择3表14列：ai_model_profiles 的 provider/model_name/max_tokens/request_timeout_ms；platform_model_usage_policy 的 daily_requests_per_user/daily_tokens_per_user；ai_model_usage_logs 的 token_count/request_bytes/response_bytes/duration_ms/input_tokens/output_tokens/reasoning_tokens/cached_tokens。
+
+两项名称扩容至原目标64/191字符；其余采用目标INT UNSIGNED或BIGINT UNSIGNED。真实聚合预检未发现负数，14列没有主键/外键引用。NULL和旧默认值全部保留，尤其request_timeout_ms两行NULL；不将未知值改零。provider/model默认值、额度默认100/500000与目标空库默认不同，这属于尚待业务合同处理的默认语义，不借扩容擅自调整。
+
+排除usage日志id/strategy_id、账户/订阅/快照根ID、行情周期和任务状态。原始交易与策略关系保持；新BIGINT容量不等于消费者已经支持任意超JS安全整数。V4当前额度读取显式Number转换，当前值均安全；未来大额度输入与汇总精度需在模型用量消费者阶段补精确比较，此批不写大额度、不变更当前额度。
+
+第一轮复审：只采用已批准目标类型，保留同一事实及ID。14个非关系字段可以独立执行，其余13项继续逐项审核而非视作完成。排序规则、NULL、默认、注释和列顺序不改变。
+
+第二轮复审：signed改unsigned不是全值域扩容，所以每次执行都检查负数并要求严格SQL模式。INTEGER到BIGINT会改变mysql2返回类型；对账将本批数值列统一CAST AS CHAR，保留完整十进制值与NULL，不经过JS Number。其它列原样摘要；只还原本批14行类型供结构前后比较，自增值必须保持。恢复副本14次DDL后中断、续接、重复和全表对账通过后才能实际升级dev_vue。采用追加SQL和同连接升级锁，不修改91步历史，不启动应用或公网部署。
