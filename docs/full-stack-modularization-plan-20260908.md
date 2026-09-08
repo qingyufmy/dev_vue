@@ -1039,3 +1039,12 @@ Outbox探针升级v2：只排除已dispatched历史，对全部剩余事件仍�
 新增[归属退役设计](architecture/account-ownership-retirement-design-20260909.md)，完成职责及兼容/并发两轮复审。明确保留账户与历史，专用幂等回执、同事务归属/区间/上下文/事件变更，以及未知结果恢复。记录Bridge账户优先与上下文用户优先的锁序差异、部分依赖表缺失等实施前问题，尚未声称退役能力可用。
 
 脚本语法、真实只读预检及diff检查通过；本批无数据写入、迁移、服务启动或终端动作。下一步补齐依赖和锁序清单，再实施受限退役能力；整体目标未完成。
+
+
+## 81. 账户源码依赖与锁序核查（第一百五十一批）
+
+新增只读源码采集器 inspect-account-source-dependencies.mjs，解析 server/src 的 280 个 TypeScript 文件，归档 58 个文件的 323 个字面量候选及全部源码摘要。报告 account-source-dependency-candidates-20260909.json 不是完整依赖图或自动边界门禁，不据此推断实际数据库引用为空。
+
+[账户数据所有权与锁序清单](architecture/account-data-ownership-and-lock-inventory-20260909.md)列出 auth/trading/bridge/strategies/execution/inference/risk/history/reviews 及 outbox 的责任和未完成项，补充无外键 JSON 与三类 Redis 租约引用。实际调用确认 Bridge 激活/复核也沿用账户到用户锁序，而上下文为用户到账户；观摩还涉及多个用户。尚未实测死锁，不报告为实际运行故障。
+
+这改变下一实施动作：先建立账户上下文与 Bridge 复核的双连接交错测试，再确定覆盖参与者的锁协议；不能只改注册或改成先锁当前用户便宣称统一。归属退役、投影写入者及动态/旧消费者清单仍未完成，合成账户继续保留。脚本语法、实际源码扫描、报告摘要复核、diff及321冻结输入检查通过；没有业务写入、迁移、重启或终端操作。
