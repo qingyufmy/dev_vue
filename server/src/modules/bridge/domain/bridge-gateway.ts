@@ -1,4 +1,4 @@
-import type { BridgeRoute, BridgeWireRoute } from '../../execution/domain/bridge-command.js'
+import type { BridgeRoute, BridgeWireRoute } from '../../execution/index.js'
 
 const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,190}$/
 const DEVICE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/

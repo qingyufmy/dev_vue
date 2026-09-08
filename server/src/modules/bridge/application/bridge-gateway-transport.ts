@@ -1,5 +1,4 @@
-import type { BridgeCommandTransport } from '../../execution/application/bridge-command-ports.js'
-import { BridgeCommandError, type BridgeCommand, type BridgeCommandReconcileEnvelope, type BridgeCommandRequestEnvelope } from '../../execution/domain/bridge-command.js'
+import { BridgeCommandError, type BridgeCommandTransport, type BridgeCommand, type BridgeCommandReconcileEnvelope, type BridgeCommandRequestEnvelope } from '../../execution/index.js'
 import type { BridgeGatewayDirectory, BridgeGatewayLeaseStore, BridgeGatewayRouteRepository } from './bridge-gateway-ports.js'
 
 export class BridgeGatewayCommandTransport implements BridgeCommandTransport {

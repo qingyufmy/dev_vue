@@ -1092,3 +1092,14 @@ MysqlContextCommands 增加最多三次尝试：仅在 begin 成功、commit 尚
 定向复核：回调仅包含数据库操作，Redis和终端I/O仍在外；固定本次route事实不改写request或epoch。重试资格来自明确事务中止且完成清理，不能据普通503决定。既有“首次账户死锁必失败”测试与新恢复语义冲突，保留重复身份不重试断言，新增账户插入/区间插入/会话插入三个死锁点，确认最终账户、归属、区间及会话各一份、只有一次commit。
 
 7项事务生命周期、29项档案注册、7项路由授权共43项测试通过；类型/构建、边界增量、14项运行合同、diff与321冻结输入检查通过。本批无实际数据库写入、运行服务重启或终端操作。全局锁序、完整未知提交回读和账户退役仍未完成，下一步继续按P1数据生命周期验收处理。
+
+
+## 86. Bridge 网关使用 execution 公开接收能力（第一百五十六批）
+
+新增execution应用端口BridgeCommandReceiver，仅声明accepted、result和reconciliation-only recover，BridgeCommandService实现该接口。网关服务及会话注入该能力，不再依赖含repository私有成员和create/dispatch等额外能力的具体类。命令传输、路由和query共享类型与校验统一通过execution/index访问；未新增具体基础设施导出或第二业务入口，普通命令派发仍属于execution工作流。
+
+边界检查确认无新增违规，精确删除本次四个Bridge源码文件对应的8条陈旧债务：登记64→56（bridge6、commerce4、execution35、inference5、risk6）。数量只是当前扫描登记，SQL归属和全局锁序仍独立验收，不能推算整体完成率。
+
+回归发现bridge-v4-gateway-persistence-boundary中一个旧源码断言仍要求trading repository内含预留吸收SQL，与既有execution absorber拆分冲突。本次移除该过期文件内容断言，保留并运行mysql-trading-offline-accounts既有同连接投影/预留吸收/事件失败回滚行为测试及精确ticket吸收测试，没有把SQL复制回trading以迎合断言。
+
+网关WebSocket、Worker、授权隔离、命令状态机、离线账户及投影吸收共66项回归通过；server类型/构建、56条增量边界门、14项运行合同、diff和321冻结输入检查通过。无数据库连接、服务重启或终端操作。后续继续账户数据生命周期和Bridge剩余边界收口；P1及总体P0–P7尚未完成。

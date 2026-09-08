@@ -4,8 +4,9 @@ import {
   type BridgeCommandAcceptedEnvelope, type BridgeCommandResultEnvelope, type CreateBridgeCommandInput,
 } from '../domain/bridge-command.js'
 import type { BridgeCommandRepository, BridgeCommandScope, BridgeCommandTransport } from './bridge-command-ports.js'
+import type { BridgeCommandReceiver } from './bridge-command-receiver.js'
 
-export class BridgeCommandService {
+export class BridgeCommandService implements BridgeCommandReceiver {
   constructor(private readonly repository: BridgeCommandRepository) {}
 
   async create(input: CreateBridgeCommandInput, now = new Date()) {

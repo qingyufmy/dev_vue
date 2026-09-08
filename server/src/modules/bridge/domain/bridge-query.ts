@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { BridgeGatewayRoute } from './bridge-gateway.js'
 import { BridgeGatewayError } from './bridge-gateway.js'
-import type { BridgeWireRoute } from '../../execution/domain/bridge-command.js'
+import type { BridgeWireRoute } from '../../execution/index.js'
 
 export type BridgeHistoryResource = 'history.orders' | 'history.trades' | 'history.deals'
 

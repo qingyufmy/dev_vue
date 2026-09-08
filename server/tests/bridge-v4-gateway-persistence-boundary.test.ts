@@ -25,16 +25,6 @@ describe('Stage 12G persistence and lease boundaries', () => {
     expect(source.indexOf('INSERT INTO bridge_connection_sessions')).toBeLessThan(source.indexOf('async activate'))
   })
 
-  it('persists the public projection, exact terminal snapshot, and absorption in one transaction', async () => {
-    const source = await readFile(new URL('../src/modules/trading/infrastructure/mysql-trading-repository.ts', import.meta.url), 'utf8')
-    expect(source).toContain('applyTrustedProjection')
-    expect(source).toContain('bridge_trade_state_snapshots_v4')
-    expect(source).toContain("status='committed'")
-    expect(source).toContain("status='absorbed'")
-    expect(source).toContain('trusted_projection_absorbed')
-    expect(source.indexOf('bridge_connection_sessions')).toBeLessThan(source.indexOf('replaceExactTradeStates'))
-  })
-
   it('builds commands from prepared intents and server-owned defaults, never from socket input', async () => {
     const source = await readFile(new URL('../src/modules/execution/infrastructure/mysql-execution-command-source.ts', import.meta.url), 'utf8')
     expect(source).toContain("i.status='prepared'")

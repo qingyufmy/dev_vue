@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { BridgeCommandService } from '../../execution/application/bridge-command-service.js'
-import { assertAcceptedEnvelope, assertResultEnvelope, type BridgeCommandAcceptedEnvelope, type BridgeCommandResultEnvelope } from '../../execution/domain/bridge-command.js'
+import { assertAcceptedEnvelope, assertResultEnvelope, type BridgeCommandReceiver, type BridgeCommandAcceptedEnvelope, type BridgeCommandResultEnvelope } from '../../execution/index.js'
 import { assertHeartbeat, assertSessionHello, BridgeGatewayError, welcomeEnvelope, type BridgeGatewayRoute, type BridgeHeartbeatEnvelope, type BridgeSessionHelloEnvelope } from '../domain/bridge-gateway.js'
 import type {
   BridgeGatewayCapacityRepository, BridgeGatewayDirectory, BridgeGatewayLeaseStore, BridgeGatewayRouteRepository,
@@ -22,7 +21,7 @@ export class BridgeGatewayService {
     private readonly capacities: BridgeGatewayCapacityRepository,
     private readonly directory: BridgeGatewayDirectory,
     private readonly transport: BridgeGatewayCommandTransport,
-    private readonly commands: BridgeCommandService,
+    private readonly commands: BridgeCommandReceiver,
     private readonly streams: BridgeGatewayStreamIngestor,
     private readonly now = () => new Date(),
     private readonly queries: BridgeGatewayQueryReceiver = NO_QUERY_RECEIVER,
@@ -76,7 +75,7 @@ export class BridgeGatewaySession {
     private readonly leases: BridgeGatewayLeaseStore,
     private readonly directory: BridgeGatewayDirectory,
     private readonly transport: BridgeGatewayCommandTransport,
-    private readonly commands: BridgeCommandService,
+    private readonly commands: BridgeCommandReceiver,
     private readonly streams: BridgeGatewayStreamIngestor,
     private readonly now: () => Date,
     private readonly queries: BridgeGatewayQueryReceiver = NO_QUERY_RECEIVER,
