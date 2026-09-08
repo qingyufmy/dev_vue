@@ -75,3 +75,6 @@ mysql-context-receipts 中原有 EXISTS users 条件仍保留，使回执与有�
 
 
 账户目标候选 ownedTarget 只负责账户及归属，不读取 users；它只供命令准备使用，不能作为独立授权 API。主体授权由回执预读与 MysqlContextCommands 同事务认证锁承担。新增调用者必须保留这条调用链；用户在 route 采集期间被停用的拒绝回归位于 mysql-context-write-port.test.ts。观摩 reader 的身份与会员联查仍待按一致性要求单独替换。
+
+
+普通观摩授权/目录读取经 MysqlObserverSnapshotReader，整次操作（含全部分页）使用一个只读RR一致快照，完成后rollback并归还连接；API、浏览器组装与repository默认入口已接入。命令authorizeOn使用已有外层事务，不能调用快照包装器。测试入口mysql-observer-snapshot-reader.test.ts与scripts/verify-observer-snapshot-mysql.mjs。当前仍保留用户表联查，主体事实端口注入为下一步。

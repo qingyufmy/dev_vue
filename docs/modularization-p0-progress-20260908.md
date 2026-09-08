@@ -1105,3 +1105,14 @@ mysql-context-target 的 ownedTarget 移除 users 联查，仅查询账户、当
 12项身份事实回归、server类型/构建、API生成运行检查通过，321个冻结输入一致。scripts/verify-account-principal-facts-mysql.mjs 在当前开发MySQL的私有临时InnoDB users表验证活动过滤、去重、驱动类型、UTC毫秒、共享读取及负版本拒绝，共3项检查通过；临时表随连接销毁，永久业务写入0，回执 architecture/account-principal-facts-mysql-20260909.json。
 
 该能力已可供组装使用，但本批尚未接入 MysqlObserverAccessReader，原观摩联查仍保留。下一批必须实现观摩的一致读取作用域与全入口注入，按第59节替换SQL并验证会员过期、停用、授权版本及事务内复核；不能将新增端口或临时表验证表述为观摩模块已完成。静态债务仍64条，未重启API。
+
+
+## 62. 普通观摩读取的一致快照作用域（第一百三十二批）
+
+新增 MysqlObserverSnapshotReader，普通 authorize 和整次分页 list 在一条池连接上执行 SET TRANSACTION ISOLATION LEVEL REPEATABLE READ 与 START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY，结束后 rollback/release。初始化或清理失败销毁连接，失败按既有 trading_context_invalid/503 合同返回；不修改池连接的session隔离级别，不在此调用外部网络。API/浏览器composition及MysqlTradingRepository默认观摩读取使用该实现，repository依赖收窄为ObserverAccessReader应用端口。命令authorizeOn仍由既有外层写事务负责，不能再嵌套快照事务。
+
+51项观摩reader/context、账户repository及命令组装回归通过；新增7项快照生命周期/失败清理测试，修正错误码为既有合同后7项重跑通过。server类型/构建、API生成运行检查通过，321个冻结输入一致。真实MySQL脚本verify-observer-snapshot-mysql.mjs验证主体事实可在只读快照内读取、FOR UPDATE被只读事务拒绝、空观摩目录查询及同一池连接恢复原隔离级别/可锁定读取，4项通过，数据库写入0；回执architecture/observer-snapshot-mysql-20260909.json。
+
+新增快照覆盖整次list而非每页单独获取连接，原100条分页与TTL检测保留。短期代价是普通授权增加事务往返，连接占用至分页/TTL结束，后续容量验收需计入。当前验证不含跨连接并发版本变化与正向观摩频道；快照层建立不等于身份事实SQL已拆分。
+
+下一批在已明确的普通快照与外层写事务中注入AccountPrincipalReader，替换MysqlObserverAccessReader的users联查，并更新所有构造入口。原联查本批保留，未重启API或浏览器网关，静态登记仍64条，P1与整体目标未完成。

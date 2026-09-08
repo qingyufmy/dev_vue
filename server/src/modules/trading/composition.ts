@@ -23,7 +23,7 @@ import type { BridgeProjectionPort } from './application/bridge-projection-port.
 import type { ProjectionReservationAbsorber } from './application/projection-reservation-absorber.js'
 import { MysqlAccountRegistration } from './infrastructure/mysql-account-registration.js'
 import { MysqlTradingRepository } from './infrastructure/mysql-trading-repository.js'
-import { MysqlObserverAccessReader } from './infrastructure/mysql-observer-access-reader.js'
+import { MysqlObserverSnapshotReader } from './infrastructure/mysql-observer-snapshot-reader.js'
 import { MysqlObserverManagementRepository } from './infrastructure/mysql-observer-management-repository.js'
 import { RedisConnectionLeaseStore } from './infrastructure/redis-connection-lease-store.js'
 import { RedisBrowserRealtimePublisher } from './infrastructure/redis-browser-realtime-publisher.js'
@@ -59,7 +59,7 @@ export function createTradingApiModule(pool: Pool, cache: Redis, auth: { trade: 
   tradeAuth: TradeSessionAuthenticator
   observerAdminAuth: ObserverManagementRequestAuthenticator
 } {
-  const access = new MysqlObserverAccessReader(pool)
+  const access = new MysqlObserverSnapshotReader(pool)
   const repository = new MysqlTradingRepository(pool, leases, access)
   const trading = new TradingService(repository, new ObserverPublicationService(access, repository))
   const connectionCapacity = new ConnectionCapacityService(repository, new RedisConnectionLeaseStore(cache))
@@ -86,7 +86,7 @@ export function createBrowserTradingModule(pool: Pool, leases: GatewayLeases, ev
   sessions: BrowserRealtimeSessions
   events: Pick<RedisBrowserRealtimeSubscriber, 'start' | 'close'>
 } {
-  const access = new MysqlObserverAccessReader(pool)
+  const access = new MysqlObserverSnapshotReader(pool)
   const hub = new BrowserRealtimeHub(new MysqlTradingRepository(pool, leases, access), access)
   const events = new RedisBrowserRealtimeSubscriber(eventCache, {
     publish(event) { hub.publish(event); onEvent() },

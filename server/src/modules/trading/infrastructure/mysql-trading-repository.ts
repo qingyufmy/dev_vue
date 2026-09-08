@@ -4,7 +4,8 @@ import type {
   BridgeExactTradeState, ConnectionCapacityRepository, TradingProjectionRepository, TradingProjectionWrite, TradingReadRepository,
   TrustedBridgeProjectionRepository, TrustedBridgeProjectionWrite,
 } from '../application/trading-ports.js'
-import { MysqlObserverAccessReader } from './mysql-observer-access-reader.js'
+import { MysqlObserverSnapshotReader } from './mysql-observer-snapshot-reader.js'
+import type { ObserverAccessReader } from '../application/observer-ports.js'
 import type { AccountLiveRouteReader } from '../application/account-live-route-reader.js'
 import type {
   AccountSnapshot, MarketCandle, MarketQuote, OpenPosition, PendingOrder, RealtimeResource,
@@ -144,11 +145,11 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
   constructor(
     private readonly pool: Pool,
     private readonly gatewayLeases: AccountLiveRouteReader | null = null,
-    observerAccessReader?: MysqlObserverAccessReader,
+    observerAccessReader?: ObserverAccessReader,
     private readonly reservationAbsorber?: (connection: PoolConnection) => ProjectionReservationAbsorber,
-  ) { this.observerAccessReader = observerAccessReader ?? new MysqlObserverAccessReader(pool) }
+  ) { this.observerAccessReader = observerAccessReader ?? new MysqlObserverSnapshotReader(pool) }
 
-  private readonly observerAccessReader: MysqlObserverAccessReader
+  private readonly observerAccessReader: ObserverAccessReader
 
   async getContext(userId: number) {
     const [rows] = await this.pool.execute<ContextRow[]>('SELECT user_id, mode, CAST(trading_account_id AS CHAR) trading_account_id, CAST(observer_channel_id AS CHAR) observer_channel_id, read_only, revision FROM trading_contexts WHERE user_id=?', [userId])
