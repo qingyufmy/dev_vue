@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { isReadonly } from 'vue'
 
 const api = vi.hoisted(() => ({ getSession: vi.fn(), logoutCurrent: vi.fn() }))
-vi.mock('@aurum/api-client', () => ({ createApiClient: () => api }))
+vi.mock('@aurum/api-client', async (original) => ({ ...await original<typeof import('@aurum/api-client')>(), createApiClient: () => api }))
 afterEach(() => { vi.restoreAllMocks(); vi.resetModules() })
 
 describe('admin auth public session', () => {

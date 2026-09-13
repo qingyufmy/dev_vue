@@ -2,6 +2,13 @@ packages:
   - frontend/apps/*
   - frontend/packages/*
 
+# Nuxt's published config types import Vite without declaring it as a dependency.
+# Match the existing Nuxt/Vite runtime instead of resolving Vitest's hoisted Vite 6.
+packageExtensions:
+  '@nuxt/schema@4.5.2':
+    dependencies:
+      vite: 8.2.2
+
 allowBuilds:
   '@alicloud/openapi-core': true
   bufferutil: true

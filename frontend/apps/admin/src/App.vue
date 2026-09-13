@@ -17,13 +17,15 @@ import {
   ShieldCheck,
   UsersRound,
 } from '@lucide/vue'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 import { Avatar, AvatarFallback } from '@aurum/ui/avatar'
 import { Button } from '@aurum/ui/button'
+import { Alert, AlertDescription, AlertTitle } from '@aurum/ui/alert'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -51,10 +53,21 @@ import { useAdminSession } from '~/features/auth'
 const route = useRoute()
 const pageTitle = computed(() => String(route.meta.title ?? '管理后台'))
 const { displayName, logout } = useAdminSession()
+const logoutPending = ref(false)
+const logoutError = ref('')
 
 async function logoutCurrent() {
-  await logout()
-  window.location.assign('/login')
+  if (logoutPending.value) return
+  logoutPending.value = true
+  logoutError.value = ''
+  try {
+    await logout()
+    window.location.assign('/login?reason=signed-out')
+  } catch {
+    logoutError.value = '退出尚未确认，请检查网络后重试。'
+  } finally {
+    logoutPending.value = false
+  }
 }
 
 const navGroups = [
@@ -123,14 +136,14 @@ const navGroups = [
       </SidebarContent>
 
       <SidebarFooter class="border-t p-3">
-        <p class="px-2 text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">管理员应用使用独立 Host-only 会话</p>
+        <p class="px-2 text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">量见管理后台</p>
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
 
     <SidebarInset class="h-svh overflow-hidden">
       <header class="flex h-16 shrink-0 items-center gap-3 border-b bg-background px-3 sm:px-5">
-        <SidebarTrigger class="shrink-0" />
+        <SidebarTrigger class="size-11 shrink-0" aria-label="展开或收起导航" />
         <div class="min-w-0 flex-1">
           <p class="truncate text-sm font-semibold">{{ pageTitle }}</p>
           <p class="hidden text-xs text-muted-foreground sm:block">管理操作将显示明确作用范围并写入审计</p>
@@ -142,22 +155,25 @@ const navGroups = [
 
         <DropdownMenu>
           <DropdownMenuTrigger as-child>
-            <Button variant="ghost" class="h-11 gap-2 px-2">
+            <Button variant="ghost" class="h-11 gap-2 px-2" aria-label="打开管理员账户菜单">
               <Avatar size="sm"><AvatarFallback>管</AvatarFallback></Avatar>
               <span class="hidden max-w-24 truncate text-sm sm:inline">{{ displayName }}</span>
               <ChevronDown class="size-4 text-muted-foreground" aria-hidden="true" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" class="w-48">
+            <DropdownMenuGroup>
             <DropdownMenuLabel>管理员账户</DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem disabled><CircleUserRound />账户资料</DropdownMenuItem>
             <DropdownMenuItem as-child><RouterLink to="/system"><Settings2 />系统设置</RouterLink></DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem @select="logoutCurrent"><LogOut />退出管理后台</DropdownMenuItem>
+            <DropdownMenuItem :disabled="logoutPending" @select="logoutCurrent"><LogOut />退出管理后台</DropdownMenuItem>
+            </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
       </header>
+      <Alert v-if="logoutError" variant="destructive" role="alert"><AlertTitle>退出未完成</AlertTitle><AlertDescription>{{ logoutError }}</AlertDescription></Alert>
 
       <main class="min-h-0 flex-1 overflow-y-auto">
         <RouterView />

@@ -1,17 +1,28 @@
 import { fileURLToPath, URL } from 'node:url'
 import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 
-export default defineConfig({
-  plugins: [vue(), tailwindcss()],
-  resolve: {
-    alias: {
-      '~': fileURLToPath(new URL('./src', import.meta.url)),
-      '@': fileURLToPath(new URL('../../packages/ui/src', import.meta.url)),
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, fileURLToPath(new URL('.', import.meta.url)), 'AURUM_ADMIN_')
+  const target = env.AURUM_ADMIN_API_BASE || 'http://127.0.0.1:3010'
+  return {
+    plugins: [vue(), tailwindcss()],
+    resolve: {
+      alias: {
+        '~': fileURLToPath(new URL('./src', import.meta.url)),
+        '@': fileURLToPath(new URL('../../packages/ui/src', import.meta.url)),
+      },
     },
-  },
-  test: {
-    environment: 'happy-dom',
-  },
+    test: {
+      environment: 'happy-dom',
+    },
+    server: {
+      proxy: {
+        // Keep the browser Host and Origin for surface authorization and CSRF.
+        '^/api/v4(?:/|\\?|$)': { target, changeOrigin: false },
+        '^/auth/(?:start|callback)(?:\\?|$)': { target, changeOrigin: false },
+      },
+    },
+  }
 })

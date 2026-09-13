@@ -81,9 +81,10 @@ export const router = createRouter({
 
 router.beforeEach(async (to) => {
   if (to.meta.public) return true
-  const { load } = useTradeSession()
+  const { load, issue } = useTradeSession()
   if (await load()) return true
-  return { path: '/login', query: { next: to.fullPath } }
+  if (issue.value === 'none') return false
+  return { path: '/login', query: { next: to.fullPath, ...(issue.value !== 'signed-out' ? { reason: issue.value } : {}) } }
 })
 
 router.afterEach((to) => {

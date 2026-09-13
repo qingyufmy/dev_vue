@@ -13,6 +13,10 @@ export default defineNuxtConfig({
   css: ['@aurum/design-tokens/styles.css'],
   devtools: { enabled: false },
   modules: [],
+  nitro: {
+    // Keep the Host-preserving server transport ahead of Nitro's native-fetch alias.
+    alias: { 'node-fetch-native/node': fileURLToPath(import.meta.resolve('node-fetch-native/node')) },
+  },
   typescript: { strict: true, typeCheck: true },
   vite: {
     plugins: [tailwindcss()],

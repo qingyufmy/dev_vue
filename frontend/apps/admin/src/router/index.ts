@@ -43,9 +43,10 @@ export const router = createRouter({
 
 router.beforeEach(async (to) => {
   if (to.meta.public) return true
-  const { load } = useAdminSession()
+  const { load, issue } = useAdminSession()
   if (await load()) return true
-  return { path: '/login', query: { next: to.fullPath } }
+  if (issue.value === 'none') return false
+  return { path: '/login', query: { next: to.fullPath, ...(issue.value !== 'signed-out' ? { reason: issue.value } : {}) } }
 })
 
 router.afterEach((to) => {

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { tradingContext, ContextCommandRecovery } from '~/features/trading-context'
+import { ContextCommandRecovery } from '~/features/trading-context'
+import { RuntimeStatus } from '~/features/shell'
 
 import {
   BarChart3,
@@ -9,7 +10,6 @@ import {
   Cable,
   ChartCandlestick,
   ChevronDown,
-  CircleUserRound,
   History,
   House,
   LogOut,
@@ -18,15 +18,16 @@ import {
   ShieldCheck,
   SlidersHorizontal,
 } from '@lucide/vue'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { activeTerminalDisplayTimezone } from '~/lib/laboratory-display-time'
 import { RouterLink, RouterView, useRoute } from 'vue-router'
 import { Avatar, AvatarFallback } from '@aurum/ui/avatar'
-import { Badge } from '@aurum/ui/badge'
 import { Button } from '@aurum/ui/button'
+import { Alert, AlertDescription, AlertTitle } from '@aurum/ui/alert'
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -50,16 +51,26 @@ import {
 } from '@aurum/ui/sidebar'
 import { Toaster } from '@aurum/ui/sonner'
 import { useTradeSession } from '~/features/auth'
-import { currentAccount, realtimeState } from '~/features/trading-context'
 
 const displayTimezone = computed(activeTerminalDisplayTimezone)
 const route = useRoute()
 const pageTitle = computed(() => String(route.meta.title ?? 'AI 交易实验室'))
 const { displayName, logout } = useTradeSession()
+const logoutPending = ref(false)
+const logoutError = ref('')
 
 async function logoutCurrent() {
-  await logout()
-  window.location.assign('/login')
+  if (logoutPending.value) return
+  logoutPending.value = true
+  logoutError.value = ''
+  try {
+    await logout()
+    window.location.assign('/login?reason=signed-out')
+  } catch {
+    logoutError.value = '退出尚未确认，请检查网络后重试。'
+  } finally {
+    logoutPending.value = false
+  }
 }
 
 const navGroups = [
@@ -136,21 +147,16 @@ const navGroups = [
 
     <SidebarInset class="h-svh overflow-hidden">
       <header class="flex h-16 shrink-0 items-center gap-3 border-b bg-background px-3 sm:px-5">
-        <SidebarTrigger class="shrink-0" />
+        <SidebarTrigger class="size-11 shrink-0" aria-label="展开或收起导航" />
         <div class="min-w-0 flex-1">
           <p class="truncate text-sm font-semibold">{{ pageTitle }}</p>
           <p class="truncate text-xs text-muted-foreground">终端时间 {{ displayTimezone.label }} · {{ displayTimezone.statusLabel }}</p>
         </div>
 
-        <div class="hidden items-center gap-2 lg:flex" aria-label="运行状态">
-          <Badge :variant="currentAccount?.bridgeState === 'online' ? 'default' : 'outline'">{{ currentAccount?.bridgeState === 'online' ? '智桥已连接' : '智桥未连接' }}</Badge>
-          <Badge variant="outline">{{ realtimeState === 'live' ? '数据实时同步' : '快照模式' }}</Badge>
-          <Badge :variant="currentAccount?.tradePermission && tradingContext?.mode !== 'observer' ? 'default' : 'secondary'">{{ tradingContext?.mode === 'observer' ? '观摩模式' : currentAccount?.tradePermission ? '交易已授权' : '只读' }}</Badge>
-        </div>
 
         <DropdownMenu>
           <DropdownMenuTrigger as-child>
-            <Button variant="ghost" class="h-11 gap-2 px-2">
+            <Button variant="ghost" class="h-11 gap-2 px-2" aria-label="打开账户与设置菜单">
               <Avatar size="sm">
                 <AvatarFallback>客</AvatarFallback>
               </Avatar>
@@ -159,22 +165,25 @@ const navGroups = [
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" class="w-52">
+            <DropdownMenuGroup>
             <DropdownMenuLabel>账户与设置</DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem as-child>
               <RouterLink to="/settings/models"><Settings2 />模型配置</RouterLink>
             </DropdownMenuItem>
-            <DropdownMenuItem><CircleUserRound />用户中心</DropdownMenuItem>
             <DropdownMenuItem as-child>
               <RouterLink to="/bridge"><Cable />量见智桥</RouterLink>
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem @select="logoutCurrent"><LogOut />退出交易实验室</DropdownMenuItem>
+            <DropdownMenuItem :disabled="logoutPending" @select="logoutCurrent"><LogOut />退出交易实验室</DropdownMenuItem>
+            </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
       </header>
+      <Alert v-if="logoutError" variant="destructive" role="alert"><AlertTitle>退出未完成</AlertTitle><AlertDescription>{{ logoutError }}</AlertDescription></Alert>
 
       <ContextCommandRecovery />
+      <RuntimeStatus />
       <main class="min-h-0 flex-1 overflow-y-auto">
         <RouterView />
       </main>

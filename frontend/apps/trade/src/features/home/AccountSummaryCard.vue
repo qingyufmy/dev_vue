@@ -6,18 +6,21 @@ import type { AccountSnapshot, ObserverChannel, TradingAccount } from '@aurum/co
 import { Badge } from '@aurum/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@aurum/ui/card'
 import { Button } from '@aurum/ui/button'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@aurum/ui/select'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@aurum/ui/select'
+import { accountMoney as money } from './account-money'
 
 const props = defineProps<{ accounts: readonly TradingAccount[]; observers: readonly ObserverChannel[]; accountId: string | null; observerChannelId: string | null; snapshot: AccountSnapshot | null; loading: boolean }>()
 const emit = defineEmits<{ select: [accountId: string]; observer: [observerChannelId: string]; leaveObserver: [] }>()
 const displayTimezone = computed(() => terminalDisplayTimezone(props.snapshot?.timezoneOffsetMinutes, props.snapshot?.clockStatus))
+const bridgeLabel = computed(() => props.snapshot ? {
+  online: '智桥在线', offline: '智桥离线', paused: '智桥已暂停', replaced: '连接已被替换', unauthorized: '智桥未获授权',
+}[props.snapshot.bridgeState] : '智桥状态待确认')
 const selection = computed(() => props.observerChannelId ? `observer:${props.observerChannelId}` : props.accountId ? `account:${props.accountId}` : undefined)
 function select(value: unknown) {
   const selection = String(value)
   if (selection.startsWith('observer:') && selection.length > 9) emit('observer', selection.slice(9))
   else if (selection.startsWith('account:') && selection.length > 8) emit('select', selection.slice(8))
 }
-const money = (value?: string, currency = '') => value === undefined ? '--' : `${Number(value).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${currency}`.trim()
 </script>
 
 <template>
@@ -34,20 +37,22 @@ const money = (value?: string, currency = '') => value === undefined ? '--' : `$
       <div class="flex flex-wrap items-center gap-2">
         <Badge v-if="observerChannelId" variant="secondary"><Eye aria-hidden="true" />观摩模式</Badge>
         <Badge :variant="snapshot?.bridgeState === 'online' ? 'default' : 'outline'">
-          <Cable aria-hidden="true" />{{ snapshot?.bridgeState === 'online' ? '智桥在线' : '智桥离线' }}
+          <Cable aria-hidden="true" />{{ bridgeLabel }}
         </Badge>
         <Badge :variant="snapshot?.tradePermission ? 'default' : 'secondary'">
-          <ShieldCheck aria-hidden="true" />{{ snapshot?.tradePermission ? '允许交易' : '只读账户' }}
+          <ShieldCheck aria-hidden="true" />{{ observerChannelId ? '仅供观摩' : !snapshot ? '交易权限待确认' : snapshot.tradePermission ? '允许交易' : '只读账户' }}
         </Badge>
         <Select :model-value="selection" :disabled="loading || (accounts.length === 0 && observers.length === 0)" @update:model-value="select">
-          <SelectTrigger class="h-10 w-[min(18rem,70vw)]"><SelectValue placeholder="选择账户或观摩源" /></SelectTrigger>
+          <SelectTrigger aria-label="选择交易账户或观摩源" class="min-h-11 w-[min(18rem,70vw)]"><SelectValue placeholder="选择账户或观摩源" /></SelectTrigger>
           <SelectContent>
-            <SelectItem v-for="account in accounts" :key="account.id" :value="`account:${account.id}`">
-              {{ account.platform.toUpperCase() }} · {{ account.login }} · {{ account.server }}
-            </SelectItem>
-            <SelectItem v-for="observer in observers" :key="observer.id" :value="`observer:${observer.id}`">
-              观摩 · {{ observer.displayName }}
-            </SelectItem>
+            <SelectGroup>
+              <SelectItem v-for="account in accounts" :key="account.id" :value="`account:${account.id}`">
+                {{ account.platform.toUpperCase() }} · {{ account.login }} · {{ account.server }}
+              </SelectItem>
+              <SelectItem v-for="observer in observers.filter(item => item.active)" :key="observer.id" :value="`observer:${observer.id}`">
+                观摩 · {{ observer.displayName }}
+              </SelectItem>
+            </SelectGroup>
           </SelectContent>
         </Select>
         <Button v-if="observerChannelId" variant="outline" size="sm" :disabled="loading" @click="emit('leaveObserver')"><LogOut />退出观摩</Button>

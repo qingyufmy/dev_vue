@@ -4,12 +4,12 @@ import type { MarketCandle, MarketQuote, Timeframe } from '@aurum/contracts'
 import { Badge } from '@aurum/ui/badge'
 import { Button } from '@aurum/ui/button'
 import { Card, CardContent, CardHeader } from '@aurum/ui/card'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@aurum/ui/select'
+import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@aurum/ui/select'
 import TradingChart from './TradingChart.vue'
 import { terminalDisplayDate, terminalDisplayTimezone } from '~/lib/terminal-display-time'
 
-defineProps<{ symbols: string[]; symbol: string; timeframe: Timeframe; quote: MarketQuote | null; candles: MarketCandle[]; realtime: string; historyVersion: number; timezoneOffsetMinutes?: number | null }>()
-const emit = defineEmits<{ symbol: [value: string]; timeframe: [value: Timeframe] }>()
+defineProps<{ symbols: string[]; symbol: string; timeframe: Timeframe; quote: MarketQuote | null; candles: MarketCandle[]; realtime: string; historyVersion: number; timezoneOffsetMinutes?: number | null; loading?: boolean; error?: string }>()
+const emit = defineEmits<{ symbol: [value: string]; timeframe: [value: Timeframe]; retry: [] }>()
 const periods: Timeframe[] = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1']
 </script>
 
@@ -18,12 +18,12 @@ const periods: Timeframe[] = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1']
     <CardHeader class="border-b p-3 sm:p-4">
       <div class="flex flex-wrap items-center gap-2">
         <Select :model-value="symbol" @update:model-value="(value) => value && emit('symbol', String(value))">
-          <SelectTrigger class="h-9 w-32"><SelectValue placeholder="品种" /></SelectTrigger>
-          <SelectContent><SelectItem v-for="item in symbols" :key="item" :value="item">{{ item }}</SelectItem></SelectContent>
+          <SelectTrigger aria-label="行情品种" class="min-h-11 w-32"><SelectValue placeholder="品种" /></SelectTrigger>
+          <SelectContent><SelectGroup><SelectItem v-for="item in symbols" :key="item" :value="item">{{ item }}</SelectItem></SelectGroup></SelectContent>
         </Select>
         <Select :model-value="timeframe" @update:model-value="(value) => emit('timeframe', value as Timeframe)">
-          <SelectTrigger class="h-9 w-24"><SelectValue /></SelectTrigger>
-          <SelectContent><SelectItem v-for="item in periods" :key="item" :value="item">{{ item }}</SelectItem></SelectContent>
+          <SelectTrigger aria-label="K 线周期" class="min-h-11 w-24"><SelectValue /></SelectTrigger>
+          <SelectContent><SelectGroup><SelectItem v-for="item in periods" :key="item" :value="item">{{ item }}</SelectItem></SelectGroup></SelectContent>
         </Select>
         <div class="ml-auto flex min-w-0 items-center rounded-lg border bg-muted/30">
           <div class="px-3 py-1.5 text-center"><p class="text-[11px] text-muted-foreground">卖出</p><p class="font-mono text-sm font-semibold tabular-nums text-trade-down">{{ quote?.bid ?? '--' }}</p></div>
@@ -32,8 +32,12 @@ const periods: Timeframe[] = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1']
         </div>
       </div>
     </CardHeader>
-    <CardContent class="p-0">
-      <div v-if="candles.length" class="relative"><TradingChart :timezone-offset-minutes="timezoneOffsetMinutes" :candles="candles" :history-version="historyVersion" /></div>
+    <CardContent class="p-0" :aria-busy="loading">
+      <div v-if="error" role="alert" class="flex h-[25rem] flex-col items-center justify-center gap-3 p-4 text-center">
+        <p class="text-sm text-destructive">{{ error }}</p><Button variant="outline" @click="emit('retry')">重新读取行情</Button>
+      </div>
+      <div v-else-if="loading" role="status" class="flex h-[25rem] items-center justify-center text-sm text-muted-foreground">正在读取 {{ symbol }} {{ timeframe }} 行情…</div>
+      <div v-else-if="candles.length" class="relative"><TradingChart :timezone-offset-minutes="timezoneOffsetMinutes" :candles="candles" :history-version="historyVersion" /></div>
       <div v-else class="flex h-[25rem] flex-col items-center justify-center gap-2 text-center text-muted-foreground">
         <RadioTower class="size-8" aria-hidden="true" /><p class="text-sm">等待终端提供 {{ symbol || '当前品种' }} K 线</p>
       </div>

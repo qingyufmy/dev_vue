@@ -127,7 +127,8 @@ describe('observer HTTP resync scope protection', () => {
     expect(home.error.value).toBe('')
     mocks.api.getTradingWorkspace.mockRejectedValueOnce(new Error('active_snapshot_failed'))
     await home.load()
-    expect(home.error.value).toBe('active_snapshot_failed')
+    expect(home.error.value).toBe('交易工作区暂时无法读取，请刷新重试')
+    expect(home.hasAccount.value).toBe(false)
     expect(accountSnapshot.value).toBeNull()
     expect(home.loading.value).toBe(false)
   })
@@ -212,6 +213,41 @@ describe('observer HTTP resync scope protection', () => {
     pending.resolve({ data: { accountId: '1', symbol: 'GBPUSD', revision: 1 } })
     await oldMarket
     expect(marketQuote.value?.symbol).toBe('EURUSD')
+    home.stop()
+  })
+
+  it('clears the previous symbol immediately and offers a recoverable error without API details', async () => {
+    const home = useHomeWorkspace()
+    await home.load()
+    const pending = deferred<unknown>()
+    mocks.api.getMarketQuote.mockReturnValueOnce(pending.promise)
+    const changing = home.selectSymbol('EURUSD')
+    expect(home.marketLoading.value).toBe(true)
+    expect(home.quote.value).toBeNull()
+    expect(home.candles.value).toEqual([])
+    pending.reject(new Error('private_provider_failure'))
+    await changing
+    expect(home.marketLoading.value).toBe(false)
+    expect(home.marketError.value).toBe('行情暂时无法读取，请重试')
+    expect(home.quote.value).toBeNull()
+    await home.refreshMarket()
+    expect(home.marketError.value).toBe('')
+    expect(home.quote.value?.symbol).toBe('EURUSD')
+    home.stop()
+  })
+
+  it('does not let an old market failure change the new market loading or error state', async () => {
+    const home = useHomeWorkspace()
+    await home.load()
+    const pending = deferred<unknown>()
+    mocks.api.getMarketQuote.mockReturnValueOnce(pending.promise)
+    const older = home.selectSymbol('GBPUSD')
+    await home.selectSymbol('EURUSD')
+    pending.reject(new Error('old_market_failure'))
+    await older
+    expect(home.quote.value?.symbol).toBe('EURUSD')
+    expect(home.marketLoading.value).toBe(false)
+    expect(home.marketError.value).toBe('')
     home.stop()
   })
 

@@ -13,6 +13,8 @@ const client = createApiClient()
 export function useHomeWorkspace() {
   const loading = ref(false)
   const error = ref('')
+  const marketLoading = ref(false)
+  const marketError = ref('')
   const symbol = ref('')
   const symbols = ref<string[]>([])
   const timeframe = ref<Timeframe>('M5')
@@ -30,6 +32,7 @@ export function useHomeWorkspace() {
     scopeVersion += 1
     loading.value = false
     analysisLoading.value = false
+    marketLoading.value = false
     stopTradingRealtime()
   }
 
@@ -46,7 +49,7 @@ export function useHomeWorkspace() {
   async function load() {
     stop()
     const current = requests.begin('context')
-    loading.value = true; error.value = ''
+    loading.value = true; error.value = ''; marketError.value = ''
     try {
       if (session.value) await recoverContextCommand(session.value)
       if (!current()) return
@@ -54,7 +57,7 @@ export function useHomeWorkspace() {
       if (!current()) return
       applyTradingContext(contextResponse.data); applyTradingAccounts(accountResponse.data.items); applyObserverChannels(observerResponse.data.items)
       const context = contextResponse.data
-      let observer = context.mode === 'observer' ? observerChannels.value.find((item) => item.id === context.observerChannelId) : null
+      let observer = context.mode === 'observer' ? observerChannels.value.find((item) => item.id === context.observerChannelId && item.active) : null
       if (context.mode === 'observer' && !observer) throw new Error('当前观摩授权已失效，请退出观摩后重新选择')
       let selected = observer?.sourceAccountId ?? context.accountId ?? tradingAccounts.value[0]?.id ?? null
       if (!selected) { activeAccountId.value = null; clearAccountRuntime(); return }
@@ -69,8 +72,9 @@ export function useHomeWorkspace() {
       await loadAccount(selected, true, observer?.id ?? null)
     } catch (reason) {
       if (!current()) return
-      error.value = reason instanceof Error ? reason.message : '交易工作区加载失败'
+      error.value = workspaceError(reason, '交易工作区暂时无法读取，请刷新重试')
       clearAccountRuntime()
+      activeAccountId.value = null
     } finally { if (current()) loading.value = false }
   }
 
@@ -150,7 +154,7 @@ export function useHomeWorkspace() {
   ) {
     stop(); clearAccountRuntime(); activeAccountId.value = null
     const current = requests.begin('context')
-    loading.value = true; error.value = ''
+    loading.value = true; error.value = ''; marketError.value = ''
     try {
       const result = await write()
       if (!current()) return
@@ -161,13 +165,40 @@ export function useHomeWorkspace() {
       if (selected) await loadAccount(selected, true, observer?.id ?? null)
     } catch (reason) {
       if (!current()) return
-      error.value = reason instanceof Error ? reason.message : '切换失败，请刷新后重试'
-      throw reason
+      error.value = workspaceError(reason, '账户切换未完成，请查看切换确认提示或刷新重试')
     } finally { if (current()) loading.value = false }
   }
 
-  async function selectSymbol(value: string) { symbol.value = value; await loadMarket() }
-  async function selectTimeframe(value: Timeframe) { timeframe.value = value; await loadMarket() }
+  async function refreshMarket() {
+    const current = requests.begin('market-selection')
+    stopTradingRealtime()
+    marketQuote.value = null; marketCandles.value = []
+    resourceRevisions.value.quote = 0; resourceRevisions.value.candle = 0
+    marketLoading.value = true; marketError.value = ''
+    try { await loadMarket() }
+    catch (reason) {
+      if (current()) marketError.value = workspaceError(reason, '行情暂时无法读取，请重试')
+    } finally { if (current()) marketLoading.value = false }
+  }
+  async function selectSymbol(value: string) {
+    if (!symbols.value.includes(value) || value === symbol.value) return
+    symbol.value = value
+    await refreshMarket()
+  }
+  async function selectTimeframe(value: Timeframe) {
+    if (value === timeframe.value) return
+    timeframe.value = value
+    await refreshMarket()
+  }
+
+  function workspaceError(reason: unknown, fallback: string) {
+    if (reason instanceof ApiClientError) {
+      if (reason.status === 401) return '登录状态已失效，请重新登录'
+      if (reason.status === 403) return '当前数据访问权限已失效，请重新选择账户或观摩频道'
+      if (reason.status === 409) return '账户状态已变化，请刷新后重新选择'
+    }
+    return fallback
+  }
 
   async function loadLatestAnalysis(includeStrategies = false) {
     const current = requests.begin('analysis')
@@ -198,12 +229,12 @@ export function useHomeWorkspace() {
     activeAccountId.value = null
     symbol.value = ''; symbols.value = []
     latestAnalysis.value = null; analysisStrategies.value = []
-    error.value = ''; analysisError.value = ''
+    error.value = ''; analysisError.value = ''; marketError.value = ''
     if (session.value) void load()
   }, { flush: 'sync' })
 
   return { loading, error, symbol, symbols, timeframe, marketHistoryVersion, accounts: tradingAccounts, observers: observerChannels, context: tradingContext,
     snapshot: accountSnapshot, quote: marketQuote, candles: marketCandles, positions: openPositions, pendingOrders,
-    latestAnalysis, analysisStrategies, analysisLoading, analysisError,
+    latestAnalysis, analysisStrategies, analysisLoading, analysisError, marketLoading, marketError, refreshMarket,
     hasAccount: computed(() => Boolean(activeAccountId.value)), load, selectAccount, selectObserver, leaveObserver, selectSymbol, selectTimeframe, stop }
 }
