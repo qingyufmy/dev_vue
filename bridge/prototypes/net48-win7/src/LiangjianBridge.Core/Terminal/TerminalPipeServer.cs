@@ -4,6 +4,7 @@ using System.IO.Pipes;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Liangjian.BridgeV4.Terminal
 {
@@ -41,35 +42,7 @@ namespace Liangjian.BridgeV4.Terminal
             {
                 throw new ArgumentOutOfRangeException("timeoutMilliseconds");
             }
-            IAsyncResult wait = pipe.BeginWaitForConnection(null, null);
-            WaitHandle waitHandle = wait.AsyncWaitHandle;
-            if (!waitHandle.WaitOne(timeoutMilliseconds))
-            {
-                Dispose();
-                try
-                {
-                    pipe.EndWaitForConnection(wait);
-                }
-                catch (ObjectDisposedException)
-                {
-                }
-                catch (IOException)
-                {
-                }
-                finally
-                {
-                    waitHandle.Close();
-                }
-                throw new TimeoutException("bridge_pipe_connect_timeout");
-            }
-            try
-            {
-                pipe.EndWaitForConnection(wait);
-            }
-            finally
-            {
-                waitHandle.Close();
-            }
+            PipeConnectionWait.Wait(pipe, timeoutMilliseconds, "bridge_pipe_connect_timeout");
         }
 
         public string ReadJson()
@@ -130,4 +103,35 @@ namespace Liangjian.BridgeV4.Terminal
             }
         }
     }
+
+    internal static class PipeConnectionWait
+    {
+        internal static void Wait(NamedPipeServerStream server, int timeoutMilliseconds, string timeoutCode)
+        {
+            // FromAsync owns the APM completion lifetime. Never close AsyncWaitHandle:
+            // on .NET 4.8 Dispose can return before the IO callback signals that handle.
+            Task connection = Task.Factory.FromAsync(server.BeginWaitForConnection,
+                server.EndWaitForConnection, null);
+            connection.ContinueWith(delegate(Task completed) { GC.KeepAlive(completed.Exception); },
+                CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted
+                    | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+            bool completedInTime;
+            try
+            {
+                completedInTime = connection.Wait(timeoutMilliseconds);
+            }
+            catch (AggregateException)
+            {
+                connection.GetAwaiter().GetResult();
+                throw;
+            }
+            if (!completedInTime)
+            {
+                server.Dispose();
+                throw new TimeoutException(timeoutCode);
+            }
+            connection.GetAwaiter().GetResult();
+        }
+    }
+
 }

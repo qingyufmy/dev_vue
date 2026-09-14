@@ -57,6 +57,9 @@ namespace Liangjian.BridgeV4.SmokeTests
                 valid.Profiles.Add(validProfile);
                 store.Save(valid);
                 string serialized = File.ReadAllText(path);
+                File.WriteAllText(path, serialized.Replace("\"SchemaVersion\":2", "\"SchemaVersion\":1"));
+                AssertThrows<InvalidDataException>(delegate { store.LoadOrCreate(); },
+                    "populated_legacy_catalog_implicitly_migrated");
                 string unexpected = serialized.Substring(0, serialized.Length - 1) + ",\"Unexpected\":true}";
                 File.WriteAllText(path, unexpected);
                 AssertThrows<InvalidDataException>(delegate { store.LoadOrCreate(); },
@@ -80,6 +83,26 @@ namespace Liangjian.BridgeV4.SmokeTests
             {
                 DeleteRoot(root);
             }
+        }
+
+        public static void TestEmptyLegacyCatalogRemainsIntact()
+        {
+            string root = NewRoot("profile-empty-legacy");
+            try
+            {
+                string path = Path.Combine(root, "profiles.json");
+                const string raw = "{\"SchemaVersion\":1,\"InstallationId\":\"installation-existing\",\"Profiles\":[]}";
+                File.WriteAllText(path, raw);
+                BridgeProfileStore store = new BridgeProfileStore(path, new CurrentUserSecretProtector());
+                BridgeProfileCatalog loaded = store.LoadOrCreate();
+                Assert(loaded.SchemaVersion == BridgeProfileStore.CurrentSchemaVersion
+                    && loaded.InstallationId == "installation-existing" && loaded.Profiles.Count == 0,
+                    "empty_legacy_catalog_not_preserved");
+                Assert(File.ReadAllText(path) == raw, "loading_rewrote_legacy_catalog");
+                File.WriteAllText(path, raw.Replace("SchemaVersion\":1", "SchemaVersion\":99"));
+                AssertThrows<InvalidDataException>(delegate { store.LoadOrCreate(); }, "unknown_empty_schema_accepted");
+            }
+            finally { DeleteRoot(root); }
         }
 
         public static void TestPersistedEpochSurvivesRestart()

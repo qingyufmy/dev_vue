@@ -739,32 +739,7 @@ namespace Liangjian.BridgeV4.Terminal
 
         private static void WaitForConnection(NamedPipeServerStream server, int timeoutMilliseconds)
         {
-            IAsyncResult wait = server.BeginWaitForConnection(null, null);
-            WaitHandle handle = wait.AsyncWaitHandle;
-            try
-            {
-                if (!handle.WaitOne(timeoutMilliseconds))
-                {
-                    // EndWaitForConnection can block indefinitely when no client
-                    // ever connected. Close the server first to cancel the
-                    // overlapped wait, then observe completion only briefly.
-                    try { server.Dispose(); } catch (Exception) { }
-                    try
-                    {
-                        if (handle.WaitOne(500))
-                        {
-                            try { server.EndWaitForConnection(wait); } catch (Exception) { }
-                        }
-                    }
-                    catch (ObjectDisposedException) { }
-                    throw new TimeoutException("bridge_mt5_worker_connect_timeout");
-                }
-                server.EndWaitForConnection(wait);
-            }
-            finally
-            {
-                handle.Close();
-            }
+            PipeConnectionWait.Wait(server, timeoutMilliseconds, "bridge_mt5_worker_connect_timeout");
         }
 
         private static string CreateNonce()

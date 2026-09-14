@@ -156,6 +156,12 @@ namespace Liangjian.BridgeV4.Configuration
                 string json = File.ReadAllText(path, Encoding.UTF8);
                 ValidateJsonShape(json);
                 BridgeProfileCatalog catalog = serializer.Deserialize<BridgeProfileCatalog>(json);
+                // Early prototypes wrote schema 1 even before a profile existed.
+                // An empty catalog has no credentials or endpoint semantics to
+                // migrate. Preserve installation identity and leave disk untouched.
+                if (catalog != null && catalog.SchemaVersion == 1
+                    && catalog.Profiles != null && catalog.Profiles.Count == 0)
+                    catalog.SchemaVersion = CurrentSchemaVersion;
                 Validate(catalog, false);
                 return catalog;
             }

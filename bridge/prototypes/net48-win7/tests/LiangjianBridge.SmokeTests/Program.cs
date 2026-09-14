@@ -47,6 +47,7 @@ namespace Liangjian.BridgeV4.SmokeTests
             Run("mt5_worker_idle_exit_is_removed", TestMt5WorkerIdleExit);
             Run("mt5_worker_immediate_exit_does_not_leak", TestMt5WorkerImmediateExit);
             Run("named_pipe_round_trip", TestNamedPipeRoundTrip);
+            Run("named_pipe_connection_lifetime", PipeConnectionLifetimeSmokeTests.RunAll);
             Run("mt4_mt5_share_narrow_pipe_contract", TestTerminalContract);
             Run("terminal_binary_wire_is_strict", TestTerminalBinaryWire);
             Run("terminal_read_only_session_correlates", TestTerminalReadOnlySession);
@@ -60,6 +61,7 @@ namespace Liangjian.BridgeV4.SmokeTests
             Run("sqlite_ledger_data_store_write_gate", TestSqliteLedgerDataStoreWriteGate);
             Run("runtime_profile_registry_isolated", RuntimeSmokeTests.TestProfileRegistryIsolation);
             Run("profile_current_user_secret_and_atomic_catalog", ProfileConfigurationSmokeTests.TestCurrentUserSecretsAndAtomicCatalog);
+            Run("profile_empty_legacy_catalog_preserved", ProfileConfigurationSmokeTests.TestEmptyLegacyCatalogRemainsIntact);
             Run("profile_catalog_rejects_corruption_and_duplicates", ProfileConfigurationSmokeTests.TestCatalogRejectsCorruptionAndDuplicates);
             Run("profile_epoch_survives_restart", ProfileConfigurationSmokeTests.TestPersistedEpochSurvivesRestart);
             Run("mt5_query_source_maps_quote_and_account", Mt5QuerySourceSmokeTests.TestQuoteAndAccountMapping);
