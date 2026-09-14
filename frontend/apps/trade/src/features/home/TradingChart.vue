@@ -19,7 +19,24 @@ function displayOptions() {
   }
 }
 
-function color(name: string) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() }
+const chartColors = new Map<string, string>()
+function color(name: string) {
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
+  const cached = chartColors.get(value)
+  if (cached) return cached
+  // Canvas resolves the design system's OKLCH colors into sRGB, which the
+  // chart library's own color parser accepts. Preserve alpha for border tokens.
+  const canvas = document.createElement('canvas')
+  canvas.width = 1; canvas.height = 1
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  if (!context) return '#808080'
+  context.fillStyle = value
+  context.fillRect(0, 0, 1, 1)
+  const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data
+  const resolved = `rgba(${red}, ${green}, ${blue}, ${(alpha ?? 255) / 255})`
+  chartColors.set(value, resolved)
+  return resolved
+}
 function toTime(value: string) { return Math.floor(new Date(value).getTime() / 1000) as UTCTimestamp }
 function candleData(candle: MarketCandle) { return { time: toTime(candle.openTime), open: Number(candle.open), high: Number(candle.high), low: Number(candle.low), close: Number(candle.close) } }
 function volumeData(candle: MarketCandle) { return { time: toTime(candle.openTime), value: Number(candle.tickVolume), color: Number(candle.close) >= Number(candle.open) ? color('--trade-up') : color('--trade-down') } }
