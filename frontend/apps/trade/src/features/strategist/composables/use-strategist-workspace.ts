@@ -5,6 +5,7 @@ import { prepareStrategyVersion, clearStrategyVersion, type StrategyVersionInten
 import { prepareStrategyMetadata, clearStrategyMetadata } from '../model/strategy-metadata-request'
 import { ApiClientError } from '@aurum/api-client'
 import { prepareStrategyCreate, clearStrategyCreate } from '../model/strategy-create-request'
+import { prepareStrategyCombination, clearStrategyCombination } from '../model/strategy-combination-request'
 import type {
   StrategyCompileResult, StrategyDetail, StrategySubscription, StrategySubscriptionPatchBody,
   StrategySummary, TradingAccount,
@@ -13,7 +14,7 @@ import { computed, onMounted, ref } from 'vue'
 import { useTradeSession } from '~/features/auth'
 import { strategistApi } from '../api/strategist-api'
 import type {
-  CompileResultView, StrategyDetailView, StrategyDraft, StrategySubscriptionView, SubscriptionDraft,
+  CompileResultView, StrategyCombinationDraft, StrategyDetailView, StrategyDraft, StrategySubscriptionView, SubscriptionDraft,
 } from '../model/strategy-presentation'
 
 export function useStrategistWorkspace(options: { autoLoad?: boolean } = {}) {
@@ -33,6 +34,8 @@ export function useStrategistWorkspace(options: { autoLoad?: boolean } = {}) {
   const actionError = ref('')
   const notice = ref('')
   const compileResult = ref<CompileResultView | null>(null)
+  const analysisCompileResult = ref<CompileResultView | null>(null)
+  const traderCompileResult = ref<CompileResultView | null>(null)
   let detailGeneration = 0
   let accountGeneration = 0
 
@@ -62,6 +65,47 @@ export function useStrategistWorkspace(options: { autoLoad?: boolean } = {}) {
       if (generation === detailGeneration) detail.value = mapDetail(response.data)
     } catch (reason) { if (generation === detailGeneration) actionError.value = readableError(reason, '策略详情读取失败') }
     finally { if (generation === detailGeneration) detailLoading.value = false }
+  }
+
+  async function fetchDetail(strategyId: string) { return mapDetail((await strategistApi.getStrategy(strategyId)).data) }
+
+  async function compileCombination(draft: StrategyCombinationDraft) {
+    if (!session.value || compiling.value) return false
+    compiling.value = true; actionError.value = ''; analysisCompileResult.value = null; traderCompileResult.value = null
+    try {
+      const [analysis, trader] = await Promise.all([
+        strategistApi.compileStrategy(session.value.csrf_token, { kind: 'analysis', prompt_text: draft.analysisPromptText, config: draft.analysisConfig }),
+        strategistApi.compileStrategy(session.value.csrf_token, { kind: 'trader', prompt_text: draft.traderPromptText, config: draft.traderConfig }),
+      ])
+      analysisCompileResult.value = mapCompile(analysis.data); traderCompileResult.value = mapCompile(trader.data)
+      return analysisCompileResult.value.valid && traderCompileResult.value.valid
+    } catch (reason) { actionError.value = readableError(reason, '策略检查失败，请重试'); return false }
+    finally { compiling.value = false }
+  }
+
+  async function saveCombination(draft: StrategyCombinationDraft, traderDetail: StrategyDetailView | null) {
+    if (!session.value || submitting.value) return null
+    const current = detail.value?.strategy ?? null, strategyId = current?.id ?? ''
+    const userId = String(session.value.user.id), csrfToken = session.value.csrf_token
+    return mutate(async () => {
+      const common = { name: draft.name, description: draft.description, analysis_prompt_text: draft.analysisPromptText,
+        analysis_config: draft.analysisConfig, trader_prompt_text: draft.traderPromptText, trader_config: draft.traderConfig }
+      const body = current ? { ...common, status: draft.status ?? 'draft', trader_expected_revision: traderDetail?.strategy.revision ?? null } : common
+      const pending = prepareStrategyCombination(sessionStorage, userId, strategyId, body, current?.revision ?? null)
+      let response
+      try {
+        response = current
+          ? await strategistApi.createStrategyCombinationVersion(csrfToken, current.id, pending.body as typeof body & { status: 'draft' | 'active'; trader_expected_revision: number | null }, current.revision, pending.idempotencyKey)
+          : await strategistApi.createStrategyCombination(csrfToken, pending.body as typeof common, pending.idempotencyKey)
+      } catch (reason) {
+        if (reason instanceof ApiClientError && [400, 401, 403, 404, 409, 412, 422, 428].includes(reason.status)) clearStrategyCombination(sessionStorage, userId, strategyId)
+        throw reason
+      }
+      clearStrategyCombination(sessionStorage, userId, strategyId)
+      detail.value = mapDetail(response.data)
+      try { await refreshStrategies() } catch { error.value = '策略组合已保存，列表刷新失败，请重新加载列表' }
+      return response.data.id
+    }, current ? '分析策略和交易策略已同时保存' : '策略组合已创建', '策略组合保存失败')
   }
 
   async function compile(draft: StrategyDraft) {
@@ -256,14 +300,14 @@ export function useStrategistWorkspace(options: { autoLoad?: boolean } = {}) {
     finally { submitting.value = false }
   }
 
-  function clearCompile() { compileResult.value = null; actionError.value = '' }
+  function clearCompile() { compileResult.value = null; analysisCompileResult.value = null; traderCompileResult.value = null; actionError.value = '' }
   function clearNotice() { notice.value = '' }
 
   onMounted(() => { if (options.autoLoad !== false) void load() })
   return {
     strategies, accounts, detail, subscriptions, symbols, loading, detailLoading, subscriptionLoading, refreshing, compiling,
-    submitting, error, actionError, notice, compileResult, personalStrategies, activeStrategies,
-    load, loadDetail, compile, createStrategy, updateMetadata, createVersion, publish, retire, loadSubscriptions,
+    submitting, error, actionError, notice, compileResult, analysisCompileResult, traderCompileResult, personalStrategies, activeStrategies,
+    load, loadDetail, fetchDetail, compile, compileCombination, saveCombination, createStrategy, updateMetadata, createVersion, publish, retire, loadSubscriptions,
     refreshSubscriptions, saveSubscription, endSubscription, clearCompile, clearNotice,
   }
 }

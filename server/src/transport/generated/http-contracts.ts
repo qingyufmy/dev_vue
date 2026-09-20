@@ -8966,6 +8966,108 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         ],
         "type": "object"
       },
+      "StrategyCombinationCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "analysis_config": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "analysis_prompt_text": {
+            "maxLength": 100000,
+            "minLength": 20,
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 191,
+            "minLength": 2,
+            "type": "string"
+          },
+          "trader_config": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "trader_prompt_text": {
+            "maxLength": 100000,
+            "minLength": 20,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "analysis_prompt_text",
+          "analysis_config",
+          "trader_prompt_text",
+          "trader_config"
+        ],
+        "type": "object"
+      },
+      "StrategyCombinationVersionCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "analysis_config": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "analysis_prompt_text": {
+            "maxLength": 100000,
+            "minLength": 20,
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 191,
+            "minLength": 2,
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "draft",
+              "active"
+            ],
+            "type": "string"
+          },
+          "trader_config": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "trader_expected_revision": {
+            "oneOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trader_prompt_text": {
+            "maxLength": 100000,
+            "minLength": 20,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "status",
+          "trader_expected_revision",
+          "analysis_prompt_text",
+          "analysis_config",
+          "trader_prompt_text",
+          "trader_config"
+        ],
+        "type": "object"
+      },
       "StrategyCompile": {
         "additionalProperties": false,
         "properties": {
@@ -20670,6 +20772,179 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
             "$ref": "#/components/schemas/Problem"
           }
         }
+      }
+    },
+    "createStrategyCombination": {
+      "parameters": [
+        {
+          "name": "x-csrf-token",
+          "location": "header",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "maxLength": 256,
+            "minLength": 16,
+            "type": "string"
+          }
+        },
+        {
+          "name": "idempotency-key",
+          "location": "header",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "maxLength": 128,
+            "minLength": 16,
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "201": {
+          "application/json": {
+            "$ref": "#/components/schemas/StrategyDetailResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "409": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "422": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      },
+      "body": {
+        "schema": {
+          "$ref": "#/components/schemas/StrategyCombinationCreate"
+        },
+        "required": true
+      }
+    },
+    "createStrategyCombinationVersion": {
+      "parameters": [
+        {
+          "name": "analysis_strategy_id",
+          "location": "path",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "$ref": "#/components/schemas/OpaqueId"
+          }
+        },
+        {
+          "name": "x-csrf-token",
+          "location": "header",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "maxLength": 256,
+            "minLength": 16,
+            "type": "string"
+          }
+        },
+        {
+          "name": "if-match",
+          "location": "header",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "maxLength": 128,
+            "minLength": 3,
+            "type": "string"
+          }
+        },
+        {
+          "name": "idempotency-key",
+          "location": "header",
+          "required": true,
+          "integerQuery": false,
+          "schema": {
+            "maxLength": 128,
+            "minLength": 16,
+            "type": "string"
+          }
+        }
+      ],
+      "responses": {
+        "201": {
+          "application/json": {
+            "$ref": "#/components/schemas/StrategyDetailResponse"
+          }
+        },
+        "400": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "401": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "403": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "404": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "409": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "412": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "422": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "428": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        },
+        "503": {
+          "application/problem+json": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      },
+      "body": {
+        "schema": {
+          "$ref": "#/components/schemas/StrategyCombinationVersionCreate"
+        },
+        "required": true
       }
     },
     "listStrategyMemories": {

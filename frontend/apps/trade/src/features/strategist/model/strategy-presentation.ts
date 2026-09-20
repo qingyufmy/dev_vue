@@ -47,6 +47,16 @@ export interface StrategyDraft {
   config: Record<string, unknown>
 }
 
+export interface StrategyCombinationDraft {
+  status?: 'draft' | 'active'
+  name: string
+  description: string
+  analysisPromptText: string
+  analysisConfig: Record<string, unknown>
+  traderPromptText: string
+  traderConfig: Record<string, unknown>
+}
+
 export interface SubscriptionDraft {
   receiveWindow?: SubscriptionTimeWindow
   accountId: string

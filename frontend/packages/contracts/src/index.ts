@@ -523,6 +523,14 @@ export const strategyCreateBodySchema = z.object({
   kind: strategyKindSchema, name: z.string().trim().min(1).max(191), description: z.string().trim().max(2000),
   prompt_text: z.string().trim().min(1).max(100_000), config: z.record(z.string(), z.unknown()),
 }).strict()
+export const strategyCombinationCreateBodySchema = z.object({
+  name: z.string().trim().min(2).max(191), description: z.string().trim().max(2000),
+  analysis_prompt_text: z.string().trim().min(20).max(100_000), analysis_config: z.record(z.string(), z.unknown()),
+  trader_prompt_text: z.string().trim().min(20).max(100_000), trader_config: z.record(z.string(), z.unknown()),
+}).strict()
+export const strategyCombinationVersionCreateBodySchema = strategyCombinationCreateBodySchema.extend({
+  status: z.enum(['draft', 'active']), trader_expected_revision: z.number().int().positive().nullable(),
+}).strict()
 export const strategyMetadataPatchBodySchema = z.object({ name: z.string().trim().min(1).max(191), description: z.string().trim().max(2000) }).strict()
 export const strategyVersionCreateBodySchema = z.object({ name: z.string().trim().min(1).max(191).optional(), description: z.string().trim().max(2000).optional(), status: z.enum(['draft', 'active']).optional(), prompt_text: z.string().trim().min(1).max(100_000), config: z.record(z.string(), z.unknown()) }).strict()
 
@@ -1631,6 +1639,8 @@ export type StrategyCompileIssue = z.infer<typeof strategyCompileIssueSchema>
 export type StrategyCompileResult = z.infer<typeof strategyCompileResultSchema>
 export type StrategyCompileBody = z.infer<typeof strategyCompileBodySchema>
 export type StrategyCreateBody = z.infer<typeof strategyCreateBodySchema>
+export type StrategyCombinationCreateBody = z.infer<typeof strategyCombinationCreateBodySchema>
+export type StrategyCombinationVersionCreateBody = z.infer<typeof strategyCombinationVersionCreateBodySchema>
 export type StrategyMetadataPatchBody = z.infer<typeof strategyMetadataPatchBodySchema>
 export type StrategyVersionCreateBody = z.infer<typeof strategyVersionCreateBodySchema>
 export type StrategySubscriptionSchedule = z.infer<typeof strategySubscriptionScheduleSchema>

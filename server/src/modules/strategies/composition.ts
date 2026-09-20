@@ -15,6 +15,7 @@ import { MysqlStrategyCatalog } from './infrastructure/mysql-strategy-catalog.js
 import { strategyRoutes, type StrategyRequestAuthenticator } from './transport/http/strategy-routes.js'
 import { platformStrategyRoutes } from './transport/http/platform-strategy-routes.js'
 import { createPlatformStrategyPublisher } from './infrastructure/mysql-platform-strategy-publisher.js'
+import { createStrategyCombinationWriter } from './infrastructure/mysql-strategy-combination-writer.js'
 import type { AdminPrincipalAccess } from '../auth/index.js'
 
 export function createMysqlStrategyService(pool: Pool): StrategyService {
@@ -26,7 +27,10 @@ export function createSubscriptionPreferencesReader(connection: PoolConnection):
 }
 
 export function createStrategyHttp(service: StrategyService, auth: StrategyRequestAuthenticator, platform?: { pool: Pool; administrators: (connection: PoolConnection) => AdminPrincipalAccess }): FastifyPluginAsync {
-  return async app => { await app.register(strategyRoutes, { prefix: '/api/v4', service, auth, ...(platform ? { platformPublisher: createPlatformStrategyPublisher(platform.pool, platform.administrators) } : {}) }) }
+  return async app => { await app.register(strategyRoutes, { prefix: '/api/v4', service, auth, ...(platform ? {
+    platformPublisher: createPlatformStrategyPublisher(platform.pool, platform.administrators),
+    combinationWriter: createStrategyCombinationWriter(platform.pool, platform.administrators),
+  } : {}) }) }
 }
 
 export function createPlatformStrategyHttp(pool: Pool, service: StrategyService,

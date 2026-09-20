@@ -6,7 +6,7 @@ vi.mock('vue-router', () => ({ useRoute: () => ({ query: { strategy_id: 's1' } }
 vi.mock('../composables/use-strategist-workspace', () => ({ useStrategistWorkspace: () => ({
   strategies: ref([{ id: 's1', kind: 'analysis' }]), accounts: ref([]), detail: ref(null), subscriptions: ref([]), symbols: ref([]),
   loading: ref(false), detailLoading: ref(false), subscriptionLoading: ref(false), refreshing: ref(false), compiling: ref(false), submitting: ref(false),
-  error: ref(''), actionError: ref(''), notice: ref(''), compileResult: ref(null), loadDetail: vi.fn(), loadSubscriptions: vi.fn(), publish: calls.publish,
+  error: ref(''), actionError: ref(''), notice: ref(''), compileResult: ref(null), analysisCompileResult: ref(null), traderCompileResult: ref(null), loadDetail: vi.fn(), loadSubscriptions: vi.fn(), publish: calls.publish,
 }) }))
 import StrategistView from '../views/StrategistView.vue'
 it('keeps the selected version until publication is acknowledged', async () => {

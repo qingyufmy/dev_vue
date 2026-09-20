@@ -109,6 +109,38 @@
         }
       }
     },
+    "/strategy-combinations": {
+      "post": {
+        "operationId": "createStrategyCombination",
+        "summary": "Create an analysis and trader strategy pair atomically",
+        "tags": ["Strategies"],
+        "parameters": [
+          { "$ref": "#/components/parameters/CsrfToken" },
+          { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategyCombinationCreate" } } } },
+        "responses": {
+          "201": { "description": "Strategy combination created", "headers": { "ETag": { "$ref": "#/components/headers/ETag" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategyDetailResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" }, "403": { "$ref": "#/components/responses/Problem" }, "409": { "$ref": "#/components/responses/Problem" }, "422": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
+    "/strategy-combinations/{analysis_strategy_id}/versions": {
+      "post": {
+        "operationId": "createStrategyCombinationVersion",
+        "summary": "Create analysis and trader versions atomically",
+        "tags": ["Strategies"],
+        "parameters": [
+          { "name": "analysis_strategy_id", "in": "path", "required": true, "schema": { "$ref": "#/components/schemas/OpaqueId" } },
+          { "$ref": "#/components/parameters/CsrfToken" }, { "$ref": "#/components/parameters/IfMatch" }, { "$ref": "#/components/parameters/IdempotencyKey" }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategyCombinationVersionCreate" } } } },
+        "responses": {
+          "201": { "description": "Strategy combination versions created", "headers": { "ETag": { "$ref": "#/components/headers/ETag" } }, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/StrategyDetailResponse" } } } },
+          "400": { "$ref": "#/components/responses/Problem" }, "401": { "$ref": "#/components/responses/Problem" }, "403": { "$ref": "#/components/responses/Problem" }, "404": { "$ref": "#/components/responses/Problem" }, "409": { "$ref": "#/components/responses/Problem" }, "412": { "$ref": "#/components/responses/Problem" }, "422": { "$ref": "#/components/responses/Problem" }, "428": { "$ref": "#/components/responses/Problem" }, "503": { "$ref": "#/components/responses/Problem" }
+        }
+      }
+    },
     "/strategies/compile": {
       "post": {
         "operationId": "compileStrategy",
@@ -1576,6 +1608,34 @@
             "type": "object",
             "additionalProperties": true
           }
+        }
+      },
+      "StrategyCombinationCreate": {
+        "type": "object",
+        "required": ["name", "description", "analysis_prompt_text", "analysis_config", "trader_prompt_text", "trader_config"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 2, "maxLength": 191 },
+          "description": { "type": "string", "maxLength": 2000 },
+          "analysis_prompt_text": { "type": "string", "minLength": 20, "maxLength": 100000 },
+          "analysis_config": { "type": "object", "additionalProperties": true },
+          "trader_prompt_text": { "type": "string", "minLength": 20, "maxLength": 100000 },
+          "trader_config": { "type": "object", "additionalProperties": true }
+        }
+      },
+      "StrategyCombinationVersionCreate": {
+        "type": "object",
+        "required": ["name", "description", "status", "trader_expected_revision", "analysis_prompt_text", "analysis_config", "trader_prompt_text", "trader_config"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 2, "maxLength": 191 },
+          "description": { "type": "string", "maxLength": 2000 },
+          "status": { "type": "string", "enum": ["draft", "active"] },
+          "trader_expected_revision": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }] },
+          "analysis_prompt_text": { "type": "string", "minLength": 20, "maxLength": 100000 },
+          "analysis_config": { "type": "object", "additionalProperties": true },
+          "trader_prompt_text": { "type": "string", "minLength": 20, "maxLength": 100000 },
+          "trader_config": { "type": "object", "additionalProperties": true }
         }
       },
       "StrategyMetadataPatch": {

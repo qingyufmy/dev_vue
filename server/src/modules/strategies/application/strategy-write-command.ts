@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto'
 import { StrategyAccessError } from '../domain/strategy.js'
 
 export const strategyWriteActions = ['create_strategy', 'update_metadata', 'create_version', 'publish_version',
-  'retire_strategy', 'create_subscription', 'update_subscription', 'set_account_trader'] as const
+  'retire_strategy', 'create_subscription', 'update_subscription', 'set_account_trader',
+  'create_strategy_combination', 'create_strategy_combination_version'] as const
 export type StrategyWriteAction = typeof strategyWriteActions[number]
 export interface StrategyWriteCommand {
   actorUserId: number

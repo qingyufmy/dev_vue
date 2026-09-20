@@ -359,7 +359,7 @@ describe('strategy management API client', () => {
 
   it('uses stable strategy paths, strict request bodies and CAS headers', async () => {
     const responses = [
-      { data: detail, meta }, { data: compile, meta }, { data: detail, meta }, { data: detail, meta },
+      { data: detail, meta }, { data: compile, meta }, { data: detail, meta }, { data: detail, meta }, { data: detail, meta }, { data: detail, meta },
       { data: detail, meta }, { data: detail, meta }, { data: detail, meta },
       { data: { items: [subscription] }, meta }, { data: subscription, meta }, { data: subscription, meta },
     ]
@@ -369,6 +369,8 @@ describe('strategy management API client', () => {
     await client.getStrategy('strategy/1')
     await client.compileStrategy('csrf', { kind: 'analysis', prompt_text: '分析黄金', config: { timeframes: ['M5'] } })
     await client.createStrategy('csrf', { kind: 'analysis', name: '黄金分析', description: '结构', prompt_text: '分析黄金', config: {} }, 'strategy-create-001')
+    await client.createStrategyCombination('csrf', { name: '黄金组合', description: '结构', analysis_prompt_text: '根据真实行情和多周期结构证据分析黄金趋势与机会，证据不足时观望。', analysis_config: {}, trader_prompt_text: '根据分析结论、账户余额、持仓和风险约束判断交易动作，条件不足时保持。', trader_config: {} }, 'strategy-combo-create-001')
+    await client.createStrategyCombinationVersion('csrf', 'strategy/1', { name: '黄金组合', description: '结构', status: 'active', trader_expected_revision: 2, analysis_prompt_text: '根据真实行情和多周期结构证据分析黄金趋势与机会，证据不足时观望。', analysis_config: {}, trader_prompt_text: '根据分析结论、账户余额、持仓和风险约束判断交易动作，条件不足时保持。', trader_config: {} }, 2, 'strategy-combo-version-001')
     await client.updateStrategyMetadata('csrf', 'strategy/1', { name: '新名字', description: '新说明' }, 1, 'strategy-metadata-001')
     await client.createStrategyVersion('csrf', 'strategy/1', { prompt_text: 'v2', config: {} }, 2, 'strategy-version-001')
     await client.publishStrategyVersion('csrf', 'strategy/1', 'version/2', 3, 'strategy-publish-001')
@@ -379,26 +381,29 @@ describe('strategy management API client', () => {
 
     expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
       '/api/v4/strategies/strategy%2F1', '/api/v4/strategies/compile', '/api/v4/strategies',
+      '/api/v4/strategy-combinations', '/api/v4/strategy-combinations/strategy%2F1/versions',
       '/api/v4/strategies/strategy%2F1', '/api/v4/strategies/strategy%2F1/versions',
       '/api/v4/strategies/strategy%2F1/versions/version%2F2/publish', '/api/v4/strategies/strategy%2F1/retire',
       '/api/v4/strategy-subscriptions?account_id=account%2F1', '/api/v4/strategy-subscriptions',
       '/api/v4/strategy-subscriptions/subscription%2F1',
     ])
-    for (const index of [1, 2, 3, 4, 5, 6, 8, 9]) {
+    for (const index of [1, 2, 3, 4, 5, 6, 7, 8, 10, 11]) {
       const [, request] = fetchImpl.mock.calls[index] ?? []
       expect(new Headers(request?.headers).get('X-CSRF-Token')).toBe('csrf')
     }
-    expect(new Headers(fetchImpl.mock.calls[3]?.[1]?.headers).get('If-Match')).toBe('"1"')
-    expect(new Headers(fetchImpl.mock.calls[2]?.[1]?.headers).get('Idempotency-Key')).toBe('strategy-create-001')
-    expect(new Headers(fetchImpl.mock.calls[3]?.[1]?.headers).get('Idempotency-Key')).toBe('strategy-metadata-001')
-    expect(new Headers(fetchImpl.mock.calls[4]?.[1]?.headers).get('Idempotency-Key')).toBe('strategy-version-001')
-    expect(new Headers(fetchImpl.mock.calls[5]?.[1]?.headers).get('Idempotency-Key')).toBe('strategy-publish-001')
-    expect(new Headers(fetchImpl.mock.calls[6]?.[1]?.headers).get('Idempotency-Key')).toBe('strategy-retire-001')
-    expect(new Headers(fetchImpl.mock.calls[8]?.[1]?.headers).get('Idempotency-Key')).toBe('subscription-create-001')
-    expect(new Headers(fetchImpl.mock.calls[9]?.[1]?.headers).get('Idempotency-Key')).toBe('subscription-update-001')
     expect(new Headers(fetchImpl.mock.calls[4]?.[1]?.headers).get('If-Match')).toBe('"2"')
-    expect(new Headers(fetchImpl.mock.calls[9]?.[1]?.headers).get('If-Match')).toBe('"1"')
-    expect(JSON.parse(String(fetchImpl.mock.calls[9]?.[1]?.body))).toEqual({ status: 'paused' })
+    expect(new Headers(fetchImpl.mock.calls[5]?.[1]?.headers).get('If-Match')).toBe('"1"')
+    expect(new Headers(fetchImpl.mock.calls[2]?.[1]?.headers).get('Idempotency-Key')).toBe('strategy-create-001')
+    expect(new Headers(fetchImpl.mock.calls[3]?.[1]?.headers).get('Idempotency-Key')).toBe('strategy-combo-create-001')
+    expect(new Headers(fetchImpl.mock.calls[4]?.[1]?.headers).get('Idempotency-Key')).toBe('strategy-combo-version-001')
+    expect(new Headers(fetchImpl.mock.calls[5]?.[1]?.headers).get('Idempotency-Key')).toBe('strategy-metadata-001')
+    expect(new Headers(fetchImpl.mock.calls[6]?.[1]?.headers).get('Idempotency-Key')).toBe('strategy-version-001')
+    expect(new Headers(fetchImpl.mock.calls[7]?.[1]?.headers).get('Idempotency-Key')).toBe('strategy-publish-001')
+    expect(new Headers(fetchImpl.mock.calls[8]?.[1]?.headers).get('Idempotency-Key')).toBe('strategy-retire-001')
+    expect(new Headers(fetchImpl.mock.calls[10]?.[1]?.headers).get('Idempotency-Key')).toBe('subscription-create-001')
+    expect(new Headers(fetchImpl.mock.calls[11]?.[1]?.headers).get('Idempotency-Key')).toBe('subscription-update-001')
+    expect(new Headers(fetchImpl.mock.calls[11]?.[1]?.headers).get('If-Match')).toBe('"1"')
+    expect(JSON.parse(String(fetchImpl.mock.calls[11]?.[1]?.body))).toEqual({ status: 'paused' })
   })
 
   it('validates strategy request bodies before making a network call', async () => {

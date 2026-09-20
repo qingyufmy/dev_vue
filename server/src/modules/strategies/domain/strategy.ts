@@ -150,6 +150,29 @@ export interface RetireStrategyInput {
   expectedRevision: number
 }
 
+export interface StrategyCombinationDraftInput {
+  name: string
+  description: string
+  status?: 'draft' | 'active'
+  analysisPromptText: string
+  analysisConfig: Record<string, unknown>
+  traderPromptText: string
+  traderConfig: Record<string, unknown>
+}
+
+export interface CreateStrategyCombinationInput extends StrategyCombinationDraftInput {
+  userId: number
+  idempotencyKey: string
+}
+
+export interface CreateStrategyCombinationVersionInput extends StrategyCombinationDraftInput {
+  userId: number
+  idempotencyKey: string
+  analysisStrategyId: string
+  expectedRevision: number
+  traderExpectedRevision: number | null
+}
+
 export interface CreateStrategySubscriptionInput {
   receiveWindow?: Record<string, unknown>
   idempotencyKey: string

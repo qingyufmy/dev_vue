@@ -1862,6 +1862,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/strategy-combinations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create an analysis and trader strategy pair atomically */
+        post: operations["createStrategyCombination"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/strategy-combinations/{analysis_strategy_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create analysis and trader versions atomically */
+        post: operations["createStrategyCombinationVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/strategy-memories": {
         parameters: {
             query?: never;
@@ -4132,6 +4166,33 @@ export interface components {
         SessionResponse: {
             data: components["schemas"]["Session"];
             meta: components["schemas"]["Meta"];
+        };
+        StrategyCombinationCreate: {
+            analysis_config: {
+                [key: string]: unknown;
+            };
+            analysis_prompt_text: string;
+            description: string;
+            name: string;
+            trader_config: {
+                [key: string]: unknown;
+            };
+            trader_prompt_text: string;
+        };
+        StrategyCombinationVersionCreate: {
+            analysis_config: {
+                [key: string]: unknown;
+            };
+            analysis_prompt_text: string;
+            description: string;
+            name: string;
+            /** @enum {string} */
+            status: "draft" | "active";
+            trader_config: {
+                [key: string]: unknown;
+            };
+            trader_expected_revision: number | null;
+            trader_prompt_text: string;
         };
         StrategyCompile: {
             config: {
@@ -8733,6 +8794,80 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    createStrategyCombination: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StrategyCombinationCreate"];
+            };
+        };
+        responses: {
+            /** @description Strategy combination created */
+            201: {
+                headers: {
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyDetailResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    createStrategyCombinationVersion: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "If-Match": components["parameters"]["IfMatch"];
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                analysis_strategy_id: components["schemas"]["OpaqueId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StrategyCombinationVersionCreate"];
+            };
+        };
+        responses: {
+            /** @description Strategy combination versions created */
+            201: {
+                headers: {
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyDetailResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            412: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            428: components["responses"]["Problem"];
             503: components["responses"]["Problem"];
         };
     };

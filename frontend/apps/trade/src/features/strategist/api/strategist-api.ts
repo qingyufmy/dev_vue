@@ -8,6 +8,8 @@ export const strategistApi = {
   getStrategy: client.getStrategy,
   compileStrategy: client.compileStrategy,
   createStrategy: client.createStrategy,
+  createStrategyCombination: client.createStrategyCombination,
+  createStrategyCombinationVersion: client.createStrategyCombinationVersion,
   updateStrategyMetadata: client.updateStrategyMetadata,
   createStrategyVersion: client.createStrategyVersion,
   publishStrategyVersion: client.publishStrategyVersion,

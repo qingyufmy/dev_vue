@@ -17,6 +17,7 @@ import {
   marketQuoteResponseSchema, observerChannelsResponseSchema, operationResponseSchema, realtimeTicketResponseSchema, sessionResponseSchema,
   executionCommandContextResponseSchema, executionDistributionDetailResponseSchema, executionDistributionPreviewResponseSchema,
   strategyCompileBodySchema, strategyCompileResponseSchema, strategyCreateBodySchema, strategyDetailResponseSchema,
+  strategyCombinationCreateBodySchema, strategyCombinationVersionCreateBodySchema,
   strategyMetadataPatchBodySchema, strategySubscriptionCreateBodySchema, strategySubscriptionPatchBodySchema,
   strategySubscriptionResponseSchema, strategySubscriptionsResponseSchema, strategyVersionCreateBodySchema,
   strategiesResponseSchema, terminalProfilesResponseSchema, tradingAccountsResponseSchema, tradingContextResponseSchema,
@@ -34,7 +35,7 @@ import type {
   AnalysisJobCreate, ApiProblem, AuthLoginRequest, AuthLoginResponse, SessionResponse, DistributionCloseCommand, ExecutionCommand, ExecutionDistribution,
   AuditActor, AuditCategory, AuditSourceKind, AuditStatus,
   ManualReviewCaseCreateBody, ReviewContent, ReviewKind,
-  RiskManualReleaseBody, RiskPolicyPatchBody, StrategyCompileBody, StrategyCreateBody, StrategyKind, StrategyMetadataPatchBody,
+  RiskManualReleaseBody, RiskPolicyPatchBody, StrategyCompileBody, StrategyCreateBody, StrategyCombinationCreateBody, StrategyCombinationVersionCreateBody, StrategyKind, StrategyMetadataPatchBody,
   StrategySubscriptionCreateBody, StrategySubscriptionPatchBody, StrategyVersionCreateBody,
 } from '@aurum/contracts'
 import { z, type ZodType } from 'zod'
@@ -200,6 +201,20 @@ export function createApiClient(options: ApiClientOptions = {}) {
       const payload = strategyCreateBodySchema.parse(body)
       return send(strategyDetailResponseSchema, '/api/v4/strategies', {
         method: 'POST', csrfToken, headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify(payload),
+      })
+    },
+    createStrategyCombination: (csrfToken: string, body: StrategyCombinationCreateBody, idempotencyKey: string) => {
+      z.string().regex(/^[A-Za-z0-9._:-]{16,128}$/).parse(idempotencyKey)
+      const payload = strategyCombinationCreateBodySchema.parse(body)
+      return send(strategyDetailResponseSchema, '/api/v4/strategy-combinations', {
+        method: 'POST', csrfToken, headers: { 'Idempotency-Key': idempotencyKey }, body: JSON.stringify(payload),
+      })
+    },
+    createStrategyCombinationVersion: (csrfToken: string, strategyId: string, body: StrategyCombinationVersionCreateBody, expectedRevision: number, idempotencyKey: string) => {
+      z.string().regex(/^[A-Za-z0-9._:-]{16,128}$/).parse(idempotencyKey)
+      const payload = strategyCombinationVersionCreateBodySchema.parse(body)
+      return send(strategyDetailResponseSchema, `/api/v4/strategy-combinations/${encodeURIComponent(strategyId)}/versions`, {
+        method: 'POST', csrfToken, headers: { 'Idempotency-Key': idempotencyKey, 'If-Match': `"${expectedRevision}"` }, body: JSON.stringify(payload),
       })
     },
     updateStrategyMetadata: (csrfToken: string, strategyId: string, body: StrategyMetadataPatchBody, expectedRevision: number, idempotencyKey: string) => {

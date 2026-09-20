@@ -14,9 +14,11 @@ export interface StrategyRequestAuthenticator {
 }
 
 import type { PlatformStrategyPublisher } from '../../application/platform-strategy-publisher.js'
+import type { StrategyCombinationWriter } from '../../application/strategy-combination-writer.js'
 
 export interface StrategyRoutesOptions {
   platformPublisher?: PlatformStrategyPublisher
+  combinationWriter?: StrategyCombinationWriter
   service: StrategyService
   auth: StrategyRequestAuthenticator
 }
@@ -24,7 +26,7 @@ export interface StrategyRoutesOptions {
 const response = (requestId: string, data: unknown) => ({ data, meta: { request_id: requestId, generated_at: new Date().toISOString() } })
 
 export const strategyRoutes: FastifyPluginAsync<StrategyRoutesOptions> = async (fastify, options) => {
-  const contract = createHttpContractValidator(httpRuntimeContracts, ['setAccountTrader', 'listStrategies', 'getStrategy', 'listStrategySubscriptions', 'createStrategy', 'updateStrategyMetadata', 'createStrategyVersion', 'publishStrategyVersion', 'retireStrategy', 'createStrategySubscription', 'updateStrategySubscription', 'compileStrategy'])
+  const contract = createHttpContractValidator(httpRuntimeContracts, ['setAccountTrader', 'listStrategies', 'getStrategy', 'listStrategySubscriptions', 'createStrategy', 'createStrategyCombination', 'createStrategyCombinationVersion', 'updateStrategyMetadata', 'createStrategyVersion', 'publishStrategyVersion', 'retireStrategy', 'createStrategySubscription', 'updateStrategySubscription', 'compileStrategy'])
   fastify.get<{ Querystring: { kind?: StrategyKind } }>('/strategies', async (request, reply) => {
     reply.header('Cache-Control', 'no-store')
     try {
@@ -66,6 +68,45 @@ export const strategyRoutes: FastifyPluginAsync<StrategyRoutesOptions> = async (
     } catch (error) {
       return problem(completed ? new StrategyAccessError('strategy_commit_unknown', 503) : error, request, reply, contract)
     }
+  })
+
+  fastify.post<{ Body: Record<string, unknown> }>('/strategy-combinations', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    let completed = false
+    try {
+      const { userId } = await writeUser(options, request)
+      if (!options.combinationWriter) throw new StrategyAccessError('strategy_write_unavailable', 503)
+      if (Object.keys(request.query as object).length) throw new HttpContractError('api_request_invalid', 400)
+      contract.request('createStrategyCombination', request)
+      const body = request.body
+      const detail = await options.combinationWriter.create({ userId, idempotencyKey: request.headers['idempotency-key'] as string,
+        name: body.name as string, description: body.description as string,
+        analysisPromptText: body.analysis_prompt_text as string, analysisConfig: body.analysis_config as Record<string, unknown>,
+        traderPromptText: body.trader_prompt_text as string, traderConfig: body.trader_config as Record<string, unknown> })
+      completed = true
+      return reply.code(201).header('ETag', etag(detail.summary.revision)).send(contract.response('createStrategyCombination', response(request.id, detailDto(detail)), 201))
+    } catch (error) { return problem(completed ? new StrategyAccessError('strategy_commit_unknown', 503) : error, request, reply, contract, 'createStrategyCombination') }
+  })
+
+  fastify.post<{ Params: { analysis_strategy_id: string }; Body: Record<string, unknown> }>('/strategy-combinations/:analysis_strategy_id/versions', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
+    let completed = false
+    try {
+      const { userId } = await writeUser(options, request)
+      if (!options.combinationWriter) throw new StrategyAccessError('strategy_write_unavailable', 503)
+      const expectedRevision = ifMatch(request.headers['if-match'])
+      if (Object.keys(request.query as object).length) throw new HttpContractError('api_request_invalid', 400)
+      contract.request('createStrategyCombinationVersion', request)
+      const body = request.body
+      const detail = await options.combinationWriter.createVersion({ userId, expectedRevision,
+        idempotencyKey: request.headers['idempotency-key'] as string, analysisStrategyId: request.params.analysis_strategy_id,
+        traderExpectedRevision: body.trader_expected_revision === null ? null : Number(body.trader_expected_revision),
+        name: body.name as string, description: body.description as string, status: body.status as 'draft' | 'active',
+        analysisPromptText: body.analysis_prompt_text as string, analysisConfig: body.analysis_config as Record<string, unknown>,
+        traderPromptText: body.trader_prompt_text as string, traderConfig: body.trader_config as Record<string, unknown> })
+      completed = true
+      return reply.code(201).header('ETag', etag(detail.summary.revision)).send(contract.response('createStrategyCombinationVersion', response(request.id, detailDto(detail)), 201))
+    } catch (error) { return problem(completed ? new StrategyAccessError('strategy_commit_unknown', 503) : error, request, reply, contract, 'createStrategyCombinationVersion') }
   })
 
   fastify.get<{ Params: { strategy_id: string } }>('/strategies/:strategy_id', async (request, reply) => {

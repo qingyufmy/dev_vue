@@ -9280,6 +9280,108 @@
         ],
         "type": "object"
       },
+      "StrategyCombinationCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "analysis_config": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "analysis_prompt_text": {
+            "maxLength": 100000,
+            "minLength": 20,
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 191,
+            "minLength": 2,
+            "type": "string"
+          },
+          "trader_config": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "trader_prompt_text": {
+            "maxLength": 100000,
+            "minLength": 20,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "analysis_prompt_text",
+          "analysis_config",
+          "trader_prompt_text",
+          "trader_config"
+        ],
+        "type": "object"
+      },
+      "StrategyCombinationVersionCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "analysis_config": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "analysis_prompt_text": {
+            "maxLength": 100000,
+            "minLength": 20,
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 2000,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 191,
+            "minLength": 2,
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "draft",
+              "active"
+            ],
+            "type": "string"
+          },
+          "trader_config": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "trader_expected_revision": {
+            "oneOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trader_prompt_text": {
+            "maxLength": 100000,
+            "minLength": 20,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "status",
+          "trader_expected_revision",
+          "analysis_prompt_text",
+          "analysis_config",
+          "trader_prompt_text",
+          "trader_config"
+        ],
+        "type": "object"
+      },
       "StrategyCompile": {
         "additionalProperties": false,
         "properties": {
@@ -20187,6 +20289,150 @@
           }
         },
         "summary": "Publish one immutable version as the active strategy version",
+        "tags": [
+          "Strategies"
+        ]
+      }
+    },
+    "/strategy-combinations": {
+      "post": {
+        "operationId": "createStrategyCombination",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StrategyCombinationCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyDetailResponse"
+                }
+              }
+            },
+            "description": "Strategy combination created",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "summary": "Create an analysis and trader strategy pair atomically",
+        "tags": [
+          "Strategies"
+        ]
+      }
+    },
+    "/strategy-combinations/{analysis_strategy_id}/versions": {
+      "post": {
+        "operationId": "createStrategyCombinationVersion",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "analysis_strategy_id",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OpaqueId"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StrategyCombinationVersionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StrategyDetailResponse"
+                }
+              }
+            },
+            "description": "Strategy combination versions created",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "412": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "428": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "summary": "Create analysis and trader versions atomically",
         "tags": [
           "Strategies"
         ]

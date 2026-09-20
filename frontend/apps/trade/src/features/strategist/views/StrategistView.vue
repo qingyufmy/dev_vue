@@ -15,7 +15,7 @@ import StrategyMetadataSheet from '../components/StrategyMetadataSheet.vue'
 import SubscriptionEditorSheet from '../components/SubscriptionEditorSheet.vue'
 import SubscriptionWorkspace from '../components/SubscriptionWorkspace.vue'
 import { useStrategistWorkspace } from '../composables/use-strategist-workspace'
-import type { StrategyDetailView, StrategyDraft, StrategySection, StrategySubscriptionView, SubscriptionDraft } from '../model/strategy-presentation'
+import type { StrategyCombinationDraft, StrategyDetailView, StrategySection, StrategySubscriptionView, SubscriptionDraft } from '../model/strategy-presentation'
 
 const route = useRoute()
 const router = useRouter()
@@ -24,8 +24,8 @@ const editorOpen = ref(false)
 let editorGeneration = 0
 watch(editorOpen, () => { editorGeneration++ }, { flush: 'sync' })
 const editorMode = ref<'create' | 'version'>('create')
-const editorKind = ref<'analysis' | 'trader'>('analysis')
 const editorBase = ref<StrategyDetailView | null>(null)
+const editorTraderBase = ref<StrategyDetailView | null>(null)
 const metadataOpen = ref(false)
 const metadataStrategy = ref<StrategySummary | null>(null)
 const retireOpen = ref(false)
@@ -38,6 +38,7 @@ const section = computed<StrategySection>(() => route.query.section === 'subscri
 const selectedStrategyId = computed(() => typeof route.query.strategy_id === 'string' ? route.query.strategy_id : '')
 const selectedAccountId = computed(() => typeof route.query.account_id === 'string' ? route.query.account_id : '')
 const latestVersion = computed(() => editorBase.value?.versions.reduce((latest, item) => !latest || item.versionNumber > latest.versionNumber ? item : latest, undefined as StrategyDetailView['versions'][number] | undefined) ?? null)
+const latestTraderVersion = computed(() => editorTraderBase.value?.versions.reduce((latest, item) => !latest || item.versionNumber > latest.versionNumber ? item : latest, undefined as StrategyDetailView['versions'][number] | undefined) ?? null)
 
 function updateQuery(patch: Record<string, string | undefined>) {
   const query = { ...route.query }
@@ -58,31 +59,35 @@ function selectStrategy(id: string) { updateQuery({ strategy_id: id }) }
 function openCreate() {
   workspace.clearCompile()
   editorMode.value = 'create'
-  editorKind.value = 'analysis'
   editorBase.value = null
+  editorTraderBase.value = null
   editorOpen.value = true
 }
 
-function openVersion(value: StrategyDetailView) {
+async function openVersion(value: StrategyDetailView) {
   workspace.clearCompile()
   editorMode.value = 'version'
-  editorKind.value = value.strategy.kind
   editorBase.value = value
+  editorTraderBase.value = null
+  const latest = value.versions.reduce((selected, item) => !selected || item.versionNumber > selected.versionNumber ? item : selected, undefined as StrategyDetailView['versions'][number] | undefined)
+  const traderId = value.strategy.pairedTraderStrategy?.id ?? (typeof latest?.config.trader_strategy_id === 'string' ? latest.config.trader_strategy_id : '')
+  if (traderId) {
+    try { editorTraderBase.value = await workspace.fetchDetail(traderId) }
+    catch { workspace.actionError.value = '配套交易策略读取失败，已停止打开编辑器，避免覆盖原提示词。'; return }
+  }
   editorOpen.value = true
 }
 
 function openMetadata(value: StrategySummary) { metadataStrategy.value = value; metadataOpen.value = true }
 
-async function saveStrategy(draft: StrategyDraft) {
+async function saveStrategy(draft: StrategyCombinationDraft) {
   if (workspace.compiling.value || workspace.submitting.value) return
   const generation = editorGeneration
   const target = editorBase.value?.strategy.id
-  if (!await workspace.compile(draft)) return
+  if (!await workspace.compileCombination(draft)) return
   if (generation !== editorGeneration || !editorOpen.value || target !== editorBase.value?.strategy.id || (target && target !== workspace.detail.value?.strategy.id)) return
-  if (editorMode.value === 'create') {
-    const id = await workspace.createStrategy(draft)
-    if (id) { editorOpen.value = false; updateQuery({ strategy_id: id }) }
-  } else if (await workspace.createVersion(draft)) editorOpen.value = false
+  const id = await workspace.saveCombination(draft, editorTraderBase.value)
+  if (id) { editorOpen.value = false; updateQuery({ strategy_id: id }) }
 }
 
 async function saveMetadata(value: { name: string; description: string }) {
@@ -162,14 +167,14 @@ watch([() => workspace.loading.value, () => workspace.accounts.value, selectedAc
     <StrategyEditorSheet
       v-model:open="editorOpen"
       :mode="editorMode"
-      :kind="editorKind"
       :strategy-name="editorBase?.strategy.name"
       :strategy-description="editorBase?.strategy.description"
       :strategy-status="editorBase?.strategy.status"
       :platform="editorBase?.strategy.scope === 'platform'"
       :base-version="editorMode === 'version' ? latestVersion : null"
-      :trader-strategies="workspace.strategies.value.filter(item => item.kind === 'trader')"
-      :compile-result="workspace.compileResult.value"
+      :trader-base-version="editorMode === 'version' ? latestTraderVersion : null"
+      :analysis-compile-result="workspace.analysisCompileResult.value"
+      :trader-compile-result="workspace.traderCompileResult.value"
       :compiling="workspace.compiling.value"
       :submitting="workspace.submitting.value"
       :error="workspace.actionError.value"
