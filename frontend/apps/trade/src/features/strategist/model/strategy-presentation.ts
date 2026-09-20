@@ -54,7 +54,6 @@ export interface SubscriptionDraft {
   traderStrategyId: string | null
   analysisEnabled: boolean
   traderEnabled: boolean
-  tradeSendEnabled: boolean
   status: 'active' | 'paused' | 'ended'
 }
 

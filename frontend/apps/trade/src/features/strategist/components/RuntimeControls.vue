@@ -6,11 +6,12 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useTradeSession } from '~/features/auth'
 import { currentAccount, tradingContext, tradingAccounts } from '~/features/trading-context'
 import TraderRuntimeSwitch from './TraderRuntimeSwitch.vue'
-import type { StrategySubscription } from '@aurum/contracts'
+import type { PublicMarketState, StrategySubscription } from '@aurum/contracts'
 import { Button } from '@aurum/ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@aurum/ui/sheet'
 import { strategistApi } from '../api/strategist-api'
-const props = defineProps<{ marketState?: 'open' | 'closed' | 'restricted' | 'stale' | 'unknown' }>()
+import { automationMarketLabel } from '../model/automation-market-state'
+const props = withDefaults(defineProps<{ marketStates?: readonly PublicMarketState[] }>(), { marketStates: () => [] })
 const { session } = useTradeSession()
 const items = ref<StrategySubscription[]>([]), error = ref(''), loading = ref(false), open = ref(false)
 const editorFocus = ref<'analysis' | 'trader'>('analysis')
@@ -29,9 +30,7 @@ let generation = 0
 const runningJobs = ref<Record<string, number>>({})
 let analysisConnection: ReturnType<typeof createAnalysisStatusRealtime> | undefined
 const analyzing = computed(() => enabledAnalysis.value.length > 0 && Object.values(runningJobs.value).some(at => now.value - at < 15 * 60000))
-const marketPauseLabel = computed(() => props.marketState && props.marketState !== 'open'
-  ? { closed: '休市暂停', restricted: '受限暂停', stale: '行情待确认', unknown: '行情待确认' }[props.marketState]
-  : '')
+const marketPauseLabel = computed(() => automationMarketLabel(items.value, props.marketStates, now.value))
 async function load() {
   const captured = scope.value, version = ++generation, account = currentAccount.value?.id
   if (!account || !session.value || readonly.value) return

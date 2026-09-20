@@ -12,7 +12,6 @@ export const manualReleaseRuleLabels: Record<string, string> = {
 export const rejectCodeLabels: Record<string, string> = {
   RISK_GLOBAL_KILL_SWITCH: '平台暂停交易',
   RISK_ACCOUNT_KILL_SWITCH: '账户暂停交易',
-  RISK_TRADE_SEND_DISABLED: '交易发送已关闭',
   RISK_DATA_INCOMPLETE: '风险数据不完整',
   RISK_DAILY_LOSS_LIMIT: '触及当日亏损限制',
   RISK_DRAWDOWN_LIMIT: '触及当日回撤限制',
@@ -32,7 +31,6 @@ export const availabilityCodeLabels: Record<string, string> = {
   risk_manual_release_disabled: '平台未开放手动解除功能',
   risk_manual_release_global_control: '平台级暂停无法由用户解除',
   risk_manual_release_account_kill_switch: '请先关闭账户暂停开关',
-  risk_manual_release_trade_send_disabled: '请先开启交易发送',
   risk_manual_release_data_incomplete: '风险数据不完整，暂不能解除',
   risk_manual_release_clock_unverified: '终端时钟尚未校准，暂不能解除',
   risk_manual_release_business_date_invalid: '交易日校验失败，暂不能解除',
@@ -66,7 +64,6 @@ export function riskState(policy: RiskPolicy | null, summary: RiskSummary | null
   const reasons: string[] = []
   if (policy.globalKillSwitch) reasons.push('平台已暂停交易')
   if (policy.accountKillSwitch) reasons.push('账户已手动暂停交易')
-  if (!policy.tradeSendEnabled) reasons.push('交易发送已关闭')
   if (!summary) return { level: reasons.length ? 'blocked' as const : 'unknown' as const, title: reasons[0] ?? '账户风险数据待准备', detail: '风险汇总尚未生成。可以先查看和设置规则，当前无法确认风险用量。', reasons }
   const observed = Date.parse(summary.observedAt)
   if (!Number.isFinite(observed) || observed > now + 5000 || now - observed > policy.maxRiskSummaryAgeSeconds * 1000) reasons.push('风险数据已过期，请等待更新')

@@ -99,14 +99,14 @@ export const DEFAULT_RISK_POLICY: Readonly<RiskPolicyValues> = Object.freeze({
   manualReleaseMaxDailyOpenCount: 30, manualReleaseConsecutiveLossLimit: 5,
   minOpenIntervalSeconds: 30, maxDailyOpenCount: 20, consecutiveLossLimit: 3,
   lossCooldownMinutes: 60, pendingValidMinutes: 180, pendingDedupAtrMultiplier: 0.05, weekendCloseMinutes: 60,
-  tradeSendEnabled: false, accountKillSwitch: false,
+  tradeSendEnabled: true, accountKillSwitch: false,
 })
 
 export const ACCOUNT_EDITABLE_FIELDS: Array<keyof AccountRiskPolicyPatch> = [
   'maxRiskPerTradePercent', 'maxDailyLossPercent', 'maxDrawdownPercent', 'maxOpenPositions',
   'maxPendingOrders', 'maxOrderVolume', 'maxTotalVolume', 'maxSpreadPoints', 'minOpenIntervalSeconds',
   'maxDailyOpenCount', 'consecutiveLossLimit', 'lossCooldownMinutes', 'pendingValidMinutes',
-  'weekendCloseMinutes', 'tradeSendEnabled', 'accountKillSwitch',
+  'weekendCloseMinutes', 'accountKillSwitch',
 ]
 
 /** V4 persisted policies may omit newer fields; all consumers use this one compatibility rule. */
@@ -152,7 +152,7 @@ export function resolveRiskPolicy(input: {
   account: AccountRiskPolicyPatch | null
   updatedAt: string
 }): EffectiveRiskPolicy {
-  const platform = assertPolicyValues({ ...input.platform.values, tradeSendEnabled: false, accountKillSwitch: false })
+  const platform = assertPolicyValues({ ...input.platform.values, tradeSendEnabled: true, accountKillSwitch: false })
   const controls = validateRiskPolicyControls(input.platform.controls ?? {}, platform)
   for (const [key, control] of Object.entries(controls)) {
     const field = key as keyof RiskPolicyValues
@@ -316,8 +316,6 @@ export function evaluateRisk(input: RiskEvaluationInput, now = new Date()): Risk
     pass('RISK_HOLD_NO_EXECUTION')
     return result('approved', null, rules, [], input.policy, now)
   }
-
-  if (!policy.tradeSendEnabled) return reject('RISK_TRADE_SEND_DISABLED')
 
   let closePrepared: ReturnType<typeof resolvePartialCloseActions>
   try { closePrepared = resolvePartialCloseActions(input) }

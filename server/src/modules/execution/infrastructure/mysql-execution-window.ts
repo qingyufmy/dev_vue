@@ -10,7 +10,7 @@ export async function assertRiskDecisionWindow(clock: AccountClockReader, connec
     INNER JOIN ai_trader_runs r ON r.id=d.trader_run_id AND r.user_id=d.user_id AND r.trading_account_id=d.trading_account_id
     INNER JOIN strategy_subscriptions s ON s.id=r.subscription_id AND s.user_id=r.user_id AND s.trading_account_id=r.trading_account_id
       AND s.revision=r.subscription_revision AND s.trader_strategy_id=r.strategy_id
-      AND s.status='active' AND s.trader_enabled=1 AND s.trade_send_enabled=1
+      AND s.status='active' AND s.trader_enabled=1
     INNER JOIN trading_accounts account ON account.id=s.trading_account_id AND account.deleted_at_utc IS NULL
     INNER JOIN trading_account_ownerships own ON own.trading_account_id=account.id AND own.user_id=s.user_id
       AND own.role='owner' AND own.revoked_at_utc IS NULL AND own.revision=account.ownership_revision
@@ -60,7 +60,7 @@ export async function assertDistributionWindow(clock: AccountClockReader, connec
     INNER JOIN strategy_subscriptions s ON s.id=target.subscription_id AND s.user_id=target.target_user_id
       AND s.trading_account_id=target.trading_account_id AND s.revision=target.subscription_revision
       AND s.trader_strategy_id=distribution.strategy_id
-      AND s.status='active' AND s.trader_enabled=1 AND s.trade_send_enabled=1
+      AND s.status='active' AND s.trader_enabled=1
     INNER JOIN strategies strategy ON strategy.id=s.trader_strategy_id AND strategy.kind='trader'
       AND strategy.status='active' AND strategy.deleted_at_utc IS NULL AND strategy.active_version_id=distribution.strategy_version_id
     INNER JOIN trading_accounts account ON account.id=s.trading_account_id AND account.deleted_at_utc IS NULL

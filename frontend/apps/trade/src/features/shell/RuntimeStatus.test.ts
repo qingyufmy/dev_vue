@@ -1,7 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick, ref } from 'vue'
 import { expect, it, vi } from 'vitest'
-vi.mock('~/features/strategist', () => ({ RuntimeControls: { props: ['marketState'], template: '<span data-runtime-market>{{ marketState }}</span>' } }))
+vi.mock('~/features/strategist', () => ({ RuntimeControls: { props: ['marketStates'], template: '<span data-runtime-market>{{ marketStates?.[0]?.state }}</span>' } }))
 vi.mock('~/features/trading-context', () => ({
   tradingAccounts: ref([{ id: 'a1', bridgeState: 'online', tradePermission: true }]),
   tradingContext: ref({ accountId: 'a1', mode: 'full' }),

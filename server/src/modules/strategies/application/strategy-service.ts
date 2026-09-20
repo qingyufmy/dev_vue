@@ -322,7 +322,7 @@ export class StrategyService {
         if (value !== undefined && typeof value !== 'boolean') throw new StrategyAccessError('request_field_invalid', 422)
       }
       const analysisEnabled = input.analysisEnabled ?? true, traderEnabled = input.traderEnabled ?? false
-      const tradeSendEnabled = input.tradeSendEnabled ?? false, traderStrategyId = input.traderStrategyId ?? null
+      const tradeSendEnabled = traderEnabled, traderStrategyId = input.traderStrategyId ?? null
       if (!analysisEnabled && traderEnabled) throw new StrategyAccessError('subscription_analysis_required', 422)
       if (traderEnabled && !traderStrategyId) throw new StrategyAccessError('subscription_trader_required', 422)
       const standardSymbol = typeof input.standardSymbol === 'string' ? input.standardSymbol.trim().toUpperCase() : ''
@@ -342,7 +342,7 @@ export class StrategyService {
       }
       const analysisEnabled = input.analysisEnabled ?? current.analysisEnabled
       const traderEnabled = input.traderEnabled ?? current.traderEnabled
-      const tradeSendEnabled = input.tradeSendEnabled ?? current.tradeSendEnabled
+      const tradeSendEnabled = traderEnabled
       if (!analysisEnabled && traderEnabled) throw new StrategyAccessError('subscription_analysis_required', 422)
       if (traderEnabled && !traderStrategyId) throw new StrategyAccessError('subscription_trader_required', 422)
       const status = input.status ?? current.status

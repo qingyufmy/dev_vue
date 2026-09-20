@@ -39,7 +39,6 @@ export function evaluatePartialCloseDispatch(request: PartialCloseDispatchRiskRe
   if (context.authorized !== true || context.connectionPaused !== false || context.tradePermission !== true) return review('RISK_PARTIAL_CLOSE_ACCESS_UNAVAILABLE')
   if (policy.globalKillSwitch) return review('RISK_GLOBAL_KILL_SWITCH')
   if (policy.values.accountKillSwitch) return review('RISK_ACCOUNT_KILL_SWITCH')
-  if (!policy.values.tradeSendEnabled) return review('RISK_TRADE_SEND_DISABLED')
   if (at < request.notBefore || at >= request.expiresAt) return review('RISK_PARTIAL_CLOSE_REQUEST_EXPIRED')
   if (!context.collectionComplete || !summary.dataComplete || summary.incompleteReasons.length !== 0) return review('RISK_DATA_INCOMPLETE')
   if (Object.values(revisions).some(value => !Number.isSafeInteger(value) || value < 1)

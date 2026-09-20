@@ -301,7 +301,7 @@ function subscription(row: SubscriptionRow): StrategySubscription {
     id: row.id, userId: Number(row.user_id), tradingAccountId: row.trading_account_id, standardSymbol: row.standard_symbol,
     analysisStrategyId: row.analysis_strategy_id, analysisStrategyVersionId: row.analysis_strategy_version_id,
     traderStrategyId: row.trader_strategy_id, traderStrategyVersionId: row.trader_strategy_version_id,
-    analysisEnabled: Boolean(row.analysis_enabled), traderEnabled: Boolean(row.trader_enabled), tradeSendEnabled: Boolean(row.trade_send_enabled),
+    analysisEnabled: Boolean(row.analysis_enabled), traderEnabled: Boolean(row.trader_enabled), tradeSendEnabled: Boolean(row.trader_enabled),
     status: row.status, revision: Number(row.revision), createdAt: toIso(row.created_at_utc), updatedAt: toIso(row.updated_at_utc),
     schedule: {
       cadenceSeconds: Number(row.cadence_seconds ?? 300), receiveTimezone: row.receive_timezone ?? 'UTC',

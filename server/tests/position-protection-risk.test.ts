@@ -57,11 +57,10 @@ describe('parent close-with-continuation current risk admission', () => {
     expect(f.run()).toMatchObject({ status: 'approved', volume: '0.01', remainingVolume: '0.01' })
     expect(f.run()).not.toHaveProperty('approvedActions')
   })
-  it.each(['global','account','disabled','paused','incomplete','uncalibrated'])('rejects current %s control', gate => {
+  it.each(['global','account','paused','incomplete','uncalibrated'])('rejects current %s control', gate => {
     const f = parent()
     if (gate === 'global') f.context.policy.globalKillSwitch = true
     if (gate === 'account') f.context.policy.values.accountKillSwitch = true
-    if (gate === 'disabled') f.context.policy.values.tradeSendEnabled = false
     if (gate === 'paused') f.context.connectionPaused = true
     if (gate === 'incomplete') f.context.summary.dataComplete = false
     if (gate === 'uncalibrated') f.context.summary.clockStatus = 'stale'
@@ -109,12 +108,15 @@ describe('current position protection risk review', () => {
     const f=fixture(), context={...f.context,[field]:value}
     expect(evaluatePositionProtection(f.request,context,now).evaluation.rejectCode).toBe('RISK_PROTECTION_ACCESS_UNAVAILABLE')
   })
-  it.each(['global','account','send'] as const)('applies %s halt even to tightening protection', gate => {
+  it.each(['global','account'] as const)('applies %s halt even to tightening protection', gate => {
     const f=fixture()
     if(gate==='global')f.context.policy.globalKillSwitch=true
     if(gate==='account')f.context.policy.values.accountKillSwitch=true
-    if(gate==='send')f.context.policy.values.tradeSendEnabled=false
-    expect(evaluate(f).evaluation.rejectCode).toBe({global:'RISK_GLOBAL_KILL_SWITCH',account:'RISK_ACCOUNT_KILL_SWITCH',send:'RISK_TRADE_SEND_DISABLED'}[gate])
+    expect(evaluate(f).evaluation.rejectCode).toBe({global:'RISK_GLOBAL_KILL_SWITCH',account:'RISK_ACCOUNT_KILL_SWITCH'}[gate])
+  })
+  it('does not use the legacy send-permission value as a protection gate', () => {
+    const f=fixture(); f.context.policy.values.tradeSendEnabled=false
+    expect(evaluate(f).evaluation.status).toBe('approved')
   })
   it.each(['terminalInstanceId','brokerServer','login','ticket','positionIdentifier','symbol','side'] as const)('rejects changed target %s', field => {
     const f=fixture(), position={...f.context.position,[field]:field==='side'?'sell':'other'} as PositionProtectionRiskContext['position']

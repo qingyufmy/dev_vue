@@ -7,6 +7,7 @@ const summary = { observedAt: new Date(now).toISOString(), clockStatus: 'calibra
 it('does not hide known account blocks when summary is absent', () => {
   expect(riskState({ ...policy, accountKillSwitch: true }, null, now).level).toBe('blocked')
   expect(riskState(policy, null, now).level).toBe('unknown')
+  expect(riskState({ ...policy, tradeSendEnabled: false }, summary, now).level).toBe('healthy')
 })
 it('stale, future and uncalibrated snapshots never appear healthy', () => {
   expect(riskState(policy, summary, now).level).toBe('healthy')

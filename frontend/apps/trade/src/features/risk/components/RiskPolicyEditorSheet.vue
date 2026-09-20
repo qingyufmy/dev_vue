@@ -15,11 +15,10 @@ import { policyFields, type NumericPolicyKey } from '../model/risk-presentation'
 const props = withDefaults(defineProps<{ open: boolean; policy: RiskPolicy | null; submitting?: boolean; error?: string }>(), { submitting: false, error: '' })
 const emit = defineEmits<{
   'update:open': [value: boolean]
-  submit: [value: { patch: Partial<Record<NumericPolicyKey, string>> & { tradeSendEnabled?: boolean; accountKillSwitch?: boolean }; reason: string }]
+  submit: [value: { patch: Partial<Record<NumericPolicyKey, string>> & { accountKillSwitch?: boolean }; reason: string }]
 }>()
 
 const values = reactive<Record<NumericPolicyKey, string>>(Object.fromEntries(policyFields.map((field) => [field.key, ''])) as Record<NumericPolicyKey, string>)
-const tradeSendEnabled = ref(false)
 const accountKillSwitch = ref(false)
 const reason = ref('')
 const localError = ref('')
@@ -37,7 +36,6 @@ function reset() {
   if (!policy) return
   const editable: Pick<RiskPolicy, NumericPolicyKey> = policy
   for (const field of policyFields) values[field.key] = String(editable[field.key] ?? '')
-  tradeSendEnabled.value = policy.tradeSendEnabled
   accountKillSwitch.value = policy.accountKillSwitch
   reason.value = ''
   localError.value = ''
@@ -47,7 +45,7 @@ function submit() {
   const policy = props.policy
   if (!policy || props.submitting) return
   const editables = editableFields.value
-  const patch: Partial<Record<NumericPolicyKey, string>> & { tradeSendEnabled?: boolean; accountKillSwitch?: boolean } = {}
+  const patch: Partial<Record<NumericPolicyKey, string>> & { accountKillSwitch?: boolean } = {}
   const original: Pick<RiskPolicy, NumericPolicyKey> = policy
   for (const field of policyFields) {
     if (!editables.has(field.wire) || values[field.key] === String(original[field.key])) continue
@@ -57,7 +55,6 @@ function submit() {
     if (control && (Number(values[field.key]) < Number(control.allowed_min) || Number(values[field.key]) > Number(control.allowed_max))) return fail(`${field.label}必须在 ${control.allowed_min} 至 ${control.allowed_max} 之间`)
     patch[field.key] = values[field.key]
   }
-  if (editables.has('trade_send_enabled') && tradeSendEnabled.value !== policy.tradeSendEnabled) patch.tradeSendEnabled = tradeSendEnabled.value
   if (editables.has('account_kill_switch') && accountKillSwitch.value !== policy.accountKillSwitch) patch.accountKillSwitch = accountKillSwitch.value
   if (!Object.keys(patch).length) return fail('请至少修改一项账户风控规则')
   if (reason.value.trim().length < 3 || reason.value.trim().length > 500) return fail('修改原因需填写 3 至 500 个字符')
@@ -86,11 +83,7 @@ watch(() => props.policy, (value, previous) => { if (props.open && value && !pre
             <AlertDescription>已在途或已执行的交易不会被本次修改回滚。若需要暂停新交易，请使用下方账户暂停开关。</AlertDescription>
           </Alert>
 
-          <div class="grid gap-3 sm:grid-cols-2">
-            <Field orientation="horizontal" class="rounded-xl border p-4">
-              <FieldContent><FieldLabel for="trade-send">交易发送</FieldLabel><FieldDescription>关闭后仍可查看与管理已有交易，但不会发送新的开仓动作。</FieldDescription></FieldContent>
-              <Switch id="trade-send" v-model="tradeSendEnabled" :disabled="!editableFields.has('trade_send_enabled')" />
-            </Field>
+          <div class="grid gap-3">
             <Field orientation="horizontal" class="rounded-xl border border-destructive/30 p-4">
               <FieldContent><FieldLabel for="account-kill-switch">账户暂停</FieldLabel><FieldDescription>立即阻止新的开仓动作；已有仓位的保护性操作仍由服务端判断。</FieldDescription></FieldContent>
               <Switch id="account-kill-switch" v-model="accountKillSwitch" :disabled="!editableFields.has('account_kill_switch')" />

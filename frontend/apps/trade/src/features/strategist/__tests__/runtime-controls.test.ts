@@ -1,4 +1,3 @@
-vi.mock('~/features/risk', () => ({ TradeSendSwitch: { template: '<span>交易发送开关</span>' } }))
 import { mount, flushPromises } from '@vue/test-utils'
 import { afterEach, expect, it, vi } from 'vitest'
 import { ref, type Ref } from 'vue'
@@ -42,7 +41,7 @@ it('shows missing account as unknown rather than a disabled subscription', async
 
 it('shows the actual countdown and running state from an analysis event', async () => {
   api.listSubscriptions.mockResolvedValue({ data: { items: [{ id: 's1', tradingAccountId: '1', analysisStrategyId: 'a1', standardSymbol: 'XAUUSD', status: 'active', analysisEnabled: true, schedule: { nextDueAt: new Date(Date.now() + 90000).toISOString() } }] } })
-  wrapper = mount(RuntimeControls, { global: { stubs: { RouterLink: true } } })
+  wrapper = mount(RuntimeControls, { props: { marketStates: [{ symbol: 'XAUUSD', state: 'open', reason: 'market_open', checked_at: new Date().toISOString() }] }, global: { stubs: { RouterLink: true } } })
   await flushPromises()
   expect(wrapper.text()).toMatch(/01:(29|30)/)
   const callback = status.connect.mock.calls.at(-1) as unknown as [{ onEvent: (event: unknown) => void }]
@@ -52,6 +51,20 @@ it('shows the actual countdown and running state from an analysis event', async 
   callback[0].onEvent({ type: 'analysis.job.changed', resource: { id: 'run1' }, data: { strategy_id: 'a1', symbol: 'XAUUSD', status: 'succeeded' } })
   await flushPromises()
   expect(wrapper.text()).not.toContain('分析中')
+})
+
+it('aggregates market state by every enabled subscription symbol', async () => {
+  const checked_at = new Date().toISOString()
+  api.listSubscriptions.mockResolvedValue({ data: { items: [
+    { id: 's1', tradingAccountId: '1', standardSymbol: 'XAUUSD', status: 'active', analysisEnabled: true, schedule: { nextDueAt: null } },
+    { id: 's2', tradingAccountId: '1', standardSymbol: 'BTCUSD', status: 'active', analysisEnabled: true, schedule: { nextDueAt: null } },
+  ] } })
+  wrapper = mount(RuntimeControls, { props: { marketStates: [
+    { symbol: 'XAUUSD', state: 'open', reason: 'market_open', checked_at },
+    { symbol: 'BTCUSD', state: 'closed', reason: 'market_closed', checked_at },
+  ] }, global: { stubs: { RouterLink: true } } })
+  await flushPromises()
+  expect(wrapper.text()).toContain('部分运行')
 })
 
 it('opens the editor directly for one connected account', async () => {

@@ -128,7 +128,7 @@ export class MysqlBridgeCommandRepository implements BridgeCommandRepository {
       if (intent.source_type === 'position_workflow') authority = await protection!.authorize(connection,command,intent.source_id)
       await assertExpectedStateMatchesSnapshot(connection, command, authority?.action ?? sourceAction)
       if (command.action === 'order.place' && sourceAction.kind === 'pending_order') {
-        await this.reviewOrder(connection, command, new Date(command.issuedAt), intent.source_type)
+        await this.reviewOrder(connection, command, new Date(command.issuedAt))
       }
       await connection.execute(`INSERT INTO bridge_commands_v4
         (id,execution_intent_id,command_sequence,user_id,trading_account_id,terminal_profile_id,terminal_instance_id,broker_server,account_login,connection_epoch,action,idempotency_key,request_sha256,status,issued_at_utc,deadline_at_utc,dispatched_at_utc,accepted_at_utc,completed_at_utc,error_code,terminal_code,result_sha256,result_message_id,revision,created_at_utc,updated_at_utc)
@@ -196,7 +196,7 @@ export class MysqlBridgeCommandRepository implements BridgeCommandRepository {
         }
       }
       if (command.action === 'order.place') {
-        await this.reviewOrder(connection, command, new Date(now), intent.source_type)
+        await this.reviewOrder(connection, command, new Date(now))
       }
       const next = await moveCommand(connection, command, 'dispatched', now, null, { dispatched: now })
       await moveIntent(connection, intent, 'dispatching', now, null)
@@ -218,10 +218,10 @@ export class MysqlBridgeCommandRepository implements BridgeCommandRepository {
     })
   }
 
-  private async reviewOrder(connection: PoolConnection, command: BridgeCommand, now: Date, sourceType?: string) {
+  private async reviewOrder(connection: PoolConnection, command: BridgeCommand, now: Date) {
     try {
       const policy = await this.riskPolicy(connection).getEffectivePolicy(command.userId, command.accountId)
-      assertOrderDispatchPolicy(command, policy, { skipForManual: sourceType === 'user_command' })
+      assertOrderDispatchPolicy(command, policy)
       if (command.request.payload.params.order_type !== 'market') {
         if (!this.pendingReviewer) throw new BridgeCommandError('execution_pending_review_unavailable', 409)
         await this.pendingReviewer(connection).review(command, policy, now)

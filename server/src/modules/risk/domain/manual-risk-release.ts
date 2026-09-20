@@ -68,7 +68,6 @@ export function assessManualRelease(policy: EffectiveRiskPolicy, summary: Accoun
   if (!policy.values.manualReleaseEnabled) return { available: false, code: 'risk_manual_release_disabled' }
   if (policy.globalKillSwitch) return { available: false, code: 'risk_manual_release_global_control' }
   if (policy.values.accountKillSwitch) return { available: false, code: 'risk_manual_release_account_kill_switch' }
-  if (!policy.values.tradeSendEnabled) return { available: false, code: 'risk_manual_release_trade_send_disabled' }
   if (!summary.dataComplete) return { available: false, code: 'risk_manual_release_data_incomplete' }
   if (!summary.businessDate || summary.clockStatus !== 'calibrated' || summary.terminalTimezoneOffsetMinutes === null) return { available: false, code: 'risk_manual_release_clock_unverified' }
   if (!validBusinessDate(summary.businessDate)) return { available: false, code: 'risk_manual_release_business_date_invalid' }

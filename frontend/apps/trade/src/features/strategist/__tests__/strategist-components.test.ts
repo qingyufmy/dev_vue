@@ -13,12 +13,13 @@ describe('strategist workspace components', () => {
     expect(view).toContain('<SubscriptionWorkspace')
   })
 
-  it('shows account-specific trader and trade-send controls without moving risk logic to the browser', () => {
-    const source = featureFile('components/SubscriptionEditorSheet.vue')
-    expect(source).toContain('启用 AI 交易员')
-    expect(source).toContain('允许发送交易')
-    expect(source).toContain('仍必须通过账户风控与执行校验')
-    expect(source).toContain('自动分析按策略运行间隔调度')
+  it('uses the AI trader as the single automation switch while keeping risk on the server', () => {
+    const editor = featureFile('components/SubscriptionEditorSheet.vue')
+    const trader = featureFile('components/SubscriptionTraderFields.vue')
+    expect(trader).toContain('发送通过账户权限与服务端风控的交易动作')
+    expect(editor).not.toContain('trade-send-enabled')
+    expect(editor).not.toContain('允许发送交易')
+    expect(editor).toContain('自动分析按策略运行间隔调度')
   })
 
   it('keeps platform strategies read-only and uses immutable versions', () => {

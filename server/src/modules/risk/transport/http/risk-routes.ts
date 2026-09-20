@@ -110,15 +110,15 @@ function policyPatch(body: Record<string, unknown>): AccountRiskPolicyPatch {
     max_drawdown_percent: 'maxDrawdownPercent', max_open_positions: 'maxOpenPositions', max_pending_orders: 'maxPendingOrders',
     max_total_volume: 'maxTotalVolume', max_order_volume: 'maxOrderVolume', max_spread_points: 'maxSpreadPoints', min_open_interval_seconds: 'minOpenIntervalSeconds',
     max_daily_open_count: 'maxDailyOpenCount', consecutive_loss_limit: 'consecutiveLossLimit', loss_cooldown_minutes: 'lossCooldownMinutes',
-    pending_valid_minutes: 'pendingValidMinutes', weekend_close_minutes: 'weekendCloseMinutes', trade_send_enabled: 'tradeSendEnabled',
+    pending_valid_minutes: 'pendingValidMinutes', weekend_close_minutes: 'weekendCloseMinutes',
     account_kill_switch: 'accountKillSwitch',
   }
   const result: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(body)) {
-    if (key === 'reason') continue
+    if (key === 'reason' || key === 'trade_send_enabled') continue
     const target = map[key]
     if (!target) { result[key] = value; continue }
-    result[target] = typeof value === 'string' && target !== 'tradeSendEnabled' && target !== 'accountKillSwitch' ? Number(value) : value
+    result[target] = typeof value === 'string' && target !== 'accountKillSwitch' ? Number(value) : value
   }
   return result as AccountRiskPolicyPatch
 }

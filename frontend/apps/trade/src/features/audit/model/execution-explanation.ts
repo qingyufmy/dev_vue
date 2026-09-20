@@ -1,6 +1,6 @@
 const reasons: Record<string, string> = {
-  RISK_TRADE_SEND_DISABLED: '账户已关闭交易发送，指令未放行。',
-  execution_dispatch_policy_halted: '交易发送受到限制，指令未放行。',
+  RISK_TRADE_SEND_DISABLED: '历史发送许可限制曾阻止该指令；当前版本已取消此独立开关。',
+  execution_dispatch_policy_halted: '账户或平台已暂停交易，指令未放行。',
   execution_order_volume_exceeded: '交易手数超过账户允许范围。',
   execution_subscription_changed: '订阅已关闭或设置已变化，本次指令不再继续。',
   execution_strategy_config_changed: '交易策略已更新，需要重新评估。',

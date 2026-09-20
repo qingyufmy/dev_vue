@@ -1,13 +1,12 @@
 import type { EffectiveRiskPolicy } from '../../risk/index.js'
 import { BridgeCommandError, type BridgeCommand } from './bridge-command.js'
 
-export function assertOrderDispatchPolicy(command: BridgeCommand, policy: EffectiveRiskPolicy, options?: { skipForManual?: boolean }) {
+export function assertOrderDispatchPolicy(command: BridgeCommand, policy: EffectiveRiskPolicy) {
   if (command.action !== 'order.place') return
   if (policy.userId !== command.userId || policy.accountId !== command.accountId) {
     throw new BridgeCommandError('execution_dispatch_policy_unavailable', 409)
   }
-  if (options?.skipForManual) return
-  if (policy.globalKillSwitch || policy.values.accountKillSwitch || !policy.values.tradeSendEnabled) {
+  if (policy.globalKillSwitch || policy.values.accountKillSwitch) {
     throw new BridgeCommandError('execution_dispatch_policy_halted', 409)
   }
   const limit = policy.values.maxOrderVolume

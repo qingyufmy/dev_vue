@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { LockKeyhole, Settings2, ShieldCheck } from '@lucide/vue'
+import { LockKeyhole, Settings2 } from '@lucide/vue'
 import type { RiskPolicy } from '@aurum/contracts'
 import { Badge } from '@aurum/ui/badge'
 import { Button } from '@aurum/ui/button'
@@ -19,7 +19,6 @@ const emit = defineEmits<{ edit: [] }>()
     </CardHeader>
     <CardContent v-if="policy" class="space-y-4">
       <div class="flex flex-wrap gap-2">
-        <Badge :variant="policy.tradeSendEnabled ? 'default' : 'secondary'"><ShieldCheck />{{ policy.tradeSendEnabled ? '风控发送许可已开启' : '交易发送关闭' }}</Badge>
         <Badge :variant="policy.accountKillSwitch ? 'destructive' : 'outline'"><LockKeyhole />{{ policy.accountKillSwitch ? '账户已暂停' : '账户未暂停' }}</Badge>
         <Badge v-if="policy.globalKillSwitch" variant="destructive">平台暂停中</Badge>
       </div>

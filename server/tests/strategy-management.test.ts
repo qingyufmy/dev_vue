@@ -147,12 +147,12 @@ describe('Stage 12Q strategy management', () => {
     await app.close()
   })
 
-  it('stores send permission independently without enabling a trader', async () => {
+  it('ignores the legacy send preference and derives it from the trader switch', async () => {
     const app = Fastify({ logger: false })
     await app.register(createStrategyHttp(new StrategyService(new MemoryStrategyRepository()), auth))
     const response = await app.inject({ method: 'POST', url: '/api/v4/strategy-subscriptions', headers: { 'x-csrf-token': 'csrf-token-123456789', 'idempotency-key': 'send-preference-001' }, payload: { trading_account_id: 'account-1', symbol: 'XAUUSD', analysis_strategy_id: 'strategy-analysis-1', trader_enabled: false, trade_send_enabled: true } })
     expect(response.statusCode).toBe(201)
-    expect(response.json().data).toMatchObject({ trader_enabled: false, trade_send_enabled: true })
+    expect(response.json().data).toMatchObject({ trader_enabled: false, trade_send_enabled: false })
     await app.close()
   })
 
@@ -180,7 +180,7 @@ describe('Stage 12Q strategy management', () => {
     const service = new StrategyService(repository)
     const receiveWindow = { enabled: true, version: 1, timezone: 'terminal_server', weekdays: [1, 2, 3, 4, 5], windows: [{ start: '09:00', end: '18:00' }], outsideBehavior: 'pause_all' }
     repository.subscriptions[0]!.schedule = { cadenceSeconds: 300, receiveTimezone: 'terminal_server', receiveWindow, nextDueAt: '2026-09-14T10:15:00.000Z', revision: 1 }
-    await service.updateSubscription({ userId: 42, idempotencyKey: 'subscription-trade-001', subscriptionId: 'subscription-1', expectedRevision: 4, tradeSendEnabled: true })
+    await service.updateSubscription({ userId: 42, idempotencyKey: 'subscription-trade-001', subscriptionId: 'subscription-1', expectedRevision: 4, tradeSendEnabled: false })
     expect(repository.updatedSubscriptionInput).toMatchObject({ tradeSendEnabled: true, analysisEnabled: true, traderEnabled: true, receiveWindow, nextDueAt: '2026-09-14T10:15:00.000Z' })
     await service.updateSubscription({ userId: 42, idempotencyKey: 'subscription-update-001', subscriptionId: 'subscription-1', expectedRevision: 4, traderEnabled: false })
     expect(repository.updatedSubscriptionInput).toMatchObject({ analysisStrategyId: analysisVersion.strategyId, traderStrategyId: traderVersion.strategyId, traderEnabled: false })

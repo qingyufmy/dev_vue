@@ -129,10 +129,7 @@ export class UserExecutionCommandService {
     const action = userCommandAction(command)
     const riskAction = riskActionFor(command, action, context)
     const riskInput = riskInputFor(command, riskAction, context, now)
-    let riskEvaluation = this.riskEvaluator.evaluate(riskInput, now)
-    if (command.sourceType === 'user_command' && riskEvaluation.status === 'rejected') {
-      riskEvaluation = { ...riskEvaluation, status: 'approved', rejectCode: null, approvedActions: riskEvaluation.approvedActions.length ? riskEvaluation.approvedActions : [action] }
-    }
+    const riskEvaluation = this.riskEvaluator.evaluate(riskInput, now)
     if (riskEvaluation.status === 'rejected') {
       const rejected = buildRejectedUserExecutionResult({ command, riskEvaluation, operationId: randomUUID(), now })
       return this.repository.persistCommand({ command, action, riskEvaluation, result: rejected, expected: command.expected })

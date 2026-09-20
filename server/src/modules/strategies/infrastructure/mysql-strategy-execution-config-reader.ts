@@ -21,7 +21,7 @@ export function createStrategyExecutionConfigReader(connection: Pick<PoolConnect
       INNER JOIN trading_account_ownerships own ON own.trading_account_id=s.trading_account_id AND own.user_id=s.user_id
         AND own.role='owner' AND own.revoked_at_utc IS NULL
       WHERE s.id=? AND s.user_id=? AND s.trading_account_id=? AND s.revision=? AND s.status='active'
-        AND s.trader_enabled=1 AND s.trade_send_enabled=1 AND s.trader_strategy_id=? AND st.active_version_id=?
+        AND s.trader_enabled=1 AND s.trader_strategy_id=? AND st.active_version_id=?
       LIMIT 2 FOR SHARE`, [scope.subscriptionId, scope.userId, scope.accountId, scope.subscriptionRevision,
       scope.traderStrategyId, scope.traderStrategyVersionId])
     if (rows.length !== 1) return null

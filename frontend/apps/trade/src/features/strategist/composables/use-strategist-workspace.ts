@@ -195,7 +195,6 @@ export function useStrategistWorkspace(options: { autoLoad?: boolean } = {}) {
           trader_strategy_id: draft.traderEnabled ? draft.traderStrategyId : null,
           analysis_enabled: draft.analysisEnabled,
           trader_enabled: draft.traderEnabled,
-          trade_send_enabled: draft.tradeSendEnabled,
           status: draft.status,
         }
         await sendSubscriptionPatch(userId, csrfToken, current, patch)
@@ -205,7 +204,7 @@ export function useStrategistWorkspace(options: { autoLoad?: boolean } = {}) {
           ...(draft.receiveWindow ? { receive_window: draft.receiveWindow } : {}),
           trader_strategy_id: draft.traderEnabled ? draft.traderStrategyId : null,
           analysis_enabled: draft.analysisEnabled, trader_enabled: draft.traderEnabled,
-          trade_send_enabled: draft.tradeSendEnabled, status: draft.status === 'paused' ? 'paused' : 'active',
+          status: draft.status === 'paused' ? 'paused' : 'active',
         })
         try { await strategistApi.createSubscription(csrfToken, pending.body, pending.idempotencyKey) }
         catch (reason) {

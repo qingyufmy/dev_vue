@@ -126,7 +126,7 @@ export class MysqlExecutionRepository implements ExecutionRepository {
         || policy.accountPolicyVersionId !== currentSource.accountPolicyVersionId
         || policy.policySetRevision !== currentSource.policySetRevision
         || riskPolicyHash(policy) !== currentSource.policyHash
-        || policy.globalKillSwitch || !policy.values.tradeSendEnabled || policy.values.accountKillSwitch) {
+        || policy.globalKillSwitch || policy.values.accountKillSwitch) {
         throw new ExecutionError('execution_policy_revision_conflict', 409)
       }
       const releasedRules = await validateManualRelease(connection, currentSource)

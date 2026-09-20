@@ -136,7 +136,7 @@ export function useRiskWorkspace(selectedDecisionId: Ref<string>, selectDecision
     async () => { await Promise.all([refreshPolicy(), refreshSummaryAndRelease(), refreshDecisions()]);
       if (summaryError.value || releaseError.value || decisionsError.value) throw Error('partial refresh failed') })
   const savingPolicy = policyRecovery.busy, policyError = policyRecovery.error
-  async function savePolicy(input: { patch: Partial<Record<NumericPolicyKey, string>> & { tradeSendEnabled?: boolean; accountKillSwitch?: boolean }; reason: string }) {
+  async function savePolicy(input: { patch: Partial<Record<NumericPolicyKey, string>> & { accountKillSwitch?: boolean }; reason: string }) {
     return policyRecovery.run('create', policyPatchBody(input.patch, input.reason))
   }
 
@@ -315,7 +315,7 @@ export function useRiskWorkspace(selectedDecisionId: Ref<string>, selectDecision
   }
 }
 
-function policyPatchBody(patch: Partial<Record<NumericPolicyKey, string>> & { tradeSendEnabled?: boolean; accountKillSwitch?: boolean }, reason: string): RiskPolicyPatchBody {
+function policyPatchBody(patch: Partial<Record<NumericPolicyKey, string>> & { accountKillSwitch?: boolean }, reason: string): RiskPolicyPatchBody {
   const body: RiskPolicyPatchBody = { reason }
   if (patch.maxRiskPerTradePercent !== undefined) body.max_risk_per_trade_percent = patch.maxRiskPerTradePercent
   if (patch.maxDailyLossPercent !== undefined) body.max_daily_loss_percent = patch.maxDailyLossPercent
@@ -331,7 +331,6 @@ function policyPatchBody(patch: Partial<Record<NumericPolicyKey, string>> & { tr
   if (patch.lossCooldownMinutes !== undefined) body.loss_cooldown_minutes = Number(patch.lossCooldownMinutes)
   if (patch.pendingValidMinutes !== undefined) body.pending_valid_minutes = Number(patch.pendingValidMinutes)
   if (patch.weekendCloseMinutes !== undefined) body.weekend_close_minutes = Number(patch.weekendCloseMinutes)
-  if (patch.tradeSendEnabled !== undefined) body.trade_send_enabled = patch.tradeSendEnabled
   if (patch.accountKillSwitch !== undefined) body.account_kill_switch = patch.accountKillSwitch
   return body
 }

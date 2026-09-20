@@ -494,7 +494,7 @@ describe('server-owned position tier action resolution', () => {
     }
   })
   it('keeps aggregate exposure limits effective after sizing', () => {
-    const value = tierInput(); value.summary.totalVolume = '0.99'
+    const value = tierInput(); value.summary.totalVolume = '4.99'
     const evaluated = evaluateRisk(value, now)
     expect(evaluated.rejectCode).toBe('RISK_TOTAL_VOLUME_LIMIT')
     expect(evaluated.approvedActions).toEqual([])

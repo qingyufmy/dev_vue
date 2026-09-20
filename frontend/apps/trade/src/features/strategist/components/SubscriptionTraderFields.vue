@@ -6,7 +6,6 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Switch } from '@aurum/ui/switch'
 defineProps<{ strategies: StrategySummary[] }>()
 const enabled = defineModel<boolean>('enabled', { required: true })
-const send = defineModel<boolean>('send', { required: true })
 const strategy = defineModel<string | null>('strategy', { required: true })
 </script>
 <template>
@@ -20,12 +19,8 @@ const strategy = defineModel<string | null>('strategy', { required: true })
       <FieldDescription>根据分析结果、账户持仓与挂单提出交易动作。</FieldDescription>
     </Field>
     <Field orientation="horizontal" class="border-t border-primary/15 pt-4">
-      <FieldContent><FieldLabel for="trader-enabled">自动评估</FieldLabel><FieldDescription>有交易机会，或需要管理持仓、挂单时运行。</FieldDescription></FieldContent>
+      <FieldContent><FieldLabel for="trader-enabled">AI 交易员</FieldLabel><FieldDescription>启用后自动评估，并发送通过账户权限与服务端风控的交易动作。</FieldDescription></FieldContent>
       <Switch id="trader-enabled" v-model="enabled" />
-    </Field>
-    <Field v-if="enabled" orientation="horizontal">
-      <FieldContent><FieldLabel for="trade-send-enabled">执行交易建议</FieldLabel><FieldDescription>开启后发送通过风控的指令；关闭时仅生成建议。</FieldDescription></FieldContent>
-      <Switch id="trade-send-enabled" v-model="send" />
     </Field>
   </section>
 </template>
