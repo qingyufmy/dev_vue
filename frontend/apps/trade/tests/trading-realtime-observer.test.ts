@@ -1,7 +1,8 @@
 import { applyAccountSnapshot, applyRealtimeState } from '~/features/trading-context'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AccountSnapshot, SessionSummary } from '@aurum/contracts'
-import { accountSnapshot, clearAccountRuntime, realtimeState, resourceRevisions, openPositions } from '../src/features/home/home-runtime'
+import { accountSnapshot, clearAccountRuntime, marketQuote, realtimeState, resourceRevisions, openPositions } from '../src/features/home/home-runtime'
+import { applyTerminalMarketSnapshot } from '../src/features/home/terminal-market-state'
 
 const mocks = vi.hoisted(() => ({
   createRealtimeTicket: vi.fn(),
@@ -93,6 +94,24 @@ describe('trade home observer realtime adapter', () => {
     await options.onMessage({ type: 'subscription.ready' })
     expect(realtimeState.value).toBe('live')
     expect(socket.close).not.toHaveBeenCalled()
+  })
+
+  it('subscribes an owned non-public symbol to terminal quote and candle resources', async () => {
+    applyTerminalMarketSnapshot({ accountId: '7', symbol: 'BTCUST', timeframe: 'M5', candles: [], quote: null })
+    await startTradingRealtime(session, '7', 'BTCUST', 'M5', null, async () => undefined, undefined, 'terminal')
+    options.onOpen(socket as never)
+    const { targets } = JSON.parse(socket.send.mock.calls[0]![0])
+    const market = targets.filter((target: any) => target.kind === 'market')
+    expect(market).toEqual(expect.arrayContaining([
+      expect.objectContaining({ trading_account_id: '7', symbol: 'BTCUST', resource_id: 'quote' }),
+      expect.objectContaining({ trading_account_id: '7', symbol: 'BTCUST', timeframe: 'M5', resource_id: 'candle' }),
+    ]))
+    await options.onMessage(sourceEvent({
+      scope: { user_id: '99', trading_account_id: '7', terminal_instance_id: 'terminal-1', observer_channel_id: null },
+      resource: { kind: 'market.quote', id: 'BTCUST' },
+      data: { symbol: 'BTCUST', bid: '80291.17', ask: '80305.17', last: '80295', spread: '14', observed_at: '2026-09-05T08:00:01.000Z' },
+    }))
+    expect(marketQuote.value).toMatchObject({ symbol: 'BTCUST', bid: '80291.17', ask: '80305.17' })
   })
 
   it('keeps analysis refresh notifications after ticket failure and reconnect', async () => {

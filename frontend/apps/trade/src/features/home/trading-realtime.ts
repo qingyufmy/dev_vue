@@ -8,6 +8,7 @@ import { browserRealtimeEventSchema, openPositionSchema, pendingOrderSchema } fr
 import type { Timeframe } from '@aurum/contracts'
 import { connectRealtime } from '@aurum/realtime'
 import { accountSnapshot, openPositions, pendingOrders, resourceRevisions } from './home-runtime'
+import { applyTerminalMarketEvent } from './terminal-market-state'
 
 const client = createApiClient()
 let connection: ReturnType<typeof connectRealtime> | null = null
@@ -26,13 +27,13 @@ export function stopTradingRealtime() {
   applyRealtimeState('idle')
 }
 
-export async function startTradingRealtime(session: TradeSessionSnapshot, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>, onAnalysisChanged?: () => void) {
+export async function startTradingRealtime(session: TradeSessionSnapshot, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>, onAnalysisChanged?: () => void, marketSource: 'public' | 'terminal' = 'public') {
   stopTradingRealtime()
   const currentGeneration = generation
-  await connect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged)
+  await connect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged, marketSource)
 }
 
-async function connect(session: TradeSessionSnapshot, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>, currentGeneration: number, onAnalysisChanged?: () => void) {
+async function connect(session: TradeSessionSnapshot, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>, currentGeneration: number, onAnalysisChanged?: () => void, marketSource: 'public' | 'terminal' = 'public') {
   let lastSequence = 0
   let connectionAlive = true
   let resyncInFlight = false
@@ -56,7 +57,7 @@ async function connect(session: TradeSessionSnapshot, accountId: string, symbol:
   }
   applyRealtimeState('connecting')
   try { await client.createRealtimeTicket(session.csrf_token) }
-  catch { scheduleReconnect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged); return }
+  catch { scheduleReconnect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged, marketSource); return }
   if (currentGeneration !== generation) return
   const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:'
   try { connection = connectRealtime({
@@ -73,12 +74,18 @@ async function connect(session: TradeSessionSnapshot, accountId: string, symbol:
         { kind: 'account', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol: null, timeframe: null, resource_id: 'positions', after_revision: null },
         { kind: 'account', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol: null, timeframe: null, resource_id: 'pending_orders', after_revision: null },
       ]
+      const marketTargets = marketSource === 'terminal' && observerChannelId === null ? [
+        { kind: 'market', trading_account_id: accountId, observer_channel_id: null, symbol, timeframe: null, resource_id: 'quote', after_revision: null },
+        { kind: 'market', trading_account_id: accountId, observer_channel_id: null, symbol, timeframe, resource_id: 'candle', after_revision: null },
+      ] : [
+        { kind: 'market', trading_account_id: null, observer_channel_id: null, symbol, timeframe: null, resource_id: 'public_quote', after_revision: null },
+        { kind: 'market', trading_account_id: null, observer_channel_id: null, symbol, timeframe, resource_id: 'public_candle', after_revision: null },
+      ]
       ws.send(JSON.stringify({
       v: 4, type: 'subscription.subscribe', request_id: crypto.randomUUID(),
       targets: [
         ...accountTargets,
-        { kind: 'market', trading_account_id: null, observer_channel_id: null, symbol, timeframe: null, resource_id: 'public_quote', after_revision: null },
-        { kind: 'market', trading_account_id: null, observer_channel_id: null, symbol, timeframe, resource_id: 'public_candle', after_revision: null },
+        ...marketTargets,
         { kind: 'signals', trading_account_id: null, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'market_analyses', after_revision: null },
       ],
       }))
@@ -103,6 +110,10 @@ async function connect(session: TradeSessionSnapshot, accountId: string, symbol:
     }
     if (event.type === 'market.public.updated') {
       if (applyPublicMarketEvent(event, symbol, timeframe) === 'resync') void requestSnapshotResync()
+      return
+    }
+    if (marketSource === 'terminal' && (event.type === 'market.quote.updated' || event.type === 'market.candle.updated' || event.type === 'market.candle.closed')) {
+      applyTerminalMarketEvent(event, accountId, symbol, timeframe)
       return
     }
     if (event.type === 'observer.publication.changed') {
@@ -137,12 +148,12 @@ async function connect(session: TradeSessionSnapshot, accountId: string, symbol:
     connectionAlive = false
     if (currentGeneration !== generation) return
     connection = null
-    scheduleReconnect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged)
+    scheduleReconnect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged, marketSource)
     },
-  }) } catch { scheduleReconnect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged) }
+  }) } catch { scheduleReconnect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged, marketSource) }
 }
 
-function scheduleReconnect(session: TradeSessionSnapshot, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>, currentGeneration: number, onAnalysisChanged?: () => void) {
+function scheduleReconnect(session: TradeSessionSnapshot, accountId: string, symbol: string, timeframe: Timeframe, observerChannelId: string | null, resync: () => Promise<void>, currentGeneration: number, onAnalysisChanged?: () => void, marketSource: 'public' | 'terminal' = 'public') {
   if (currentGeneration !== generation || reconnectTimer !== null) return
   applyRealtimeState('offline')
   const baseDelay = RECONNECT_DELAYS_MS[Math.min(reconnectAttempt, RECONNECT_DELAYS_MS.length - 1)] ?? 30_000
@@ -153,9 +164,9 @@ function scheduleReconnect(session: TradeSessionSnapshot, accountId: string, sym
     if (currentGeneration !== generation) return
     void resync().then(
       () => {
-        if (currentGeneration === generation) return connect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged)
+        if (currentGeneration === generation) return connect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged, marketSource)
       },
-      () => scheduleReconnect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged),
+      () => scheduleReconnect(session, accountId, symbol, timeframe, observerChannelId, resync, currentGeneration, onAnalysisChanged, marketSource),
     )
   }, delay)
 }

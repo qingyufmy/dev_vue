@@ -4,10 +4,12 @@ import { applyAccountSnapshot, activeMarketSymbol } from '~/features/trading-con
 import { applyPublicDisplayClock, observerChannels, tradingAccounts, tradingContext, applyTradingContext, applyTradingAccounts, applyObserverChannels, createRequestScope } from '~/features/trading-context'
 import { ApiClientError, createApiClient } from '@aurum/api-client'
 import { computed, ref, watch } from 'vue'
-import type { MarketAnalysisSummary, StrategySummary, Timeframe } from '@aurum/contracts'
+import type { MarketAnalysisSummary, StrategySummary, TerminalMarketSymbol, Timeframe } from '@aurum/contracts'
 import { useTradeSession } from '~/features/auth'
 import { accountSnapshot, marketSourceKey, clearAccountRuntime, marketCandles, marketQuote, marketStructure, openPositions, pendingOrders, resourceRevisions } from './home-runtime'
 import { startTradingRealtime, stopTradingRealtime } from './trading-realtime'
+import { preferredGoldSymbol } from './terminal-market-workspace'
+import { applyTerminalMarketSnapshot, mergeTerminalMarketHistory } from './terminal-market-state'
 
 const client = createApiClient()
 
@@ -23,6 +25,11 @@ export function useHomeWorkspace() {
   const marketHistoryVersion = ref(0)
   const historyLoading = ref(false)
   const historyMessage = ref('')
+  const symbolDirectoryNotice = ref('')
+  let publicSymbolCatalog = new Set<string>()
+  let terminalDirectoryAccount = ''
+  let terminalDirectory: TerminalMarketSymbol[] = []
+  let terminalDirectoryRetryAt = 0
   let exhaustedBefore = ''
   let historyRetryAt = 0
   async function loadOlderHistory() {
@@ -32,6 +39,14 @@ export function useHomeWorkspace() {
     const requestedSymbol = symbol.value, requestedTimeframe = timeframe.value
     historyLoading.value = true; historyMessage.value = ''; historyRetryAt = Date.now() + 750
     try {
+      if (source?.startsWith('terminal:') && activeAccountId.value) {
+        const result = await client.getTerminalMarketWindow(activeAccountId.value, requestedSymbol, requestedTimeframe, Date.parse(before), 200)
+        if (!current() || requestedSymbol !== symbol.value || requestedTimeframe !== timeframe.value || source !== marketSourceKey.value) return
+        if (!result.data.items.length) { exhaustedBefore = before; historyMessage.value = '已到终端可读取的最早历史'; return }
+        mergeTerminalMarketHistory(activeAccountId.value, requestedSymbol, requestedTimeframe, result.data.items)
+        marketHistoryVersion.value += 1
+        return
+      }
       const result = await client.getPublicMarketSnapshot(requestedSymbol, requestedTimeframe, 200, before)
       if (!current() || requestedSymbol !== symbol.value || requestedTimeframe !== timeframe.value || source !== marketSourceKey.value) return
       if (result.data.source_key !== source) { await refreshMarket(); return }
@@ -70,6 +85,7 @@ export function useHomeWorkspace() {
 
   async function load() {
     stop()
+    terminalDirectoryAccount = ''; terminalDirectory = []; terminalDirectoryRetryAt = 0; publicSymbolCatalog = new Set()
     const current = requests.begin('context')
     loading.value = true; error.value = ''; marketError.value = ''
     try {
@@ -107,7 +123,7 @@ export function useHomeWorkspace() {
     activeAccountId.value = accountId
     await syncAccountSnapshot(accountId, observerChannelId, scope)
     if (!current()) return
-    if (session.value && symbol.value) await startTradingRealtime(session.value, accountId, symbol.value, timeframe.value, observerChannelId, () => syncAccountSnapshot(accountId, observerChannelId, scope), () => { void loadLatestAnalysis() })
+    if (session.value && symbol.value) await startTradingRealtime(session.value, accountId, symbol.value, timeframe.value, observerChannelId, () => syncAccountSnapshot(accountId, observerChannelId, scope), () => { void loadLatestAnalysis() }, marketSource(accountId, observerChannelId))
   }
 
   async function syncAccountSnapshot(accountId: string, observerChannelId: string | null, scope = scopeVersion) {
@@ -131,13 +147,54 @@ export function useHomeWorkspace() {
     if (scope !== scopeVersion) return
     const current = requests.begin('market')
     marketError.value = ''
-    const directory = await client.getPublicMarketSymbols()
+    const [publicResult, terminalResult] = await Promise.allSettled([
+      client.getPublicMarketSymbols(),
+      accountId && observerChannelId === null && (terminalDirectoryAccount !== accountId || !terminalDirectory.length && Date.now() >= terminalDirectoryRetryAt)
+        ? client.getTerminalMarketSymbols(accountId)
+        : Promise.resolve(null),
+    ])
     if (!current()) return
-    applyPublicDisplayClock(directory.data.timezone ?? null)
-    symbols.value = directory.data.items
-    if (!symbols.value.includes(symbol.value)) symbol.value = symbols.value.includes('XAUUSD') ? 'XAUUSD' : symbols.value[0] ?? ''
+    if (publicResult.status === 'fulfilled') {
+      applyPublicDisplayClock(publicResult.value.data.timezone ?? null)
+      publicSymbolCatalog = new Set(publicResult.value.data.items)
+    } else if (!accountId || observerChannelId !== null) throw publicResult.reason
+    if (terminalResult.status === 'fulfilled' && terminalResult.value) {
+      terminalDirectoryAccount = accountId
+      terminalDirectory = terminalResult.value.data.items
+      terminalDirectoryRetryAt = 0
+      symbolDirectoryNotice.value = ''
+    } else if (terminalResult.status === 'rejected') {
+      terminalDirectoryAccount = accountId
+      terminalDirectory = []
+      terminalDirectoryRetryAt = Date.now() + 5_000
+      symbolDirectoryNotice.value = '终端品种同步失败，当前仅显示平台公共品种'
+    }
+    if (!accountId || observerChannelId !== null) symbolDirectoryNotice.value = ''
+    const terminalSymbols = terminalDirectoryAccount === accountId
+      ? terminalDirectory.filter(item => item.trade_mode !== 0).map(item => item.symbol)
+      : []
+    symbols.value = [...new Set([...publicSymbolCatalog, ...terminalSymbols])]
+    if (!symbols.value.includes(symbol.value)) {
+      const preferred = terminalSymbols.length ? preferredGoldSymbol(terminalDirectory) : null
+      symbol.value = symbols.value.includes('XAUUSD') ? 'XAUUSD'
+        : preferred && symbols.value.includes(preferred) ? preferred : symbols.value[0] ?? ''
+    }
     if (!symbol.value) return
     const requestedSymbol = symbol.value, requestedTimeframe = timeframe.value
+    const source = marketSource(accountId, observerChannelId)
+    if (source === 'terminal') {
+      const [windowResult, quoteResult] = await Promise.all([
+        client.getTerminalMarketWindow(accountId, requestedSymbol, requestedTimeframe, Date.now(), 500),
+        client.getMarketQuote(accountId, requestedSymbol).catch(() => ({ data: null })),
+      ])
+      if (!current() || requestedSymbol !== symbol.value || requestedTimeframe !== timeframe.value) return
+      exhaustedBefore = ''; historyMessage.value = ''
+      applyTerminalMarketSnapshot({ accountId, symbol: requestedSymbol, timeframe: requestedTimeframe, candles: windowResult.data.items, quote: quoteResult.data })
+      marketHistoryVersion.value += 1
+      if (reconnect && session.value) await startTradingRealtime(session.value, accountId, requestedSymbol, requestedTimeframe, observerChannelId,
+        () => syncAccountSnapshot(accountId, observerChannelId, scope), () => { void loadLatestAnalysis() }, 'terminal')
+      return
+    }
     // The Chan engine uses a much longer private calculation window. Keep a
     // bounded two-day-ish public context so the latest forming segment can
     // remain visible without exposing the whole internal history.
@@ -148,7 +205,11 @@ export function useHomeWorkspace() {
     applyPublicSnapshot(result.data)
     marketHistoryVersion.value += 1
     if (reconnect && session.value) await startTradingRealtime(session.value, accountId, symbol.value, timeframe.value, observerChannelId,
-      () => accountId ? syncAccountSnapshot(accountId, observerChannelId, scope) : loadMarket('', false, null, scope), () => { void loadLatestAnalysis() })
+      () => accountId ? syncAccountSnapshot(accountId, observerChannelId, scope) : loadMarket('', false, null, scope), () => { void loadLatestAnalysis() }, 'public')
+  }
+
+  function marketSource(accountId: string, observerChannelId: string | null): 'public' | 'terminal' {
+    return accountId && observerChannelId === null && !publicSymbolCatalog.has(symbol.value) ? 'terminal' : 'public'
   }
 
   async function selectAccount(accountId: string) {
@@ -255,13 +316,13 @@ export function useHomeWorkspace() {
     clearAccountRuntime()
     applyTradingContext(null); applyTradingAccounts([]); applyObserverChannels([])
     activeAccountId.value = null
-    symbol.value = ''; symbols.value = []
+    symbol.value = ''; symbols.value = []; symbolDirectoryNotice.value = ''
     latestAnalysis.value = null; analysisStrategies.value = []
     error.value = ''; analysisError.value = ''; marketError.value = ''
     if (session.value) void load()
   }, { flush: 'sync' })
 
-  return { marketSourceKey, historyLoading, historyMessage, loadOlderHistory, loading, error, symbol, symbols, timeframe, marketHistoryVersion, accounts: tradingAccounts, observers: observerChannels, context: tradingContext,
+  return { marketSourceKey, historyLoading, historyMessage, symbolDirectoryNotice, loadOlderHistory, loading, error, symbol, symbols, timeframe, marketHistoryVersion, accounts: tradingAccounts, observers: observerChannels, context: tradingContext,
     positionsConfirmed: computed(() => resourceRevisions.value.positions > 0), ordersConfirmed: computed(() => resourceRevisions.value.pendingOrders > 0),
     snapshot: accountSnapshot, quote: marketQuote, candles: marketCandles, structure: marketStructure, positions: openPositions, pendingOrders,
     latestAnalysis, analysisStrategies, analysisLoading, analysisError, marketLoading, marketError, refreshMarket,

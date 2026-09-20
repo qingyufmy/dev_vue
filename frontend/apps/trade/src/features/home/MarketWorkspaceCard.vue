@@ -8,12 +8,13 @@ import { Button } from '@aurum/ui/button'
 import { Card, CardContent, CardHeader } from '@aurum/ui/card'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@aurum/ui/select'
 import TradingChart from './TradingChart.vue'
+import SymbolSearchSelect from './SymbolSearchSelect.vue'
 import { chartReferenceLevels } from './chart-reference-levels'
 import { presentChanTrend } from './chan-trend-presentation'
 import { activeTerminalDisplayTimezone } from '~/lib/laboratory-display-time'
 import { terminalDisplayDate, terminalDisplayTimezone } from '~/lib/terminal-display-time'
 
-const props = defineProps<{ symbols: string[]; symbol: string; timeframe: Timeframe; quote: ChartQuote | null; candles: ChartCandle[]; structure: PublicMarketSnapshotData['structure']; realtime: string; historyVersion: number; timezoneOffsetMinutes?: number | null; loading?: boolean; error?: string; historyLoading?: boolean; historyMessage?: string }>()
+const props = defineProps<{ symbols: string[]; symbol: string; timeframe: Timeframe; quote: ChartQuote | null; candles: ChartCandle[]; structure: PublicMarketSnapshotData['structure']; realtime: string; historyVersion: number; marketSource?: 'public' | 'terminal'; timezoneOffsetMinutes?: number | null; loading?: boolean; error?: string; historyLoading?: boolean; historyMessage?: string; symbolDirectoryNotice?: string }>()
 const emit = defineEmits<{ symbol: [value: string]; timeframe: [value: Timeframe]; retry: []; older: [] }>()
 const periods: Timeframe[] = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1']
 const layers = reactive({ bi: true, segment: true, center: true, fractal: true, levels: true })
@@ -32,7 +33,7 @@ onUnmounted(() => { clearInterval(clock) })
 const quoteCurrent = computed(() => !!props.quote && now.value - Date.parse(props.quote.observedAt) <= 30_000)
 const marketStatus = computed(() => {
   if (!quoteCurrent.value) return '等待最新行情 · 历史快照'
-  if (props.realtime === 'live') return '公共行情实时更新'
+  if (props.realtime === 'live') return props.marketSource === 'terminal' ? '当前终端行情实时更新' : '公共行情实时更新'
   if (props.realtime === 'connecting') return '正在连接实时行情'
   if (props.realtime === 'recovering') return '正在同步最新行情'
   if (props.realtime === 'offline') return '实时连接已断开 · 自动重连中'
@@ -68,10 +69,7 @@ const trendPresentation = computed(() => presentChanTrend(props.structure))
   <Card class="min-w-0 gap-0 overflow-hidden py-0 shadow-none">
     <CardHeader class="shrink-0 gap-3 border-b p-3 sm:p-4">
       <div class="flex flex-wrap items-center gap-2">
-        <Select :model-value="symbol" @update:model-value="(value) => value && emit('symbol', String(value))">
-          <SelectTrigger aria-label="行情品种" class="min-h-11 w-32 bg-transparent font-semibold"><SelectValue placeholder="品种" /></SelectTrigger>
-          <SelectContent><SelectGroup><SelectItem v-for="item in symbols" :key="item" :value="item">{{ item }}</SelectItem></SelectGroup></SelectContent>
-        </Select>
+        <SymbolSearchSelect :symbols="symbols" :model-value="symbol" @update:model-value="emit('symbol', $event)" />
         <Select :model-value="timeframe" @update:model-value="(value) => emit('timeframe', value as Timeframe)">
           <SelectTrigger aria-label="K 线周期" class="min-h-11 w-20 bg-transparent"><SelectValue /></SelectTrigger>
           <SelectContent><SelectGroup><SelectItem v-for="item in periods" :key="item" :value="item">{{ item }}</SelectItem></SelectGroup></SelectContent>
@@ -87,6 +85,7 @@ const trendPresentation = computed(() => presentChanTrend(props.structure))
             <div class="px-3 py-1.5 text-center"><p class="text-[11px] text-muted-foreground">点差</p><p class="font-mono text-sm tabular-nums">{{ price(quote.spread) }}</p></div>
         </div>
       </div>
+      <p v-if="symbolDirectoryNotice" class="text-xs text-amber-600 dark:text-amber-400" role="status">{{ symbolDirectoryNotice }}</p>
       <div class="flex flex-wrap items-center gap-1 rounded-lg bg-muted/35 p-1" role="group" aria-label="缠论图层">
         <Button v-for="layer in layerOptions" :key="layer.key" type="button" size="sm" variant="ghost" class="min-h-11 flex-1 gap-2 px-2 text-xs transition-colors motion-reduce:transition-none sm:px-3" :class="layers[layer.key] ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'" :aria-pressed="layers[layer.key]" :aria-label="`${layer.label}图层，${layerCounts[layer.key]} 项${layers[layer.key] ? '，已显示' : '，已隐藏'}`" @click="layers[layer.key] = !layers[layer.key]"><span class="h-0.5 w-3 rounded-full" :class="[layer.tone, layers[layer.key] ? 'opacity-100' : 'opacity-35']" aria-hidden="true" />{{ layer.label }}</Button>
         <Button type="button" size="sm" variant="ghost" class="min-h-11 flex-1 px-2 text-xs transition-colors motion-reduce:transition-none sm:px-3" :class="layers.levels ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'" :aria-pressed="layers.levels" :aria-label="`支撑压力图层，${referenceCount} 项${layers.levels ? '，已显示' : '，已隐藏'}`" @click="layers.levels = !layers.levels">支撑 / 压力</Button>
@@ -114,7 +113,7 @@ const trendPresentation = computed(() => presentChanTrend(props.structure))
         <Button variant="ghost" size="sm" class="min-h-11 px-1 font-mono text-xs" aria-label="查看行情时区确认信息" :aria-expanded="clockDetails" @click="clockDetails = !clockDetails">{{ terminalDisplayDate(new Date(now), timezoneOffsetMinutes).toLocaleTimeString('zh-CN', { hour12: false, timeZone: 'UTC' }) }} {{ terminalDisplayTimezone(timezoneOffsetMinutes).label }}</Button>
 
       </div>
-      <p v-if="clockDetails" class="shrink-0 border-t px-4 py-3 text-xs leading-relaxed text-muted-foreground">公共行情时区 {{ displayTimezone.label }} · {{ displayTimezone.statusLabel }}。由管理员终端确认，前端本地走时。收盘或数据修正后自动更新确认结构；虚线段为形成中结构，中枢包含段级与笔级，支撑压力仅作结构参考。</p>
+      <p v-if="clockDetails" class="shrink-0 border-t px-4 py-3 text-xs leading-relaxed text-muted-foreground">{{ marketSource === 'terminal' ? '当前终端' : '公共行情' }}时区 {{ displayTimezone.label }} · {{ displayTimezone.statusLabel }}。前端本地走时；收盘或数据修正后自动更新确认结构。虚线段为形成中结构，中枢包含段级与笔级，支撑压力仅作结构参考。</p>
     </CardContent>
   </Card>
 </template>

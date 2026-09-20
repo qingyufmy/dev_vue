@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     getTradingContext: vi.fn(), listTradingAccounts: vi.fn(), listObserverChannels: vi.fn(),
     listMarketAnalyses: vi.fn(), listStrategies: vi.fn(), selectTradingAccount: vi.fn(),
     getPublicMarketSymbols: vi.fn(), getPublicMarketSnapshot: vi.fn(), getTradingWorkspace: vi.fn(), quotePayload: vi.fn(), getMarketCandles: vi.fn(),
+    getTerminalMarketSymbols: vi.fn(), getTerminalMarketWindow: vi.fn(), getMarketQuote: vi.fn(),
     enterObserverMode: vi.fn(), leaveObserverMode: vi.fn(),
   },
   start: vi.fn(), stop: vi.fn(),
@@ -54,6 +55,9 @@ beforeEach(() => {
   mocks.api.selectTradingAccount.mockResolvedValue({ data: { mode: 'full', accountId: '2', observerChannelId: null, revision: 2 } })
   mocks.api.quotePayload.mockImplementation(async (accountId: string, symbol: string) => ({ data: { accountId, symbol, revision: 1 } }))
   mocks.api.getPublicMarketSymbols.mockResolvedValue({ data: { items: ['XAUUSD', 'EURUSD', 'GBPUSD'] } })
+  mocks.api.getTerminalMarketSymbols.mockResolvedValue({ data: { items: ['XAUUSD', 'EURUSD', 'GBPUSD'].map(symbol => ({ symbol, description: '', selected: true, visible: true, trade_mode: 4, currency_base: symbol.slice(0, 3), currency_profit: symbol.slice(3) })), next_cursor: null, observed_at: '2026-09-14T00:00:00Z' } })
+  mocks.api.getTerminalMarketWindow.mockResolvedValue({ data: { items: [], before: String(Date.now() - 300_000) } })
+  mocks.api.getMarketQuote.mockResolvedValue({ data: null })
   mocks.api.getPublicMarketSnapshot.mockImplementation(async (symbol: string, timeframe: string) => {
     const { data } = await mocks.api.quotePayload('public', symbol)
     return { data: { symbol: data.symbol, timeframe, source_key: 'a'.repeat(64), source_generation: '1', status: 'cached', candles: [],
@@ -220,6 +224,24 @@ describe('observer HTTP resync scope protection', () => {
     pending.resolve({ data: { accountId: '1', symbol: 'GBPUSD', revision: 1 } })
     await oldMarket
     expect(marketQuote.value?.symbol).toBe('EURUSD')
+    home.stop()
+  })
+
+  it('syncs the owned terminal directory and loads a non-public Bitcoin symbol on selection', async () => {
+    mocks.api.getTradingContext.mockResolvedValue({ data: { mode: 'full', accountId: '2', observerChannelId: null, revision: 1 } })
+    mocks.api.listTradingAccounts.mockResolvedValue({ data: { items: [{ id: '2', bridgeState: 'online' }] } })
+    mocks.api.getTerminalMarketSymbols.mockResolvedValue({ data: { items: [
+      { symbol: 'XAUUSD', description: 'Gold', selected: true, visible: true, trade_mode: 4, currency_base: 'XAU', currency_profit: 'USD' },
+      { symbol: 'BTCUST', description: 'Bitcoin', selected: true, visible: true, trade_mode: 4, currency_base: 'BTC', currency_profit: 'UST' },
+    ], next_cursor: null, observed_at: '2026-09-14T00:00:00Z' } })
+    const home = useHomeWorkspace()
+    await home.load()
+
+    expect(mocks.api.getTerminalMarketSymbols).toHaveBeenCalledWith('2')
+    expect(home.symbols.value).toEqual(['XAUUSD', 'EURUSD', 'GBPUSD', 'BTCUST'])
+    await home.selectSymbol('BTCUST')
+    expect(mocks.api.getTerminalMarketWindow).toHaveBeenCalledWith('2', 'BTCUST', 'M5', expect.any(Number), 500)
+    expect(home.marketSourceKey.value).toBe('terminal:2:BTCUST:M5')
     home.stop()
   })
 
