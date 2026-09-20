@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, createChart, createSeriesMarkers, type IChartApi, type IPrimitivePaneRenderer, type ISeriesApi, type ISeriesMarkersPluginApi, type ISeriesPrimitive, type SeriesAttachedParameter, type SeriesMarker, type UTCTimestamp, type Time, type TickMarkType } from 'lightweight-charts'
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { PublicMarketSnapshotData } from '@aurum/contracts'
 import type { ChartCandle } from './home-runtime'
 import { chartDisplayTime } from './chart-display-time'
-import type { IPriceLine } from 'lightweight-charts'
+import type { IPriceLine, MouseEventParams } from 'lightweight-charts'
 import type { ChartReferenceLevels } from './chart-reference-levels'
 
 type StructureLayers = { bi: boolean; segment: boolean; center: boolean; fractal: boolean; levels: boolean }
@@ -15,6 +15,21 @@ let renderedCandles: ChartCandle[] = []
 let historyRendering = false
 let olderTimer: ReturnType<typeof setTimeout> | undefined
 const host = ref<HTMLElement | null>(null)
+const detailHost = ref<HTMLElement | null>(null)
+let detailObserver: ResizeObserver | undefined
+const hoveredTime = ref<number | null>(null)
+const detailCandle = computed(() => (hoveredTime.value === null ? null
+  : props.candles.find(candle => toTime(candle.openTime) === hoveredTime.value)) ?? props.candles.at(-1))
+const detailSelected = computed(() => !!detailCandle.value && toTime(detailCandle.value.openTime) === hoveredTime.value)
+const detailTime = computed(() => detailCandle.value ? chartDisplayTime(toTime(detailCandle.value.openTime), props.timezoneOffsetMinutes).slice(0, 16) : '')
+function detailPrice(value: string) {
+  const [whole, fraction = ''] = value.split('.')
+  return `${whole}.${fraction.replace(/0+$/, '').padEnd(2, '0')}`
+}
+function showCandleDetails(event: MouseEventParams<Time>) {
+  hoveredTime.value = event.point && typeof event.time === 'number' && candleSeries && event.seriesData.has(candleSeries)
+    ? event.time : null
+}
 let chart: IChartApi | null = null
 let candleSeries: ISeriesApi<'Candlestick'> | null = null
 let volumeSeries: ISeriesApi<'Histogram'> | null = null
@@ -222,11 +237,22 @@ onMounted(() => {
   })
   chart.applyOptions(displayOptions())
   candleSeries = chart.addSeries(CandlestickSeries, { upColor: color('--trade-up'), downColor: color('--trade-down'), wickUpColor: color('--trade-up'), wickDownColor: color('--trade-down'), borderVisible: false, priceLineVisible: true })
+  chart.subscribeCrosshairMove(showCandleDetails)
   structureMarkers = createSeriesMarkers(candleSeries, [])
   volumeSeries = chart.addSeries(HistogramSeries, { priceFormat: { type: 'volume' }, lastValueVisible: false, priceLineVisible: false }, 1)
   volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.15, bottom: 0 } })
   chart.panes()[0]?.setStretchFactor(4)
   chart.panes()[1]?.setStretchFactor(1)
+  // Reserve only the height the wrapping detail strip actually needs.
+  detailObserver = new ResizeObserver(() => {
+    const paneHeight = chart?.panes()[0]?.getHeight() ?? 0
+    if (!paneHeight || !detailHost.value) return
+    candleSeries?.priceScale().applyOptions({ scaleMargins: {
+      top: Math.min(0.4, Math.max(0.1, (detailHost.value.offsetHeight + 18) / paneHeight)), bottom: 0.08,
+    } })
+  })
+  detailObserver.observe(host.value)
+  if (detailHost.value) detailObserver.observe(detailHost.value)
   renderHistory(props.candles)
   renderReferenceLevels()
   chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
@@ -243,7 +269,19 @@ watch(() => props.candles, () => renderLatest(props.candles), { deep: false })
 watch(() => props.structure, renderStructure, { deep: false })
 watch(() => props.layers, renderStructure, { deep: true })
 watch(() => [props.referenceLevels, props.layers.levels], renderReferenceLevels)
-onBeforeUnmount(() => { clearTimeout(olderTimer); structureMarkers?.detach(); chart?.remove(); chart = null })
+onBeforeUnmount(() => { clearTimeout(olderTimer); detailObserver?.disconnect(); chart?.unsubscribeCrosshairMove(showCandleDetails); structureMarkers?.detach(); chart?.remove(); chart = null })
 </script>
 
-<template><div ref="host" class="absolute inset-0 h-full w-full" role="img" aria-label="实时 K 线、成交量与缠论结构图表" /></template>
+<template>
+  <div class="absolute inset-0">
+    <div ref="host" class="absolute inset-0 h-full w-full" role="img" aria-label="实时 K 线、成交量与缠论结构图表" />
+    <div v-if="detailCandle" ref="detailHost" class="pointer-events-none absolute left-2 right-20 top-2 z-10 rounded-md bg-card/85 px-2 py-1.5 text-xs leading-relaxed" aria-label="K 线详情">
+      <dl class="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+        <div class="flex items-baseline gap-1.5 whitespace-nowrap"><dt class="text-muted-foreground">{{ detailSelected ? '所选' : '最新' }}</dt><dd class="font-mono font-medium tabular-nums">{{ detailTime }}</dd></div>
+        <div v-for="(label, field) in { open: '开', high: '高', low: '低', close: '收' }" :key="field" class="flex items-baseline gap-1 whitespace-nowrap"><dt class="text-muted-foreground">{{ label }}</dt><dd class="font-mono tabular-nums" :class="field === 'high' ? 'text-trade-up' : field === 'low' ? 'text-trade-down' : 'text-foreground'">{{ detailPrice(detailCandle[field]) }}</dd></div>
+        <div class="flex items-baseline gap-1 whitespace-nowrap"><dt class="text-muted-foreground">Tick 量</dt><dd class="font-mono tabular-nums">{{ Number(detailCandle.tickVolume).toLocaleString('zh-CN') }}</dd></div>
+        <span v-if="!detailCandle.closed" class="text-muted-foreground">未收盘</span>
+      </dl>
+    </div>
+  </div>
+</template>
