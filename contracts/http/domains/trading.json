@@ -4415,7 +4415,7 @@
         "properties": {
           "kind": {
             "type": "string",
-            "enum": ["bi", "segment", "forming_segment", "center", "fractal_top", "fractal_bottom"]
+            "enum": ["bi", "segment", "forming_segment", "center", "bi_center", "fractal_top", "fractal_bottom"]
           },
           "from": { "$ref": "#/components/schemas/UtcDateTime" },
           "to": { "$ref": "#/components/schemas/UtcDateTime" },
@@ -4432,6 +4432,18 @@
           "status": { "type": "string", "minLength": 1, "maxLength": 64 },
           "reliability": { "type": "string", "enum": ["high", "medium", "low"] },
           "based_on_closed_bars": { "type": "integer", "minimum": 0, "maximum": 2000 },
+          "trend": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "required": ["state", "direction", "phase", "confidence", "reason"],
+            "properties": {
+              "state": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "direction": { "type": "string", "enum": ["up", "down", "neutral"] },
+              "phase": { "type": "string", "minLength": 1, "maxLength": 64 },
+              "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
+              "reason": { "type": "string", "minLength": 1, "maxLength": 128 }
+            }
+          },
           "lines": {
             "type": "array",
             "maxItems": 32,

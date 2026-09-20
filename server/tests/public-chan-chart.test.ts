@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { publicChanChart } from '../src/modules/market/application/public-chan-chart.js'
+import { publicChanChart, recentBiFractalLines } from '../src/modules/market/application/public-chan-chart.js'
 
 function candles(count: number) {
   return Array.from({ length: count }, (_, index) => {
@@ -22,7 +22,7 @@ describe('public Chan chart projection', () => {
     const rows = [...candles(29), { ...candles(1)[0]!, openTime: '2026-09-01T02:30:00.000Z', closed: false }]
     expect(publicChanChart({ accountId: '1', platform: 'mt5', timeframe: 'M5', candles: rows, clock: null,
       referenceTime: '2026-09-02T00:00:00.000Z' })).toEqual({
-      algorithm: 'chan_structure_v8', status: 'insufficient_klines', reliability: 'low', based_on_closed_bars: 29, lines: [],
+      algorithm: 'chan_structure_v8', status: 'insufficient_klines', reliability: 'low', based_on_closed_bars: 29, trend: null, lines: [],
     })
   })
 
@@ -32,6 +32,18 @@ describe('public Chan chart projection', () => {
     expect(result?.algorithm).toBe('chan_structure_v8')
     expect(result?.based_on_closed_bars).toBe(300)
     expect(result?.lines.length).toBeLessThanOrEqual(32)
-    expect(result?.lines.every(line => ['bi', 'segment', 'forming_segment', 'center', 'fractal_top', 'fractal_bottom'].includes(line.kind))).toBe(true)
+    expect(result?.lines.every(line => ['bi', 'segment', 'forming_segment', 'center', 'bi_center', 'fractal_top', 'fractal_bottom'].includes(line.kind))).toBe(true)
+    expect(result).toHaveProperty('trend')
+  })
+
+  it('projects every recent confirmed bi endpoint as a de-duplicated fractal', () => {
+    const start = Date.UTC(2026, 8, 18, 10)
+    const lines = recentBiFractalLines([
+      { confirmed: true, dir: 'up', start_time_utc_msc: start, end_time_utc_msc: start + 300_000, start_price: 4300, end_price: 4310 },
+      { confirmed: true, dir: 'down', start_time_utc_msc: start + 300_000, end_time_utc_msc: start + 600_000, start_price: 4310, end_price: 4298 },
+    ])
+    expect(lines.map(line => [line.kind, line.start])).toEqual([
+      ['fractal_bottom', 4300], ['fractal_top', 4310], ['fractal_bottom', 4298],
+    ])
   })
 })

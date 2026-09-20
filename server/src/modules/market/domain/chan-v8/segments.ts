@@ -4,11 +4,67 @@ import { findSegmentEndpoint, pendingSegmentConfirmation } from './features.js'
 const MIN_BIS_PER_SEGMENT = 3
 type SegmentOptions = { trustedStart?: boolean }
 export type Candidate = ReturnType<typeof pendingSegmentConfirmation> & { dir: 'up' | 'down'; bi_ids: number[]; start_price: number; end_price: number; endpoint_raw_idx: number | null }
-type AnchorResult = { segments: ChanSegment[]; candidate: Candidate | null; resynced: boolean }
+type AnchorResult = { segments: ChanSegment[]; candidate: Candidate | null; historicalCandidate: Candidate | null; resynced: boolean }
 type Validator = AnchorResult & { probeStart: number }
 
+function segmentCandidate(confirmedBis: readonly ChanBi[], startIndex: number): Candidate | null {
+  const tailBis = confirmedBis.slice(startIndex)
+  if (tailBis.length === 0) return null
+  const dir = tailBis[0]!.dir
+  const lifecycle = pendingSegmentConfirmation(confirmedBis, startIndex, dir)
+  const endpointBi = tailBis
+    .filter(bi => bi.dir === dir)
+    .filter(bi => Number.isFinite(Number(bi.end_price)))
+    .reduce<ChanBi | null>((best, bi) => {
+      if (!best) return bi
+      return dir === 'up'
+        ? (Number(bi.end_price) > Number(best.end_price) ? bi : best)
+        : (Number(bi.end_price) < Number(best.end_price) ? bi : best)
+    }, null)
+  return {
+    dir,
+    bi_ids: tailBis.map(bi => bi.id),
+    start_price: tailBis[0]!.start_price,
+    end_price: Number(endpointBi?.end_price),
+    // The candidate may already contain a reverse stroke after its price
+    // extreme. Keep the full stroke span for structure calculations, while
+    // pairing the displayed endpoint price with the bar where it occurred.
+    endpoint_raw_idx: Number.isFinite(Number(endpointBi?.raw_end_idx)) ? Number(endpointBi!.raw_end_idx) : null,
+    ...lifecycle,
+  }
+}
+
+function candidateInvalidatingBi(candidate: Candidate | null, confirmedBis: readonly ChanBi[]) {
+  if (!candidate || candidate.bi_ids.length < MIN_BIS_PER_SEGMENT * 2 + 1) return null
+  const candidateIds = new Set(candidate.bi_ids)
+  const startPrice = Number(candidate.start_price)
+  if (!Number.isFinite(startPrice)) return null
+  return confirmedBis.find(bi => candidateIds.has(bi.id) && (
+    candidate.dir === 'down' ? Number(bi.high) > startPrice : Number(bi.low) < startPrice
+  )) || null
+}
+
+/** A retired candidate is historical evidence, not a permanent current-state
+ * anchor. Re-anchor at the first opposite stroke that broke its origin and
+ * repeat until the returned candidate is connected to the latest stroke. */
+export function buildActiveSegmentCandidate(confirmedBis: readonly ChanBi[], startIndex: number) {
+  let cursor = startIndex
+  let candidate = segmentCandidate(confirmedBis, cursor)
+  let historicalCandidate: Candidate | null = null
+  for (let guard = 0; candidate && guard < confirmedBis.length; guard++) {
+    const invalidatingBi = candidateInvalidatingBi(candidate, confirmedBis)
+    if (!invalidatingBi) return { candidate, historicalCandidate }
+    historicalCandidate = candidate
+    const nextCursor = confirmedBis.findIndex(bi => bi.id === invalidatingBi.id)
+    if (nextCursor <= cursor) return { candidate: null, historicalCandidate }
+    cursor = nextCursor
+    candidate = segmentCandidate(confirmedBis, cursor)
+  }
+  return { candidate, historicalCandidate }
+}
+
 export function buildSegmentsFromAnchor(confirmedBis: readonly ChanBi[], options: SegmentOptions = {}): AnchorResult {
-  if (confirmedBis.length < MIN_BIS_PER_SEGMENT) return { segments: [], candidate: null, resynced: false }
+  if (confirmedBis.length < MIN_BIS_PER_SEGMENT) return { segments: [], candidate: null, historicalCandidate: null, resynced: false }
   const trustedStart = options.trustedStart !== false
   const segments: ChanSegment[] = []
   let startIndex = 0
@@ -52,35 +108,8 @@ export function buildSegmentsFromAnchor(confirmedBis: readonly ChanBi[], options
     startIndex = endpoint.endpointIndex
   }
 
-  const tailBis = confirmedBis.slice(startIndex)
-  let candidate: Candidate | null = null
-  if (tailBis.length > 0) {
-    const dir = tailBis[0]!.dir
-    const lifecycle = pendingSegmentConfirmation(confirmedBis, startIndex, dir)
-    const directionalBis = tailBis
-      .filter(b => b.dir === dir)
-      .filter(b => Number.isFinite(Number(b.end_price)))
-    const endpointBi = directionalBis.reduce<ChanBi | null>((best, bi) => {
-      if (!best) return bi
-      return dir === 'up'
-        ? (Number(bi.end_price) > Number(best.end_price) ? bi : best)
-        : (Number(bi.end_price) < Number(best.end_price) ? bi : best)
-    }, null)
-    const endPrice = Number(endpointBi?.end_price)
-    candidate = {
-      dir,
-      bi_ids: tailBis.map(b => b.id),
-      start_price: tailBis[0]!.start_price,
-      end_price: endPrice,
-      // The candidate may already contain a reverse stroke after its price
-      // extreme. Keep the full stroke span for structure calculations, while
-      // pairing the displayed endpoint price with the bar where it occurred.
-      endpoint_raw_idx: Number.isFinite(Number(endpointBi?.raw_end_idx)) ? Number(endpointBi!.raw_end_idx) : null,
-      ...lifecycle,
-    }
-  }
-
-  return { segments, candidate, resynced }
+  const { candidate, historicalCandidate } = buildActiveSegmentCandidate(confirmedBis, startIndex)
+  return { segments, candidate, historicalCandidate, resynced }
 }
 
 function sameSegmentBoundary(a: ChanSegment | undefined, b: ChanSegment | undefined) {
@@ -135,7 +164,7 @@ export function buildSegments(confirmedBis: readonly ChanBi[], options: SegmentO
   }
   if (validators.length < 2) {
     return {
-      segments: [], candidate: null, resynced: primary.resynced,
+      segments: [], candidate: null, historicalCandidate: primary.historicalCandidate, resynced: primary.resynced,
       stable: false, supportCount: validators.length, validatorCount: validators.length,
       supportRatio: validators.length === 1 ? 1 : 0,
       pairSupport: [],
@@ -166,7 +195,7 @@ export function buildSegments(confirmedBis: readonly ChanBi[], options: SegmentO
   const hasMajority = supportCount >= 2 && supportCount * 2 > validatorCount
   if (!hasMajority) {
     return {
-      segments: [], candidate: null, resynced: primary.resynced,
+      segments: [], candidate: null, historicalCandidate: primary.historicalCandidate, resynced: primary.resynced,
       stable: false, supportCount, validatorCount, supportRatio,
       pairSupport: [], historicalSegmentRuns: [],
     }
@@ -198,17 +227,17 @@ export function buildSegments(confirmedBis: readonly ChanBi[], options: SegmentO
       return {
         segment,
         next,
-        supportCount:pairSupportCount,
-        eligibleCount:pairEligible.length,
-        supported:pairSupportCount >= 2 && pairSupportCount * 2 > pairEligible.length,
+        supportCount: pairSupportCount,
+        eligibleCount: pairEligible.length,
+        supported: pairSupportCount >= 2 && pairSupportCount * 2 > pairEligible.length,
       }
     })
     const chainSupported = chainSupport >= 2 && chainSupport * 2 > eligibleValidators.length
     if (chainSupported && pairEvidence.every(item => item.supported)) {
       confirmedChain = {
-        segments:chain,
-        supportCount:chainSupport,
-        validatorCount:eligibleValidators.length,
+        segments: chain,
+        supportCount: chainSupport,
+        validatorCount: eligibleValidators.length,
         pairEvidence,
       }
       break
@@ -244,11 +273,12 @@ export function buildSegments(confirmedBis: readonly ChanBi[], options: SegmentO
   return {
     segments,
     candidate,
+    historicalCandidate: representative.historicalCandidate || primary.historicalCandidate,
     resynced: true,
     stable: segments.length >= 2,
-    supportCount:confirmedChain?.supportCount || 0,
-    validatorCount:confirmedChain?.validatorCount || 0,
-    supportRatio:confirmedChain?.validatorCount
+    supportCount: confirmedChain?.supportCount || 0,
+    validatorCount: confirmedChain?.validatorCount || 0,
+    supportRatio: confirmedChain?.validatorCount
       ? confirmedChain.supportCount / confirmedChain.validatorCount : 0,
     pairSupport,
     historicalSegmentRuns,

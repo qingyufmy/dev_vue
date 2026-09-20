@@ -138,7 +138,10 @@ export function useHomeWorkspace() {
     if (!symbols.value.includes(symbol.value)) symbol.value = symbols.value.includes('XAUUSD') ? 'XAUUSD' : symbols.value[0] ?? ''
     if (!symbol.value) return
     const requestedSymbol = symbol.value, requestedTimeframe = timeframe.value
-    const result = await client.getPublicMarketSnapshot(requestedSymbol, requestedTimeframe)
+    // The Chan engine uses a much longer private calculation window. Keep a
+    // bounded two-day-ish public context so the latest forming segment can
+    // remain visible without exposing the whole internal history.
+    const result = await client.getPublicMarketSnapshot(requestedSymbol, requestedTimeframe, 500)
       .catch(reason => { if (!current()) return null; clearForbiddenSnapshot(reason, scope); throw reason })
     if (!result || !current() || requestedSymbol !== symbol.value || requestedTimeframe !== timeframe.value) return
     exhaustedBefore = ''; historyMessage.value = ''

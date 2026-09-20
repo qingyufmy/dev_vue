@@ -3768,12 +3768,21 @@ export interface components {
             /** @enum {string} */
             reliability: "high" | "medium" | "low";
             status: string;
+            trend?: {
+                /** @enum {string} */
+                confidence: "high" | "medium" | "low";
+                /** @enum {string} */
+                direction: "up" | "down" | "neutral";
+                phase: string;
+                reason: string;
+                state: string;
+            } | null;
         };
         PublicMarketStructureLine: {
             end: number;
             from: components["schemas"]["UtcDateTime"];
             /** @enum {string} */
-            kind: "bi" | "segment" | "forming_segment" | "center" | "fractal_top" | "fractal_bottom";
+            kind: "bi" | "segment" | "forming_segment" | "center" | "bi_center" | "fractal_top" | "fractal_bottom";
             start: number;
             to: components["schemas"]["UtcDateTime"];
         };

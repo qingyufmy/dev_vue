@@ -222,7 +222,7 @@ export function computeChanWindow(rates: readonly WindowRate[], timeframe: strin
     validatorCount: segmentValidatorCount = 0,
     supportRatio: segmentSupportRatio = 0,
     pairSupport: segmentPairSupport = [],
-    historicalSegmentRuns = [],
+    historicalSegmentRuns = [], historicalCandidate = null,
   } = buildSegments(segmentBis, { trustedStart: structureAnchorTimeMatched })
   const windowResynced = structureAnchorTimeMatched || resynced
   if (!windowResynced) warnings.push('segment_window_not_resynced')
@@ -301,8 +301,8 @@ export function computeChanWindow(rates: readonly WindowRate[], timeframe: strin
   const candidateSegmentDiagnostic = summarizeSegmentCandidate(candidate, allBis, closedRates, (lastSeg?.id || 0) + 1)
   const candidateSegmentSummary = candidateSegmentDiagnostic?.active_for_current_state === false
     ? null : candidateSegmentDiagnostic
-  const historicalCandidateSegment = candidateSegmentDiagnostic?.active_for_current_state === false
-    ? candidateSegmentDiagnostic : null
+  const historicalCandidateSegment = summarizeSegmentCandidate(
+    historicalCandidate, allBis, closedRates, (lastSeg?.id || 0) + 1)
   const formingDivergence = detectFormingDivergence(candidate, validSegs, allBis, closedMacdHist, centers, closedRates)
   if (divergence.type !== 'none') {
     // ok

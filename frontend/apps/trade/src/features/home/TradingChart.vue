@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CandlestickSeries, ColorType, HistogramSeries, LineSeries, LineStyle, createChart, createSeriesMarkers, type IChartApi, type IPrimitivePaneRenderer, type ISeriesApi, type ISeriesMarkersPluginApi, type ISeriesPrimitive, type SeriesAttachedParameter, type SeriesMarker, type UTCTimestamp, type Time, type TickMarkType } from 'lightweight-charts'
+import { CandlestickSeries, ColorType, CrosshairMode, HistogramSeries, LineSeries, LineStyle, createChart, createSeriesMarkers, type IChartApi, type IPrimitivePaneRenderer, type ISeriesApi, type ISeriesMarkersPluginApi, type ISeriesPrimitive, type SeriesAttachedParameter, type SeriesMarker, type UTCTimestamp, type Time, type TickMarkType } from 'lightweight-charts'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { PublicMarketSnapshotData } from '@aurum/contracts'
 import type { ChartCandle } from './home-runtime'
@@ -53,15 +53,16 @@ function volumeData(candle: ChartCandle) { return { time: toTime(candle.openTime
 
 function layerVisible(kind: string) {
   if (kind.startsWith('fractal_')) return props.layers.fractal
-  return props.layers[kind === 'forming_segment' ? 'segment' : kind as keyof StructureLayers]
+  return props.layers[kind === 'forming_segment' ? 'segment' : kind === 'bi_center' ? 'center' : kind as keyof StructureLayers]
 }
 
-interface CenterBand { from: UTCTimestamp; to: UTCTimestamp; high: number; low: number }
+interface CenterBand { from: UTCTimestamp; to: UTCTimestamp; high: number; low: number; level: 'segment' | 'bi' }
 
 class CenterBandPrimitive implements ISeriesPrimitive<Time> {
   private chart?: SeriesAttachedParameter<Time>['chart']
   private series?: SeriesAttachedParameter<Time>['series']
-  constructor(private readonly bands: CenterBand[], private readonly fill: string, private readonly stroke: string) {}
+  constructor(private readonly bands: CenterBand[], private readonly segmentFill: string,
+    private readonly biFill: string, private readonly stroke: string) {}
   attached(param: SeriesAttachedParameter<Time>) { this.chart = param.chart; this.series = param.series }
   detached() { this.chart = undefined; this.series = undefined }
   paneViews() {
@@ -80,7 +81,7 @@ class CenterBandPrimitive implements ISeriesPrimitive<Time> {
           const y = Math.round(Math.min(top!, bottom!) * scope.verticalPixelRatio)
           const width = Math.max(1, Math.round(Math.abs(right! - left!) * scope.horizontalPixelRatio))
           const height = Math.max(1, Math.round(Math.abs(bottom! - top!) * scope.verticalPixelRatio))
-          context.fillStyle = this.fill
+          context.fillStyle = band.level === 'segment' ? this.segmentFill : this.biFill
           context.fillRect(x, y, width, height)
           context.strokeStyle = this.stroke
           context.lineWidth = Math.max(1, scope.horizontalPixelRatio)
@@ -95,20 +96,21 @@ class CenterBandPrimitive implements ISeriesPrimitive<Time> {
 }
 
 function visibleCenterBands() {
-  const groups = new Map<string, { from: UTCTimestamp; to: UTCTimestamp; values: number[] }>()
+  const groups = new Map<string, { from: UTCTimestamp; to: UTCTimestamp; values: number[]; level: 'segment' | 'bi' }>()
   const visibleTimes = new Set(renderedTimes.map(toTime))
   for (const line of props.structure?.lines ?? []) {
-    if (line.kind !== 'center') continue
+    if (line.kind !== 'center' && line.kind !== 'bi_center') continue
     const from = toTime(line.from), to = toTime(line.to)
     if (!visibleTimes.has(from) || !visibleTimes.has(to)) continue
-    const key = `${line.from}:${line.to}`
-    const group = groups.get(key) ?? { from, to, values: [] }
+    const level = line.kind === 'center' ? 'segment' : 'bi'
+    const key = `${level}:${line.from}:${line.to}`
+    const group = groups.get(key) ?? { from, to, values: [], level }
     group.values.push(line.start, line.end)
     groups.set(key, group)
   }
   return [...groups.values()].flatMap(group => {
     const values = [...new Set(group.values.filter(Number.isFinite))]
-    return values.length >= 2 ? [{ from: group.from, to: group.to, high: Math.max(...values), low: Math.min(...values) }] : []
+    return values.length >= 2 ? [{ from: group.from, to: group.to, high: Math.max(...values), low: Math.min(...values), level: group.level }] : []
   })
 }
 
@@ -123,7 +125,7 @@ function renderStructure() {
   if (props.layers.center) {
     const bands = visibleCenterBands()
     if (bands.length) {
-      centerBands = new CenterBandPrimitive(bands, color('--chart-2', 0.1), color('--chart-2', 0.58))
+      centerBands = new CenterBandPrimitive(bands, color('--chart-2', 0.13), color('--chart-2', 0.065), color('--chart-2', 0.58))
       candleSeries.attachPrimitive(centerBands)
     }
   }
@@ -136,7 +138,7 @@ function renderStructure() {
       continue
     }
     if (!visibleTimes.has(from) || !visibleTimes.has(to)) continue
-    if (line.kind === 'center') continue
+    if (line.kind === 'center' || line.kind === 'bi_center') continue
     const series = chart.addSeries(LineSeries, {
       color: line.kind === 'bi' ? color('--chart-1', 0.72) : color('--chart-3', line.kind === 'forming_segment' ? 0.78 : 1),
       lineWidth: line.kind === 'segment' ? 3 : line.kind === 'forming_segment' ? 2 : 1,
@@ -192,7 +194,7 @@ onMounted(() => {
     autoSize: true, layout: { attributionLogo: false, background: { type: ColorType.Solid, color: 'transparent' }, textColor: color('--muted-foreground') },
     grid: { vertLines: { color: color('--border') }, horzLines: { color: color('--border') } },
     rightPriceScale: { borderColor: color('--border') }, timeScale: { borderColor: color('--border'), timeVisible: true, secondsVisible: false, minBarSpacing: 2 },
-    crosshair: { vertLine: { labelBackgroundColor: color('--primary') }, horzLine: { labelBackgroundColor: color('--primary') } },
+    crosshair: { mode: CrosshairMode.Normal, vertLine: { labelBackgroundColor: color('--primary') }, horzLine: { labelBackgroundColor: color('--primary') } },
   })
   chart.applyOptions(displayOptions())
   candleSeries = chart.addSeries(CandlestickSeries, { upColor: color('--trade-up'), downColor: color('--trade-down'), wickUpColor: color('--trade-up'), wickDownColor: color('--trade-down'), borderVisible: false, priceLineVisible: true })

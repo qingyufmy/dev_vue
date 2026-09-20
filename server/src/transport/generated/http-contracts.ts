@@ -7207,6 +7207,53 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
             "maxLength": 64,
             "minLength": 1,
             "type": "string"
+          },
+          "trend": {
+            "additionalProperties": false,
+            "properties": {
+              "confidence": {
+                "enum": [
+                  "high",
+                  "medium",
+                  "low"
+                ],
+                "type": "string"
+              },
+              "direction": {
+                "enum": [
+                  "up",
+                  "down",
+                  "neutral"
+                ],
+                "type": "string"
+              },
+              "phase": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "reason": {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "state": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "state",
+              "direction",
+              "phase",
+              "confidence",
+              "reason"
+            ],
+            "type": [
+              "object",
+              "null"
+            ]
           }
         },
         "required": [
@@ -7233,6 +7280,7 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
               "segment",
               "forming_segment",
               "center",
+              "bi_center",
               "fractal_top",
               "fractal_bottom"
             ],

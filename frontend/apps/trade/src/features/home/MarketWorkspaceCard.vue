@@ -43,7 +43,7 @@ const structureSummary = computed(() => {
 })
 const layerCounts = computed(() => {
   const lines = props.structure?.lines ?? []
-  const centers = new Set(lines.filter(line => line.kind === 'center').map(line => `${line.from}:${line.to}`)).size
+  const centers = new Set(lines.filter(line => line.kind === 'center' || line.kind === 'bi_center').map(line => `${line.kind}:${line.from}:${line.to}`)).size
   return {
     bi: lines.filter(line => line.kind === 'bi').length,
     segment: lines.filter(line => line.kind === 'segment' || line.kind === 'forming_segment').length,
@@ -51,6 +51,16 @@ const layerCounts = computed(() => {
     fractal: lines.filter(line => line.kind.startsWith('fractal_')).length,
   }
 })
+const trendLabel = computed(() => {
+  const trend = props.structure?.trend
+  if (!trend) return '待确认'
+  if (trend.phase === 'range') return '盘整'
+  if (trend.direction === 'up') return '向上'
+  if (trend.direction === 'down') return '向下'
+  return '方向未定'
+})
+const trendTone = computed(() => props.structure?.trend?.direction === 'up' ? 'bg-trade-up'
+  : props.structure?.trend?.direction === 'down' ? 'bg-trade-down' : 'bg-muted-foreground')
 </script>
 
 <template>
@@ -77,6 +87,7 @@ const layerCounts = computed(() => {
       <div class="flex flex-wrap items-center gap-1.5 border-t pt-3">
         <span class="mr-1 text-xs font-medium">缠论结构</span>
         <Button v-for="layer in layerOptions" :key="layer.key" type="button" size="sm" class="min-h-11 gap-2 px-3" :variant="layers[layer.key] ? 'secondary' : 'ghost'" :aria-pressed="layers[layer.key]" :aria-label="`${layer.label}图层，${layerCounts[layer.key]} 项${layers[layer.key] ? '，已显示' : '，已隐藏'}`" @click="layers[layer.key] = !layers[layer.key]"><span class="size-1.5 rounded-full" :class="[layer.tone, layers[layer.key] ? 'opacity-100' : 'opacity-35']" aria-hidden="true" />{{ layer.label }}<span class="font-mono text-[10px] text-muted-foreground">{{ layerCounts[layer.key] }}</span></Button>
+        <Badge variant="outline" class="min-h-7 gap-1.5" :title="structure?.trend ? `确定性走势判断：${structure.trend.state}` : '当前没有可用的确定性走势判断'"><span class="size-1.5 rounded-full" :class="trendTone" aria-hidden="true" />走势 {{ trendLabel }}</Badge>
         <span class="ml-auto text-xs text-muted-foreground">{{ structureSummary }}</span>
       </div>
     </CardHeader>
@@ -94,7 +105,7 @@ const layerCounts = computed(() => {
         <div v-if="structure?.lines.length" class="ml-auto hidden items-center gap-3 lg:flex" aria-label="缠论结构图例">
           <span class="flex items-center gap-1.5"><i class="block h-px w-4 bg-chart-1" />笔</span>
           <span class="flex items-center gap-1.5"><i class="block h-0.5 w-4 bg-chart-3" />段</span>
-          <span class="flex items-center gap-1.5"><i class="block size-2 rounded-sm border border-chart-2 bg-chart-2/15" />中枢</span>
+          <span class="flex items-center gap-1.5" title="深色为段级中枢，浅色为笔级中枢"><i class="block size-2 rounded-sm border border-chart-2 bg-chart-2/15" />中枢（含笔级）</span>
         </div>
         <Button variant="ghost" size="sm" class="min-h-11 font-mono text-xs" :class="structure?.lines.length ? '' : 'ml-auto'" aria-label="查看行情时区确认信息" :aria-expanded="clockDetails" @click="clockDetails = !clockDetails">{{ terminalDisplayDate(new Date(now), timezoneOffsetMinutes).toLocaleTimeString('zh-CN', { hour12: false, timeZone: 'UTC' }) }} {{ terminalDisplayTimezone(timezoneOffsetMinutes).label }}</Button>
 

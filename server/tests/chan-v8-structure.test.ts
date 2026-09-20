@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildCenters } from '../src/modules/market/domain/chan-v8/centers.js'
 import { evaluateGapEndpointConfirmation } from '../src/modules/market/domain/chan-v8/features.js'
-import { buildSegments } from '../src/modules/market/domain/chan-v8/segments.js'
+import { buildActiveSegmentCandidate, buildSegments } from '../src/modules/market/domain/chan-v8/segments.js'
 import type { ChanBi } from '../src/modules/market/domain/chan-v8/types.js'
 
 const bi = (id: number, dir: 'up' | 'down', start: number, end: number): ChanBi => ({
@@ -31,5 +31,15 @@ describe('v8 structure semantics', () => {
   it('does not invent confirmation from an untrusted short prefix', () => {
     expect(buildSegments([bi(1, 'up', 0, 2), bi(2, 'down', 2, 1)], { trustedStart: false }))
       .toMatchObject({ segments: [], candidate: null, stable: false, supportCount: 0, validatorCount: 0 })
+  })
+  it('re-anchors the active candidate after an old candidate origin is broken', () => {
+    const items = [
+      bi(1, 'down', 130, 110), bi(2, 'up', 110, 140), bi(3, 'down', 140, 115),
+      bi(4, 'up', 115, 145), bi(5, 'down', 145, 120), bi(6, 'up', 120, 142),
+      bi(7, 'down', 142, 118), bi(8, 'up', 118, 138), bi(9, 'down', 138, 116),
+    ]
+    const result = buildActiveSegmentCandidate(items, 0)
+    expect(result.historicalCandidate).toMatchObject({ dir:'down', start_price:130 })
+    expect(result.candidate).toMatchObject({ dir:'up', start_price:110, bi_ids:[2,3,4,5,6,7,8,9] })
   })
 })
