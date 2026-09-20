@@ -37,7 +37,7 @@ function price(value?: string | null) {
   return `${whole}.${fraction.replace(/0+$/, '').padEnd(2, '0')}`
 }
 const structureSummary = computed(() => {
-  if (!props.structure) return ['M5', 'M15', 'H1', 'H4'].includes(props.timeframe) ? '结构数据准备中' : '当前周期暂不支持结构计算'
+  if (!props.structure) return '结构数据准备中'
   if (!props.structure.lines.length) return `结构证据不足 · ${props.structure.based_on_closed_bars} 根已收盘 K 线`
   return `缠论结构 · ${props.structure.based_on_closed_bars} 根已收盘 K 线`
 })

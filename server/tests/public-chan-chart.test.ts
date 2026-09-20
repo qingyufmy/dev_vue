@@ -14,7 +14,7 @@ function candles(count: number) {
 
 describe('public Chan chart projection', () => {
   it('does not calculate an unsupported timeframe', () => {
-    expect(publicChanChart({ accountId: '1', platform: 'mt5', timeframe: 'M1', candles: candles(40), clock: null,
+    expect(publicChanChart({ accountId: '1', platform: 'mt5', timeframe: 'invalid', candles: candles(40), clock: null,
       referenceTime: '2026-09-02T00:00:00.000Z' })).toBeNull()
   })
 

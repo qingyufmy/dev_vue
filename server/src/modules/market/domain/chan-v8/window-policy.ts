@@ -1,13 +1,11 @@
 export interface WindowPolicyInput { target?: number; validators?: readonly number[]; timeframe?: string }
 export interface WindowPolicyOptions { policyId?: string; windowPolicy?: WindowPolicyInput }
-// Fixed Chan history-window policy for the production v7 calculation path.
-//
-// The policy is deliberately small and immutable.  Strategy-visible candle
-// counts remain owned by the strategy tags; this module only describes the
-// additional server-side history required by Chan structure calculations.
+// Callers choose periods from their strategy or chart request. These windows
+// control calculation depth, not which periods may calculate Chan.
 
-export const CHAN_WINDOW_POLICY_VERSION = 'chan_window_v7'
+export const CHAN_WINDOW_POLICY_VERSION = 'chan_window_v8'
 export const CHAN_WINDOW_POLICY_ID = 'dao_xau_v1'
+const DEFAULT_WINDOW = Object.freeze({ target: 1800, validators: Object.freeze([1400, 1600, 1800]) })
 
 export const CHAN_WINDOW_POLICIES = Object.freeze({
   [CHAN_WINDOW_POLICY_ID]: Object.freeze({
@@ -44,9 +42,10 @@ export function getChanWindowPolicy(timeframe: string, policyId = CHAN_WINDOW_PO
   const tf = normalizeTimeframe(timeframe)
   const configured = policyId === CHAN_WINDOW_POLICY_ID ? CHAN_WINDOW_POLICIES[CHAN_WINDOW_POLICY_ID][tf as keyof typeof CHAN_WINDOW_POLICIES[typeof CHAN_WINDOW_POLICY_ID]] : undefined
   if (configured) return freezePolicy(tf, configured)
-  // Non-configured periods are explicitly unsupported by this policy. Callers can
-  // retain their legacy v5 path or fail closed; they never silently inherit
-  // one of the configured period windows.
+  // Transport/terminal capabilities validate selectable periods. The engine
+  // accepts canonical period labels with a common depth when no tuning exists.
+  // Unknown policy IDs still fail closed.
+  if (policyId === CHAN_WINDOW_POLICY_ID && /^(?:MN|M|H|D|W)[1-9]\d*$/.test(tf)) return freezePolicy(tf, DEFAULT_WINDOW)
   return Object.freeze({
     timeframe: tf || 'M30',
     target: 0,

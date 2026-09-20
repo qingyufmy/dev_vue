@@ -37,7 +37,11 @@ export function summarizeLatestConfirmedFractal(fractals: readonly ChanFractal[]
   if (!fractal) return null
   const extremeRawIndex = Number(fractal.extreme_raw_idx ?? fractal.raw_start_idx ?? fractal.raw_idx)
   const confirmationBar = Array.isArray(normalizedBars) ? normalizedBars[Number(fractal.idx) + 1] : null
-  const confirmationRawIndex = Number(confirmationBar?.raw_end_idx ?? confirmationBar?.raw_idx)
+  // The right-hand standard bar first confirms the fractal when it is born.
+  // It starts only after a non-containing directional move from the middle
+  // bar. Later inclusion extends that right bar in the same direction; it
+  // cannot make this unchanged fractal newly confirmed again.
+  const confirmationRawIndex = Number(confirmationBar?.raw_start_idx ?? confirmationBar?.raw_idx)
   const extremeRate = Number.isFinite(extremeRawIndex) ? rates?.[extremeRawIndex] : null
   const confirmationRate = Number.isFinite(confirmationRawIndex) ? rates?.[confirmationRawIndex] : null
   const timeUtcMs = Number(extremeRate?.time_utc_msc)

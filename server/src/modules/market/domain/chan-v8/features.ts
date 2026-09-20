@@ -185,7 +185,13 @@ export function findSegmentEndpoint(bis: readonly ChanBi[], startIndex: number, 
     const strokeCount = endpointIndex - startIndex
     if (strokeCount < MIN_BIS_PER_SEGMENT || strokeCount % 2 === 0) continue
     const hasGap = !rangesOverlap(prev, cur)
-    if (hasGap && !confirmGapEndpoint(bis, endpointIndex, segmentDirection)) continue
+    if (hasGap) {
+      const confirmation = evaluateGapEndpointConfirmation(bis, endpointIndex, segmentDirection)
+      if (confirmation.state === 'invalidated_by_old_direction_extreme') continue
+      // Do not finalize a later endpoint while this earlier candidate can
+      // still confirm: doing so would rewrite the published segment later.
+      if (!confirmation.confirmed) return null
+    }
     return { endpointIndex, hasGap, feature_count: features.length }
   }
   return null
