@@ -1,7 +1,7 @@
 import { applyAccountSnapshot, applyRealtimeState } from '~/features/trading-context'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AccountSnapshot, SessionSummary } from '@aurum/contracts'
-import { accountSnapshot, clearAccountRuntime, marketQuote, realtimeState, resourceRevisions, openPositions } from '../src/features/home/home-runtime'
+import { accountSnapshot, clearAccountRuntime, marketCandles, marketQuote, realtimeState, resourceRevisions, openPositions } from '../src/features/home/home-runtime'
 import { applyTerminalMarketSnapshot } from '../src/features/home/terminal-market-state'
 
 const mocks = vi.hoisted(() => ({
@@ -97,7 +97,10 @@ describe('trade home observer realtime adapter', () => {
   })
 
   it('subscribes an owned non-public symbol to terminal quote and candle resources', async () => {
-    applyTerminalMarketSnapshot({ accountId: '7', symbol: 'BTCUST', timeframe: 'M5', candles: [], quote: null, structure: null })
+    applyTerminalMarketSnapshot({ accountId: '7', symbol: 'BTCUST', timeframe: 'M5', candles: [{
+      accountId: '7', symbol: 'BTCUST', timeframe: 'M5', openTime: '2026-09-05T08:00:00.000Z',
+      open: '80280', high: '80290', low: '80270', close: '80285', tickVolume: '12', closed: false, revision: 11,
+    }], quote: null, structure: null })
     await startTradingRealtime(session, '7', 'BTCUST', 'M5', null, async () => undefined, undefined, 'terminal')
     options.onOpen(socket as never)
     const { targets } = JSON.parse(socket.send.mock.calls[0]![0])
@@ -112,6 +115,7 @@ describe('trade home observer realtime adapter', () => {
       data: { symbol: 'BTCUST', bid: '80291.17', ask: '80305.17', last: '80295', spread: '14', observed_at: '2026-09-05T08:00:01.000Z' },
     }))
     expect(marketQuote.value).toMatchObject({ symbol: 'BTCUST', bid: '80291.17', ask: '80305.17' })
+    expect(marketCandles.value.at(-1)).toMatchObject({ high: '80291.17', close: '80291.17', revision: 11 })
   })
 
   it('keeps analysis refresh notifications after ticket failure and reconnect', async () => {

@@ -1,5 +1,6 @@
 import { marketCandleSchema, marketQuoteSchema, type BrowserRealtimeEvent, type MarketCandle, type MarketQuote, type PublicMarketSnapshotData, type Timeframe } from '@aurum/contracts'
 import { marketCandles, marketQuote, marketSourceKey, marketStructure, resourceRevisions } from './home-runtime'
+import { syncCandleWithQuote } from './realtime-candle'
 import { applyTerminalMarketObservation } from '~/features/trading-context'
 
 function stripCandle(value: MarketCandle) {
@@ -36,6 +37,7 @@ export function applyTerminalMarketSnapshot(input: { accountId: string; symbol: 
   marketStructure.value = input.structure
   resourceRevisions.value.quote = input.quote?.revision ?? 0
   resourceRevisions.value.candle = Math.max(0, ...input.candles.map(item => item.revision))
+  syncCandleWithQuote()
 }
 
 export function mergeTerminalMarketHistory(accountId: string, symbol: string, timeframe: Timeframe, candles: MarketCandle[], structure: Structure = null) {
@@ -63,6 +65,7 @@ export function applyTerminalMarketEvent(event: BrowserRealtimeEvent, accountId:
       marketQuote.value = stripQuote(parsed.data)
       applyTerminalMarketObservation({ symbol, observedAt: parsed.data.observedAt })
       resourceRevisions.value.quote = parsed.data.revision
+      syncCandleWithQuote()
     }
     return 'applied'
   }

@@ -68,33 +68,57 @@ const trendPresentation = computed(() => presentChanTrend(props.structure))
 <template>
   <Card class="min-w-0 gap-0 overflow-hidden py-0 shadow-none">
     <CardHeader class="shrink-0 gap-3 border-b p-3 sm:p-4">
-      <div class="flex flex-wrap items-center gap-2">
-        <SymbolSearchSelect :symbols="symbols" :model-value="symbol" @update:model-value="emit('symbol', $event)" />
-        <Select :model-value="timeframe" @update:model-value="(value) => emit('timeframe', value as Timeframe)">
-          <SelectTrigger aria-label="K 线周期" class="min-h-11 w-20 bg-transparent"><SelectValue /></SelectTrigger>
-          <SelectContent><SelectGroup><SelectItem v-for="item in periods" :key="item" :value="item">{{ item }}</SelectItem></SelectGroup></SelectContent>
-        </Select>
-        <div class="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1" role="status" :aria-label="trendPresentation.ariaLabel" :title="trendPresentation.title">
-          <Badge variant="outline" class="min-h-7 gap-1.5 border-transparent bg-muted/50"><span class="size-1.5 rounded-full" :class="trendPresentation.tone" aria-hidden="true" />{{ trendPresentation.primary }}</Badge>
-          <Badge v-if="trendPresentation.phase" variant="outline" class="min-h-7 border-border/70 bg-background/70 text-foreground">{{ trendPresentation.phase }}</Badge>
-          <span v-if="trendPresentation.quality.length" class="px-1 text-xs text-muted-foreground">{{ trendPresentation.quality.join(' · ') }}</span>
+      <div class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+        <div class="min-w-0 space-y-2">
+          <div class="flex flex-wrap items-center gap-2">
+            <SymbolSearchSelect :symbols="symbols" :model-value="symbol" @update:model-value="emit('symbol', $event)" />
+            <Select :model-value="timeframe" @update:model-value="(value) => emit('timeframe', value as Timeframe)">
+              <SelectTrigger aria-label="K 线周期" class="min-h-11 w-20 bg-transparent"><SelectValue /></SelectTrigger>
+              <SelectContent><SelectGroup><SelectItem v-for="item in periods" :key="item" :value="item">{{ item }}</SelectItem></SelectGroup></SelectContent>
+            </Select>
+            <span class="inline-flex min-h-7 items-center gap-1.5 px-1 text-xs text-muted-foreground" role="status">
+              <span class="size-1.5 rounded-full" :class="quoteCurrent && realtime === 'live' ? 'bg-emerald-500' : 'bg-muted-foreground/50'" aria-hidden="true" />
+              {{ quoteCurrent && realtime === 'live' ? '实时' : '快照' }}
+            </span>
+          </div>
+          <div class="flex min-w-0 flex-wrap items-center gap-1" role="status" :aria-label="trendPresentation.ariaLabel" :title="trendPresentation.title">
+            <span class="mr-1 text-xs text-muted-foreground">结构</span>
+            <Badge variant="outline" class="min-h-7 gap-1.5 border-transparent bg-muted/50"><span class="size-1.5 rounded-full" :class="trendPresentation.tone" aria-hidden="true" />{{ trendPresentation.primary }}</Badge>
+            <Badge v-if="trendPresentation.phase" variant="outline" class="min-h-7 border-border/70 bg-background/70 text-foreground">{{ trendPresentation.phase }}</Badge>
+            <span v-if="trendPresentation.quality.length" class="px-1 text-xs text-muted-foreground">{{ trendPresentation.quality.join(' · ') }}</span>
+          </div>
         </div>
-        <div v-if="quote && quoteCurrent && !loading" class="flex min-w-0 flex-wrap items-center rounded-lg border bg-muted/20">
-            <div class="px-3 py-1.5 text-center"><p class="text-[11px] text-muted-foreground">卖出</p><p class="font-mono text-sm font-semibold tabular-nums text-trade-down">{{ price(quote.bid) }}</p></div>
-            <div class="border-x px-3 py-1.5 text-center"><p class="text-[11px] text-muted-foreground">买入</p><p class="font-mono text-sm font-semibold tabular-nums text-trade-up">{{ price(quote.ask) }}</p></div>
-            <div class="px-3 py-1.5 text-center"><p class="text-[11px] text-muted-foreground">点差</p><p class="font-mono text-sm tabular-nums">{{ price(quote.spread) }}</p></div>
+
+        <div v-if="quote && quoteCurrent && !loading" class="grid grid-cols-[1fr_1fr_auto] items-stretch rounded-xl bg-muted/35 p-1" aria-label="实时报价">
+          <div class="min-w-[6.25rem] rounded-lg px-3 py-2">
+            <p class="text-[11px] text-muted-foreground">卖出</p>
+            <p class="font-mono text-base font-semibold tabular-nums text-trade-down">{{ price(quote.bid) }}</p>
+          </div>
+          <div class="min-w-[6.25rem] rounded-lg bg-background/75 px-3 py-2 shadow-sm ring-1 ring-border/60">
+            <p class="text-[11px] text-muted-foreground">买入</p>
+            <p class="font-mono text-base font-semibold tabular-nums text-trade-up">{{ price(quote.ask) }}</p>
+          </div>
+          <div class="flex min-w-[4rem] flex-col justify-center px-3 py-2 text-center">
+            <p class="text-[11px] text-muted-foreground">点差</p>
+            <p class="font-mono text-sm tabular-nums">{{ price(quote.spread) }}</p>
+          </div>
         </div>
       </div>
+
       <p v-if="symbolDirectoryNotice" class="text-xs text-amber-600 dark:text-amber-400" role="status">{{ symbolDirectoryNotice }}</p>
-      <div class="flex flex-wrap items-center gap-1 rounded-lg bg-muted/35 p-1" role="group" aria-label="缠论图层">
-        <Button v-for="layer in layerOptions" :key="layer.key" type="button" size="sm" variant="ghost" class="min-h-11 flex-1 gap-2 px-2 text-xs transition-colors motion-reduce:transition-none sm:px-3" :class="layers[layer.key] ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'" :aria-pressed="layers[layer.key]" :aria-label="`${layer.label}图层，${layerCounts[layer.key]} 项${layers[layer.key] ? '，已显示' : '，已隐藏'}`" @click="emit('layer', layer.key)"><span class="h-0.5 w-3 rounded-full" :class="[layer.tone, layers[layer.key] ? 'opacity-100' : 'opacity-35']" aria-hidden="true" />{{ layer.label }}</Button>
-        <Button type="button" size="sm" variant="ghost" class="min-h-11 flex-1 px-2 text-xs transition-colors motion-reduce:transition-none sm:px-3" :class="layers.levels ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'" :aria-pressed="layers.levels" :aria-label="`支撑压力图层，${referenceCount} 项${layers.levels ? '，已显示' : '，已隐藏'}`" @click="emit('layer', 'levels')">支撑 / 压力</Button>
-      </div>
-      <div v-if="layers.levels" class="grid grid-cols-2 divide-x rounded-lg border bg-muted/10" aria-label="支撑与压力参考">
-        <div v-for="(label, key) in { support: '参考支撑', resistance: '参考压力' }" :key="key" class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 px-3 py-2">
-          <span class="text-xs text-muted-foreground">{{ label }}</span>
-          <strong class="font-mono text-sm tabular-nums" :class="key === 'support' ? 'text-chart-1' : 'text-chart-3'">{{ referencePrice(key) }}</strong>
-          <span v-if="referenceLevels[key]" class="text-xs text-muted-foreground">{{ referenceLevels[key].source }}</span>
+
+      <div class="flex flex-col gap-2 border-t pt-3 2xl:flex-row 2xl:items-center 2xl:justify-between">
+        <div v-if="layers.levels" class="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1" aria-label="支撑与压力参考">
+          <div v-for="(label, key) in { support: '支撑', resistance: '压力' }" :key="key" class="flex min-w-0 items-baseline gap-1.5">
+            <span class="text-xs text-muted-foreground">{{ label }}</span>
+            <strong class="font-mono text-sm tabular-nums" :class="key === 'support' ? 'text-chart-1' : 'text-chart-3'">{{ referencePrice(key) }}</strong>
+            <span v-if="referenceLevels[key]" class="max-w-24 truncate text-[11px] text-muted-foreground" :title="referenceLevels[key].source">{{ referenceLevels[key].source }}</span>
+          </div>
+        </div>
+        <div class="flex flex-wrap items-center gap-1" role="group" aria-label="缠论图层">
+          <span class="mr-1 text-xs text-muted-foreground">图层</span>
+          <Button v-for="layer in layerOptions" :key="layer.key" type="button" size="sm" variant="ghost" class="min-h-11 min-w-16 gap-2 rounded-lg px-3 text-xs transition-colors motion-reduce:transition-none" :class="layers[layer.key] ? 'bg-muted text-foreground' : 'text-muted-foreground'" :aria-pressed="layers[layer.key]" :aria-label="`${layer.label}图层，${layerCounts[layer.key]} 项${layers[layer.key] ? '，已显示' : '，已隐藏'}`" @click="emit('layer', layer.key)"><span class="h-0.5 w-3 rounded-full" :class="[layer.tone, layers[layer.key] ? 'opacity-100' : 'opacity-35']" aria-hidden="true" />{{ layer.label }}</Button>
+          <Button type="button" size="sm" variant="ghost" class="min-h-11 min-w-24 rounded-lg px-3 text-xs transition-colors motion-reduce:transition-none" :class="layers.levels ? 'bg-muted text-foreground' : 'text-muted-foreground'" :aria-pressed="layers.levels" :aria-label="`支撑压力图层，${referenceCount} 项${layers.levels ? '，已显示' : '，已隐藏'}`" @click="emit('layer', 'levels')">支撑 / 压力</Button>
         </div>
       </div>
       <p v-if="structure && !structure.lines.length" role="status" class="text-xs text-muted-foreground">当前结构证据不足，等待后续行情确认。</p>
