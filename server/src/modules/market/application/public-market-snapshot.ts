@@ -23,7 +23,7 @@ export interface PublicMarketCache {
 
 /** Cached public data survives collector route changes. Never probes a terminal or reads a viewer's private pool. */
 export class PublicMarketSnapshot {
-  private readonly structureCache = new Map<string, { revision: string; value: ReturnType<typeof publicChanChart> }>()
+  private readonly structureCache = new Map<string, { revision: string; closedRevisions: Map<string, number>; value: ReturnType<typeof publicChanChart> }>()
   constructor(private readonly providers: { list(): Promise<number[]> },
     private readonly trading: PublicMarketCache,
     private readonly catalog: { list(): Promise<string[]> },
@@ -81,7 +81,11 @@ export class PublicMarketSnapshot {
       const structureKey = `${publicCacheKey(symbol, source.accountId, source.resolvedSymbol)}:${timeframe}`
       const revision = latestClosed ? `${latestClosed.openTime}:${latestClosed.revision}` : 'empty'
       const cached = this.structureCache.get(structureKey)
-      if (cached?.revision === revision) structure = cached.value
+      // Snapshot sizes differ (relay: 2, chart: 500). Compare each returned
+      // closed bar with the calculation window, rather than hashing the page
+      // or only checking the newest bar and missing a preceding correction.
+      if (cached?.revision === revision && candles.every(candle => !candle.closed
+        || cached.closedRevisions.get(candle.openTime) === candle.revision)) structure = cached.value
       else {
         const [structureCandles, clock] = await Promise.all([
           this.trading.listCandles(source.accountId, source.resolvedSymbol, timeframe, structureTarget),
@@ -100,7 +104,8 @@ export class PublicMarketSnapshot {
           Number.isFinite(closedThrough) ? closedThrough : 0, Date.now())).toISOString()
         structure = publicChanChart({ accountId: source.accountId, platform: source.platform,
           timeframe, candles: structureCandles, clock, referenceTime })
-        this.structureCache.set(structureKey, { revision, value: structure })
+        this.structureCache.set(structureKey, { revision,
+          closedRevisions: new Map(structureCandles.filter(candle => candle.closed).map(candle => [candle.openTime, candle.revision])), value: structure })
       }
     }
     return { symbol, timeframe, source_key: publicCacheKey(symbol, source.accountId, source.resolvedSymbol), source_generation: '1', status: 'cached' as const,

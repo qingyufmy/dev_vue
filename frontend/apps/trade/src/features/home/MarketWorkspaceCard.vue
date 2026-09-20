@@ -8,16 +8,22 @@ import { Button } from '@aurum/ui/button'
 import { Card, CardContent, CardHeader } from '@aurum/ui/card'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@aurum/ui/select'
 import TradingChart from './TradingChart.vue'
+import { chartReferenceLevels } from './chart-reference-levels'
 import { activeTerminalDisplayTimezone } from '~/lib/laboratory-display-time'
 import { terminalDisplayDate, terminalDisplayTimezone } from '~/lib/terminal-display-time'
 
 const props = defineProps<{ symbols: string[]; symbol: string; timeframe: Timeframe; quote: ChartQuote | null; candles: ChartCandle[]; structure: PublicMarketSnapshotData['structure']; realtime: string; historyVersion: number; timezoneOffsetMinutes?: number | null; loading?: boolean; error?: string; historyLoading?: boolean; historyMessage?: string }>()
 const emit = defineEmits<{ symbol: [value: string]; timeframe: [value: Timeframe]; retry: []; older: [] }>()
 const periods: Timeframe[] = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1']
-const layers = reactive({ bi: true, segment: true, center: true, fractal: false })
+const layers = reactive({ bi: true, segment: true, center: true, fractal: true, levels: true })
 const layerOptions = [{ key: 'bi', label: '笔', tone: 'bg-chart-1' }, { key: 'segment', label: '段', tone: 'bg-chart-3' }, { key: 'center', label: '中枢', tone: 'bg-chart-2' }, { key: 'fractal', label: '分型', tone: 'bg-chart-3' }] as const
 const now = ref(Date.now())
 const clockDetails = ref(false)
+const referenceLevels = computed(() => {
+  const latest = props.candles.at(-1)
+  return chartReferenceLevels(props.structure, Number(latest?.close), latest?.openTime ?? '')
+})
+const referenceCount = computed(() => Number(!!referenceLevels.value.support) + Number(!!referenceLevels.value.resistance))
 const displayTimezone = computed(activeTerminalDisplayTimezone)
 let clock: ReturnType<typeof setInterval> | undefined
 onMounted(() => { clock = setInterval(() => { now.value = Date.now() }, 1000) })
@@ -90,13 +96,20 @@ const trendTone = computed(() => props.structure?.trend?.direction === 'up' ? 'b
         <Badge variant="outline" class="min-h-7 gap-1.5" :title="structure?.trend ? `确定性走势判断：${structure.trend.state}` : '当前没有可用的确定性走势判断'"><span class="size-1.5 rounded-full" :class="trendTone" aria-hidden="true" />走势 {{ trendLabel }}</Badge>
         <span class="ml-auto text-xs text-muted-foreground">{{ structureSummary }}</span>
       </div>
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground" aria-label="支撑与压力参考">
+        <Button type="button" size="sm" class="min-h-11 px-3" :variant="layers.levels ? 'secondary' : 'ghost'" :aria-pressed="layers.levels" :aria-label="`支撑压力图层，${referenceCount} 项${layers.levels ? '，已显示' : '，已隐藏'}`" @click="layers.levels = !layers.levels">支撑 / 压力</Button>
+        <template v-if="layers.levels">
+          <span v-for="(label, key) in { support: '参考支撑', resistance: '参考压力' }" :key="key">{{ label }} <strong class="font-mono text-foreground">{{ referenceLevels[key] ? price(String(referenceLevels[key].price)) : '暂无' }}</strong><span v-if="referenceLevels[key]" class="ml-1">· {{ referenceLevels[key].source }}</span></span>
+        </template>
+        <span class="ml-auto" title="报价更新当前 K 线及价位关系；收盘或数据修正后重算确认结构。虚线段是形成中的结构，支撑压力只是结构参考。">收盘确认 · 行情更新后自动同步</span>
+      </div>
     </CardHeader>
     <CardContent class="flex flex-1 flex-col p-0" :aria-busy="loading">
       <div v-if="error" role="alert" class="flex min-h-[25rem] flex-1 flex-col items-center justify-center gap-3 p-4 text-center">
         <p class="text-sm text-destructive">{{ error }}</p><Button variant="outline" @click="emit('retry')">重新读取行情</Button>
       </div>
       <div v-else-if="loading" role="status" class="flex min-h-[25rem] flex-1 items-center justify-center gap-2 text-sm text-muted-foreground"><LoaderCircle class="size-5 animate-spin motion-reduce:animate-none" aria-hidden="true" />行情加载中…</div>
-      <div v-else-if="candles.length" class="relative min-h-[25rem] flex-1"><TradingChart :timezone-offset-minutes="timezoneOffsetMinutes" :candles="candles" :structure="structure" :layers="layers" :history-version="historyVersion" @older="emit('older')" /><div class="absolute left-3 top-2 flex items-center gap-2 text-xs text-muted-foreground" role="status"><LoaderCircle v-if="historyLoading" class="size-3 animate-spin motion-reduce:animate-none" />{{ historyLoading ? '历史加载中…' : historyMessage }}</div></div>
+      <div v-else-if="candles.length" class="relative min-h-[25rem] flex-1"><TradingChart :timezone-offset-minutes="timezoneOffsetMinutes" :candles="candles" :structure="structure" :layers="layers" :reference-levels="referenceLevels" :history-version="historyVersion" @older="emit('older')" /><div class="absolute left-3 top-2 flex items-center gap-2 text-xs text-muted-foreground" role="status"><LoaderCircle v-if="historyLoading" class="size-3 animate-spin motion-reduce:animate-none" />{{ historyLoading ? '历史加载中…' : historyMessage }}</div></div>
       <div v-else role="status" class="flex min-h-[25rem] flex-1 flex-col items-center justify-center gap-2 text-center text-muted-foreground">
         <LoaderCircle class="size-6 animate-spin motion-reduce:animate-none" aria-hidden="true" /><p class="text-sm">{{ symbol }} {{ timeframe }} 行情加载中…</p>
       </div>

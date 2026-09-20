@@ -63,6 +63,35 @@ it('requests a new snapshot before accepting a changed source', () => {
   expect(marketQuote.value?.bid).toBe('2500')
 })
 
+it('resyncs Chan at rollover and accepts a delayed previous close by per-bar revision', () => {
+  applyPublicSnapshot({ ...snapshot, quote: null, candles: [liveBar] })
+  expect(applyPublicMarketEvent(tick('1001', '2026-09-14T08:05:01Z'), 'XAUUSD', 'M5')).toBe('resync')
+  const current = event({ quote: null, timeframe: 'M5', candle: { ...liveBar, open_time: '2026-09-14T08:05:00Z', revision: '20' } })
+  expect(applyPublicMarketEvent(current, 'XAUUSD', 'M5')).toBe('resync')
+  const close = event({ quote: null, timeframe: 'M5', candle: { ...liveBar, closed: true, revision: '19' } })
+  expect(applyPublicMarketEvent(close, 'XAUUSD', 'M5')).toBe('resync')
+  expect(marketCandles.value[0]?.closed).toBe(true)
+  expect(applyPublicMarketEvent(close, 'XAUUSD', 'M5')).toBe('applied')
+  expect(applyPublicMarketEvent(current, 'XAUUSD', 'M5')).toBe('applied')
+})
+
+it('does not roll back a live quote while the structure snapshot is in flight', () => {
+  const base = { ...snapshot, candles: [liveBar] }
+  applyPublicSnapshot(base)
+  applyPublicMarketEvent(tick('2502', '2026-09-14T08:01:00Z', '12'), 'XAUUSD', 'M5')
+  applyPublicSnapshot(base)
+  expect(marketQuote.value).toMatchObject({ bid: '2502', revision: 12 })
+  expect(marketCandles.value.at(-1)?.close).toBe('2502')
+  applyPublicMarketEvent(tick('2501', '2026-09-14T08:00:30Z', '11'), 'XAUUSD', 'M5')
+  expect(marketQuote.value?.bid).toBe('2502')
+})
+
+it('uses quotes for candle rendering without repeatedly requesting Chan calculation inside the period', () => {
+  applyPublicSnapshot({ ...snapshot, quote: null, candles: [liveBar] })
+  expect(applyPublicMarketEvent(tick('1001', '2026-09-14T08:01:00Z'), 'XAUUSD', 'M5')).toBe('applied')
+  expect(applyPublicMarketEvent(tick('1002', '2026-09-14T08:02:00Z', '12'), 'XAUUSD', 'M5')).toBe('applied')
+})
+
 it('deduplicates historical pages and retains older candles when the latest snapshot refreshes', () => {
   const candle = { open_time: '2026-09-14T08:00:00Z', open: '2500', high: '2501', low: '2499', close: '2500', tick_volume: '10', closed: true, revision: '1' }
   applyPublicSnapshot({ ...snapshot, candles: [candle] })

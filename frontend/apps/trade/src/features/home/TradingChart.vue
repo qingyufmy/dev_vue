@@ -4,9 +4,11 @@ import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { PublicMarketSnapshotData } from '@aurum/contracts'
 import type { ChartCandle } from './home-runtime'
 import { chartDisplayTime } from './chart-display-time'
+import type { IPriceLine } from 'lightweight-charts'
+import type { ChartReferenceLevels } from './chart-reference-levels'
 
-type StructureLayers = { bi: boolean; segment: boolean; center: boolean; fractal: boolean }
-const props = defineProps<{ candles: ChartCandle[]; structure: PublicMarketSnapshotData['structure']; layers: StructureLayers; historyVersion: number; timezoneOffsetMinutes?: number | null }>()
+type StructureLayers = { bi: boolean; segment: boolean; center: boolean; fractal: boolean; levels: boolean }
+const props = defineProps<{ candles: ChartCandle[]; structure: PublicMarketSnapshotData['structure']; layers: StructureLayers; referenceLevels: ChartReferenceLevels; historyVersion: number; timezoneOffsetMinutes?: number | null }>()
 const emit = defineEmits<{ older: [] }>()
 let renderedTimes: string[] = []
 let renderedCandles: ChartCandle[] = []
@@ -20,6 +22,28 @@ let structureSeries: ISeriesApi<'Line'>[] = []
 let structureMarkers: ISeriesMarkersPluginApi<Time> | null = null
 let centerBands: ISeriesPrimitive<Time> | null = null
 let renderedKey = ''
+const referencePriceLines = new Map<string, IPriceLine>()
+let referenceKey = ''
+
+function renderReferenceLevels() {
+  if (!candleSeries) return
+  const nextKey = JSON.stringify([props.layers.levels, props.referenceLevels])
+  if (nextKey === referenceKey) return
+  referenceKey = nextKey
+  for (const [kind, label] of [['support', '参考支撑'], ['resistance', '参考压力']] as const) {
+    const level = props.layers.levels ? props.referenceLevels[kind] : null
+    const previous = referencePriceLines.get(kind)
+    if (!level) {
+      if (previous) candleSeries.removePriceLine(previous)
+      referencePriceLines.delete(kind)
+      continue
+    }
+    const options = { price: level.price, color: color(kind === 'support' ? '--chart-1' : '--chart-3'),
+      lineWidth: 1 as const, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: label }
+    if (previous) previous.applyOptions(options)
+    else referencePriceLines.set(kind, candleSeries.createPriceLine(options))
+  }
+}
 
 function displayOptions() {
   return {
@@ -204,6 +228,7 @@ onMounted(() => {
   chart.panes()[0]?.setStretchFactor(4)
   chart.panes()[1]?.setStretchFactor(1)
   renderHistory(props.candles)
+  renderReferenceLevels()
   chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
     if (historyRendering || !range || range.from > 40) return
     clearTimeout(olderTimer)
@@ -217,6 +242,7 @@ watch(() => props.historyVersion, () => renderHistory(props.candles))
 watch(() => props.candles, () => renderLatest(props.candles), { deep: false })
 watch(() => props.structure, renderStructure, { deep: false })
 watch(() => props.layers, renderStructure, { deep: true })
+watch(() => [props.referenceLevels, props.layers.levels], renderReferenceLevels)
 onBeforeUnmount(() => { clearTimeout(olderTimer); structureMarkers?.detach(); chart?.remove(); chart = null })
 </script>
 

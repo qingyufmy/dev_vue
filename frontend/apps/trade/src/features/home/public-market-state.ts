@@ -59,19 +59,22 @@ export function mergePublicHistory(data: Snapshot) {
 }
 export function applyPublicSnapshot(data: Snapshot) {
   const preserve = data.source_key === marketSourceKey.value && marketCandles.value[0]?.symbol === data.symbol && marketCandles.value[0]?.timeframe === data.timeframe
+  const newerQuote = preserve && marketQuote.value && data.quote
+    && marketQuote.value.revision > Number(data.quote.revision) ? marketQuote.value : null
   marketSourceKey.value = data.source_key
-  marketQuote.value = data.quote ? quote(data.quote, data.symbol) : null
+  marketQuote.value = newerQuote ?? (data.quote ? quote(data.quote, data.symbol) : null)
   marketStructure.value = data.structure
   if (preserve) mergePublicHistory(data)
   else marketCandles.value = data.candles.map(value => candle(value, data.symbol, data.timeframe))
-  resourceRevisions.value.quote = Number(data.quote?.revision ?? 0)
-  resourceRevisions.value.candle = Math.max(0, ...data.candles.map(value => Number(value.revision)))
+  resourceRevisions.value.quote = marketQuote.value?.revision ?? 0
+  resourceRevisions.value.candle = Math.max(0, ...marketCandles.value.map(value => value.revision))
   syncCandleWithQuote()
 }
 export function applyPublicMarketEvent(event: Event, symbol: string, timeframe: Snapshot['timeframe']) {
   const data = event.data
   if (data.symbol !== symbol || data.timeframe !== null && data.timeframe !== timeframe) return 'ignored'
   if (data.source_key !== marketSourceKey.value) return 'resync'
+  const previousLast = marketCandles.value.at(-1)
   let quoteUpdated = false
   if (data.quote && Number(data.quote.revision) > resourceRevisions.value.quote) {
     if (!marketQuote.value || Date.parse(data.quote.observed_at) >= Date.parse(marketQuote.value.observedAt)) {
@@ -81,13 +84,20 @@ export function applyPublicMarketEvent(event: Event, symbol: string, timeframe: 
     resourceRevisions.value.quote = Number(data.quote.revision)
   }
   let closedCandleUpdated = false
-  if (data.candle && Number(data.candle.revision) > resourceRevisions.value.candle) {
+  if (data.candle) {
     const next = candle(data.candle, symbol, timeframe)
-    marketCandles.value = [...marketCandles.value.filter(item => Date.parse(item.openTime) !== Date.parse(next.openTime)), next]
-      .sort((a, b) => a.openTime.localeCompare(b.openTime))
-    resourceRevisions.value.candle = next.revision
-    closedCandleUpdated = next.closed
+    const previous = marketCandles.value.find(item => Date.parse(item.openTime) === Date.parse(next.openTime))
+    // Compare the same bar, not the newest bar's watermark: a delayed close
+    // can arrive after the terminal has already published the next candle.
+    if (!previous || next.revision > previous.revision) {
+      marketCandles.value = [...marketCandles.value.filter(item => Date.parse(item.openTime) !== Date.parse(next.openTime)), next]
+        .sort((a, b) => a.openTime.localeCompare(b.openTime))
+      resourceRevisions.value.candle = Math.max(resourceRevisions.value.candle, next.revision)
+      closedCandleUpdated = next.closed || previous?.revision === 0
+    }
   }
   if (quoteUpdated) syncCandleWithQuote()
-  return closedCandleUpdated ? 'resync' : 'applied'
+  const rolledOver = previousLast && Date.parse(marketCandles.value.at(-1)!.openTime) > Date.parse(previousLast.openTime)
+  // Rollover also repairs a close notification coalesced by the relay.
+  return closedCandleUpdated || rolledOver ? 'resync' : 'applied'
 }
