@@ -650,6 +650,7 @@
                 "additionalProperties": false,
                 "required": [
                   "status",
+                  "blocking_reason",
                   "history_revision",
                   "fresh_through",
                   "last_success_at"
@@ -664,6 +665,10 @@
                       "stale",
                       "failed"
                     ]
+                  },
+                  "blocking_reason": {
+                    "type": ["string", "null"],
+                    "enum": ["terminal_clock_unavailable", "terminal_connection_unavailable", null]
                   },
                   "history_revision": {
                     "$ref": "#/components/schemas/Revision"

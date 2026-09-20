@@ -112,6 +112,7 @@ export interface TradeHistoryDailyPoint {
 
 export interface TradeHistoryFreshness {
   status: 'empty' | 'syncing' | 'ready' | 'stale' | 'failed'
+  blockingReason: 'terminal_clock_unavailable' | 'terminal_connection_unavailable' | null
   historyRevision: number
   freshThrough: string | null
   lastSuccessAt: string | null

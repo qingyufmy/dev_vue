@@ -19,7 +19,7 @@ const detail: TradeRecordDetail = { ...item, evidenceHash: 'a'.repeat(64), deals
 function repository(overrides: Partial<TradeHistoryRepository> = {}): TradeHistoryRepository {
   return {
     canReadHistoryAccount: async () => true,
-    list: async () => ({ items: [item], hasMore: false, freshness: { status: 'ready', historyRevision: 8, freshThrough: now, lastSuccessAt: now }, summary, daily: [{ businessDate: '2026-09-04', tradeCount: 1, netProfit: '97', cumulativeNetProfit: '97' }] }),
+    list: async () => ({ items: [item], hasMore: false, freshness: { status: 'ready', blockingReason: null, historyRevision: 8, freshThrough: now, lastSuccessAt: now }, summary, daily: [{ businessDate: '2026-09-04', tradeCount: 1, netProfit: '97', cumulativeNetProfit: '97' }] }),
     find: async () => detail,
     ...overrides,
   }

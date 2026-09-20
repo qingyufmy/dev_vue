@@ -92,7 +92,6 @@ export function useHomeWorkspace() {
     analysisLoading.value = false
     marketLoading.value = false
     stopTradingRealtime()
-    applyTerminalMarketObservation(null)
   }
 
   function clearForbiddenSnapshot(reason: unknown, scope: number) {

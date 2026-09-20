@@ -15,7 +15,7 @@ interface TradeRow extends MoneyRow {
   commission: string; swap_amount: string; fee_amount: string; net_profit: string; opened_at_utc: Date; closed_at_utc: Date | null
   terminal_timezone_offset_minutes: number; evidence_sha256: string; revision: number
 }
-interface FreshnessRow extends RowDataPacket { status: TradeHistoryFreshness['status']; history_revision: number; fresh_through_utc: Date | null; last_success_at_utc: Date | null }
+interface FreshnessRow extends RowDataPacket { status: TradeHistoryFreshness['status']; blocking_reason: TradeHistoryFreshness['blockingReason']; history_revision: number; fresh_through_utc: Date | null; last_success_at_utc: Date | null }
 interface SummaryRow extends RowDataPacket { account_currency: string | null; money_status: TradeHistorySummary['moneyStatus']; trade_count: number; winning_count: number; losing_count: number; breakeven_count: number; win_rate_percent: string | null; gross_profit: string; commission: string; swap_amount: string; fee_amount: string; net_profit: string; profit_factor: string | null }
 interface DailyRow extends RowDataPacket { business_date: Date | string; trade_count: number; net_profit: string | null; account_currency: string | null }
 interface DealRow extends MoneyRow { id: string; deal_ticket: string; order_ticket: string | null; role: TradeRecordDeal['role']; side: TradeRecordDeal['side']; entry_kind: TradeRecordDeal['entryKind']; volume: string | null; price: string | null; gross_profit: string; commission: string; swap_amount: string; fee_amount: string; occurred_at_utc: Date }
@@ -43,10 +43,22 @@ export class MysqlTradeHistoryRepository implements TradeHistoryRepository {
             WHERE t.trading_account_id=? AND t.status='failed') THEN 'failed'
           ELSE 'empty'
         END status,
+        CASE WHEN EXISTS (SELECT 1 FROM history_collection_tasks_v4 t
+          WHERE t.trading_account_id=? AND t.status IN ('pending','running','completing')) THEN
+          CASE
+            WHEN NOT EXISTS (SELECT 1 FROM bridge_connection_sessions b
+              WHERE b.trading_account_id=? AND b.disconnected_at_utc IS NULL
+                AND b.last_seen_at_utc>=DATE_SUB(UTC_TIMESTAMP(3),INTERVAL 60 SECOND)) THEN 'terminal_connection_unavailable'
+            WHEN COALESCE(snap.clock_status,'unavailable')<>'calibrated' OR snap.timezone_offset_minutes IS NULL THEN 'terminal_clock_unavailable'
+            ELSE NULL
+          END
+          ELSE NULL
+        END blocking_reason,
         COALESCE(s.history_revision,0) history_revision,s.fresh_through_utc,s.last_success_at_utc
         FROM (SELECT ? trading_account_id) scope
-        LEFT JOIN trade_history_sync_states_v4 s ON s.trading_account_id=scope.trading_account_id`,
-      [filter.accountId, filter.accountId, filter.accountId]),
+        LEFT JOIN trade_history_sync_states_v4 s ON s.trading_account_id=scope.trading_account_id
+        LEFT JOIN account_runtime_snapshots snap ON snap.trading_account_id=scope.trading_account_id`,
+      [filter.accountId, filter.accountId, filter.accountId, filter.accountId, filter.accountId]),
       this.pool.execute<SummaryRow[]>(`SELECT ${moneyScopeSql()},COUNT(*) trade_count,SUM(r.net_profit>0) winning_count,SUM(r.net_profit<0) losing_count,SUM(r.net_profit=0) breakeven_count,
         CASE WHEN COUNT(*)=0 THEN NULL ELSE CAST(ROUND(100*SUM(r.net_profit>0)/COUNT(*),4) AS CHAR) END win_rate_percent,
         CASE WHEN ${comparableSql} THEN CAST(SUM(r.gross_profit) AS CHAR) ELSE NULL END gross_profit,CASE WHEN ${comparableSql} THEN CAST(SUM(r.commission) AS CHAR) ELSE NULL END commission,
@@ -132,7 +144,7 @@ function deal(row: DealRow): TradeRecordDeal { return { accountCurrency: row.acc
   entryKind: row.entry_kind, volume: nullable(row.volume), price: nullable(row.price), grossProfit: String(row.gross_profit), commission: String(row.commission),
   swap: String(row.swap_amount), fee: String(row.fee_amount), occurredAt: utc(row.occurred_at_utc)! } }
 function attribution(row: AttributionRow): TradeRecordAttribution { return { kind: row.source_kind, sourceId: row.source_id, relation: row.relation_kind, proofKind: row.proof_kind } }
-function freshness(row?: FreshnessRow): TradeHistoryFreshness { return row ? { status: row.status, historyRevision: Number(row.history_revision), freshThrough: utc(row.fresh_through_utc), lastSuccessAt: utc(row.last_success_at_utc) } : { status: 'empty', historyRevision: 0, freshThrough: null, lastSuccessAt: null } }
+function freshness(row?: FreshnessRow): TradeHistoryFreshness { return row ? { status: row.status, blockingReason: row.blocking_reason ?? null, historyRevision: Number(row.history_revision), freshThrough: utc(row.fresh_through_utc), lastSuccessAt: utc(row.last_success_at_utc) } : { status: 'empty', blockingReason: null, historyRevision: 0, freshThrough: null, lastSuccessAt: null } }
 const comparableSql = "COUNT(*)>0 AND SUM(CASE WHEN r.currency_evidence='explicit_record' AND r.account_currency IS NOT NULL THEN 1 ELSE 0 END)=COUNT(*) AND COUNT(DISTINCT r.account_currency)=1"
 function moneyScopeSql() { return `CASE WHEN ${comparableSql} THEN MIN(r.account_currency) ELSE NULL END account_currency,
   CASE WHEN COUNT(*)=0 THEN 'empty' WHEN COUNT(DISTINCT r.account_currency)>1 THEN 'mixed'

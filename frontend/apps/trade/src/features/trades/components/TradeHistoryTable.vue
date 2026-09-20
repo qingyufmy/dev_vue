@@ -9,12 +9,18 @@ import { Skeleton } from '@aurum/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@aurum/ui/table'
 import { decimal, evidenceLabel, sideLabel, sourceLabel, terminalTime } from '../model/trade-history-presentation'
 
-const props = defineProps<{ items: TradeHistoryRecord[]; loading: boolean; loadingMore: boolean; hasMore: boolean; freshnessStatus: 'empty' | 'syncing' | 'ready' | 'stale' | 'failed'; hasFilters: boolean }>()
+const props = defineProps<{ items: TradeHistoryRecord[]; loading: boolean; loadingMore: boolean; hasMore: boolean; freshnessStatus: 'empty' | 'syncing' | 'ready' | 'stale' | 'failed'; blockingReason: 'terminal_clock_unavailable' | 'terminal_connection_unavailable' | null; hasFilters: boolean }>()
 const emit = defineEmits<{ select: [id: string]; more: []; reset: []; refresh: [] }>()
 const pnlClass = (value: string) => Number(value) > 0 ? 'text-trade-up' : Number(value) < 0 ? 'text-trade-down' : 'text-foreground'
-const emptyTitle = () => props.freshnessStatus === 'syncing' ? '正在建立账户历史档案' : props.freshnessStatus === 'failed' ? '历史同步暂时中断' : props.hasFilters ? '没有匹配的交易记录' : '该账户暂无已结算交易'
+const emptyTitle = () => props.blockingReason === 'terminal_clock_unavailable' ? '等待终端时钟校准'
+  : props.blockingReason === 'terminal_connection_unavailable' ? '等待量见智桥连接'
+    : props.freshnessStatus === 'syncing' ? '正在同步账户历史' : props.freshnessStatus === 'failed' ? '历史同步暂时中断' : props.hasFilters ? '没有匹配的交易记录' : '该账户暂无已结算交易'
 const emptyDescription = () => props.freshnessStatus === 'syncing'
-  ? '采集任务已经创建，正在等待终端提供可校验的时间与历史数据。休市期间可能停留在这里，恢复有效终端时钟后会自动继续。'
+  ? props.blockingReason === 'terminal_clock_unavailable'
+    ? '量见智桥已经在线，但终端尚未提供可校验的服务器时区。为避免把成交归入错误交易日，历史采集会保持等待；时钟校准后将自动继续。'
+    : props.blockingReason === 'terminal_connection_unavailable'
+      ? '历史任务已经保留。量见智桥重新在线后会自动继续，不需要重新创建任务。'
+      : '正在从终端读取并校验历史成交，请稍候。'
   : props.freshnessStatus === 'failed' ? '已保留现有终端证据。刷新可重新读取同步状态。'
     : props.hasFilters ? '当前账户有数据边界，尝试清除品种、日期、方向或来源条件。'
       : '这里只展示该账户经终端历史确认的平仓记录，不会借用其他账户或模拟数据。'
@@ -26,7 +32,7 @@ const emptyDescription = () => props.freshnessStatus === 'syncing'
     <CardContent class="p-0">
       <div v-if="loading && !items.length" class="grid gap-2 p-5"><Skeleton v-for="index in 6" :key="index" class="h-14 w-full" /></div>
       <Empty v-else-if="!items.length" class="min-h-72">
-        <EmptyHeader><EmptyMedia variant="icon"><RefreshCw v-if="freshnessStatus === 'syncing'" class="animate-spin motion-reduce:animate-none" /><FileSearch v-else /></EmptyMedia><EmptyTitle>{{ emptyTitle() }}</EmptyTitle><EmptyDescription class="max-w-lg">{{ emptyDescription() }}</EmptyDescription></EmptyHeader>
+        <EmptyHeader><EmptyMedia variant="icon"><RefreshCw v-if="freshnessStatus === 'syncing' && !blockingReason" class="animate-spin motion-reduce:animate-none" /><FileSearch v-else /></EmptyMedia><EmptyTitle>{{ emptyTitle() }}</EmptyTitle><EmptyDescription class="max-w-lg">{{ emptyDescription() }}</EmptyDescription></EmptyHeader>
         <div class="flex flex-wrap justify-center gap-2"><Button v-if="hasFilters" variant="outline" @click="emit('reset')"><RotateCcw />清除筛选</Button><Button v-else-if="freshnessStatus === 'syncing' || freshnessStatus === 'failed'" variant="outline" @click="emit('refresh')"><RefreshCw />刷新状态</Button></div>
       </Empty>
       <template v-else>

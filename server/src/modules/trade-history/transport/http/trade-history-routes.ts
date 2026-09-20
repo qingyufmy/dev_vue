@@ -24,7 +24,7 @@ export const tradeHistoryRoutes: FastifyPluginAsync<TradeHistoryRoutesOptions> =
         ...(request.query.q ? { query: request.query.q } : {}), ...(request.query.cursor ? { cursor: request.query.cursor } : {}),
         pageSize: Number(request.query.page_size ?? 50),
       })
-      return contract.response('listTradeHistory', response(request.id, { captured_end: result.capturedEnd, freshness: { status: result.freshness.status, history_revision: String(result.freshness.historyRevision), fresh_through: result.freshness.freshThrough, last_success_at: result.freshness.lastSuccessAt }, items: result.items.map(recordDto), next_cursor: result.nextCursor, has_more: result.hasMore, summary: summaryDto(result.summary), daily: result.daily.map(item => ({ business_date: item.businessDate, trade_count: item.tradeCount, net_profit: item.netProfit, cumulative_net_profit: item.cumulativeNetProfit })) }))
+      return contract.response('listTradeHistory', response(request.id, { captured_end: result.capturedEnd, freshness: { status: result.freshness.status, blocking_reason: result.freshness.blockingReason, history_revision: String(result.freshness.historyRevision), fresh_through: result.freshness.freshThrough, last_success_at: result.freshness.lastSuccessAt }, items: result.items.map(recordDto), next_cursor: result.nextCursor, has_more: result.hasMore, summary: summaryDto(result.summary), daily: result.daily.map(item => ({ business_date: item.businessDate, trade_count: item.tradeCount, net_profit: item.netProfit, cumulative_net_profit: item.cumulativeNetProfit })) }))
     } catch (error) { return problem(error, request, reply, contract, 'listTradeHistory') }
   })
 

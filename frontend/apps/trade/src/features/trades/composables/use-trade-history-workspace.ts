@@ -10,7 +10,7 @@ const emptySummary: TradeHistorySummary = { accountCurrency: null, moneyStatus: 
 export function useTradeHistoryWorkspace(accountId: Ref<string>, filters: Ref<TradeHistoryFilters>) {
   const { session } = useTradeSession(); const accounts = ref<TradingAccount[]>([]); const items = ref<TradeHistoryRecord[]>([]); const summary = ref(emptySummary)
   const daily = ref<Array<{ businessDate: string; tradeCount: number; netProfit: string | null; cumulativeNetProfit: string | null }>>([])
-  const freshness = ref<{ status: 'empty' | 'syncing' | 'ready' | 'stale' | 'failed'; historyRevision: number; freshThrough: string | null; lastSuccessAt: string | null }>({ status: 'empty', historyRevision: 0, freshThrough: null, lastSuccessAt: null })
+  const freshness = ref<{ status: 'empty' | 'syncing' | 'ready' | 'stale' | 'failed'; blockingReason: 'terminal_clock_unavailable' | 'terminal_connection_unavailable' | null; historyRevision: number; freshThrough: string | null; lastSuccessAt: string | null }>({ status: 'empty', blockingReason: null, historyRevision: 0, freshThrough: null, lastSuccessAt: null })
   const selected = ref<TradeRecordDetail | null>(null); const nextCursor = ref<string | null>(null); const loading = ref(false); const loadingMore = ref(false); const detailLoading = ref(false); const error = ref(''); const detailError = ref(''); const realtime = ref<TradeHistoryRealtimeState>('idle')
   let generation = 0; let detailGeneration = 0; let realtimeController: ReturnType<typeof createTradeHistoryRealtime> | null = null; let refreshTimer: number | null = null
   const selectedAccount = computed(() => accounts.value.find((item) => item.id === accountId.value) ?? null)

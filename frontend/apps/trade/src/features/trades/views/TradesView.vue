@@ -21,12 +21,16 @@ const filters = ref<TradeHistoryFilters>({ symbol: text(route.query.symbol).toUp
 const workspace = useTradeHistoryWorkspace(accountId, filters)
 const detailOpen = computed(() => Boolean(workspace.selected.value || workspace.detailLoading.value || workspace.detailError.value))
 const realtimeLabel = computed(() => ({ idle: '未连接', connecting: '连接中', live: '实时同步', recovering: '恢复中', offline: '快照模式' })[workspace.realtime.value])
-const freshnessLabel = computed(() => ({ empty: '等待历史数据', syncing: '历史同步中', ready: '历史已就绪', stale: '历史可能滞后', failed: '历史同步失败' })[workspace.freshness.value.status])
+const freshnessLabel = computed(() => workspace.freshness.value.blockingReason === 'terminal_clock_unavailable' ? '等待终端校准'
+  : workspace.freshness.value.blockingReason === 'terminal_connection_unavailable' ? '等待智桥连接'
+    : ({ empty: '等待历史数据', syncing: '历史同步中', ready: '历史已就绪', stale: '历史可能滞后', failed: '历史同步失败' })[workspace.freshness.value.status])
 const hasFilters = computed(() => Object.values(filters.value).some(Boolean))
 const selectedAccountLabel = computed(() => workspace.selectedAccount.value
   ? `${workspace.selectedAccount.value.platform.toUpperCase()} · ${workspace.selectedAccount.value.login}` : '尚未选择账户')
 const freshnessDetail = computed(() => {
   const value = workspace.freshness.value
+  if (value.blockingReason === 'terminal_clock_unavailable') return '量见智桥在线，但终端服务器时区尚未校准。历史任务会等待有效时钟，避免成交日期和统计失真。'
+  if (value.blockingReason === 'terminal_connection_unavailable') return '量见智桥当前不在线；已保留历史任务，连接恢复后会自动继续。'
   if (value.status === 'syncing') return value.lastSuccessAt ? '后台正在拉取增量历史，当前仍展示最近一次已确认快照。' : '采集任务已建立，正在等待终端时钟校准后读取首批历史。'
   if (value.status === 'ready') return value.freshThrough ? `终端历史已确认至 ${new Date(value.freshThrough).toLocaleString('zh-CN', { hour12: false })}` : '终端历史已完成校验。'
   if (value.status === 'stale') return '当前展示最近一次已确认快照，后台将继续补齐。'
@@ -74,7 +78,7 @@ watch(accountId, (value) => {
     <TradeHistoryFilterBar v-model:account-id="accountId" v-model:filters="filters" :accounts="workspace.accounts.value" :loading="workspace.loading.value" @apply="applyFilters" @reset="resetFilters" />
     <TradeSummaryCards :summary="workspace.summary.value" :loading="workspace.loading.value" :freshness-status="workspace.freshness.value.status" />
     <TradePnlChart v-if="workspace.summary.value.tradeCount" :points="workspace.daily.value" :summary="workspace.summary.value" />
-    <TradeHistoryTable :items="workspace.items.value" :loading="workspace.loading.value" :loading-more="workspace.loadingMore.value" :has-more="Boolean(workspace.nextCursor.value)" :freshness-status="workspace.freshness.value.status" :has-filters="hasFilters" @select="openDetail" @more="workspace.load(false)" @reset="resetFilters" @refresh="workspace.load(true)" />
+    <TradeHistoryTable :items="workspace.items.value" :loading="workspace.loading.value" :loading-more="workspace.loadingMore.value" :has-more="Boolean(workspace.nextCursor.value)" :freshness-status="workspace.freshness.value.status" :blocking-reason="workspace.freshness.value.blockingReason" :has-filters="hasFilters" @select="openDetail" @more="workspace.load(false)" @reset="resetFilters" @refresh="workspace.load(true)" />
     <TradeDetailSheet :open="detailOpen" :detail="workspace.selected.value" :loading="workspace.detailLoading.value" :error="workspace.detailError.value" @update:open="value => { if (!value) closeDetail() }" />
   </div>
 </template>

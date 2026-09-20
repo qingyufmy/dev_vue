@@ -6,7 +6,7 @@ const meta = { request_id: 'request-1', generated_at: '2026-09-04T08:00:00.000Z'
 
 describe('trade history contracts', () => {
   it('parses normalized records, summary and cumulative daily points', () => {
-    const parsed = tradeHistoryPageResponseSchema.parse({ data: { captured_end: meta.generated_at, freshness: { status: 'ready', history_revision: '8', fresh_through: meta.generated_at, last_success_at: meta.generated_at }, items: [record], next_cursor: null, has_more: false, summary: { account_currency: 'USD', money_status: 'comparable', trade_count: 1, winning_count: 1, losing_count: 0, breakeven_count: 0, win_rate_percent: '100', gross_profit: '100', commission: '-2', swap: '-1', fee: '0', net_profit: '97', profit_factor: null }, daily: [{ business_date: '2026-09-04', trade_count: 1, net_profit: '97', cumulative_net_profit: '97' }] }, meta })
+    const parsed = tradeHistoryPageResponseSchema.parse({ data: { captured_end: meta.generated_at, freshness: { status: 'ready', blocking_reason: null, history_revision: '8', fresh_through: meta.generated_at, last_success_at: meta.generated_at }, items: [record], next_cursor: null, has_more: false, summary: { account_currency: 'USD', money_status: 'comparable', trade_count: 1, winning_count: 1, losing_count: 0, breakeven_count: 0, win_rate_percent: '100', gross_profit: '100', commission: '-2', swap: '-1', fee: '0', net_profit: '97', profit_factor: null }, daily: [{ business_date: '2026-09-04', trade_count: 1, net_profit: '97', cumulative_net_profit: '97' }] }, meta })
     expect(parsed.data).toMatchObject({ capturedEnd: meta.generated_at, freshness: { historyRevision: 8 }, items: [{ primaryTicket: '1001', netProfit: '97' }], daily: [{ businessDate: '2026-09-04' }] })
   })
 

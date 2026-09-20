@@ -10997,6 +10997,17 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
               "freshness": {
                 "additionalProperties": false,
                 "properties": {
+                  "blocking_reason": {
+                    "enum": [
+                      "terminal_clock_unavailable",
+                      "terminal_connection_unavailable",
+                      null
+                    ],
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
                   "fresh_through": {
                     "oneOf": [
                       {
@@ -11033,6 +11044,7 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
                 },
                 "required": [
                   "status",
+                  "blocking_reason",
                   "history_revision",
                   "fresh_through",
                   "last_success_at"

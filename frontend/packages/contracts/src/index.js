@@ -305,12 +305,12 @@ export const tradeHistorySummarySchema = z.object({
     swap: value.swap, fee: value.fee, netProfit: value.net_profit, profitFactor: value.profit_factor }));
 export const tradeHistoryPageResponseSchema = z.object({ data: z.object({
         captured_end: z.iso.datetime({ offset: true }),
-        freshness: z.object({ status: z.enum(['empty', 'syncing', 'ready', 'stale', 'failed']), history_revision: numericRevisionSchema,
+        freshness: z.object({ status: z.enum(['empty', 'syncing', 'ready', 'stale', 'failed']), blocking_reason: z.enum(['terminal_clock_unavailable', 'terminal_connection_unavailable']).nullable(), history_revision: numericRevisionSchema,
             fresh_through: z.iso.datetime({ offset: true }).nullable(), last_success_at: z.iso.datetime({ offset: true }).nullable() }).strict(),
         items: z.array(tradeHistoryRecordSchema), next_cursor: z.string().min(1).nullable(), has_more: z.boolean(), summary: tradeHistorySummarySchema,
         daily: z.array(z.object({ business_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), trade_count: z.number().int().nonnegative(), net_profit: decimalSchema.nullable(), cumulative_net_profit: decimalSchema.nullable() }).strict()
             .transform((value) => ({ businessDate: value.business_date, tradeCount: value.trade_count, netProfit: value.net_profit, cumulativeNetProfit: value.cumulative_net_profit }))),
-    }).strict().transform((value) => ({ capturedEnd: value.captured_end, freshness: { status: value.freshness.status, historyRevision: value.freshness.history_revision,
+    }).strict().transform((value) => ({ capturedEnd: value.captured_end, freshness: { status: value.freshness.status, blockingReason: value.freshness.blocking_reason, historyRevision: value.freshness.history_revision,
             freshThrough: value.freshness.fresh_through, lastSuccessAt: value.freshness.last_success_at }, items: value.items, nextCursor: value.next_cursor,
         hasMore: value.has_more, summary: value.summary, daily: value.daily })), meta: responseMetaSchema });
 export const tradeRecordDealSchema = z.object({ account_currency: z.string().min(1).max(16).nullable(), currency_evidence: z.enum(['unknown', 'explicit_record']), id: z.string(), deal_ticket: z.string(), order_ticket: z.string().nullable(), role: z.enum(['entry', 'exit', 'fee', 'adjustment', 'unknown']),

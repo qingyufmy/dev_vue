@@ -1,15 +1,16 @@
 <script setup lang="ts">
 const RuntimeControls = defineAsyncComponent(() => import('~/features/strategist').then(module => module.RuntimeControls))
-import { computed, defineAsyncComponent, ref, onBeforeUnmount } from 'vue'
+import { computed, defineAsyncComponent, ref, onBeforeUnmount, watch } from 'vue'
+import { createApiClient } from '@aurum/api-client'
 import { RouterLink } from 'vue-router'
 import { Cable, ChevronDown } from '@lucide/vue'
 import { Button } from '@aurum/ui/button'
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuItem } from '@aurum/ui/dropdown-menu'
 import { tradingAccounts, tradingContext } from '~/features/trading-context'
-import { publicMarketStates, activeMarketSymbol, activeTerminalMarketObservation } from '~/features/trading-context'
+import { publicMarketStates, activeMarketSymbol, activeTerminalMarketObservation, applyTerminalMarketObservation } from '~/features/trading-context'
+const client = createApiClient()
 const now = ref(Date.now())
 const timer = setInterval(() => { now.value = Date.now() }, 1000)
-onBeforeUnmount(() => clearInterval(timer))
 const market = computed(() => publicMarketStates.value.find(item => item.symbol === activeMarketSymbol.value))
 const terminalMarketCurrent = computed(() => activeTerminalMarketObservation.value?.symbol === activeMarketSymbol.value
   && now.value - Date.parse(activeTerminalMarketObservation.value.observedAt) <= 45_000)
@@ -18,6 +19,23 @@ const marketState = computed(() => terminalMarketCurrent.value ? 'open'
 const marketLabel = computed(() => ({ open: '交易中', closed: '休市', restricted: '交易受限', stale: '报价待更新', unknown: '待确认' }[marketState.value]))
 
 const currentAccount = computed(() => tradingAccounts.value.find(item => item.id === tradingContext.value?.accountId) ?? null)
+let quoteGeneration = 0
+async function refreshTerminalMarket() {
+  const generation = ++quoteGeneration
+  const accountId = currentAccount.value?.id
+  const symbol = activeMarketSymbol.value
+  if (!accountId || currentAccount.value?.bridgeState !== 'online' || !symbol || tradingContext.value?.mode === 'observer') return
+  try {
+    const result = await client.getMarketQuote(accountId, symbol)
+    if (result.data && generation === quoteGeneration && currentAccount.value?.id === accountId && activeMarketSymbol.value === symbol) {
+      applyTerminalMarketObservation({ symbol, observedAt: result.data.observedAt })
+    }
+  } catch { /* The last observation expires naturally; public market state remains the fallback. */ }
+}
+watch(() => `${currentAccount.value?.id ?? ''}:${currentAccount.value?.bridgeState ?? ''}:${activeMarketSymbol.value}:${tradingContext.value?.mode ?? ''}`,
+  () => { void refreshTerminalMarket() }, { immediate: true })
+const quoteTimer = setInterval(() => { void refreshTerminalMarket() }, 15000)
+onBeforeUnmount(() => { quoteGeneration++; clearInterval(timer); clearInterval(quoteTimer) })
 const bridgeLabel = computed(() => currentAccount.value ? {
   online: '智桥已连接', offline: '智桥未连接', paused: '智桥已暂停', replaced: '连接已替换', unauthorized: '智桥未获授权',
 }[currentAccount.value.bridgeState] : '智桥状态待确认')

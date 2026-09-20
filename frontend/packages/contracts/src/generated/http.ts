@@ -4598,6 +4598,8 @@ export interface components {
                     trade_count: number;
                 }[];
                 freshness: {
+                    /** @enum {string|null} */
+                    blocking_reason: "terminal_clock_unavailable" | "terminal_connection_unavailable" | null;
                     fresh_through: components["schemas"]["UtcDateTime"] | null;
                     history_revision: components["schemas"]["Revision"];
                     last_success_at: components["schemas"]["UtcDateTime"] | null;

@@ -1,12 +1,14 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick, ref } from 'vue'
 import { expect, it, vi } from 'vitest'
+const quote = vi.hoisted(() => vi.fn(async () => ({ data: null })))
+vi.mock('@aurum/api-client', () => ({ createApiClient: () => ({ getMarketQuote: quote }) }))
 vi.mock('~/features/strategist', () => ({ RuntimeControls: { props: ['marketStates'], template: '<span data-runtime-market>{{ marketStates?.[0]?.state }}</span>' } }))
 vi.mock('~/features/trading-context', () => ({
   tradingAccounts: ref([{ id: 'a1', bridgeState: 'online', tradePermission: true }]),
   tradingContext: ref({ accountId: 'a1', mode: 'full' }),
   realtimeState: ref('live'), currentAccount: ref(null),
-  publicMarketStates: ref([]), activeMarketSymbol: ref('XAUUSD'), activeTerminalMarketObservation: ref(null),
+  publicMarketStates: ref([]), activeMarketSymbol: ref('XAUUSD'), activeTerminalMarketObservation: ref(null), applyTerminalMarketObservation: vi.fn(),
 }))
 import { activeMarketSymbol, activeTerminalMarketObservation, publicMarketStates, realtimeState, tradingAccounts } from '~/features/trading-context'
 import RuntimeStatus from './RuntimeStatus.vue'
