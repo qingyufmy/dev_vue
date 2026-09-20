@@ -22,7 +22,9 @@ describe('trade history workspace', () => {
     const view = feature('views/TradesView.vue')
     expect(view.indexOf('<TradeSummaryCards')).toBeLessThan(view.indexOf('<TradePnlChart'))
     expect(view.indexOf('<TradePnlChart')).toBeLessThan(view.indexOf('<TradeHistoryTable'))
-    expect(view).toContain('执行受理不等于终端成交')
+    expect(view).toContain('终端历史证据为准')
+    expect(view).toContain(':freshness-status="workspace.freshness.value.status"')
+    expect(view).toContain(':has-filters="hasFilters"')
   })
 
   it('provides a mobile record surface and terminal-time context', () => {

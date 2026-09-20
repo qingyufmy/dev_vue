@@ -19,6 +19,20 @@ async function read(status: string, currency: string | null, dailyCurrency = cur
   return { page: await new MysqlTradeHistoryRepository(pool).list(7, filter), calls }
 }
 
+it('reports an account with an active collection task as syncing even before records exist', async () => {
+  const pool = { async execute(sql: string) {
+    if (sql.includes('FROM (SELECT ? trading_account_id) scope')) return [[{
+      status: 'syncing', history_revision: 0, fresh_through_utc: null, last_success_at_utc: null,
+    }], []]
+    if (sql.includes('profit_factor')) return [[{ trade_count: 0, winning_count: 0, losing_count: 0, breakeven_count: 0,
+      win_rate_percent: null, account_currency: null, money_status: 'empty', gross_profit: null, commission: null,
+      swap_amount: null, fee_amount: null, net_profit: null, profit_factor: null }], []]
+    return [[], []]
+  } } as unknown as Pool
+  const page = await new MysqlTradeHistoryRepository(pool).list(7, { ...filter, cursor: null })
+  expect(page.freshness).toEqual({ status: 'syncing', historyRevision: 0, freshThrough: null, lastSuccessAt: null })
+})
+
 describe('history money query and adapter (offline SQL fixtures)', () => {
   it('adds same-unit daily values using decimals', async () => {
     const { page } = await read('comparable', 'USD')

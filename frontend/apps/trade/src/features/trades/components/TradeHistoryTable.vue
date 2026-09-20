@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowDownRight, ArrowUpRight, ChevronRight, FileSearch } from '@lucide/vue'
+import { ArrowDownRight, ArrowUpRight, ChevronRight, FileSearch, RefreshCw, RotateCcw } from '@lucide/vue'
 import type { TradeHistoryRecord } from '@aurum/contracts'
 import { Badge } from '@aurum/ui/badge'
 import { Button } from '@aurum/ui/button'
@@ -9,9 +9,15 @@ import { Skeleton } from '@aurum/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@aurum/ui/table'
 import { decimal, evidenceLabel, sideLabel, sourceLabel, terminalTime } from '../model/trade-history-presentation'
 
-defineProps<{ items: TradeHistoryRecord[]; loading: boolean; loadingMore: boolean; hasMore: boolean }>()
-const emit = defineEmits<{ select: [id: string]; more: [] }>()
+const props = defineProps<{ items: TradeHistoryRecord[]; loading: boolean; loadingMore: boolean; hasMore: boolean; freshnessStatus: 'empty' | 'syncing' | 'ready' | 'stale' | 'failed'; hasFilters: boolean }>()
+const emit = defineEmits<{ select: [id: string]; more: []; reset: []; refresh: [] }>()
 const pnlClass = (value: string) => Number(value) > 0 ? 'text-trade-up' : Number(value) < 0 ? 'text-trade-down' : 'text-foreground'
+const emptyTitle = () => props.freshnessStatus === 'syncing' ? '正在建立账户历史档案' : props.freshnessStatus === 'failed' ? '历史同步暂时中断' : props.hasFilters ? '没有匹配的交易记录' : '该账户暂无已结算交易'
+const emptyDescription = () => props.freshnessStatus === 'syncing'
+  ? '采集任务已经创建，正在等待终端提供可校验的时间与历史数据。休市期间可能停留在这里，恢复有效终端时钟后会自动继续。'
+  : props.freshnessStatus === 'failed' ? '已保留现有终端证据。刷新可重新读取同步状态。'
+    : props.hasFilters ? '当前账户有数据边界，尝试清除品种、日期、方向或来源条件。'
+      : '这里只展示该账户经终端历史确认的平仓记录，不会借用其他账户或模拟数据。'
 </script>
 
 <template>
@@ -19,7 +25,10 @@ const pnlClass = (value: string) => Number(value) > 0 ? 'text-trade-up' : Number
     <CardHeader class="flex-row items-start justify-between gap-4"><div><CardTitle>交易明细</CardTitle><CardDescription class="mt-1">点击任意记录查看成交拆分和完整来源链。</CardDescription></div><Badge variant="outline">{{ items.length }} 笔已加载</Badge></CardHeader>
     <CardContent class="p-0">
       <div v-if="loading && !items.length" class="grid gap-2 p-5"><Skeleton v-for="index in 6" :key="index" class="h-14 w-full" /></div>
-      <Empty v-else-if="!items.length" class="min-h-64"><EmptyHeader><EmptyMedia variant="icon"><FileSearch /></EmptyMedia><EmptyTitle>当前范围没有交易记录</EmptyTitle><EmptyDescription>可调整账户、日期或来源筛选。页面不会用模拟数据代替终端记录。</EmptyDescription></EmptyHeader></Empty>
+      <Empty v-else-if="!items.length" class="min-h-72">
+        <EmptyHeader><EmptyMedia variant="icon"><RefreshCw v-if="freshnessStatus === 'syncing'" class="animate-spin motion-reduce:animate-none" /><FileSearch v-else /></EmptyMedia><EmptyTitle>{{ emptyTitle() }}</EmptyTitle><EmptyDescription class="max-w-lg">{{ emptyDescription() }}</EmptyDescription></EmptyHeader>
+        <div class="flex flex-wrap justify-center gap-2"><Button v-if="hasFilters" variant="outline" @click="emit('reset')"><RotateCcw />清除筛选</Button><Button v-else-if="freshnessStatus === 'syncing' || freshnessStatus === 'failed'" variant="outline" @click="emit('refresh')"><RefreshCw />刷新状态</Button></div>
+      </Empty>
       <template v-else>
         <div class="hidden lg:block">
           <Table>

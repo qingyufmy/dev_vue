@@ -105,9 +105,10 @@ describe('P3 MySQL adapter statements using offline fixtures (not a SQL engine)'
     expect(calls[0]).toContain('trading_account_ownership_intervals')
     expect(calls[0]).not.toContain('revoked_at_utc')
     expect(calls).toHaveLength(5)
-    expect(calls[2]).toContain('NULL fresh_through_utc,NULL last_success_at_utc')
-    expect(calls[2]).not.toContain('trade_history_sync_states_v4')
-    for (const sql of calls.slice(1)) {
+    expect(calls[2]).toContain('history_collection_tasks_v4')
+    expect(calls[2]).toContain('trade_history_sync_states_v4')
+    expect(calls[2]).not.toContain('account_trade_records_v4')
+    for (const sql of [calls[1], ...calls.slice(3)]) {
       expect(sql).toContain(provenHistoryRecordSql())
       expect(sql).toContain('r.user_id=?')
       expect(sql).toContain('r.trading_account_id=?')

@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { AlertCircle, Clock3, DatabaseZap, RefreshCw } from '@lucide/vue'
+import { AlertCircle, Clock3, DatabaseZap, Radio, RefreshCw } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Alert, AlertDescription, AlertTitle } from '@aurum/ui/alert'
 import { Badge } from '@aurum/ui/badge'
 import { Button } from '@aurum/ui/button'
+import { Card, CardContent } from '@aurum/ui/card'
 import TradeDetailSheet from '../components/TradeDetailSheet.vue'
 import TradeHistoryFilterBar from '../components/TradeHistoryFilters.vue'
 import TradeHistoryTable from '../components/TradeHistoryTable.vue'
@@ -21,6 +22,17 @@ const workspace = useTradeHistoryWorkspace(accountId, filters)
 const detailOpen = computed(() => Boolean(workspace.selected.value || workspace.detailLoading.value || workspace.detailError.value))
 const realtimeLabel = computed(() => ({ idle: '未连接', connecting: '连接中', live: '实时同步', recovering: '恢复中', offline: '快照模式' })[workspace.realtime.value])
 const freshnessLabel = computed(() => ({ empty: '等待历史数据', syncing: '历史同步中', ready: '历史已就绪', stale: '历史可能滞后', failed: '历史同步失败' })[workspace.freshness.value.status])
+const hasFilters = computed(() => Object.values(filters.value).some(Boolean))
+const selectedAccountLabel = computed(() => workspace.selectedAccount.value
+  ? `${workspace.selectedAccount.value.platform.toUpperCase()} · ${workspace.selectedAccount.value.login}` : '尚未选择账户')
+const freshnessDetail = computed(() => {
+  const value = workspace.freshness.value
+  if (value.status === 'syncing') return value.lastSuccessAt ? '后台正在拉取增量历史，当前仍展示最近一次已确认快照。' : '采集任务已建立，正在等待终端时钟校准后读取首批历史。'
+  if (value.status === 'ready') return value.freshThrough ? `终端历史已确认至 ${new Date(value.freshThrough).toLocaleString('zh-CN', { hour12: false })}` : '终端历史已完成校验。'
+  if (value.status === 'stale') return '当前展示最近一次已确认快照，后台将继续补齐。'
+  if (value.status === 'failed') return '同步任务未完成，已确认的历史证据不会被覆盖。'
+  return '尚未形成该账户的终端历史快照。'
+})
 
 async function applyFilters() {
   const clean = { ...filters.value }
@@ -42,17 +54,27 @@ watch(accountId, (value) => {
 <template>
   <div class="mx-auto grid w-full max-w-[1680px] gap-5 p-4 sm:p-6 lg:p-8">
     <header class="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-      <div><div class="flex items-center gap-2 text-xs font-medium text-primary"><DatabaseZap class="size-4" />账户档案 · 终端事实</div><h1 class="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">交易记录</h1><p class="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">按当前交易账户查看已结算交易、费用和来源链。执行受理不等于终端成交，只有终端历史事实会进入这里。</p></div>
-      <div class="flex flex-wrap items-center gap-2"><Badge variant="outline"><span :class="['size-1.5 rounded-full', workspace.realtime.value === 'live' ? 'bg-system-ok' : 'bg-muted-foreground']" />{{ realtimeLabel }}</Badge><Badge variant="outline"><Clock3 class="size-3.5" />{{ freshnessLabel }}</Badge><Button variant="outline" class="min-h-11" :disabled="workspace.loading.value" @click="workspace.load(true)"><RefreshCw :class="workspace.loading.value ? 'animate-spin motion-reduce:animate-none' : ''" />刷新</Button></div>
+      <div><div class="flex items-center gap-2 text-xs font-medium text-primary"><DatabaseZap class="size-4" />交易档案</div><h1 class="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">交易记录</h1><p class="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">核对已平仓交易、真实费用与决策来源。所有统计都以当前账户的终端历史证据为准。</p></div>
+      <Button variant="outline" class="min-h-11 self-start xl:self-auto" :disabled="workspace.loading.value" @click="workspace.load(true)"><RefreshCw :class="workspace.loading.value ? 'animate-spin motion-reduce:animate-none' : ''" />刷新数据</Button>
     </header>
 
     <Alert v-if="workspace.error.value" variant="destructive" role="alert"><AlertCircle /><AlertTitle>交易记录暂时不可用</AlertTitle><AlertDescription>{{ workspace.error.value }}。不会显示本地模拟数据，也不会因此发起任何终端操作。</AlertDescription></Alert>
-    <Alert v-else-if="workspace.freshness.value.status === 'stale' || workspace.freshness.value.status === 'syncing'"><Clock3 /><AlertTitle>{{ freshnessLabel }}</AlertTitle><AlertDescription>当前页面仍可查看最近一次已确认快照；新成交会在历史投影封口后通过轻量实时事件触发刷新。</AlertDescription></Alert>
+    <Alert v-else-if="workspace.freshness.value.status === 'failed'" variant="destructive"><AlertCircle /><AlertTitle>{{ freshnessLabel }}</AlertTitle><AlertDescription>{{ freshnessDetail }}</AlertDescription></Alert>
+
+    <Card class="overflow-hidden shadow-none">
+      <CardContent class="grid gap-5 p-5 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+        <div class="flex min-w-0 items-start gap-3">
+          <span class="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"><DatabaseZap class="size-5" /></span>
+          <div class="min-w-0"><div class="flex flex-wrap items-center gap-2"><strong class="truncate text-base">{{ selectedAccountLabel }}</strong><Badge variant="outline"><Clock3 class="size-3.5" />{{ freshnessLabel }}</Badge></div><p class="mt-1 text-sm leading-6 text-muted-foreground">{{ freshnessDetail }}</p><p v-if="workspace.selectedAccount.value" class="mt-1 truncate text-xs text-muted-foreground">{{ workspace.selectedAccount.value.server }}</p></div>
+        </div>
+        <div class="flex items-center gap-2 md:justify-end"><Badge variant="secondary"><Radio class="size-3.5" /><span :class="['size-1.5 rounded-full', workspace.realtime.value === 'live' ? 'bg-system-ok' : 'bg-muted-foreground']" />{{ realtimeLabel }}</Badge><span class="text-xs tabular-nums text-muted-foreground">版本 {{ workspace.freshness.value.historyRevision }}</span></div>
+      </CardContent>
+    </Card>
 
     <TradeHistoryFilterBar v-model:account-id="accountId" v-model:filters="filters" :accounts="workspace.accounts.value" :loading="workspace.loading.value" @apply="applyFilters" @reset="resetFilters" />
-    <TradeSummaryCards :summary="workspace.summary.value" :loading="workspace.loading.value" />
-    <TradePnlChart :points="workspace.daily.value" :summary="workspace.summary.value" />
-    <TradeHistoryTable :items="workspace.items.value" :loading="workspace.loading.value" :loading-more="workspace.loadingMore.value" :has-more="Boolean(workspace.nextCursor.value)" @select="openDetail" @more="workspace.load(false)" />
+    <TradeSummaryCards :summary="workspace.summary.value" :loading="workspace.loading.value" :freshness-status="workspace.freshness.value.status" />
+    <TradePnlChart v-if="workspace.summary.value.tradeCount" :points="workspace.daily.value" :summary="workspace.summary.value" />
+    <TradeHistoryTable :items="workspace.items.value" :loading="workspace.loading.value" :loading-more="workspace.loadingMore.value" :has-more="Boolean(workspace.nextCursor.value)" :freshness-status="workspace.freshness.value.status" :has-filters="hasFilters" @select="openDetail" @more="workspace.load(false)" @reset="resetFilters" @refresh="workspace.load(true)" />
     <TradeDetailSheet :open="detailOpen" :detail="workspace.selected.value" :loading="workspace.detailLoading.value" :error="workspace.detailError.value" @update:open="value => { if (!value) closeDetail() }" />
   </div>
 </template>

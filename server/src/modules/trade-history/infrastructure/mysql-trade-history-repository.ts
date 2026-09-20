@@ -34,9 +34,19 @@ export class MysqlTradeHistoryRepository implements TradeHistoryRepository {
     const page = criteria(userId, filter, true)
     const [records, freshnessRows, summaryRows, dailyRows] = await Promise.all([
       this.pool.execute<TradeRow[]>(`${tradeSelect()} ${page.sql} ORDER BY r.closed_at_utc DESC,r.id DESC LIMIT ?`, [...page.params, filter.limit + 1]),
-      this.pool.execute<FreshnessRow[]>(`SELECT 'stale' status,MAX(r.revision) history_revision,
-        NULL fresh_through_utc,NULL last_success_at_utc
-        FROM account_trade_records_v4 r ${base.sql} HAVING COUNT(*)>0`, base.params),
+      this.pool.execute<FreshnessRow[]>(`SELECT
+        CASE
+          WHEN EXISTS (SELECT 1 FROM history_collection_tasks_v4 t
+            WHERE t.trading_account_id=? AND t.status IN ('pending','running','completing')) THEN 'syncing'
+          WHEN s.status IS NOT NULL THEN s.status
+          WHEN EXISTS (SELECT 1 FROM history_collection_tasks_v4 t
+            WHERE t.trading_account_id=? AND t.status='failed') THEN 'failed'
+          ELSE 'empty'
+        END status,
+        COALESCE(s.history_revision,0) history_revision,s.fresh_through_utc,s.last_success_at_utc
+        FROM (SELECT ? trading_account_id) scope
+        LEFT JOIN trade_history_sync_states_v4 s ON s.trading_account_id=scope.trading_account_id`,
+      [filter.accountId, filter.accountId, filter.accountId]),
       this.pool.execute<SummaryRow[]>(`SELECT ${moneyScopeSql()},COUNT(*) trade_count,SUM(r.net_profit>0) winning_count,SUM(r.net_profit<0) losing_count,SUM(r.net_profit=0) breakeven_count,
         CASE WHEN COUNT(*)=0 THEN NULL ELSE CAST(ROUND(100*SUM(r.net_profit>0)/COUNT(*),4) AS CHAR) END win_rate_percent,
         CASE WHEN ${comparableSql} THEN CAST(SUM(r.gross_profit) AS CHAR) ELSE NULL END gross_profit,CASE WHEN ${comparableSql} THEN CAST(SUM(r.commission) AS CHAR) ELSE NULL END commission,
