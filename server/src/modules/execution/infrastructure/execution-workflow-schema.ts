@@ -1112,6 +1112,10 @@ export const executionWorkflowSchema = {
     {
       "id": "inplace_086_01_risk_reapproval",
       "checksum": "24d83c62967b96c0f8c8a94a135aadad190e62f4c06a2ccd232575197a92d520"
+    },
+    {
+      "id": "inplace_087_01_strategy_combination_receipt_actions",
+      "checksum": "3a939abbfaaaebf34be8b1bb40faaa7a90e4601ecba337c24e74afc0592b5d94"
     }
   ],
   "tables": [
