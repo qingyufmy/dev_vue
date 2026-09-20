@@ -72,9 +72,9 @@ try {
   assert.equal(result.headers['set-cookie'], undefined)
   checks.push({ name: 'nonexistent-credentials', status: 401, sessionCookieCreated: false })
   await redis.del(`auth:v4:login:${state}`); state = undefined
-  const report = { kind: 'local-account-api-smoke/v1', observedAt: new Date().toISOString(), redis: { host: '127.0.0.1', port: 16379, version, ping: 'PONG' },
+  const report = { kind: 'local-account-api-smoke/v1', observedAt: new Date().toISOString(), redis: { host: env.REDIS_HOST, port: Number(env.REDIS_PORT), version, ping: 'PONG' },
     api: 'http://127.0.0.1:3010', checks, ownLoginTransactionRemoved: true,
-    scope: 'Real local API, local Redis and configured development MySQL. No successful login, browser flow, account selection, observer grant or terminal execution proof.' }
+    scope: 'Real local API with Redis and development MySQL from server/.env. No successful login, browser flow, account selection, observer grant or terminal execution proof.' }
   await output.writeFile(JSON.stringify(report, null, 2) + '\n'); await output.sync()
   console.log(JSON.stringify({ checks: checks.length, redisVersion: version, ownLoginTransactionRemoved: true }))
 } catch {

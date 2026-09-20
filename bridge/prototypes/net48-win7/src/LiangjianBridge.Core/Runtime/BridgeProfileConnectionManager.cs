@@ -15,6 +15,8 @@ namespace Liangjian.BridgeV4.Runtime
         public string ConnectionId { get; internal set; }
         public string TerminalState { get; internal set; }
         public string LastErrorCode { get; internal set; }
+        public string TradePermission { get; internal set; }
+        public string TradePermissionDetails { get; internal set; }
     }
 
     internal sealed class ManagedProfileConnection : IDisposable
@@ -28,6 +30,7 @@ namespace Liangjian.BridgeV4.Runtime
         private readonly string terminalInstanceId;
         private readonly IDisposable profileLease;
         private readonly string profileId;
+        private readonly BridgeTradePermissionDisplay permissions;
         private string lastErrorCode;
         private bool disposed;
         private bool stopping;
@@ -43,6 +46,11 @@ namespace Liangjian.BridgeV4.Runtime
 
         public ManagedProfileConnection(ProfileRuntime runtimeValue, BridgeProfileWorker workerValue,
             string terminalId, Mt5WorkerHost liveHost, Mt5WorkerHost archiveHost, IDisposable lease, string profileIdValue)
+            : this(runtimeValue, workerValue, terminalId, liveHost, archiveHost, lease, profileIdValue, null) { }
+
+        public ManagedProfileConnection(ProfileRuntime runtimeValue, BridgeProfileWorker workerValue,
+            string terminalId, Mt5WorkerHost liveHost, Mt5WorkerHost archiveHost, IDisposable lease, string profileIdValue,
+            BridgeTradePermissionDisplay permissionDisplay)
         {
             runtime = runtimeValue;
             worker = workerValue;
@@ -51,6 +59,7 @@ namespace Liangjian.BridgeV4.Runtime
             mt5Archive = archiveHost;
             profileLease = lease;
             profileId = profileIdValue;
+            permissions = permissionDisplay;
             stopping = worker == null;
             if (worker != null)
             {
@@ -58,6 +67,9 @@ namespace Liangjian.BridgeV4.Runtime
                 worker.StateChanged += OnStateChanged;
             }
         }
+
+        public bool ResumeForAvailableCapacity() { return worker != null && worker.ResumeForAvailableCapacity(); }
+        public string State { get { return worker == null ? "stopped" : worker.State; } }
 
         public event EventHandler StateChanged;
 
@@ -105,13 +117,17 @@ namespace Liangjian.BridgeV4.Runtime
         {
             lock (gate)
             {
+                string state = disposed ? "stopped" : stopping ? "stopping" : worker.State;
+                string permission = "unknown", details = "交易权限未知：尚未取得当前账户的权限快照。";
+                if (permissions != null) permissions.Read(!disposed && !stopping && terminalState == "connected", out permission, out details);
                 return new BridgeProfileConnectionSnapshot
                 {
                     ProfileId = profileId,
-                    State = disposed ? "stopped" : stopping ? "stopping" : worker.State,
+                    State = state,
                     ConnectionId = stopping || disposed ? null : worker.ConnectionId,
                     TerminalState = terminalState,
-                    LastErrorCode = lastErrorCode
+                    LastErrorCode = lastErrorCode,
+                    TradePermission = permission, TradePermissionDetails = details
                 };
             }
         }
@@ -158,6 +174,9 @@ namespace Liangjian.BridgeV4.Runtime
 
         private void OnStateChanged(object sender, EventArgs eventArgs)
         {
+            string state = worker.State;
+            if (state == "active") { lock (gate) lastErrorCode = null; }
+            if (permissions != null && (state == "stopped" || state == "stopping")) permissions.Clear();
             RaiseStateChanged();
         }
 
@@ -213,6 +232,22 @@ namespace Liangjian.BridgeV4.Runtime
         }
 
         public event EventHandler StateChanged;
+
+        public void ResumeCapacityWaiters(int available)
+        {
+            ManagedProfileConnection[] current;
+            lock (gate) current = new List<ManagedProfileConnection>(connections.Values).ToArray();
+            foreach (ManagedProfileConnection connection in current)
+            {
+                string state = connection.State;
+                if (state == "awaiting_welcome" || state == "backoff" || state == "disconnected") available--;
+            }
+            foreach (ManagedProfileConnection connection in current)
+            {
+                if (available <= 0) break;
+                if (connection.ResumeForAvailableCapacity()) available--;
+            }
+        }
 
         public void Start(BridgeProfileSettings profile)
         {
@@ -336,14 +371,41 @@ namespace Liangjian.BridgeV4.Runtime
                 EnsureNotDisposed();
                 if (!connections.TryGetValue(profile.ProfileId, out connection))
                 {
-                    return new BridgeProfileConnectionSnapshot
+                    return WithLocalPermissions(profile, new BridgeProfileConnectionSnapshot
                     {
                         ProfileId = profile.ProfileId, State = "stopped", ConnectionId = null,
-                        TerminalState = TerminalState(profile), LastErrorCode = null
-                    };
+                        TerminalState = TerminalState(profile), LastErrorCode = null,
+                        TradePermission = "unknown", TradePermissionDetails = "交易权限未知：连接尚未就绪或已断开。"
+                    });
                 }
             }
-            return connection.Snapshot(TerminalState(profile));
+            return WithLocalPermissions(profile, connection.Snapshot(TerminalState(profile)));
+        }
+
+        private BridgeProfileConnectionSnapshot WithLocalPermissions(BridgeProfileSettings profile, BridgeProfileConnectionSnapshot result)
+        {
+            if (profile.Platform != "mt4") return result;
+            result.TradePermission = "unknown";
+            result.TradePermissionDetails = "尚未收到当前终端的权限心跳，请确认已加载新版 EA。";
+            foreach (TerminalSessionSnapshot session in mt4Host.Snapshot())
+            {
+                if (session.TerminalInstanceId != profile.TerminalInstanceId || session.BrokerServer != profile.BrokerServer
+                    || session.Login != profile.Login || !session.CurrentTradePermission.HasValue) continue;
+                Dictionary<string, object> flags = new Dictionary<string, object>();
+                if (session.CurrentPermissionFlags != null)
+                {
+                    string[] names = { "terminal_trade_allowed", "ea_trade_allowed", "trade_expert", "trade_allowed" };
+                    for (int i = 0; i < names.Length; i++) flags[names[i]] = session.CurrentPermissionFlags[i] == 1;
+                }
+                BridgeTradePermissionDisplay display = new BridgeTradePermissionDisplay("mt4");
+                display.Observe(flags, (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds);
+                string permission, details;
+                display.Read(true, out permission, out details);
+                result.TradePermission = permission;
+                result.TradePermissionDetails = details;
+                break;
+            }
+            return result;
         }
 
         public UpdateActivitySnapshot ReadUpdateActivity()
@@ -498,6 +560,7 @@ namespace Liangjian.BridgeV4.Runtime
                     profile.Login, epoch));
                 ITerminalQuerySource terminal;
                 ITerminalCommandSource commands;
+                ITerminalProjectionSource marketSource;
                 Mt5WorkerHost live = null;
                 Mt5WorkerHost archive = null;
                 if (profile.Platform == "mt5")
@@ -507,27 +570,38 @@ namespace Liangjian.BridgeV4.Runtime
                     string archiveDiagnostics = Path.Combine(directory, "worker-archive-diagnostics.json");
                     mt5Live.Connect(new Mt5WorkerConfiguration(profile.PythonExecutablePath,
                         profile.WorkerScriptPath, profile.TerminalPath, profile.TerminalInstanceId,
-                        profile.BrokerServer, profile.Login, workerEpoch, "live", liveDiagnostics));
+                        profile.BrokerServer, profile.Login, workerEpoch, "live", liveDiagnostics, profile.Mt5Portable, profile.Mt5DataPath));
                     liveConnected = true;
                     live = mt5Live;
                     mt5Archive.Connect(new Mt5WorkerConfiguration(profile.PythonExecutablePath,
                         profile.WorkerScriptPath, profile.TerminalPath, profile.TerminalInstanceId,
-                        profile.BrokerServer, profile.Login, workerEpoch, "archive", archiveDiagnostics));
+                        profile.BrokerServer, profile.Login, workerEpoch, "archive", archiveDiagnostics, profile.Mt5Portable, profile.Mt5DataPath));
                     archiveConnected = true;
                     archive = mt5Archive;
                     terminal = new Mt5WorkerQuerySource(mt5Live);
                     commands = new Mt5TerminalCommandSource(mt5Live);
+                    marketSource = new Mt5ProjectionSyncSource(mt5Live, mt5Archive);
                 }
                 else
                 {
                     terminal = new TerminalPipeQuerySource(mt4Host);
                     commands = new Mt4TerminalCommandSource(mt4Host);
+                    marketSource = new TerminalPipeProjectionSource(mt4Host);
                 }
                 BridgeProfileSession session = new BridgeProfileSession(runtime, terminal, commands);
+                session.MarketStreams = new BridgeMarketStreams(runtime, terminal, marketSource);
+                session.MarketHistorySource = marketSource;
                 BridgeSessionConfiguration configuration = SessionConfiguration(profile);
+                configuration.MarketStreamsProvider = session.MarketStreams.ReadCandles;
+                configuration.MarketQuotesProvider = session.MarketStreams.ReadQuotes;
+                BridgeAccountStream accountStream = new BridgeAccountStream(runtime);
+                configuration.AccountStreamProvider = accountStream.Create;
+                configuration.TradeStreamsProvider = new BridgeTradeStreams(runtime, terminal).Read;
+                BridgeTradePermissionDisplay permissions = new BridgeTradePermissionDisplay(profile.Platform);
                 BridgeTerminalIdentityMonitor identityMonitor = new BridgeTerminalIdentityMonitor(delegate(long nowUtcMsc)
                 {
-                    return BridgeAccountFacts.Read(runtime, terminal, nowUtcMsc);
+                    try { return BridgeAccountFacts.Read(runtime, terminal, nowUtcMsc, delegate(IDictionary<string, object> data, long at) { permissions.Observe(data, at); accountStream.Observe(data, at); }); }
+                    catch { permissions.Clear(); throw; }
                 });
                 configuration.AccountFactsProvider = identityMonitor.Read;
                 BridgeSessionController controller = new BridgeSessionController(runtime, session, configuration);
@@ -548,8 +622,8 @@ namespace Liangjian.BridgeV4.Runtime
                 };
                 BridgeProfileWorker worker = new BridgeProfileWorker(runtime, controller,
                     new Rfc6455MessageChannelFactory(new Uri(profile.ServerUri),
-                        acquireSessionToken, 15000), releaseStatus, identityMonitor);
-                return new ManagedProfileConnection(runtime, worker, profile.TerminalInstanceId, live, archive, lease);
+                        acquireSessionToken, 15000), releaseStatus, identityMonitor, marketSource);
+                return new ManagedProfileConnection(runtime, worker, profile.TerminalInstanceId, live, archive, lease, profile.ProfileId, permissions);
             }
             catch
             {

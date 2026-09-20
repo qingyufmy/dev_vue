@@ -39,7 +39,7 @@ from worker import (  # noqa: E402
 
 Account = namedtuple(
     "Account", "login server balance equity margin_free trade_allowed trade_expert")
-Terminal = namedtuple("Terminal", "connected trade_allowed tradeapi_disabled")
+Terminal = namedtuple("Terminal", "connected trade_allowed tradeapi_disabled path data_path", defaults=(None, None))
 Position = namedtuple("Position", "ticket symbol volume type magic sl tp")
 Order = namedtuple(
     "Order",
@@ -121,6 +121,8 @@ class FakeMt5:
 
     def initialize(self, **_kwargs):
         self.initialized = True
+        self.initialize_arguments = _kwargs
+        self.terminal_directory = str(Path(_kwargs["path"]).parent)
         return True
 
     def shutdown(self):
@@ -130,7 +132,7 @@ class FakeMt5:
         return Account(123456, "Broker-Demo", 10_000.0, 10_025.0, 9_500.0, True, True)
 
     def terminal_info(self):
-        return Terminal(True, True, False)
+        return Terminal(True, True, False, self.terminal_directory, self.terminal_directory)
 
     def positions_get(self, **kwargs):
         ticket = kwargs.get("ticket")
@@ -301,11 +303,33 @@ class WorkerTests(unittest.TestCase):
             result = probe_terminal(self.mt5, str(terminal))
         self.assertEqual(1, result["probe_version"])
         self.assertEqual(str(terminal.resolve()), result["terminal_path"])
+        self.assertEqual(str(terminal.parent.resolve()), result["data_path"])
         self.assertEqual(
             {"broker_server": "Broker-Demo", "login": "123456"},
             result["account_ref"],
         )
         self.assertFalse(self.mt5.initialized)
+
+    def test_probe_portable_and_data_directory_are_verified(self):
+        result = probe_terminal(self.mt5, str(self.terminal_path), portable=True,
+                                expected_data_path=str(self.terminal_path.parent))
+        self.assertTrue(self.mt5.initialize_arguments["portable"])
+        self.assertEqual(str(self.terminal_path.parent), result["data_path"])
+        with self.assertRaisesRegex(WorkerError, "mt5_terminal_data_path_mismatch"):
+            probe_terminal(self.mt5, str(self.terminal_path), expected_data_path=str(self.terminal_path.parent / "wrong"))
+        self.assertFalse(self.mt5.initialized)
+
+    def test_probe_rejects_sdk_attaching_to_another_installation(self):
+        self.mt5.terminal_info = lambda: Terminal(True, True, False, str(self.terminal_path.parent / "wrong"), str(self.terminal_path.parent))
+        with self.assertRaisesRegex(WorkerError, "mt5_terminal_path_mismatch"):
+            probe_terminal(self.mt5, str(self.terminal_path))
+        self.assertFalse(self.mt5.initialized)
+
+    def test_live_identity_rejects_data_directory_change(self):
+        self.adapter.expected_data_path = str(self.terminal_path.parent)
+        self.mt5.terminal_info = lambda: Terminal(True, True, False, str(self.terminal_path.parent), str(self.terminal_path.parent / "wrong"))
+        with self.assertRaisesRegex(WorkerError, "mt5_terminal_data_path_mismatch"):
+            self.adapter._ensure_identity()
 
     def test_probe_main_emits_stable_structured_failure_and_numeric_last_error(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -527,6 +551,27 @@ class WorkerTests(unittest.TestCase):
         request["payload"] = {"command": command}
         return request
 
+    def test_display_clock_checks_daily_and_retains_pair_for_account_delivery(self):
+        def evidence(*args):
+            return {"sample_status": "captured", "symbol": "XAUUSD.s", "raw_tick_time_msc": self.now + 180 * 60000,
+                    "sampling_started_at_utc_msc": self.now - 1, "sampled_at_utc_msc": self.now}
+        with patch("worker.sample_clock_evidence", side_effect=evidence) as probe, patch("worker.time.monotonic", side_effect=lambda: self.now / 1000):
+            self.adapter.collect_snapshot(["account"])
+            self.now += 10000
+            pair = self.adapter.collect_snapshot(["account"])["streams"]["account"]["clock_sample"]
+            self.assertIn("previous", pair)
+            self.now += 10000
+            self.assertEqual(pair, self.adapter.collect_snapshot(["account"])["streams"]["account"]["clock_sample"])
+            self.assertEqual(2, probe.call_count)
+            self.now += 120000
+            self.assertNotIn("clock_sample", self.adapter.collect_snapshot(["account"])["streams"]["account"])
+            self.assertEqual(2, probe.call_count)
+            self.now += 86400000
+            self.adapter.collect_snapshot(["account"])
+            self.now += 10000
+            self.adapter.collect_snapshot(["account"])
+            self.assertEqual(4, probe.call_count)
+
     def test_snapshot_preserves_account_positions_and_orders(self):
         response = self.worker.handle(self.request("collect_snapshot", {
             "streams": ["account", "positions", "orders"]
@@ -535,9 +580,45 @@ class WorkerTests(unittest.TestCase):
         snapshot = response["payload"]["snapshot"]
         self.assertGreater(snapshot["source_time_msc"], 0)
         self.assertEqual(123456, snapshot["streams"]["account"]["login"])
+        sample = snapshot["streams"]["account"].get("clock_sample")
+        if sample is not None:
+            self.assertTrue({"symbol", "raw_time_msc", "started_at_msc", "sampled_at_msc", "monotonic_msc"}.issubset(sample))
+            self.assertGreater(sample["monotonic_msc"], 0)
+            self.assertNotIn("timezone_offset_minutes", sample)
         self.assertTrue(snapshot["streams"]["account"]["terminal_trade_allowed"])
+        self.assertIs(False, snapshot["streams"]["account"]["terminal_tradeapi_disabled"])
         self.assertEqual(101, snapshot["streams"]["positions"][0]["ticket"])
         self.assertEqual(202, snapshot["streams"]["orders"][0]["ticket"])
+
+    def test_snapshot_trade_times_use_broker_clock_and_missing_times_stay_unknown(self):
+        raw = self.now + 180 * 60_000 - 60_000
+        row = dict(self.mt5.positions[0]._asdict(), time_msc=raw)
+        self.mt5.positions = [namedtuple("LivePosition", row.keys())(**row)]
+        row = dict(self.mt5.orders[0]._asdict(), time_setup_msc=raw)
+        self.mt5.orders = [namedtuple("LiveOrder", row.keys())(**row)]
+        response = self.worker.handle(self.request("collect_snapshot", {"streams": ["positions", "orders"]}))
+        self.assertEqual("snapshot", response["outcome"])
+        streams = response["payload"]["snapshot"]["streams"]
+        self.assertEqual(self.now - 60_000, streams["positions"][0]["open_time_utc_msc"])
+        self.assertEqual(self.now - 60_000, streams["orders"][0]["create_time_utc_msc"])
+        self.assertIsNone(streams["orders"][0]["expiration_time_utc_msc"])
+
+    def test_snapshot_tradeapi_permission_requires_an_explicit_boolean(self):
+        for value in (True, False, None, 0, 1, "false"):
+            with self.subTest(value=value):
+                terminal = SimpleNamespace(connected=True, trade_allowed=True,
+                                           path=str(self.terminal_path.parent),
+                                           data_path=str(self.terminal_path.parent))
+                if value is not None:
+                    terminal.tradeapi_disabled = value
+                self.mt5.terminal_info = lambda: terminal
+                response = self.worker.handle(self.request("collect_snapshot", {"streams": ["account"]}))
+                account = response["payload"]["snapshot"]["streams"]["account"]
+                if isinstance(value, bool):
+                    self.assertIs(value, account["terminal_tradeapi_disabled"])
+                else:
+                    self.assertNotIn("terminal_tradeapi_disabled", account)
+                self.assertEqual([], self.mt5.sent)
 
     def test_quote_resolves_suffix_and_normalizes_broker_time(self):
         response = self.worker.handle(self.request("quote", {"symbol": "XAUUSD"}))
@@ -609,6 +690,14 @@ class WorkerTests(unittest.TestCase):
 
         self.assertEqual("error", response["outcome"])
         self.assertEqual("symbol_ambiguous", response["payload"]["error_code"])
+
+    def test_symbol_resolution_accepts_broker_suffix_without_a_whitelist(self):
+        for suffix in ("", ".s", ".c", "pro", "_broker_suffix_longer_than_sixteen"):
+            with self.subTest(suffix=suffix):
+                self.adapter._resolved_symbols.clear()
+                actual = "XAUUSD" + suffix
+                self.mt5.symbols_get = lambda: (self.mt5.symbol_info("XAUUSD.s")._replace(name=actual),)
+                self.assertEqual(actual, self.adapter._resolve_symbol("XAUUSD"))
 
     def test_unexpected_worker_exception_writes_only_redacted_diagnostic(self):
         with tempfile.TemporaryDirectory() as root:
@@ -749,6 +838,9 @@ class WorkerTests(unittest.TestCase):
         first_batch = first["payload"]["batch"]
         self.assertEqual([], first_batch["deals"])
         self.assertEqual([3101], [item["ticket"] for item in first_batch["history_orders"]])
+        self.assertEqual(["3101"], [item["ticket"] for item in first_batch["order_completion_evidence"]["items"]])
+        self.assertEqual(event_one // 1000 * 1000, first_batch["order_completion_evidence"]["items"][0]["completed_at_utc_msc"])
+        self.assertNotIn("completed_at_utc_msc", first_batch["history_orders"][0])
         self.assertTrue(first_batch["has_more"])
 
         second = self.archive_worker.handle(self.request(
@@ -759,6 +851,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual("history_batch", second["outcome"], second)
         second_batch = second["payload"]["batch"]
         self.assertEqual([3102], [item["ticket"] for item in second_batch["history_orders"]])
+        self.assertEqual(["3102"], [item["ticket"] for item in second_batch["order_completion_evidence"]["items"]])
         self.assertFalse(second_batch["has_more"])
         self.assertEqual(
             {"time_msc": payload["range_end_utc_msc"], "ticket": "0"},
@@ -1268,7 +1361,7 @@ class WorkerTests(unittest.TestCase):
                     self.assertEqual(2300.0, request["stoplimit"])
 
     def test_trade_permission_is_revalidated_immediately_before_send(self):
-        self.mt5.terminal_info = lambda: Terminal(True, True, True)
+        self.mt5.terminal_info = lambda: Terminal(True, True, True, str(self.terminal_path.parent), str(self.terminal_path.parent))
         response = self.worker.handle(self.command_request(
             "execute_command", self.command()))
 

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "architecture": "amd64",
+  "pythonVersion": "3.8.10",
+  "metadataSources": [
+    "https://www.python.org/downloads/release/python-3810/",
+    "https://pypi.org/pypi/MetaTrader5/5.0.5735/json",
+    "https://pypi.org/pypi/numpy/1.24.4/json"
+  ],
+  "compatibility": "CPython 3.8 ABI only; Windows 7 runtime compatibility requires a real-machine validation. This lock does not reuse the CPython 3.13 worker lock.",
+  "packages": [
+    {
+      "file": "python-3.8.10-embed-amd64.zip",
+      "url": "https://www.python.org/ftp/python/3.8.10/python-3.8.10-embed-amd64.zip",
+      "sha256": "abbe314e9b41603dde0a823b76f5bbbe17b3de3e5ac4ef06b759da5466711271",
+      "destination": "."
+    },
+    {
+      "file": "metatrader5-5.0.5735-cp38-cp38-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/00/bd/9a5d0fb2f6a75ed29fa1a272835de6dde85ea2e625941862fbf55551b1a2/metatrader5-5.0.5735-cp38-cp38-win_amd64.whl",
+      "sha256": "d3a92482934b1fa76acb1e60dac46e81ad29d4c787202a096c77e2c84d2dc62c",
+      "destination": "Lib/site-packages"
+    },
+    {
+      "file": "numpy-1.24.4-cp38-cp38-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/69/65/0d47953afa0ad569d12de5f65d964321c208492064c38fe3b0b9744f8d44/numpy-1.24.4-cp38-cp38-win_amd64.whl",
+      "sha256": "692f2e0f55794943c5bfff12b3f56f99af76f902fc47487bdfe97856de51a706",
+      "destination": "Lib/site-packages"
+    }
+  ]
+}

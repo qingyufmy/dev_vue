@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { assertReviewContent, reviewContentFromWire } from '../domain/review.js'
+import { ReviewError, assertReviewContent, reviewContentFromWire } from '../domain/review.js'
 import type { ReviewJobClaim, ReviewWorkerRepository } from './review-ports.js'
 
 export interface ReviewModelGateway {
@@ -55,6 +55,7 @@ export class ReviewWorker {
         const completed = await this.repository.completeJob({ claim, attemptId, content: normalized, responseHash: sha256(output.value), usage: output.usage, now: new Date().toISOString() })
         return { status: 'succeeded' as const, ...completed }
       } catch (error) {
+        if (error instanceof ReviewError && error.code === 'review_commit_unknown') throw error
         const failure = modelFailure(error); const final = !failure.retryable || attemptNumber >= attempts
         await this.repository.failModelAttempt({ claim, attemptId, status: failure.status, errorCode: failure.code, final, now: new Date().toISOString() })
         if (final) return { status: 'failed' as const, code: failure.code }

@@ -1,7 +1,9 @@
 import { readFile } from 'node:fs/promises'
 import Fastify from 'fastify'
-import { describe, expect, it } from 'vitest'
-import { ExecutionError, ExecutionService, executionRoutes, type ApprovedRiskExecutionSource, type ExecutionRepository, type Operation, type PersistPreparedExecutionInput } from '../src/modules/execution/index.js'
+import { describe, expect, it, vi } from 'vitest'
+import { AuthError } from '../src/modules/auth/index.js'
+import { ExecutionError, ExecutionService, type ApprovedRiskExecutionSource, type ExecutionRepository, type Operation, type PersistPreparedExecutionInput } from '../src/modules/execution/index.js'
+import { executionRoutes } from '../src/modules/execution/transport/http/execution-routes.js'
 
 const operation: Operation = {
   id: 'op-1', userId: 42, accountId: '7', kind: 'risk_decision_execution', status: 'queued',
@@ -12,6 +14,7 @@ const operation: Operation = {
 }
 
 class ReadRepository implements ExecutionRepository {
+  async replayPreparedExecution() { return null }
   async loadApprovedRiskSource(): Promise<ApprovedRiskExecutionSource | null> { return null }
   async persistPreparedExecution(_input: PersistPreparedExecutionInput): Promise<never> { throw new ExecutionError('not_used', 500) }
   async getOperation(userId: number, operationId: string) { return userId === 42 && operationId === operation.id ? operation : null }
@@ -19,6 +22,28 @@ class ReadRepository implements ExecutionRepository {
 }
 
 describe('Stage 12E persistence and transport boundaries', () => {
+  it('authenticates before request validation and hides malformed operation output', async () => {
+    const repo = new ReadRepository()
+    const getOperation = vi.spyOn(repo, 'getOperation')
+    const authenticate = vi.fn().mockResolvedValue({ userId: 42 })
+    const app = Fastify()
+    await app.register(executionRoutes, { prefix: '/api/v4', service: new ExecutionService(repo), auth: { authenticate } })
+    try {
+      authenticate.mockRejectedValueOnce(new AuthError('auth_session_invalid', 401))
+      const denied = await app.inject('/api/v4/operations/op-1?actor=2')
+      expect(denied.statusCode).toBe(401)
+      expect(denied.headers['content-type']).toContain('application/problem+json')
+      expect(denied.headers['cache-control']).toBe('no-store')
+      expect((await app.inject('/api/v4/operations/op-1?actor=2')).statusCode).toBe(400)
+      expect(getOperation).not.toHaveBeenCalled()
+      getOperation.mockResolvedValueOnce({ ...operation, status: 'private-invalid-status' } as unknown as Operation)
+      const invalid = await app.inject('/api/v4/operations/op-1')
+      expect(invalid.statusCode).toBe(503)
+      expect(invalid.json().code).toBe('api_response_invalid')
+      expect(invalid.body).not.toContain('private-invalid-status')
+      expect(getOperation).toHaveBeenCalledWith(42, 'op-1')
+    } finally { await app.close() }
+  })
   it('exposes only the current user operation through the V4 HTTP contract', async () => {
     const app = Fastify({ logger: false })
     await app.register(executionRoutes, { prefix: '/api/v4', service: new ExecutionService(new ReadRepository()), auth: { async authenticate() { return { userId: 42 } } } })

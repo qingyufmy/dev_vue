@@ -1,0 +1,16 @@
+{
+  "kind": "review-worker-mysql-reference/v1",
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "foreignKeysVerified": false,
+  "modelCalls": "synthetic-only",
+  "checks": [
+    "claim-and-complete-use-schema-compatible-status",
+    "unexpired-lease-not-stolen",
+    "expired-lease-reclaimed-and-attempt-expired",
+    "stale-worker-cannot-write-after-takeover",
+    "archived-case-never-calls-model"
+  ],
+  "referenceDatabaseRemoved": true,
+  "observedAt": "2026-09-11T03:43:03.742Z"
+}

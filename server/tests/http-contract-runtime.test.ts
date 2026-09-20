@@ -3,6 +3,17 @@ import { createHttpContractValidator } from '../src/transport/http-contract.js'
 import { httpRuntimeContracts } from '../src/transport/generated/http-contracts.js'
 
 describe('generated HTTP contract runtime', () => {
+  it('accepts only declared 204 responses with no body', () => {
+    const contract = createHttpContractValidator(httpRuntimeContracts, ['logoutAuthCenterSession', 'getApplicationSession'])
+    expect(contract.response('logoutAuthCenterSession', undefined, 204)).toBeUndefined()
+    for (const body of [null, '', {}, { data: null }]) {
+      expect(() => contract.response('logoutAuthCenterSession', body, 204)).toThrow('api_response_invalid')
+    }
+    expect(() => contract.response('getApplicationSession', undefined, 204)).toThrow('api_response_invalid')
+    expect(() => contract.response('logoutAuthCenterSession', undefined, 200)).toThrow('api_response_invalid')
+    expect(() => contract.response('notRegistered', undefined, 204)).toThrow('http_contract_not_registered')
+  })
+
   it('checks write headers and strict JSON bodies without coercion', () => {
     const contract = createHttpContractValidator(httpRuntimeContracts, ['setLearningCompletion'])
     const request = { params: { courseId: '12', lessonId: '99' }, headers: {

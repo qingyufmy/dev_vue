@@ -35,13 +35,13 @@ function accountChange(value: unknown) { const id = String(value); if (id && id 
         <div class="flex flex-wrap gap-2">
           <Select :model-value="accountId || undefined" :disabled="loading || !accounts.length" @update:model-value="accountChange"><SelectTrigger class="min-h-11 w-[min(21rem,78vw)]" aria-label="切换订阅账户"><SelectValue placeholder="选择交易账户" /></SelectTrigger><SelectContent><SelectGroup><SelectItem v-for="item in accounts" :key="item.id" :value="item.id">{{ item.platform.toUpperCase() }} · {{ item.login }} · {{ item.server }}</SelectItem></SelectGroup></SelectContent></Select>
           <Button variant="outline" size="icon-lg" :disabled="loading || refreshing" aria-label="刷新订阅" @click="emit('refresh')"><RefreshCw :class="refreshing ? 'animate-spin motion-reduce:animate-none' : ''" /></Button>
-          <Button size="lg" :disabled="!accountId" @click="emit('create')"><Plus />新增订阅</Button>
+          <Button size="lg" :disabled="loading || !accountId" @click="emit('create')"><Plus />新增订阅</Button>
         </div>
       </CardContent>
     </Card>
 
     <Card class="min-w-0 shadow-none">
-      <CardHeader class="border-b"><CardTitle>账户策略订阅</CardTitle><CardDescription>分析记录归系统用户；AI 交易员、交易发送和执行结果按交易账户隔离。</CardDescription></CardHeader>
+      <CardHeader class="border-b"><CardTitle>账户策略订阅</CardTitle><CardDescription>为当前账户选择策略、设置分析时间和交易发送权限。</CardDescription></CardHeader>
       <CardContent class="p-0">
         <div v-if="loading" class="grid gap-2 p-4" aria-busy="true"><div v-for="index in 3" :key="index" class="h-20 animate-pulse rounded-lg bg-muted motion-reduce:animate-none" /></div>
         <Empty v-else-if="!subscriptions.length" class="min-h-80"><EmptyHeader><EmptyMedia variant="icon"><Bot /></EmptyMedia><EmptyTitle>这个账户还没有策略订阅</EmptyTitle><EmptyDescription>先选择已发布的行情分析策略；需要自动管理交易时，再绑定交易执行策略。</EmptyDescription></EmptyHeader></Empty>
@@ -51,7 +51,7 @@ function accountChange(value: unknown) { const id = String(value); if (id && id 
               <TableHeader><TableRow><TableHead>品种</TableHead><TableHead>行情分析</TableHead><TableHead>AI 交易员</TableHead><TableHead>交易发送</TableHead><TableHead>状态</TableHead><TableHead class="text-right">操作</TableHead></TableRow></TableHeader>
               <TableBody><TableRow v-for="item in subscriptions" :key="item.id">
                 <TableCell class="font-mono font-semibold">{{ item.symbol }}</TableCell>
-                <TableCell><div class="font-medium">{{ findStrategyName(strategies, item.analysisStrategyId) }}</div><span class="text-xs text-muted-foreground">{{ item.analysisEnabled ? '每 5 分钟' : '已关闭' }}</span></TableCell>
+                <TableCell><div class="font-medium">{{ findStrategyName(strategies, item.analysisStrategyId) }}</div><span class="text-xs text-muted-foreground">{{ item.analysisEnabled ? `每 ${Math.round(item.cadenceSeconds / 60)} 分钟` : '已关闭' }}</span></TableCell>
                 <TableCell>{{ item.traderEnabled ? findStrategyName(strategies, item.traderStrategyId) : '仅分析' }}</TableCell>
                 <TableCell><Badge :variant="item.tradeSendEnabled ? 'default' : 'secondary'"><ShieldCheck v-if="item.tradeSendEnabled" /><Pause v-else />{{ item.tradeSendEnabled ? '允许' : '不发送' }}</Badge></TableCell>
                 <TableCell><Badge variant="outline">{{ subscriptionStatusLabel[item.status] }}</Badge></TableCell>

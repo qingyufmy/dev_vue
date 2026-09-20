@@ -1,0 +1,28 @@
+{
+  "kind": "strategy-write-schema-reference/v1",
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "referenceDatabaseRemoved": true,
+  "scaffoldParents": [
+    "users",
+    "trading_accounts",
+    "trading_account_ownerships"
+  ],
+  "checks": [
+    "real_create_commit_then_injected_ack_loss_recovered_and_conflict_rejected",
+    "concurrent_same_key_one_strategy"
+  ],
+  "migrationSha256": "7a7b1cdb5c345ddbe7f6734a4e6b3063067ef0fbc10f7b96043ec72a88dcf54a",
+  "parentSources": {
+    "strategy": "b5252c385357b9cccec2513a6d3f17634f8a73f194818420de88ed76b0790960",
+    "preferences": "87c8d3e026442c73bf502c251828d719962b0dfbe3609a2b3150aabf8b651b99"
+  },
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "serverVersion": "8.4.8",
+  "canonicalDdl": "CREATE TABLE `strategy_write_receipts_v4` (\n  `actor_user_id` int NOT NULL,\n  `idempotency_key` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `action` varchar(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `request_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `resource_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `result_revision` bigint unsigned NOT NULL,\n  `result_json` json NOT NULL,\n  `result_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `recorded_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`actor_user_id`,`idempotency_key`),\n  KEY `idx_strategy_receipt_actor_time` (`actor_user_id`,`recorded_at_utc`,`idempotency_key`),\n  CONSTRAINT `fk_strategy_receipt_actor` FOREIGN KEY (`actor_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_strategy_receipt_action` CHECK ((`action` in (_utf8mb4'create_strategy',_utf8mb4'update_metadata',_utf8mb4'create_version',_utf8mb4'publish_version',_utf8mb4'retire_strategy',_utf8mb4'create_subscription',_utf8mb4'update_subscription'))),\n  CONSTRAINT `chk_strategy_receipt_hashes` CHECK ((regexp_like(`request_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c') and (not(regexp_like(`request_sha256`,_utf8mb4'[^0-9a-f]',_utf8mb4'c'))) and regexp_like(`result_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c') and (not(regexp_like(`result_sha256`,_utf8mb4'[^0-9a-f]',_utf8mb4'c'))))),\n  CONSTRAINT `chk_strategy_receipt_key` CHECK ((char_length(`idempotency_key`) between 16 and 128)),\n  CONSTRAINT `chk_strategy_receipt_result` CHECK ((json_type(`result_json`) = _utf8mb4'OBJECT')),\n  CONSTRAINT `chk_strategy_receipt_revision` CHECK (((`result_revision` > 0) and (`result_revision` <= 9007199254740991)))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+  "stage": "create_subscription",
+  "errorCode": "ER_TRUNCATED_WRONG_VALUE",
+  "stageChecks": 2,
+  "databaseError": "Incorrect datetime value: '2026-09-09T08:10:00.000Z' for column 'next_due_at_utc' at row 1",
+  "observedAt": "2026-09-09T08:08:53.601Z"
+}

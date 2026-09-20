@@ -3,7 +3,7 @@
     "/review-cases": {
       "get": {
         "operationId": "listReviewCases",
-        "summary": "List the current user's daily, monthly and manual review cases",
+        "summary": "List the current user's daily, monthly, manual and single-trade review cases",
         "tags": [
           "Reviews"
         ],
@@ -16,7 +16,8 @@
               "enum": [
                 "daily",
                 "monthly",
-                "manual"
+                "manual",
+                "trade"
               ]
             }
           },
@@ -28,7 +29,14 @@
             }
           },
           {
-            "$ref": "#/components/parameters/PageSize"
+            "name": "page_size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
           }
         ],
         "responses": {
@@ -41,6 +49,24 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -75,6 +101,21 @@
           },
           "404": {
             "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -95,6 +136,9 @@
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "requestBody": {
@@ -136,11 +180,92 @@
           },
           "412": {
             "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "428": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
     },
     "/review-cases/{review_case_id}/versions": {
+      "get": {
+        "operationId": "listReviewVersions",
+        "summary": "listReviewVersions",
+        "tags": [
+          "Reviews"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReviewCaseId"
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "before_version",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 4294967295
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Review case",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewVersionHistoryResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
       "post": {
         "operationId": "createReviewVersion",
         "summary": "Create an immutable user-edited review version",
@@ -156,6 +281,9 @@
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "requestBody": {
@@ -186,9 +314,38 @@
                   "$ref": "#/components/schemas/ReviewCaseDetailResponse"
                 }
               }
+            },
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
             }
           },
           "412": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "428": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -210,6 +367,9 @@
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "requestBody": {
@@ -247,6 +407,27 @@
           },
           "412": {
             "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "428": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -267,6 +448,9 @@
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "requestBody": {
@@ -303,6 +487,30 @@
           },
           "412": {
             "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "428": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -323,7 +531,14 @@
             }
           },
           {
-            "$ref": "#/components/parameters/PageSize"
+            "name": "page_size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
           }
         ],
         "responses": {
@@ -336,6 +551,24 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -381,6 +614,27 @@
           },
           "422": {
             "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "412": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "428": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -402,6 +656,24 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -431,6 +703,21 @@
           },
           "404": {
             "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -457,6 +744,24 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -477,6 +782,9 @@
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "requestBody": {
@@ -515,6 +823,312 @@
             }
           },
           "412": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "428": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/review-cases/{review_case_id}/versions/{version_id}": {
+      "get": {
+        "operationId": "getReviewVersion",
+        "summary": "getReviewVersion",
+        "tags": [
+          "Reviews"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReviewCaseId"
+          },
+          {
+            "name": "version_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/OpaqueId"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Review case",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewVersionResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/review-cases/{review_case_id}/history": {
+      "get": {
+        "operationId": "getReviewHistoricalMetadata",
+        "summary": "getReviewHistoricalMetadata",
+        "tags": [
+          "Reviews"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReviewCaseId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Review case",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewHistoricalMetadataResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/review-cases/{review_case_id}/history/jobs": {
+      "get": {
+        "operationId": "listArchivedReviewJobs",
+        "summary": "读取归档复盘作业",
+        "tags": [
+          "Reviews"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReviewCaseId"
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Review case",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchivedReviewJobPageResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/review-cases/{review_case_id}/history/events": {
+      "get": {
+        "operationId": "listArchivedReviewEvents",
+        "summary": "读取归档复盘事件",
+        "tags": [
+          "Reviews"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReviewCaseId"
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Review case",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchivedReviewEventPageResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/review-cases/{review_case_id}/history/stages": {
+      "get": {
+        "operationId": "listArchivedReviewStages",
+        "summary": "读取归档复盘阶段",
+        "tags": [
+          "Reviews"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ReviewCaseId"
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Review case",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchivedReviewStagePageResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -586,7 +1200,8 @@
             "enum": [
               "daily",
               "monthly",
-              "manual"
+              "manual",
+              "trade"
             ]
           },
           "user_id": {
@@ -676,7 +1291,8 @@
               "awaiting_confirmation",
               "needs_changes",
               "confirmed",
-              "failed"
+              "failed",
+              "archived"
             ]
           },
           "evidence_status": {
@@ -972,22 +1588,55 @@
             ]
           },
           "conclusion": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "enum": [
               "effective",
               "mixed",
               "ineffective",
               "insufficient_evidence",
-              "manual_trade_reviewed"
+              "manual_trade_reviewed",
+              null
             ]
           },
           "content": {
-            "$ref": "#/components/schemas/ReviewContent"
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReviewContent"
+              },
+              {
+                "$ref": "#/components/schemas/LegacyReviewContent"
+              }
+            ]
           },
           "created_at": {
             "$ref": "#/components/schemas/UtcDateTime"
           }
-        }
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/LegacyReviewContent"
+              },
+              "conclusion": {
+                "type": "null"
+              }
+            }
+          },
+          {
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/ReviewContent"
+              },
+              "conclusion": {
+                "type": "string"
+              }
+            }
+          }
+        ]
       },
       "ReviewCaseDetail": {
         "type": "object",
@@ -1243,79 +1892,12 @@
         }
       },
       "StrategyMemorySummary": {
-        "type": "object",
-        "required": [
-          "id",
-          "strategy_id",
-          "strategy_name",
-          "strategy_kind",
-          "owner_user_id",
-          "mode",
-          "status",
-          "current_version",
-          "pending_count",
-          "updated_at",
-          "revision"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          "strategy_id": {
-            "$ref": "#/components/schemas/OpaqueId"
-          },
-          "strategy_name": {
-            "type": "string"
-          },
-          "strategy_kind": {
-            "type": "string",
-            "enum": [
-              "analysis",
-              "trader"
-            ]
-          },
-          "owner_user_id": {
-            "oneOf": [
-              {
-                "$ref": "#/components/schemas/OpaqueId"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "mode": {
-            "type": "string",
-            "enum": [
-              "off",
-              "shadow",
-              "active"
-            ]
-          },
-          "status": {
-            "type": "string",
-            "enum": [
-              "active",
-              "revalidating",
-              "retired"
-            ]
-          },
-          "current_version": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "pending_count": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "updated_at": {
-            "$ref": "#/components/schemas/UtcDateTime"
-          },
-          "revision": {
-            "$ref": "#/components/schemas/Revision"
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/StrategyMemoryFields"
           }
-        }
+        ],
+        "unevaluatedProperties": false
       },
       "StrategyMemoryListResponse": {
         "type": "object",
@@ -1356,7 +1938,7 @@
           "data": {
             "allOf": [
               {
-                "$ref": "#/components/schemas/StrategyMemorySummary"
+                "$ref": "#/components/schemas/StrategyMemoryFields"
               },
               {
                 "type": "object",
@@ -1388,7 +1970,8 @@
                   }
                 }
               }
-            ]
+            ],
+            "unevaluatedProperties": false
           },
           "meta": {
             "$ref": "#/components/schemas/Meta"
@@ -1564,6 +2147,645 @@
         "properties": {
           "data": {
             "$ref": "#/components/schemas/StrategyMemoryUpdate"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "StrategyMemoryFields": {
+        "type": "object",
+        "required": [
+          "id",
+          "strategy_id",
+          "strategy_name",
+          "strategy_kind",
+          "owner_user_id",
+          "mode",
+          "status",
+          "current_version",
+          "pending_count",
+          "updated_at",
+          "revision"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "strategy_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "strategy_name": {
+            "type": "string"
+          },
+          "strategy_kind": {
+            "type": "string",
+            "enum": [
+              "analysis",
+              "trader"
+            ]
+          },
+          "owner_user_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "shadow",
+              "active"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "revalidating",
+              "retired"
+            ]
+          },
+          "current_version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pending_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "updated_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        }
+      },
+      "LegacyReviewContent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema_version",
+          "source_table",
+          "source_id",
+          "source_sha256",
+          "original_content_hash",
+          "raw_text"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "review.legacy.v1",
+            "type": "string"
+          },
+          "source_table": {
+            "type": "string",
+            "enum": [
+              "period_review_versions",
+              "manual_trade_review_versions",
+              "trade_review_versions"
+            ]
+          },
+          "source_id": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,19}$"
+          },
+          "source_sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "original_content_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "raw_text": {
+            "type": "string",
+            "maxLength": 16777215
+          }
+        }
+      },
+      "ReviewVersionSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "review_case_id",
+          "version",
+          "author_kind",
+          "conclusion",
+          "created_at"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "review_case_id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "author_kind": {
+            "type": "string",
+            "enum": [
+              "ai",
+              "user"
+            ]
+          },
+          "conclusion": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "effective",
+              "mixed",
+              "ineffective",
+              "insufficient_evidence",
+              "manual_trade_reviewed",
+              null
+            ]
+          },
+          "created_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          }
+        }
+      },
+      "ReviewVersionHistoryResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "items",
+              "next_before_version"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "$ref": "#/components/schemas/ReviewVersionSummary"
+                }
+              },
+              "next_before_version": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 1,
+                "maximum": 4294967295
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "ReviewVersionResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ReviewVersion"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "ReviewHistoricalMetadata": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "review_case_id",
+          "source_table",
+          "source_id",
+          "source_status",
+          "source_evidence_status",
+          "source_strategy_id",
+          "source_strategy_version",
+          "timezone_source"
+        ],
+        "properties": {
+          "review_case_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 191
+          },
+          "source_table": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 191
+          },
+          "source_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 191
+          },
+          "source_status": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 191
+          },
+          "source_evidence_status": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 191
+          },
+          "source_strategy_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 191
+          },
+          "source_strategy_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 191
+          },
+          "timezone_source": {
+            "type": "string",
+            "enum": [
+              "legacy_evidence",
+              "legacy_case",
+              "default_utc_plus_3"
+            ]
+          }
+        }
+      },
+      "ReviewHistoricalMetadataResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ReviewHistoricalMetadata"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "ArchivedReviewJob": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "source_table",
+          "source_id",
+          "original_status",
+          "stage",
+          "attempts",
+          "error_code",
+          "created_at",
+          "updated_at",
+          "completed_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 191
+          },
+          "source_table": {
+            "type": "string",
+            "enum": [
+              "period_review_jobs",
+              "manual_trade_review_jobs"
+            ]
+          },
+          "source_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 191
+          },
+          "original_status": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 191
+          },
+          "stage": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 191
+          },
+          "attempts": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 191
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "ArchivedReviewJobPageResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "items",
+              "total",
+              "next_offset"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "$ref": "#/components/schemas/ArchivedReviewJob"
+                }
+              },
+              "total": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "next_offset": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 10000
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "ArchivedReviewEvent": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "job_id",
+          "stage",
+          "original_status",
+          "message_code",
+          "occurred_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 191
+          },
+          "job_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 191
+          },
+          "stage": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 191
+          },
+          "original_status": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 191
+          },
+          "message_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 191
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ArchivedReviewEventPageResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "items",
+              "total",
+              "next_offset"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "$ref": "#/components/schemas/ArchivedReviewEvent"
+                }
+              },
+              "total": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "next_offset": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 10000
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "ArchivedReviewStage": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "job_id",
+          "generation",
+          "stage",
+          "original_status",
+          "input_hash",
+          "output_hash",
+          "has_output",
+          "error_code",
+          "created_at",
+          "completed_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 191
+          },
+          "job_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 191
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "stage": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 191
+          },
+          "original_status": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 191
+          },
+          "input_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "output_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "has_output": {
+            "type": "boolean"
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 191
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "ArchivedReviewStagePageResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "items",
+              "total",
+              "next_offset"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "$ref": "#/components/schemas/ArchivedReviewStage"
+                }
+              },
+              "total": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10000
+              },
+              "next_offset": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 10000
+              }
+            }
           },
           "meta": {
             "$ref": "#/components/schemas/Meta"

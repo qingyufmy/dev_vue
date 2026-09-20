@@ -8,6 +8,8 @@ import App from './App.vue'
 import { router } from './router'
 
 document.documentElement.dataset.surface = 'trade'
+try { document.documentElement.dataset.theme = localStorage.getItem('aurum-trade-theme') === 'light' ? 'light' : 'dark' } catch { document.documentElement.dataset.theme = 'dark' }
+document.documentElement.classList.toggle('dark', document.documentElement.dataset.theme === 'dark')
 
 createApp(App)
   .use(createPinia())

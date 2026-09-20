@@ -1,0 +1,37 @@
+import { describe, expect, it } from 'vitest'
+import { publicChanChart } from '../src/modules/market/application/public-chan-chart.js'
+
+function candles(count: number) {
+  return Array.from({ length: count }, (_, index) => {
+    const base = 2400 + Math.sin(index / 4) * 18 + index / 20
+    return {
+      openTime: new Date(Date.UTC(2026, 8, 1) + index * 300_000).toISOString(),
+      open: base.toFixed(2), high: (base + 4).toFixed(2), low: (base - 4).toFixed(2),
+      close: (base + Math.sin(index) * 2).toFixed(2), closed: true,
+    }
+  })
+}
+
+describe('public Chan chart projection', () => {
+  it('does not calculate an unsupported timeframe', () => {
+    expect(publicChanChart({ accountId: '1', platform: 'mt5', timeframe: 'M1', candles: candles(40), clock: null,
+      referenceTime: '2026-09-02T00:00:00.000Z' })).toBeNull()
+  })
+
+  it('reports insufficient closed history without treating a forming candle as evidence', () => {
+    const rows = [...candles(29), { ...candles(1)[0]!, openTime: '2026-09-01T02:30:00.000Z', closed: false }]
+    expect(publicChanChart({ accountId: '1', platform: 'mt5', timeframe: 'M5', candles: rows, clock: null,
+      referenceTime: '2026-09-02T00:00:00.000Z' })).toEqual({
+      algorithm: 'chan_structure_v8', status: 'insufficient_klines', reliability: 'low', based_on_closed_bars: 29, lines: [],
+    })
+  })
+
+  it('returns only bounded display line kinds from the production engine', () => {
+    const result = publicChanChart({ accountId: '1', platform: 'mt5', timeframe: 'M5', candles: candles(300),
+      clock: { offset: 180, checkedAt: '2026-09-02T00:00:00.000Z' }, referenceTime: '2026-09-02T00:00:00.000Z' })
+    expect(result?.algorithm).toBe('chan_structure_v8')
+    expect(result?.based_on_closed_bars).toBe(300)
+    expect(result?.lines.length).toBeLessThanOrEqual(32)
+    expect(result?.lines.every(line => ['bi', 'segment', 'forming_segment', 'center', 'fractal_top', 'fractal_bottom'].includes(line.kind))).toBe(true)
+  })
+})

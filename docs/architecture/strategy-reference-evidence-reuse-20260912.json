@@ -1,0 +1,37 @@
+{
+  "sourceReport": "strategy-reference-portfolio-sql-v9-20260910.json",
+  "checks": [
+    {
+      "path": "server/src/modules/inference/application/read-strategy-reference-portfolio.ts",
+      "expectedSha256": "d0a4e00ded2cb22afff182848e717dff2546e9e98a25ae3523ed57f58b858b03",
+      "actualSha256": "d0a4e00ded2cb22afff182848e717dff2546e9e98a25ae3523ed57f58b858b03",
+      "unchanged": true
+    },
+    {
+      "path": "server/src/modules/inference/application/strategy-reference-portfolio.ts",
+      "expectedSha256": "87f07f8a6fe774cac71582eb86cb20f8e14e27c36d6711350c77b42175c1ab8a",
+      "actualSha256": "87f07f8a6fe774cac71582eb86cb20f8e14e27c36d6711350c77b42175c1ab8a",
+      "unchanged": true
+    },
+    {
+      "path": "scripts/lib/strategy-reference-source-reference.mjs",
+      "expectedSha256": "ce878a9df70bb26fe285bd0a3e0333e8b7c45148b358909df2e0cc041e600f59",
+      "actualSha256": "ce878a9df70bb26fe285bd0a3e0333e8b7c45148b358909df2e0cc041e600f59",
+      "unchanged": true
+    },
+    {
+      "path": "server/dist-v4/bootstrap/strategy-reference-evidence.js",
+      "expectedSha256": "cbdf93ab01fc28b7fe81106e939eaa1daa7a890a3f01a2f6ffbdf8b2741d25c2",
+      "actualSha256": "cbdf93ab01fc28b7fe81106e939eaa1daa7a890a3f01a2f6ffbdf8b2741d25c2",
+      "unchanged": true
+    },
+    {
+      "path": "server/dist-v4/modules/inference/infrastructure/mysql-strategy-reference-source-reader.js",
+      "expectedSha256": "e054de71bd0e3eef1be1efff5c8eb393dd4502c53c0ddce3807107304c571283",
+      "actualSha256": "e054de71bd0e3eef1be1efff5c8eb393dd4502c53c0ddce3807107304c571283",
+      "unchanged": true
+    }
+  ],
+  "allUnchanged": true,
+  "databaseWrites": 0
+}

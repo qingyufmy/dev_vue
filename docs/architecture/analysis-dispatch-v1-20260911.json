@@ -1,0 +1,20 @@
+{
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "syntheticPorts": [
+    "model-result",
+    "trader-consumer-readback-only"
+  ],
+  "foreignKeysVerified": false,
+  "checks": [
+    "analysis-result-and-trader-task-commit-with-UTC-and-outbox",
+    "duplicate-completion-rejected"
+  ],
+  "errorCode": "ERR_ASSERTION",
+  "locations": [
+    "    at file:///D:/dev_codex/dev_vue/scripts/verify-analysis-completion-reference-local.mjs:111:14",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)"
+  ],
+  "referenceQueueRemoved": true,
+  "referenceDatabaseRemoved": true
+}

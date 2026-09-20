@@ -1,0 +1,33 @@
+{
+  "kind": "review-worker-mysql-reference/v1",
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "foreignKeysVerified": false,
+  "modelCalls": "synthetic-only",
+  "checks": [
+    "claim-and-complete-use-schema-compatible-status",
+    "unexpired-lease-not-stolen",
+    "expired-lease-reclaimed-and-attempt-expired",
+    "stale-worker-cannot-write-after-takeover",
+    "archived-case-never-calls-model",
+    "retry_wait-not-claimed-before-due-and-accepted-at-boundary",
+    "queued-not-claimed-before-due-and-accepted-at-boundary",
+    "real-redis-repeated-scans-deduplicate-and-complete-due-and-expired-jobs"
+  ],
+  "redisConfigurationSource": "REDIS",
+  "runtimeQueueConfigurationVerified": false,
+  "recoveryResults": [
+    {
+      "status": "succeeded",
+      "versionId": "2a8fb073-fd3c-4f39-8d07-711ec38756cd"
+    },
+    {
+      "status": "succeeded",
+      "versionId": "6fb88a0b-a5a2-4b26-8e76-304f3047b066"
+    }
+  ],
+  "redisVerified": true,
+  "referenceQueueRemoved": true,
+  "referenceDatabaseRemoved": true,
+  "observedAt": "2026-09-11T04:15:49.243Z"
+}

@@ -22,6 +22,14 @@ namespace Liangjian.BridgeV4.Runtime
     {
         public const long HistoryWindowMsc = 30L * 24L * 60L * 60L * 1000L;
 
+        internal static bool ShrinkFreshHistoryWindow(ProjectionSourceCursor cursor)
+        {
+            long width = cursor.WindowEndUtcMsc - cursor.WindowStartUtcMsc;
+            if (width <= 1000 || cursor.NativeTimeUtcMsc != cursor.WindowStartUtcMsc || cursor.NativeTicket != "0") return false;
+            cursor.WindowEndUtcMsc = cursor.WindowStartUtcMsc + width / 2;
+            return true;
+        }
+
         public static ProjectionSourceCursor DecodeCursor(string value)
         {
             if (string.IsNullOrEmpty(value))
@@ -191,7 +199,7 @@ namespace Liangjian.BridgeV4.Runtime
 
         public static IList<CandleRecord> MapCandles(
             IDictionary<string, object> root, string expectedSymbol, string expectedTimeframe,
-            long rangeStartUtcMsc, long rangeEndUtcMsc, long observedAtUtcMsc, string revision)
+            long rangeStartUtcMsc, long rangeEndUtcMsc, long observedAtUtcMsc, string revision, bool allowOpenCandles = false)
         {
             if (ReadText(root, "symbol", true) != expectedSymbol
                 || ReadText(root, "timeframe", true) != expectedTimeframe)
@@ -208,7 +216,7 @@ namespace Liangjian.BridgeV4.Runtime
                 {
                     continue;
                 }
-                if (!IsClosedCandle(expectedTimeframe, openTime, observedAtUtcMsc))
+                if (!allowOpenCandles && !IsClosedCandle(expectedTimeframe, openTime, observedAtUtcMsc))
                 {
                     throw new InvalidDataException("bridge_projection_open_candle_pending");
                 }
@@ -232,7 +240,7 @@ namespace Liangjian.BridgeV4.Runtime
                     TickVolume = ReadLong(row, "tick_volume"),
                     RealVolume = ReadOptionalLong(row, "real_volume", 0),
                     Spread = ReadDouble(row, "spread"),
-                    Closed = true,
+                    Closed = IsClosedCandle(expectedTimeframe, openTime, observedAtUtcMsc),
                     SourceRevision = revision,
                     ObservedAtUtcMsc = observedAtUtcMsc,
                     LastAccessedUtcMsc = observedAtUtcMsc

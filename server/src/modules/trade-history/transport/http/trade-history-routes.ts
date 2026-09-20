@@ -1,4 +1,8 @@
-import type { FastifyPluginAsync } from 'fastify'
+import { randomUUID } from 'node:crypto'
+import { AuthError } from '../../../auth/index.js'
+import { createHttpContractValidator, HttpContractError } from '../../../../transport/http-contract.js'
+import { httpRuntimeContracts } from '../../../../transport/generated/http-contracts.js'
+import type { FastifyPluginAsync, FastifyReply } from 'fastify'
 import type { TradeHistoryService } from '../../application/trade-history-service.js'
 import { TradeHistoryError, type TradeRecordAttribution, type TradeRecordDeal, type TradeRecordDetail, type TradeRecordSummary } from '../../domain/trade-history.js'
 
@@ -7,9 +11,11 @@ export interface TradeHistoryRoutesOptions { service: TradeHistoryService; auth:
 const response = (requestId: string, data: unknown) => ({ data, meta: { request_id: requestId, generated_at: new Date().toISOString() } })
 
 export const tradeHistoryRoutes: FastifyPluginAsync<TradeHistoryRoutesOptions> = async (fastify, options) => {
+  const contract = createHttpContractValidator(httpRuntimeContracts, ['listTradeHistory', 'getTradeRecord'])
   fastify.get<{ Querystring: { account_id?: string; symbol?: string; side?: string; source?: string; outcome?: string; from_date?: string; to_date?: string; q?: string; page_size?: string; cursor?: string } }>('/trade-history', async (request, reply) => {
     try {
       const { userId } = await options.auth.authenticate(request)
+      contract.request('listTradeHistory', request)
       const result = await options.service.records(userId, {
         accountId: String(request.query.account_id ?? ''),
         ...(request.query.symbol ? { symbol: request.query.symbol } : {}), ...(request.query.side ? { side: request.query.side } : {}),
@@ -18,13 +24,17 @@ export const tradeHistoryRoutes: FastifyPluginAsync<TradeHistoryRoutesOptions> =
         ...(request.query.q ? { query: request.query.q } : {}), ...(request.query.cursor ? { cursor: request.query.cursor } : {}),
         pageSize: Number(request.query.page_size ?? 50),
       })
-      return response(request.id, { captured_end: result.capturedEnd, freshness: { status: result.freshness.status, history_revision: String(result.freshness.historyRevision), fresh_through: result.freshness.freshThrough, last_success_at: result.freshness.lastSuccessAt }, items: result.items.map(recordDto), next_cursor: result.nextCursor, has_more: result.hasMore, summary: summaryDto(result.summary), daily: result.daily.map(item => ({ business_date: item.businessDate, trade_count: item.tradeCount, net_profit: item.netProfit, cumulative_net_profit: item.cumulativeNetProfit })) })
-    } catch (error) { return problem(error, request, reply) }
+      return contract.response('listTradeHistory', response(request.id, { captured_end: result.capturedEnd, freshness: { status: result.freshness.status, history_revision: String(result.freshness.historyRevision), fresh_through: result.freshness.freshThrough, last_success_at: result.freshness.lastSuccessAt }, items: result.items.map(recordDto), next_cursor: result.nextCursor, has_more: result.hasMore, summary: summaryDto(result.summary), daily: result.daily.map(item => ({ business_date: item.businessDate, trade_count: item.tradeCount, net_profit: item.netProfit, cumulative_net_profit: item.cumulativeNetProfit })) }))
+    } catch (error) { return problem(error, request, reply, contract, 'listTradeHistory') }
   })
 
   fastify.get<{ Params: { trade_record_id: string } }>('/trade-history/:trade_record_id', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); return response(request.id, detailDto(await options.service.detail(userId, request.params.trade_record_id))) }
-    catch (error) { return problem(error, request, reply) }
+    try {
+      const { userId } = await options.auth.authenticate(request)
+      contract.request('getTradeRecord', request)
+      return contract.response('getTradeRecord', response(request.id, detailDto(await options.service.detail(userId, request.params.trade_record_id))))
+    }
+    catch (error) { return problem(error, request, reply, contract, 'getTradeRecord') }
   })
 }
 
@@ -33,4 +43,16 @@ function detailDto(value: TradeRecordDetail) { return { ...recordDto(value), evi
 function dealDto(value: TradeRecordDeal) { return { account_currency: value.accountCurrency, currency_evidence: value.currencyEvidence, id: value.id, deal_ticket: value.dealTicket, order_ticket: value.orderTicket, role: value.role, side: value.side, entry_kind: value.entryKind, volume: value.volume, price: value.price, gross_profit: value.grossProfit, commission: value.commission, swap: value.swap, fee: value.fee, occurred_at: value.occurredAt } }
 function attributionDto(value: TradeRecordAttribution) { return { kind: value.kind, source_id: value.sourceId, relation: value.relation, proof_kind: value.proofKind } }
 function summaryDto(value: Awaited<ReturnType<TradeHistoryService['records']>>['summary']) { return { account_currency: value.accountCurrency, money_status: value.moneyStatus, trade_count: value.tradeCount, winning_count: value.winningCount, losing_count: value.losingCount, breakeven_count: value.breakevenCount, win_rate_percent: value.winRatePercent, gross_profit: value.grossProfit, commission: value.commission, swap: value.swap, fee: value.fee, net_profit: value.netProfit, profit_factor: value.profitFactor } }
-function problem(error: unknown, request: { id: string; url: string }, reply: { code(status: number): { send(body: unknown): unknown } }) { const known = error instanceof TradeHistoryError ? error : new TradeHistoryError('trade_history_unavailable', 503); return reply.code(known.status).send({ type: `urn:aurum:problem:${known.code}`, title: 'Trade history request failed', status: known.status, code: known.code, detail: known.code, instance: request.url, correlation_id: request.id, retryable: known.status >= 500 }) }
+function problem(error: unknown, request: { id: string; url: string }, reply: FastifyReply, contract: ReturnType<typeof createHttpContractValidator>, operationId: string) {
+  const known = error instanceof TradeHistoryError || error instanceof HttpContractError || error instanceof AuthError ? error : new TradeHistoryError('trade_history_unavailable', 503)
+  const body = { type: `urn:aurum:problem:${known.code}`, title: 'Trade history request failed', status: known.status,
+    code: known.code, detail: known.code, instance: request.url, correlation_id: request.id, retryable: known.status >= 500 }
+  try {
+    return reply.type('application/problem+json').code(known.status).send(contract.response(operationId, body, known.status, 'application/problem+json'))
+  } catch {
+    // Never echo a value that failed the error contract, or recursively retry it.
+    const fallback = { type: 'urn:aurum:problem:api_response_invalid', title: 'Response validation failed', status: 503,
+      code: 'api_response_invalid', detail: 'api_response_invalid', instance: '/api/v4/trade-history', correlation_id: randomUUID(), retryable: true }
+    return reply.type('application/problem+json').code(503).send(contract.response(operationId, fallback, 503, 'application/problem+json'))
+  }
+}

@@ -1,0 +1,980 @@
+{
+  "kind": "core-legacy-lineage-current/v1",
+  "passed": true,
+  "writes": 0,
+  "checks": [
+    "all-retained-source-rows-read-and-hashed-without-payload-disclosure",
+    "installed-core-foreign-keys-have-no-orphans",
+    "legacy-archive-reader-preserves-original-identity-and-rejects-other-user",
+    "financial-aggregates-use-MySQL-decimal"
+  ],
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "recovery": "0"
+  },
+  "archives": [
+    {
+      "table": "ai_signals",
+      "records": 1764,
+      "rowSha256": "31b6fe1c326799d8f9098e02e62c756d51ad31d0a54bf2285706c385b60c3328",
+      "owners": [
+        {
+          "user_id": 0,
+          "records": "1015"
+        },
+        {
+          "user_id": 1,
+          "records": "455"
+        },
+        {
+          "user_id": 2,
+          "records": "1"
+        },
+        {
+          "user_id": 3,
+          "records": "236"
+        },
+        {
+          "user_id": 4,
+          "records": "6"
+        },
+        {
+          "user_id": 5,
+          "records": "4"
+        },
+        {
+          "user_id": 6,
+          "records": "6"
+        },
+        {
+          "user_id": 7,
+          "records": "4"
+        },
+        {
+          "user_id": 9,
+          "records": "7"
+        },
+        {
+          "user_id": 11,
+          "records": "1"
+        },
+        {
+          "user_id": 12,
+          "records": "6"
+        },
+        {
+          "user_id": 15,
+          "records": "6"
+        },
+        {
+          "user_id": 16,
+          "records": "1"
+        },
+        {
+          "user_id": 17,
+          "records": "6"
+        },
+        {
+          "user_id": 18,
+          "records": "10"
+        }
+      ],
+      "readDestination": "retained-legacy-archive",
+      "v4RuntimeBackfill": false
+    },
+    {
+      "table": "inference_snapshots_legacy_v3",
+      "records": 789,
+      "rowSha256": "2fadee5123935149796d5f80e64d8677395b2c5dda0f916fdf7b921bd4aba71f",
+      "owners": [
+        {
+          "user_id": 0,
+          "records": "789"
+        }
+      ],
+      "readDestination": "retained-legacy-archive",
+      "v4RuntimeBackfill": false
+    },
+    {
+      "table": "ai_model_tasks_legacy_v3",
+      "records": 9317,
+      "rowSha256": "0d97b72aedc8d2198f60fb6c50ab39cf61d380a124bc0933e008d132ddc4a2d8",
+      "owners": [
+        {
+          "user_id": 0,
+          "records": "9205"
+        },
+        {
+          "user_id": 1,
+          "records": "80"
+        },
+        {
+          "user_id": 29,
+          "records": "32"
+        }
+      ],
+      "readDestination": "retained-legacy-archive",
+      "v4RuntimeBackfill": false
+    },
+    {
+      "table": "auto_signal_deliveries",
+      "records": 1442,
+      "rowSha256": "efb97339a28e3f37c75612143b09dd7972ab892782ee053b9a2e449922895057",
+      "owners": [
+        {
+          "user_id": 1,
+          "records": "738"
+        },
+        {
+          "user_id": 28,
+          "records": "427"
+        },
+        {
+          "user_id": 29,
+          "records": "277"
+        }
+      ],
+      "readDestination": "retained-legacy-archive",
+      "v4RuntimeBackfill": false
+    },
+    {
+      "table": "order_intents",
+      "records": 412,
+      "rowSha256": "97fbb445c3387ec0982d0fe743d42c0775f36162a1fb60ef5775944e12289afc",
+      "owners": [
+        {
+          "user_id": 1,
+          "records": "154"
+        },
+        {
+          "user_id": 28,
+          "records": "42"
+        },
+        {
+          "user_id": 29,
+          "records": "216"
+        }
+      ],
+      "readDestination": "retained-legacy-archive",
+      "v4RuntimeBackfill": false
+    },
+    {
+      "table": "risk_decisions",
+      "records": 395,
+      "rowSha256": "18e7197d9bec7675a84dfaea0e6d728a99e7c0303a143b3ee7fdd3d1dfc3ccd1",
+      "owners": [],
+      "readDestination": "retained-legacy-archive",
+      "v4RuntimeBackfill": false
+    },
+    {
+      "table": "signal_outcomes",
+      "records": 334,
+      "rowSha256": "3b27e16a2578254bad77cddf954ce3692579730fee13ad689b1f960bd795ade3",
+      "owners": [
+        {
+          "user_id": 1,
+          "records": "122"
+        },
+        {
+          "user_id": 28,
+          "records": "19"
+        },
+        {
+          "user_id": 29,
+          "records": "193"
+        }
+      ],
+      "readDestination": "retained-legacy-archive",
+      "v4RuntimeBackfill": false
+    },
+    {
+      "table": "signal_outcome_deals",
+      "records": 427,
+      "rowSha256": "5932d978cac5c30cb86a075659b2aaec22f93e6da09029dce92580ce97dfe900",
+      "owners": [
+        {
+          "user_id": 1,
+          "records": "138"
+        },
+        {
+          "user_id": 28,
+          "records": "12"
+        },
+        {
+          "user_id": 29,
+          "records": "277"
+        }
+      ],
+      "readDestination": "retained-legacy-archive",
+      "v4RuntimeBackfill": false
+    }
+  ],
+  "foreignKeys": [
+    {
+      "table": "ai_model_tasks",
+      "name": "build_inf_b57695181409e75e254b094d",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "ai_model_tasks",
+      "name": "build_inf_c5bd3bc0267d7b28ad294bfc",
+      "parent": "trading_accounts",
+      "columns": [
+        "trading_account_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "ai_model_tasks",
+      "name": "build_inf_ea6a85c5635a874974888a5d",
+      "parent": "inference_snapshots",
+      "columns": [
+        "input_snapshot_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "ai_trader_runs",
+      "name": "build_inf_23e635cc46a94d900a2abf58",
+      "parent": "strategy_versions",
+      "columns": [
+        "strategy_version_id",
+        "strategy_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "ai_trader_runs",
+      "name": "build_inf_2e2bc6c7f719003f523e5169",
+      "parent": "strategies",
+      "columns": [
+        "strategy_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "ai_trader_runs",
+      "name": "build_inf_34bcfbca16c0eeea5d67abd9",
+      "parent": "ai_model_tasks",
+      "columns": [
+        "model_task_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "ai_trader_runs",
+      "name": "build_inf_4f5a6112fdd30750fca34809",
+      "parent": "market_analyses",
+      "columns": [
+        "market_analysis_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "ai_trader_runs",
+      "name": "build_inf_74c1dfba66ec6aabea9a24ef",
+      "parent": "trading_accounts",
+      "columns": [
+        "trading_account_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "ai_trader_runs",
+      "name": "build_inf_855d8ea12f63231125056a9e",
+      "parent": "inference_snapshots",
+      "columns": [
+        "input_snapshot_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "ai_trader_runs",
+      "name": "build_inf_b8a7d27c436c902fe45c961a",
+      "parent": "strategy_subscriptions",
+      "columns": [
+        "subscription_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "ai_trader_runs",
+      "name": "build_inf_f77611e8b8ceee5174cf6f1f",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "bridge_commands_v4",
+      "name": "fk_bridge_command_account",
+      "parent": "trading_accounts",
+      "columns": [
+        "trading_account_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "bridge_commands_v4",
+      "name": "fk_bridge_command_intent",
+      "parent": "execution_intents",
+      "columns": [
+        "execution_intent_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "bridge_commands_v4",
+      "name": "fk_bridge_command_profile",
+      "parent": "terminal_profiles",
+      "columns": [
+        "terminal_profile_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "bridge_commands_v4",
+      "name": "fk_bridge_command_user",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "execution_intents",
+      "name": "fk_execution_intent_account",
+      "parent": "trading_accounts",
+      "columns": [
+        "trading_account_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "execution_intents",
+      "name": "fk_execution_intent_operation",
+      "parent": "operations",
+      "columns": [
+        "operation_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "execution_intents",
+      "name": "fk_execution_intent_position_workflow",
+      "parent": "partial_close_workflows_v4",
+      "columns": [
+        "position_workflow_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "execution_intents",
+      "name": "fk_execution_intent_risk_v4",
+      "parent": "risk_decisions_v4",
+      "columns": [
+        "risk_decision_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "execution_intents",
+      "name": "fk_execution_intent_trade_v4",
+      "parent": "trade_decisions",
+      "columns": [
+        "trade_decision_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "execution_intents",
+      "name": "fk_execution_intent_user",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "execution_intents",
+      "name": "fk_execution_intent_user_command",
+      "parent": "user_execution_commands",
+      "columns": [
+        "user_command_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "execution_outcomes",
+      "name": "fk_execution_outcome_account",
+      "parent": "trading_accounts",
+      "columns": [
+        "trading_account_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "execution_outcomes",
+      "name": "fk_execution_outcome_distribution_target",
+      "parent": "execution_distribution_targets",
+      "columns": [
+        "distribution_target_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "execution_outcomes",
+      "name": "fk_execution_outcome_intent",
+      "parent": "execution_intents",
+      "columns": [
+        "execution_intent_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "inference_snapshot_payloads",
+      "name": "build_inf_f9afae7e9c71fae06bc7df0e",
+      "parent": "inference_snapshots",
+      "columns": [
+        "snapshot_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "inference_snapshots",
+      "name": "build_inf_15a94f5bb0f6d57e59233511",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "inference_snapshots",
+      "name": "build_inf_37a482f0f6a622d4cbf7ba51",
+      "parent": "strategies",
+      "columns": [
+        "strategy_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "inference_snapshots",
+      "name": "build_inf_c86d439b34a23c6959ec8bfc",
+      "parent": "trading_accounts",
+      "columns": [
+        "trading_account_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "inference_snapshots",
+      "name": "build_inf_d744497b3fe127ab6f7ca36e",
+      "parent": "strategy_versions",
+      "columns": [
+        "strategy_version_id",
+        "strategy_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "market_analyses",
+      "name": "build_inf_5af34c29eac6ba73de991fb1",
+      "parent": "ai_analysis_runs",
+      "columns": [
+        "analysis_run_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "market_analyses",
+      "name": "build_inf_97fce77d611ca2d4bf21af1f",
+      "parent": "users",
+      "columns": [
+        "owner_user_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "market_analyses",
+      "name": "build_inf_b8d2f00897dd8adb7d311814",
+      "parent": "inference_snapshots",
+      "columns": [
+        "input_snapshot_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "market_analyses",
+      "name": "build_inf_d2611a93717bf755bfec2a40",
+      "parent": "strategy_versions",
+      "columns": [
+        "strategy_version_id",
+        "strategy_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "market_analyses",
+      "name": "build_inf_e2e9573b5c5851425eb7900b",
+      "parent": "strategies",
+      "columns": [
+        "strategy_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "risk_decisions_v4",
+      "name": "build_inf_1408092cb77dd9ba1ccd31f2",
+      "parent": "trading_accounts",
+      "columns": [
+        "trading_account_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "risk_decisions_v4",
+      "name": "build_inf_ca6c6bc2591479ec688ff5c8",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "risk_decisions_v4",
+      "name": "build_inf_dddef97403c671d093ba0f98",
+      "parent": "risk_policy_versions_v4",
+      "columns": [
+        "platform_policy_version_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "risk_decisions_v4",
+      "name": "build_inf_e43675f95ef8db37e5d34c99",
+      "parent": "risk_policy_versions_v4",
+      "columns": [
+        "account_policy_version_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "risk_decisions_v4",
+      "name": "build_inf_fcad85ec3743434f847c77ff",
+      "parent": "trade_decisions",
+      "columns": [
+        "trade_decision_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "risk_decisions_v4",
+      "name": "fk_risk_decision_manual_release",
+      "parent": "risk_manual_releases",
+      "columns": [
+        "manual_release_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "risk_decisions_v4",
+      "name": "fk_risk_decision_operation",
+      "parent": "operations",
+      "columns": [
+        "operation_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "strategy_subscriptions",
+      "name": "build_sub_0c51ad8469fff6ff093c86f9",
+      "parent": "strategy_versions",
+      "columns": [
+        "analysis_strategy_version_id",
+        "analysis_strategy_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "strategy_subscriptions",
+      "name": "build_sub_4fc8ff10102c070027098b11",
+      "parent": "strategies",
+      "columns": [
+        "trader_strategy_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "strategy_subscriptions",
+      "name": "build_sub_725f39a146e86dec96dbd0aa",
+      "parent": "trading_accounts",
+      "columns": [
+        "trading_account_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "strategy_subscriptions",
+      "name": "build_sub_7a251248c43ab0574975e1a3",
+      "parent": "strategies",
+      "columns": [
+        "analysis_strategy_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "strategy_subscriptions",
+      "name": "build_sub_9294d57ac7727ef83f7993ac",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "strategy_subscriptions",
+      "name": "build_sub_b279ce344487dfeef755f66f",
+      "parent": "strategy_versions",
+      "columns": [
+        "trader_strategy_version_id",
+        "trader_strategy_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "trade_decisions",
+      "name": "build_inf_0740be2c90774cd9e3b8f32c",
+      "parent": "trading_accounts",
+      "columns": [
+        "trading_account_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "trade_decisions",
+      "name": "build_inf_12a3ff95db57c0e8ddc81a23",
+      "parent": "inference_snapshots",
+      "columns": [
+        "input_snapshot_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "trade_decisions",
+      "name": "build_inf_1c4afc38a8809f954434c06c",
+      "parent": "strategies",
+      "columns": [
+        "strategy_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "trade_decisions",
+      "name": "build_inf_237346b062143ea85b1c19bd",
+      "parent": "users",
+      "columns": [
+        "user_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "trade_decisions",
+      "name": "build_inf_3b9c04485778d1c93b5a5ad9",
+      "parent": "market_analyses",
+      "columns": [
+        "market_analysis_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "trade_decisions",
+      "name": "build_inf_7a01f47f1db675d867c684d4",
+      "parent": "strategy_versions",
+      "columns": [
+        "strategy_version_id",
+        "strategy_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "trade_decisions",
+      "name": "build_inf_83956b0400318cd49a2b3277",
+      "parent": "risk_decisions_v4",
+      "columns": [
+        "risk_decision_id"
+      ],
+      "orphans": "0"
+    },
+    {
+      "table": "trade_decisions",
+      "name": "build_inf_8ae2b167ba9b0743ddaefb7f",
+      "parent": "ai_trader_runs",
+      "columns": [
+        "trader_run_id"
+      ],
+      "orphans": "0"
+    }
+  ],
+  "coreTablesWithoutForeignKeys": [],
+  "legacyRelations": {
+    "snapshot_signal": "0",
+    "signal_task": "0",
+    "delivery_intent": "0",
+    "outcome_intent": "0",
+    "deal_outcome": "0"
+  },
+  "amounts": [
+    {
+      "user_id": 1,
+      "trading_account_id": 1,
+      "records": "122",
+      "entry_volume": "1.67000000",
+      "closed_volume": "1.67000000",
+      "gross_profit": "-826.61000000",
+      "commission": "0.00000000",
+      "swap": "0.00000000",
+      "fee": "0.00000000",
+      "net_profit": "-826.61000000"
+    },
+    {
+      "user_id": 28,
+      "trading_account_id": 3,
+      "records": "9",
+      "entry_volume": "0.00000000",
+      "closed_volume": "0.00000000",
+      "gross_profit": "0.00000000",
+      "commission": "0.00000000",
+      "swap": "0.00000000",
+      "fee": "0.00000000",
+      "net_profit": "0.00000000"
+    },
+    {
+      "user_id": 28,
+      "trading_account_id": 4,
+      "records": "10",
+      "entry_volume": "0.12000000",
+      "closed_volume": "0.13000000",
+      "gross_profit": "-207.92000000",
+      "commission": "0.00000000",
+      "swap": "0.00000000",
+      "fee": "0.00000000",
+      "net_profit": "-207.92000000"
+    },
+    {
+      "user_id": 29,
+      "trading_account_id": 2,
+      "records": "193",
+      "entry_volume": "3.33000000",
+      "closed_volume": "3.27000000",
+      "gross_profit": "-453.80000000",
+      "commission": "0.00000000",
+      "swap": "0.00000000",
+      "fee": "0.00000000",
+      "net_profit": "-453.80000000"
+    }
+  ],
+  "idMaps": [
+    {
+      "entity_kind": "learning-course",
+      "source_table": "courses",
+      "records": "12"
+    },
+    {
+      "entity_kind": "learning-lesson",
+      "source_table": "courses",
+      "records": "12"
+    },
+    {
+      "entity_kind": "learning-progress",
+      "source_table": "progress",
+      "records": "5"
+    },
+    {
+      "entity_kind": "membership",
+      "source_table": "users",
+      "records": "21"
+    },
+    {
+      "entity_kind": "memory-library-analysis",
+      "source_table": "strategy_memory_libraries",
+      "records": "2"
+    },
+    {
+      "entity_kind": "memory-library-trader",
+      "source_table": "strategy_memory_libraries",
+      "records": "2"
+    },
+    {
+      "entity_kind": "memory-revision-analysis",
+      "source_table": "strategy_memory_library_revisions",
+      "records": "20"
+    },
+    {
+      "entity_kind": "memory-revision-trader",
+      "source_table": "strategy_memory_library_revisions",
+      "records": "20"
+    },
+    {
+      "entity_kind": "ownership_interval",
+      "source_table": "mt5_account_ownership_history",
+      "records": "274"
+    },
+    {
+      "entity_kind": "referral-account",
+      "source_table": "users",
+      "records": "25"
+    },
+    {
+      "entity_kind": "review-case",
+      "source_table": "manual_trade_review_cases",
+      "records": "3"
+    },
+    {
+      "entity_kind": "review-case",
+      "source_table": "period_review_cases",
+      "records": "25"
+    },
+    {
+      "entity_kind": "review-case",
+      "source_table": "trade_review_cases",
+      "records": "155"
+    },
+    {
+      "entity_kind": "review-version",
+      "source_table": "manual_trade_review_versions",
+      "records": "1"
+    },
+    {
+      "entity_kind": "review-version",
+      "source_table": "period_review_versions",
+      "records": "33"
+    },
+    {
+      "entity_kind": "risk-policy-set",
+      "source_table": "risk_policy_sets",
+      "records": "3"
+    },
+    {
+      "entity_kind": "risk-policy-version",
+      "source_table": "risk_policy_versions",
+      "records": "10"
+    },
+    {
+      "entity_kind": "strategy-analysis",
+      "source_table": "auto_prompt_types",
+      "records": "3"
+    },
+    {
+      "entity_kind": "strategy-trader",
+      "source_table": "auto_prompt_types",
+      "records": "3"
+    },
+    {
+      "entity_kind": "strategy-version-analysis",
+      "source_table": "auto_prompt_types",
+      "records": "3"
+    },
+    {
+      "entity_kind": "strategy-version-trader",
+      "source_table": "auto_prompt_types",
+      "records": "3"
+    },
+    {
+      "entity_kind": "subscription-d7e0bc54eb984ea6039731e1b317bbea4d36207dc1989cf5",
+      "source_table": "strategy_subscriptions",
+      "records": "5"
+    },
+    {
+      "entity_kind": "trading_account",
+      "source_table": "trading_accounts",
+      "records": "4"
+    }
+  ],
+  "accountIdentityMappings": [
+    {
+      "source_pk_json": "[{\"type\": \"integer\", \"value\": \"3\"}]",
+      "target_json": "{\"pk\": [{\"type\": \"integer\", \"value\": \"3\"}], \"table\": \"trading_accounts\"}"
+    },
+    {
+      "source_pk_json": "[{\"type\": \"integer\", \"value\": \"2\"}]",
+      "target_json": "{\"pk\": [{\"type\": \"integer\", \"value\": \"2\"}], \"table\": \"trading_accounts\"}"
+    },
+    {
+      "source_pk_json": "[{\"type\": \"integer\", \"value\": \"4\"}]",
+      "target_json": "{\"pk\": [{\"type\": \"integer\", \"value\": \"2\"}], \"table\": \"trading_accounts\"}"
+    },
+    {
+      "source_pk_json": "[{\"type\": \"integer\", \"value\": \"1\"}]",
+      "target_json": "{\"pk\": [{\"type\": \"integer\", \"value\": \"1\"}], \"table\": \"trading_accounts\"}"
+    }
+  ],
+  "archiveReadChecks": [
+    {
+      "signalId": "17001",
+      "userId": 0,
+      "snapshots": 1,
+      "tasks": 1,
+      "intents": 0,
+      "unresolvedIntentIds": [],
+      "wrongUserDenied": true
+    },
+    {
+      "signalId": "17000",
+      "userId": 0,
+      "snapshots": 1,
+      "tasks": 1,
+      "intents": 0,
+      "unresolvedIntentIds": [],
+      "wrongUserDenied": true
+    },
+    {
+      "signalId": "16999",
+      "userId": 0,
+      "snapshots": 1,
+      "tasks": 1,
+      "intents": 0,
+      "unresolvedIntentIds": [],
+      "wrongUserDenied": true
+    }
+  ],
+  "executionArchiveReadChecks": [
+    {
+      "intentId": "412",
+      "userId": 28,
+      "outcomes": 1,
+      "deals": 0,
+      "risks": 1,
+      "wrongUserDenied": true
+    },
+    {
+      "intentId": "411",
+      "userId": 1,
+      "outcomes": 1,
+      "deals": 0,
+      "risks": 1,
+      "wrongUserDenied": true
+    },
+    {
+      "intentId": "410",
+      "userId": 28,
+      "outcomes": 1,
+      "deals": 0,
+      "risks": 1,
+      "wrongUserDenied": true
+    }
+  ],
+  "limits": [
+    "local-archive-reader-is-not-a-browser-API",
+    "legacy-system-user-zero-is-not-assigned-to-a-current-user",
+    "historical-unresolved-links-are-reported-not-repaired-by-guessing",
+    "current-digests-are-not-an-independent-backup-comparison"
+  ],
+  "observedAt": "2026-09-12T08:24:04.730Z"
+}

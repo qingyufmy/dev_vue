@@ -1,0 +1,18 @@
+{
+  "kind": "risk-current-upgrade-application/v1",
+  "passed": true,
+  "observedAt": "2026-09-09T00:43:09.409Z",
+  "status": "completed",
+  "ddlCount": 8,
+  "identity": {
+    "database": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "historyCount": 174,
+  "proofHash": "64e56901aa05704f2435f12945e3e793a2ddc902d91ce53950d870281614db28",
+  "ddlAttempted": 8,
+  "ddlAcknowledged": 8,
+  "journalAttempts": 16,
+  "replayDdlCount": 0,
+  "scope": "Applied only the reviewed 043 risk structures to dev_vue. No seeds, backfill or 044 policy receipts. Data and prior history checked by coordinator."
+}

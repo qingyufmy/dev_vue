@@ -8,7 +8,7 @@ AnalysisTradingReader 仅选择 trading 公开读取合同中的 findOwnedAccoun
 TradingAnalysisMarketSource 留在本域基础设施，不从业务 index 导出；worker-analysis 经 composition 的 createAnalysisMarketSource 创建，返回 AnalysisMarketSource 应用端口。其它历史基础设施公开导出仍需逐项迁移，不能把本次单一工厂视为全域收口。定向验证包含 strategy-market-plan、inference-pipeline-vertical-slice 和 trader-preferences。
 
 
-交易 Worker 通过 createMysqlTraderContext 创建上下文应用能力，由模块内部组装合约、风险摘要、执行偏好读取器；createMysqlTraderWindowGuard 返回应用时间窗端口。具体读取器和守卫不从业务 index 导出。SQL 跨域所有权仍待逐项处理，不能把构造器迁移视为数据所有权完成。
+交易 Worker 通过 createMysqlTraderContext 创建上下文应用能力；品种快照由 trading 的 InstrumentSnapshotReader 公开端口注入，运行入口组装，inference 不再直接读取该快照正文表。风险摘要、执行偏好读取器仍在模块内部组装；createMysqlTraderWindowGuard 返回应用时间窗端口。其它 SQL 跨域所有权仍待逐项处理，不能把这一读取入口迁移视为全域数据所有权完成。
 
 
 分析 Worker 使用 createMysqlAnalysisWindowGuard/createMysqlMacroSnapshotReader 获得应用能力，业务 index 不公开具体类。时钟回调保留账户和用户范围，宏观证据哈希、版本、时效及缺失拒绝规则保持。定向入口为 analysis-window-guard、macro-evidence-context、inference-pipeline-vertical-slice。
@@ -17,10 +17,41 @@ TradingAnalysisMarketSource 留在本域基础设施，不从业务 index 导出
 运行入口经 createMysqlInferenceRepository 获得应用持久化端口，必须注入账户时钟与偏好连接工厂。createInferenceHttp 组装路由及策略服务，模块持有 /api/v4 前缀，总注册器保留 trade Host 隔离。业务 index 不导出 MySQL repository 与路由；模型、调度、恢复及用量相关具体出口仍待清理。
 
 
-createMysqlAnalysisScheduler/createMysqlModelTaskRecovery 组装调度和恢复持久化，实现只留在基础设施层。调用方仅获得 tick/expireOverdue，仍拥有轮询和生命周期；工厂本身不发起查询、调度或恢复。相关定向回归为 analysis-schedule-query、analysis-scheduler-worker。
+createAnalysisScheduler 接收 strategies 公开的 AnalysisScheduleStore，createMysqlModelTaskRecovery 组装本域恢复持久化。订阅计划 SQL 不再由 inference 持有。调用方仅获得 tick/expireOverdue，仍拥有轮询和生命周期；工厂本身不发起查询、调度或恢复。相关定向回归为 analysis-schedule-query、analysis-scheduler-worker。
 
 
 模型用量接口及上下文位于 application/model-usage-ledger.ts，composition 的 createMysqlModelUsageLedger 返回结算和恢复能力。网关仅依赖用量接口，业务 index 不公开 MySQL 账本。用量规则和 SQL 未改，定向验证为 ai-runtime-wiring。
 
 
 模型运行组装：分析、交易和冻结复盘经 composition 的 createMysqlAnalysisModelResolver/createMysqlTraderModelResolver/createMysqlReviewModelResolver 获取应用端口。HTTP 网关、凭据目录及 RuntimeModelProfile 保持基础设施内部实现；业务 index 不公开具体适配器。冻结复盘保留历史策略解析路径，分析/交易仍校验活动版本。回归入口为 ai-runtime-wiring.test.ts 与 review-worker.test.ts；本批不改变 SQL 数据所有权或证明真实模型联调。
+# 决策审核写入能力
+
+trade_decisions由本域创建并拥有写入口。公开TradeDecisionRiskWriter仅提供recordRiskReview业务能力，不暴露SQL、连接池或repository；composition导出工厂供运行入口绑定调用方已有事务连接。该能力只允许匹配用户、账户、预期revision、status=proposed且risk_decision_id为空的记录转为accepted/risk_rejected，并递增revision。未更新返回false，由事务拥有者处理冲突。适配器不开始、提交或回滚事务，也不发送执行命令。
+
+风险审核以risk用例为事务拥有者，将风险结果、决策审核状态及outbox一起提交。定向测试：risk-decision-owner-transaction.test.ts。推理/执行其它跨域读取和写入口仍须按功能矩阵继续核对，新增本能力不表示整个域已收口。
+
+分析/交易Worker及InferenceService只依赖strategies公开的ActiveStrategyVersionReader，保留用户权限、策略类型与活动版本检查，不取得整个策略管理服务。上下文构造器通过strategies/index读取公开StrategyVersion类型。已登记5条策略内部穿透清除；不代表模型/历史/真实运行验收完成。
+
+
+分析列表由MarketAnalysisListService及MysqlMarketAnalysisListReader拥有；API composition显式注入列表能力，原InferenceService/Repository无筛选listAnalyses入口已移除。列表只读摘要、按用户与筛选键分页，完整正文仍走详情。客户端保留nextCursor，页面加载更多交互在前端阶段接续。
+
+
+策略列表迁移后，createInferenceHttp只接收推理服务、认证端口及分析列表能力，不再接收策略目录服务。InferenceService自身进行分析策略校验的业务依赖仍保留。
+
+策略参考组合通过StrategyReferencePortfolioReader读取，经冻结器校验作用域/版本/时间并投影到TraderInputSnapshot.strategyReferencePortfolio；不混入账户positions/pendingOrders，referenceId不是执行ticket。scope包含具体analysisId，内部冻结证据schemaVersion=2保留该ID，历史快照不重写。提供方负责授权观察源与精确策略归属，当前由ReadStrategyReferencePortfolio和bootstrap参考证据工厂提供运行适配器，worker-trader已接线；真实Bridge覆盖和权限全链验收仍未完成。测试入口strategy-reference-portfolio.test.ts及trader-worker.test.ts。
+
+AnalysisSourceReader从本域分析结果、成功运行和输入快照的完整关联读取历史行情来源，校验快照摘要及策略版本/品种，返回来源账户和快照引用，不返回提示词或行情正文。手动运行源为空时使用冻结快照中的实际源；非空运行源必须与快照一致。createMysqlAnalysisSourceReader仅经composition提供基础设施工厂。该能力不证明当前观察授权、账户连接或持仓完整性，后续参考组合provider仍需这些能力。测试入口analysis-source-reader.test.ts、scripts/lib/analysis-source-reference.mjs。
+
+交易员上下文版本读取由运行入口注入：strategies提供订阅筛选、手动校验和当前版本，trading提供库存摘要、投影版本与账户行锁，risk提供摘要和轻量版本。MysqlInferenceRepository保留自身分析/任务/决策SQL及outbox，在同事务串行读取各域能力；不直接访问这些域的业务表。消费方RiskSummaryReader/RiskRevisionReader经结构匹配注入，避免risk已有推理证据依赖形成反向环。测试入口analysis-subscriber-dispatch、manual-trader-evaluation-ports、trader-risk-revision-port；后者完成路径捕获stale写入选择，不代表完整事务成功。
+
+AnalysisWindowService位于application，仅消费strategies.AnalysisWindowReader和账户时钟回调；Worker通过createAnalysisWindowGuard组装，手动任务跳过自动分析窗口，按需缓存单次判定内的时钟读取。模型任务恢复由scheduler注入trading.lockAccount，保留账户→run→task锁序；公开锁方法不能授予访问权限。测试入口analysis-window-guard和model-recovery-account-lock。
+
+模型配置/共享策略/用量仍归inference。RuntimeModelProfileCatalog经strategies.RuntimeStrategyAccess区分当前活动版本与冻结复盘的历史访问；共享资格的套餐事实由auth.AccountPrincipalReader提供。MysqlModelUsageLedger预留共享额度时复用auth的活动用户update锁和share当前事实读取，再锁本域policy、统计并插入日志；不存在或非活动主体拒绝，套餐期限不在这里重算。三个模型Worker及用量恢复入口显式注入能力。验证入口ai-runtime-wiring、scripts/lib/model-access-reference.mjs；真实并发证明限定参考用户及最小模型用量夹具。
+
+
+参考持仓创建证据：reference-position-creation在授权库存同一快照中核对生命周期有效开仓订单的创建策略；bootstrap注入execution公开快照读取器，业务层使用调用方结构端口。creation_strategy_matched仅表示开仓来源一致，缺证/混合保持未决；覆盖、精确历史来源和最终模型准入仍独立验证。测试strategy-reference-source-reader及真实strategy-reference-source-reference。
+
+参考组合准入：ReadStrategyReferencePortfolio消费完整positionEvidence和开仓来源，仅保留确切symbol/traderStrategyId项；同品种未决拒绝，不用空组合作替代。参考ID是上下文限定hash，公开模型字段仍经freezeStrategyReferencePortfolio白名单冻结。Worker启动先检查053任务历史结构，当前并未启动或证明真实终端可用。测试read-strategy-reference-portfolio、strategy-reference-portfolio、trader-worker；reference-v42验证真实历史SQL→组合→模型字段，授权库存与策略来源仍是注入夹具。
+# 个人旧信号归档（2026-09-12）
+
+archived-signal-reader 应用端口与 MysqlArchivedSignalReader 仅读取 ai_signals 原用户记录。`/api/v4/history/signals` 列表按原 ID 游标分页，详情返回分析/理由及旧任务 ID；旧系统 user_id=0 不作为登录身份开放，旧记录不进入 Worker。原始推理快照正文仍属受控归档，不由该接口隐式公开。行为验证见 server/tests/history-archive-http.test.ts。

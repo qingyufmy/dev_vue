@@ -1,0 +1,23 @@
+{
+  "kind": "review-worker-mysql-reference/v1",
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "foreignKeysVerified": false,
+  "modelCalls": "synthetic-only",
+  "checks": [
+    "claim-and-complete-use-schema-compatible-status",
+    "unexpired-lease-not-stolen",
+    "expired-lease-reclaimed-and-attempt-expired",
+    "stale-worker-cannot-write-after-takeover",
+    "archived-case-never-calls-model",
+    "retry_wait-not-claimed-before-due-and-accepted-at-boundary",
+    "queued-not-claimed-before-due-and-accepted-at-boundary"
+  ],
+  "errorCode": "ERR_ASSERTION",
+  "errorLocations": [
+    "    at file:///D:/dev_codex/dev_vue/scripts/verify-review-worker-reference-local.mjs:103:43",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)"
+  ],
+  "referenceDatabaseRemoved": true,
+  "observedAt": "2026-09-11T04:12:46.521Z"
+}

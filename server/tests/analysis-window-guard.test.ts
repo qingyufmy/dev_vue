@@ -1,4 +1,5 @@
-import { createMysqlAnalysisWindowGuard } from '../src/modules/inference/composition.js'
+import { createAnalysisWindowReader } from '../src/modules/strategies/composition.js'
+import { createAnalysisWindowGuard } from '../src/modules/inference/composition.js'
 import { describe, expect, it } from 'vitest'
 import type { Pool } from 'mysql2/promise'
 import { type AnalysisRun } from '../src/modules/inference/index.js'
@@ -7,13 +8,25 @@ const run = { trigger: 'scheduled', userId: 42, marketSourceAccountId: '7', stra
 const window = { enabled: true, version: 1, timezone: 'terminal_server', weekdays: [1], windows: [{ start: '22:00', end: '02:00' }], outsideBehavior: 'pause_all' }
 const now = new Date('2026-09-07T19:00:00Z')
 describe('queued analysis window guard', () => {
+  it('uses a strategy port and reads the bound clock at most once for multiple windows', async () => {
+    let clocks = 0
+    const guard = createAnalysisWindowGuard({ async list(scope) {
+      expect(scope).toEqual({ userId: 42, accountId: '7', strategyId: '10', strategyVersionId: '11', symbol: 'XAUUSD' })
+      return [{ timezone: 'terminal_server', window }, { timezone: 'terminal_server', window }]
+    } }, async (accountId, userId) => {
+      expect([accountId, userId]).toEqual(['7', 42]); clocks++
+      return { timezoneOffsetMinutes: 180, clockStatus: 'calibrated' }
+    })
+    await expect(guard.assertAllowed(run, new Date('2026-09-07T23:00:00Z'))).rejects.toThrow('analysis_schedule_closed')
+    expect(clocks).toBe(1)
+  })
   it('re-reads current settings and bound account clock on each invocation', async () => {
     let enabled = false, reads = 0
     const pool = { async execute(_sql: string, parameters: unknown[]) {
       expect(parameters).toEqual([42, '7', '10', '11', 'XAUUSD'])
       return [[{ receive_timezone: 'terminal_server', receive_window_json: enabled ? window : { enabled: false } }]]
     } } as unknown as Pool
-    const guard = createMysqlAnalysisWindowGuard(pool, async (accountId, userId) => {
+    const guard = createAnalysisWindowGuard(createAnalysisWindowReader(pool), async (accountId, userId) => {
       expect([accountId, userId]).toEqual(['7', 42]); reads += 1
       return { timezoneOffsetMinutes: 180, clockStatus: 'calibrated' }
     })
@@ -26,7 +39,7 @@ describe('queued analysis window guard', () => {
   })
   it('rejects removed subscription or lost account source and leaves manual requests outside this policy', async () => {
     let queries = 0
-    const guard = createMysqlAnalysisWindowGuard({ async execute() { queries += 1; return [[]] } } as unknown as Pool, async () => null)
+    const guard = createAnalysisWindowGuard(createAnalysisWindowReader({ async execute() { queries += 1; return [[]] } } as unknown as Pool), async () => null)
     await expect(guard.assertAllowed(run, now)).rejects.toThrow('analysis_schedule_closed')
     await expect(guard.assertAllowed({ ...run, marketSourceAccountId: null }, now)).rejects.toThrow('analysis_schedule_unavailable')
     await guard.assertAllowed({ ...run, trigger: 'manual' }, now)
@@ -34,9 +47,9 @@ describe('queued analysis window guard', () => {
   })
   it('retains signals-only with missing clock but never treats a display offset as calibrated', async () => {
     let outsideBehavior = 'pause_all'
-    const guard = createMysqlAnalysisWindowGuard({ async execute() { return [[{
+    const guard = createAnalysisWindowGuard(createAnalysisWindowReader({ async execute() { return [[{
       receive_timezone: 'terminal_server', receive_window_json: { ...window, outsideBehavior },
-    }]] } } as unknown as Pool, async () => ({ timezoneOffsetMinutes: 180, clockStatus: 'fallback' }))
+    }]] } } as unknown as Pool), async () => ({ timezoneOffsetMinutes: 180, clockStatus: 'fallback' }))
     await expect(guard.assertAllowed(run, now)).rejects.toThrow('analysis_schedule_closed')
     outsideBehavior = 'signals_only'
     await expect(guard.assertAllowed(run, now)).resolves.toBeUndefined()

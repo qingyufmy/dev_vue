@@ -1,4 +1,8 @@
-import type { FastifyPluginAsync } from 'fastify'
+import { randomUUID } from 'node:crypto'
+import { AuthError } from '../../../auth/index.js'
+import { createHttpContractValidator, HttpContractError } from '../../../../transport/http-contract.js'
+import { httpRuntimeContracts } from '../../../../transport/generated/http-contracts.js'
+import type { FastifyPluginAsync, FastifyReply } from 'fastify'
 import {
   ExecutionDistributionError,
   type CreateDistributionCloseInput,
@@ -37,30 +41,40 @@ const response = (requestId: string, data: unknown) => ({ data, meta: { request_
  * performed by the execution distribution repository transaction.
  */
 export const executionDistributionRoutes: FastifyPluginAsync<ExecutionDistributionRoutesOptions> = async (fastify, options) => {
+  const contract = createHttpContractValidator(httpRuntimeContracts, ['previewExecutionDistribution', 'getExecutionDistribution', 'createExecutionDistribution', 'createDistributionCloseCommand'])
   fastify.get<{ Querystring: { strategy_id?: string; symbol?: string } }>('/execution-distributions/preview', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
     try {
       const actor = await options.auth.authenticate(request)
+      if (Object.keys(request.query).some(key => key !== 'strategy_id' && key !== 'symbol')) throw new HttpContractError('api_request_invalid', 400)
+      contract.request('previewExecutionDistribution', request)
       const preview = await options.service.previewManualOrderDistribution({
         actorUserId: actor.userId,
         actorRole: actor.role,
         strategyId: String(request.query.strategy_id ?? ''),
         symbol: String(request.query.symbol ?? ''),
       })
-      return response(request.id, distributionPreviewDto(preview))
-    } catch (error) { return problem(error, request, reply) }
+      return contract.response('previewExecutionDistribution', response(request.id, distributionPreviewDto(preview)))
+    } catch (error) { return distributionProblem(error, request.id, reply, contract, 'previewExecutionDistribution') }
   })
 
   fastify.get<{ Params: { distribution_id: string } }>('/execution-distributions/:distribution_id', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
     try {
       const actor = await options.auth.authenticate(request)
+      if (Object.keys(request.query as object).length) throw new HttpContractError('api_request_invalid', 400)
+      contract.request('getExecutionDistribution', request)
       const result = await options.service.getDistribution(actor.userId, actor.role, request.params.distribution_id)
-      return response(request.id, distributionDetailDto(result))
-    } catch (error) { return problem(error, request, reply) }
+      return contract.response('getExecutionDistribution', response(request.id, distributionDetailDto(result)))
+    } catch (error) { return distributionProblem(error, request.id, reply, contract, 'getExecutionDistribution') }
   })
 
   fastify.post<{ Body: DistributionBody }>('/execution-distributions', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
     try {
       const actor = await options.auth.assertWrite(request)
+      if (Object.keys(request.query as object).length) throw new HttpContractError('api_request_invalid', 400)
+      contract.request('createExecutionDistribution', request)
       const body = object(request.body, 'distribution_body_invalid')
       const command = wireOrderCommand(object(body.command, 'distribution_command_required'))
       const input: CreateDistributionInput = {
@@ -71,13 +85,17 @@ export const executionDistributionRoutes: FastifyPluginAsync<ExecutionDistributi
         command,
       }
       const result = await options.service.createManualOrderDistribution(input)
-      return reply.code(202).send(response(request.id, operationDto(result)))
-    } catch (error) { return problem(error, request, reply) }
+      try { return reply.code(202).send(contract.response('createExecutionDistribution', response(request.id, operationDto(result)), 202)) }
+      catch { throw new ExecutionDistributionError('distribution_commit_unknown', 503) }
+    } catch (error) { return distributionProblem(error, request.id, reply, contract, 'createExecutionDistribution') }
   })
 
   fastify.post<{ Params: { distribution_id: string }; Body: CloseBody }>('/execution-distributions/:distribution_id/close-commands', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
     try {
       const actor = await options.auth.assertWrite(request)
+      if (Object.keys(request.query as object).length) throw new HttpContractError('api_request_invalid', 400)
+      contract.request('createDistributionCloseCommand', request)
       const body = object(request.body, 'distribution_close_body_invalid')
       const targetIds = body.target_ids === undefined ? [] : arrayOfStrings(body.target_ids, 'distribution_target_ids_invalid')
       const input: CreateDistributionCloseInput = {
@@ -89,8 +107,9 @@ export const executionDistributionRoutes: FastifyPluginAsync<ExecutionDistributi
         targetIds,
       }
       const result = await options.service.createDistributionClose(input)
-      return reply.code(202).send(response(request.id, operationDto(result)))
-    } catch (error) { return problem(error, request, reply) }
+      try { return reply.code(202).send(contract.response('createDistributionCloseCommand', response(request.id, operationDto(result)), 202)) }
+      catch { throw new ExecutionDistributionError('distribution_commit_unknown', 503) }
+    } catch (error) { return distributionProblem(error, request.id, reply, contract, 'createDistributionCloseCommand') }
   })
 }
 
@@ -197,16 +216,18 @@ function nullableString(value: unknown) { if (value === null) return null; if (t
 function numberValue(value: unknown) { const number = typeof value === 'number' ? value : Number(String(value ?? '').trim()); if (!Number.isSafeInteger(number) || number < 1) throw new ExecutionDistributionError('distribution_revision_invalid', 422); return number }
 function header(value: unknown) { const normalized = Array.isArray(value) ? value[0] : value; return String(normalized ?? '') }
 
-function problem(error: unknown, request: { id: string; url: string }, reply: { code(status: number): { send(body: unknown): unknown } }) {
-  const known = error instanceof ExecutionDistributionError ? error : new ExecutionDistributionError('distribution_unavailable', 503)
-  return reply.code(known.status).send({
-    type: `urn:aurum:problem:${known.code}`,
-    title: 'Execution distribution request failed',
-    status: known.status,
-    code: known.code,
-    detail: known.code,
-    instance: request.url,
-    correlation_id: request.id,
-    retryable: known.status >= 500,
-  })
+function distributionProblem(error: unknown, id: string, reply: FastifyReply, contract: ReturnType<typeof createHttpContractValidator>,
+  operation: 'previewExecutionDistribution' | 'getExecutionDistribution' | 'createExecutionDistribution' | 'createDistributionCloseCommand') {
+  const write = operation === 'createExecutionDistribution' || operation === 'createDistributionCloseCommand'
+  const known = error instanceof ExecutionDistributionError || error instanceof AuthError || error instanceof HttpContractError
+    ? error : new ExecutionDistributionError('distribution_unavailable', 503)
+  const body = { type: `urn:aurum:problem:${known.code}`, title: 'Distribution read failed', status: known.status,
+    code: known.code, detail: write && known.status >= 500 ? '暂时无法确认结果，请保留原请求编号和内容。' : known.code, instance: '/api/v4/execution-distributions', correlation_id: id, retryable: known.status >= 500 }
+  try {
+    return reply.type('application/problem+json').code(known.status).send(contract.response(operation, body, known.status, 'application/problem+json'))
+  } catch {
+    const code = write ? 'distribution_commit_unknown' : 'api_response_invalid'
+    const fallback = { ...body, type: `urn:aurum:problem:${code}`, code, detail: write ? '暂时无法确认结果，请保留原请求编号和内容。' : code, status: 503, correlation_id: randomUUID(), retryable: true }
+    return reply.type('application/problem+json').code(503).send(contract.response(operation, fallback, 503, 'application/problem+json'))
+  }
 }

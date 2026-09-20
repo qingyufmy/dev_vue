@@ -1,0 +1,25 @@
+{
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "syntheticPorts": [
+    "model-result",
+    "trader-context-builder",
+    "active-strategy-reader"
+  ],
+  "foreignKeysVerified": false,
+  "checks": [
+    "analysis-result-and-trader-task-commit-with-UTC-and-outbox",
+    "duplicate-completion-rejected",
+    "real-outbox-to-BullMQ-consumer-preserves-run-and-analysis-identity",
+    "replayed-publication-does-not-deliver-a-second-job",
+    "real-TraderWorker-commits-nonempty-decision-once",
+    "persisted-decision-published-to-real-risk-queue",
+    "real-revoked-ownership-excludes-trader-fanout"
+  ],
+  "traderResult": {
+    "status": "succeeded"
+  },
+  "referenceQueueRemoved": true,
+  "referenceRiskQueueRemoved": true,
+  "referenceDatabaseRemoved": true
+}

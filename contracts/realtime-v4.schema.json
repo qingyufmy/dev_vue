@@ -3,8 +3,12 @@
   "$id": "https://contracts.aurum.invalid/realtime-v4.schema.json",
   "title": "AURUM Browser Realtime Protocol V4",
   "oneOf": [
-    { "$ref": "#/$defs/ClientMessage" },
-    { "$ref": "#/$defs/ServerMessage" }
+    {
+      "$ref": "#/$defs/ClientMessage"
+    },
+    {
+      "$ref": "#/$defs/ServerMessage"
+    }
   ],
   "$defs": {
     "OpaqueId": {
@@ -34,49 +38,136 @@
     },
     "Timeframe": {
       "type": "string",
-      "enum": ["M1", "M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN1"]
+      "enum": [
+        "M1",
+        "M5",
+        "M15",
+        "M30",
+        "H1",
+        "H4",
+        "D1",
+        "W1",
+        "MN1"
+      ]
     },
     "Scope": {
       "type": "object",
-      "required": ["user_id", "trading_account_id", "terminal_instance_id", "observer_channel_id"],
+      "required": [
+        "user_id",
+        "trading_account_id",
+        "terminal_instance_id",
+        "observer_channel_id"
+      ],
       "additionalProperties": false,
       "properties": {
-        "user_id": { "$ref": "#/$defs/OpaqueId" },
+        "user_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
         "trading_account_id": {
-          "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OpaqueId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "terminal_instance_id": {
-          "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OpaqueId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "observer_channel_id": {
-          "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OpaqueId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
     "ResourceRef": {
       "type": "object",
-      "required": ["kind", "id"],
+      "required": [
+        "kind",
+        "id"
+      ],
       "additionalProperties": false,
       "properties": {
-        "kind": { "type": "string", "minLength": 1, "maxLength": 64 },
-        "id": { "type": "string", "minLength": 1, "maxLength": 256 }
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
       }
     },
     "BaseEvent": {
       "type": "object",
-      "required": ["v", "event_id", "type", "occurred_at", "sequence", "scope", "resource", "revision", "data", "correlation_id"],
+      "required": [
+        "v",
+        "event_id",
+        "type",
+        "occurred_at",
+        "sequence",
+        "scope",
+        "resource",
+        "revision",
+        "data",
+        "correlation_id"
+      ],
       "properties": {
-        "v": { "const": 4 },
-        "event_id": { "$ref": "#/$defs/OpaqueId" },
-        "type": { "$ref": "#/$defs/ServerEventType" },
-        "occurred_at": { "$ref": "#/$defs/UtcDateTime" },
-        "sequence": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
-        "scope": { "$ref": "#/$defs/Scope" },
-        "resource": { "$ref": "#/$defs/ResourceRef" },
-        "revision": { "$ref": "#/$defs/Revision" },
-        "data": { "type": "object" },
+        "v": {
+          "const": 4
+        },
+        "event_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "type": {
+          "$ref": "#/$defs/ServerEventType"
+        },
+        "occurred_at": {
+          "$ref": "#/$defs/UtcDateTime"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "resource": {
+          "$ref": "#/$defs/ResourceRef"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "data": {
+          "type": "object"
+        },
         "correlation_id": {
-          "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OpaqueId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
@@ -114,431 +205,1434 @@
         "audit.changed",
         "notification.created",
         "payment.status.changed",
-        "admin.alert.created"
+        "admin.alert.created",
+        "market.public.updated",
+        "market.public.history.updated"
       ]
     },
     "RuntimeBridgeData": {
       "type": "object",
-      "required": ["state", "platform", "bridge_version", "last_seen_at"],
+      "required": [
+        "state",
+        "platform",
+        "bridge_version",
+        "last_seen_at"
+      ],
       "additionalProperties": false,
       "properties": {
-        "state": { "type": "string", "enum": ["online", "offline", "paused", "replaced", "unauthorized"] },
-        "platform": { "type": ["string", "null"], "enum": ["mt4", "mt5", null] },
-        "bridge_version": { "type": ["string", "null"], "maxLength": 64 },
-        "last_seen_at": { "$ref": "#/$defs/UtcDateTime" }
+        "state": {
+          "type": "string",
+          "enum": [
+            "online",
+            "offline",
+            "paused",
+            "replaced",
+            "unauthorized"
+          ]
+        },
+        "platform": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "mt4",
+            "mt5",
+            null
+          ]
+        },
+        "bridge_version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 64
+        },
+        "last_seen_at": {
+          "$ref": "#/$defs/UtcDateTime"
+        }
       }
     },
     "RuntimeMarketData": {
       "type": "object",
-      "required": ["state", "trade_mode"],
+      "required": [
+        "state",
+        "trade_mode"
+      ],
       "additionalProperties": false,
       "properties": {
-        "state": { "type": "string", "enum": ["open", "closed", "paused", "unknown"] },
-        "trade_mode": { "type": "string", "enum": ["full", "long_only", "short_only", "close_only", "disabled", "unknown"] }
+        "state": {
+          "type": "string",
+          "enum": [
+            "open",
+            "closed",
+            "paused",
+            "unknown"
+          ]
+        },
+        "trade_mode": {
+          "type": "string",
+          "enum": [
+            "full",
+            "long_only",
+            "short_only",
+            "close_only",
+            "disabled",
+            "unknown"
+          ]
+        }
       }
     },
     "RuntimeAnalysisData": {
       "type": "object",
-      "required": ["enabled", "state", "next_run_at"],
+      "required": [
+        "enabled",
+        "state",
+        "next_run_at"
+      ],
       "additionalProperties": false,
       "properties": {
-        "enabled": { "type": "boolean" },
-        "state": { "type": "string", "enum": ["idle", "waiting", "running", "backoff", "paused", "failed"] },
-        "next_run_at": {
-          "oneOf": [{ "$ref": "#/$defs/UtcDateTime" }, { "type": "null" }]
+        "enabled": {
+          "type": "boolean"
         },
-        "last_error_code": { "type": ["string", "null"], "maxLength": 128 }
+        "state": {
+          "type": "string",
+          "enum": [
+            "idle",
+            "waiting",
+            "running",
+            "backoff",
+            "paused",
+            "failed"
+          ]
+        },
+        "next_run_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/UtcDateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_error_code": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        }
       }
     },
     "TerminalTimezoneData": {
       "type": "object",
-      "required": ["timezone_offset_minutes", "clock_status", "calibration_source", "calibrated_at"],
+      "required": [
+        "timezone_offset_minutes",
+        "clock_status",
+        "calibration_source",
+        "calibrated_at"
+      ],
       "additionalProperties": false,
       "properties": {
-        "timezone_offset_minutes": { "type": ["integer", "null"], "minimum": -840, "maximum": 840 },
-        "clock_status": { "type": "string", "enum": ["calibrated", "observer_bootstrap", "stale", "unavailable"] },
-        "calibration_source": { "type": ["string", "null"], "maxLength": 64 },
+        "timezone_offset_minutes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": -840,
+          "maximum": 840
+        },
+        "clock_status": {
+          "type": "string",
+          "enum": [
+            "calibrated",
+            "observer_bootstrap",
+            "stale",
+            "unavailable"
+          ]
+        },
+        "calibration_source": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 64
+        },
         "calibrated_at": {
-          "oneOf": [{ "$ref": "#/$defs/UtcDateTime" }, { "type": "null" }]
+          "oneOf": [
+            {
+              "$ref": "#/$defs/UtcDateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
     "AccountMetricsData": {
       "type": "object",
-      "required": ["balance", "equity", "margin", "free_margin", "floating_profit", "currency", "observed_at"],
+      "required": [
+        "balance",
+        "equity",
+        "margin",
+        "free_margin",
+        "floating_profit",
+        "currency",
+        "observed_at"
+      ],
       "additionalProperties": false,
-      "dependentRequired": { "timezone_offset_minutes": ["clock_status"], "clock_status": ["timezone_offset_minutes"] },
+      "dependentRequired": {
+        "timezone_offset_minutes": [
+          "clock_status"
+        ],
+        "clock_status": [
+          "timezone_offset_minutes"
+        ]
+      },
       "properties": {
-        "balance": { "$ref": "#/$defs/Decimal" },
-        "equity": { "$ref": "#/$defs/Decimal" },
-        "margin": { "$ref": "#/$defs/Decimal" },
-        "free_margin": { "$ref": "#/$defs/Decimal" },
-        "floating_profit": { "$ref": "#/$defs/Decimal" },
-        "currency": { "type": "string", "minLength": 3, "maxLength": 12 },
-        "timezone_offset_minutes": { "type": ["integer", "null"], "minimum": -840, "maximum": 840 },
-        "clock_status": { "type": "string", "enum": ["calibrated", "observer_bootstrap", "stale", "unavailable"] },
-        "observed_at": { "$ref": "#/$defs/UtcDateTime" }
+        "leverage": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "trade_permission": {
+          "type": "boolean"
+        },
+        "balance": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "equity": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "margin": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "free_margin": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "floating_profit": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "currency": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 12
+        },
+        "timezone_offset_minutes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": -840,
+          "maximum": 840
+        },
+        "clock_status": {
+          "type": "string",
+          "enum": [
+            "calibrated",
+            "observer_bootstrap",
+            "stale",
+            "unavailable"
+          ]
+        },
+        "observed_at": {
+          "$ref": "#/$defs/UtcDateTime"
+        }
       }
     },
     "QuoteData": {
       "type": "object",
-      "required": ["symbol", "bid", "ask", "spread", "observed_at"],
+      "required": [
+        "symbol",
+        "bid",
+        "ask",
+        "spread",
+        "observed_at"
+      ],
       "additionalProperties": false,
       "properties": {
-        "symbol": { "$ref": "#/$defs/Symbol" },
-        "bid": { "$ref": "#/$defs/Decimal" },
-        "ask": { "$ref": "#/$defs/Decimal" },
-        "last": {
-          "oneOf": [{ "$ref": "#/$defs/Decimal" }, { "type": "null" }]
+        "symbol": {
+          "$ref": "#/$defs/Symbol"
         },
-        "spread": { "$ref": "#/$defs/Decimal" },
-        "observed_at": { "$ref": "#/$defs/UtcDateTime" }
+        "bid": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "ask": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "last": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Decimal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spread": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/UtcDateTime"
+        }
       }
     },
     "CandleData": {
       "type": "object",
-      "required": ["symbol", "timeframe", "open_time", "open", "high", "low", "close", "tick_volume", "closed"],
+      "required": [
+        "symbol",
+        "timeframe",
+        "open_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "tick_volume",
+        "closed"
+      ],
       "additionalProperties": false,
       "properties": {
-        "symbol": { "$ref": "#/$defs/Symbol" },
-        "timeframe": { "$ref": "#/$defs/Timeframe" },
-        "open_time": { "$ref": "#/$defs/UtcDateTime" },
-        "open": { "$ref": "#/$defs/Decimal" },
-        "high": { "$ref": "#/$defs/Decimal" },
-        "low": { "$ref": "#/$defs/Decimal" },
-        "close": { "$ref": "#/$defs/Decimal" },
-        "tick_volume": { "$ref": "#/$defs/Decimal" },
-        "closed": { "type": "boolean" }
+        "symbol": {
+          "$ref": "#/$defs/Symbol"
+        },
+        "timeframe": {
+          "$ref": "#/$defs/Timeframe"
+        },
+        "open_time": {
+          "$ref": "#/$defs/UtcDateTime"
+        },
+        "open": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "high": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "low": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "close": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "tick_volume": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "closed": {
+          "type": "boolean"
+        }
       }
     },
     "CollectionDeltaData": {
       "type": "object",
-      "required": ["upserts", "removes"],
+      "required": [
+        "upserts",
+        "removes"
+      ],
       "additionalProperties": false,
       "properties": {
         "upserts": {
           "type": "array",
           "maxItems": 1000,
-          "items": { "type": "object" }
+          "items": {
+            "type": "object"
+          }
         },
         "removes": {
           "type": "array",
           "maxItems": 1000,
-          "items": { "type": "string", "minLength": 1, "maxLength": 191 }
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 191
+          }
         }
       }
     },
     "AnalysisJobData": {
       "type": "object",
-      "required": ["analysis_id", "strategy_id", "symbol", "status", "updated_at"],
+      "required": [
+        "analysis_id",
+        "strategy_id",
+        "symbol",
+        "status",
+        "updated_at"
+      ],
       "additionalProperties": false,
       "properties": {
-        "analysis_id": { "$ref": "#/$defs/OpaqueId" },
-        "strategy_id": { "$ref": "#/$defs/OpaqueId" },
-        "symbol": { "$ref": "#/$defs/Symbol" },
-        "status": { "type": "string", "enum": ["queued", "running", "succeeded", "failed", "cancelled", "expired"] },
-        "updated_at": { "$ref": "#/$defs/UtcDateTime" }
+        "analysis_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "strategy_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "symbol": {
+          "$ref": "#/$defs/Symbol"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "queued",
+            "running",
+            "succeeded",
+            "failed",
+            "cancelled",
+            "expired"
+          ]
+        },
+        "updated_at": {
+          "$ref": "#/$defs/UtcDateTime"
+        }
       }
     },
     "MarketAnalysisSummaryData": {
       "type": "object",
-      "required": ["analysis_id", "strategy_id", "symbol", "market_bias", "opportunity", "confidence", "valid_until"],
+      "required": [
+        "analysis_id",
+        "strategy_id",
+        "symbol",
+        "market_bias",
+        "opportunity",
+        "confidence",
+        "valid_until"
+      ],
       "additionalProperties": false,
       "properties": {
-        "analysis_id": { "$ref": "#/$defs/OpaqueId" },
-        "strategy_id": { "$ref": "#/$defs/OpaqueId" },
-        "symbol": { "$ref": "#/$defs/Symbol" },
-        "market_bias": { "type": "string", "enum": ["bullish", "bearish", "neutral", "uncertain"] },
-        "opportunity": { "type": "string", "enum": ["none", "long_setup", "short_setup"] },
-        "confidence": { "type": "number", "minimum": 0, "maximum": 100 },
-        "valid_until": { "$ref": "#/$defs/UtcDateTime" }
+        "analysis_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "strategy_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "symbol": {
+          "$ref": "#/$defs/Symbol"
+        },
+        "market_bias": {
+          "type": "string",
+          "enum": [
+            "bullish",
+            "bearish",
+            "neutral",
+            "uncertain"
+          ]
+        },
+        "opportunity": {
+          "type": "string",
+          "enum": [
+            "none",
+            "long_setup",
+            "short_setup"
+          ]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "valid_until": {
+          "$ref": "#/$defs/UtcDateTime"
+        }
       }
     },
     "TraderJobData": {
       "type": "object",
-      "required": ["trader_run_id", "analysis_id", "trading_account_id", "task_mode", "status", "updated_at"],
+      "required": [
+        "trader_run_id",
+        "analysis_id",
+        "trading_account_id",
+        "task_mode",
+        "status",
+        "updated_at"
+      ],
       "additionalProperties": false,
       "properties": {
-        "trader_run_id": { "$ref": "#/$defs/OpaqueId" },
-        "analysis_id": { "$ref": "#/$defs/OpaqueId" },
-        "trading_account_id": { "$ref": "#/$defs/OpaqueId" },
-        "task_mode": { "type": "string", "enum": ["entry", "manage", "both"] },
-        "status": { "type": "string", "enum": ["queued", "running", "succeeded", "failed", "cancelled", "expired"] },
-        "updated_at": { "$ref": "#/$defs/UtcDateTime" }
+        "trader_run_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "analysis_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "trading_account_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "task_mode": {
+          "type": "string",
+          "enum": [
+            "entry",
+            "manage",
+            "both"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "queued",
+            "running",
+            "succeeded",
+            "failed",
+            "cancelled",
+            "expired"
+          ]
+        },
+        "updated_at": {
+          "$ref": "#/$defs/UtcDateTime"
+        }
       }
     },
     "TradeDecisionSummaryData": {
       "type": "object",
-      "required": ["decision_id", "analysis_id", "trading_account_id", "action", "side", "confidence", "status", "stale_reason"],
+      "required": [
+        "decision_id",
+        "analysis_id",
+        "trading_account_id",
+        "action",
+        "side",
+        "confidence",
+        "status",
+        "stale_reason"
+      ],
       "additionalProperties": false,
       "properties": {
-        "decision_id": { "$ref": "#/$defs/OpaqueId" },
-        "analysis_id": { "$ref": "#/$defs/OpaqueId" },
-        "trading_account_id": { "$ref": "#/$defs/OpaqueId" },
-        "action": { "type": "string", "enum": ["hold", "market_order", "pending_order", "modify_position", "close_position", "modify_order", "cancel_order"] },
-        "side": { "type": ["string", "null"], "enum": ["buy", "sell", null] },
-        "confidence": { "type": "number", "minimum": 0, "maximum": 100 },
-        "status": { "type": "string", "enum": ["proposed", "stale", "risk_rejected", "accepted"] },
-        "stale_reason": { "type": ["string", "null"], "maxLength": 128 }
+        "decision_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "analysis_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "trading_account_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "hold",
+            "market_order",
+            "pending_order",
+            "modify_position",
+            "close_position",
+            "modify_order",
+            "cancel_order"
+          ]
+        },
+        "side": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "buy",
+            "sell",
+            null
+          ]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "proposed",
+            "stale",
+            "risk_rejected",
+            "accepted"
+          ]
+        },
+        "stale_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        }
       }
     },
     "RiskPolicyChangedData": {
       "type": "object",
-      "required": ["account_id", "policy_version_id", "revision"],
+      "required": [
+        "account_id",
+        "policy_version_id",
+        "revision"
+      ],
       "additionalProperties": false,
       "properties": {
-        "account_id": { "$ref": "#/$defs/OpaqueId" },
-        "policy_version_id": { "$ref": "#/$defs/OpaqueId" },
-        "revision": { "$ref": "#/$defs/Revision" }
+        "account_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "policy_version_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        }
       }
     },
     "RiskSummaryChangedData": {
       "type": "object",
-      "required": ["account_id", "data_complete", "revision"],
+      "required": [
+        "account_id",
+        "data_complete",
+        "revision"
+      ],
       "additionalProperties": false,
       "properties": {
-        "account_id": { "$ref": "#/$defs/OpaqueId" },
-        "data_complete": { "type": "boolean" },
-        "revision": { "$ref": "#/$defs/Revision" }
+        "account_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "data_complete": {
+          "type": "boolean"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        }
       }
     },
     "RiskDecisionData": {
       "type": "object",
-      "required": ["risk_decision_id", "decision_id", "account_id", "status", "reject_code"],
+      "required": [
+        "risk_decision_id",
+        "decision_id",
+        "account_id",
+        "status",
+        "reject_code"
+      ],
       "additionalProperties": false,
       "properties": {
-        "risk_decision_id": { "$ref": "#/$defs/OpaqueId" },
-        "decision_id": { "$ref": "#/$defs/OpaqueId" },
-        "account_id": { "$ref": "#/$defs/OpaqueId" },
-        "status": { "type": "string", "enum": ["approved", "rejected"] },
-        "reject_code": { "type": ["string", "null"], "maxLength": 128 }
+        "risk_decision_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "decision_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "account_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "approved",
+            "rejected"
+          ]
+        },
+        "reject_code": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        }
       }
     },
     "RiskManualReleaseData": {
       "type": "object",
-      "required": ["manual_release_id", "account_id", "status", "invalidation_reason", "revision"],
+      "required": [
+        "manual_release_id",
+        "account_id",
+        "status",
+        "invalidation_reason",
+        "revision"
+      ],
       "additionalProperties": false,
       "properties": {
-        "manual_release_id": { "$ref": "#/$defs/OpaqueId" },
-        "account_id": { "$ref": "#/$defs/OpaqueId" },
-        "status": { "type": "string", "enum": ["active", "superseded", "expired", "revoked"] },
-        "invalidation_reason": { "type": ["string", "null"], "maxLength": 128 },
-        "revision": { "$ref": "#/$defs/Revision" }
+        "manual_release_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "account_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "superseded",
+            "expired",
+            "revoked"
+          ]
+        },
+        "invalidation_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        }
       }
     },
     "OperationData": {
       "type": "object",
-      "required": ["operation_id", "kind", "status", "updated_at"],
+      "required": [
+        "operation_id",
+        "kind",
+        "status",
+        "updated_at"
+      ],
       "additionalProperties": false,
       "properties": {
-        "operation_id": { "$ref": "#/$defs/OpaqueId" },
-        "kind": { "type": "string", "maxLength": 128 },
-        "status": { "type": "string", "enum": ["accepted", "queued", "running", "succeeded", "partially_succeeded", "rejected", "failed", "uncertain", "cancelled", "expired"] },
-        "updated_at": { "$ref": "#/$defs/UtcDateTime" },
-        "resource_id": {
-          "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+        "operation_id": {
+          "$ref": "#/$defs/OpaqueId"
         },
-        "error_code": { "type": ["string", "null"], "maxLength": 128 }
+        "kind": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "accepted",
+            "queued",
+            "running",
+            "succeeded",
+            "partially_succeeded",
+            "rejected",
+            "failed",
+            "uncertain",
+            "cancelled",
+            "expired"
+          ]
+        },
+        "updated_at": {
+          "$ref": "#/$defs/UtcDateTime"
+        },
+        "resource_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OpaqueId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error_code": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 128
+        }
       }
     },
     "ReviewCaseChangedData": {
       "type": "object",
-      "required": ["review_case_id", "status", "revision"],
+      "required": [
+        "review_case_id",
+        "status",
+        "revision"
+      ],
       "additionalProperties": false,
       "properties": {
-        "review_case_id": { "$ref": "#/$defs/OpaqueId" },
-        "status": { "type": "string", "enum": ["awaiting_evidence", "queued", "running", "awaiting_confirmation", "needs_changes", "confirmed", "failed"] },
-        "current_version_id": { "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }] },
-        "revision": { "$ref": "#/$defs/Revision" }
+        "review_case_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "awaiting_evidence",
+            "queued",
+            "running",
+            "awaiting_confirmation",
+            "needs_changes",
+            "confirmed",
+            "failed"
+          ]
+        },
+        "current_version_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OpaqueId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        }
       }
     },
     "StrategyMemoryChangedData": {
       "type": "object",
-      "required": ["strategy_memory_id", "status", "pending_count", "revision"],
+      "required": [
+        "strategy_memory_id",
+        "status",
+        "pending_count",
+        "revision"
+      ],
       "additionalProperties": false,
       "properties": {
-        "strategy_memory_id": { "$ref": "#/$defs/OpaqueId" },
-        "status": { "type": "string", "enum": ["active", "revalidating", "retired"] },
-        "pending_count": { "type": "integer", "minimum": 0 },
-        "revision": { "$ref": "#/$defs/Revision" }
+        "strategy_memory_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "revalidating",
+            "retired"
+          ]
+        },
+        "pending_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        }
       }
     },
     "TradeHistoryChangedData": {
       "type": "object",
-      "required": ["status", "history_revision", "fresh_through"],
+      "required": [
+        "status",
+        "history_revision",
+        "fresh_through"
+      ],
       "additionalProperties": false,
       "properties": {
-        "status": { "type": "string", "enum": ["empty", "syncing", "ready", "stale", "failed"] },
-        "history_revision": { "$ref": "#/$defs/Revision" },
+        "status": {
+          "type": "string",
+          "enum": [
+            "empty",
+            "syncing",
+            "ready",
+            "stale",
+            "failed"
+          ]
+        },
+        "history_revision": {
+          "$ref": "#/$defs/Revision"
+        },
         "fresh_through": {
-          "oneOf": [{ "$ref": "#/$defs/UtcDateTime" }, { "type": "null" }]
+          "oneOf": [
+            {
+              "$ref": "#/$defs/UtcDateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     },
     "ObserverPublicationChangedData": {
       "type": "object",
-      "required": ["channel_id", "source_revision", "resource", "resource_id"],
+      "required": [
+        "channel_id",
+        "source_revision",
+        "resource",
+        "resource_id"
+      ],
       "additionalProperties": false,
       "properties": {
-        "channel_id": { "$ref": "#/$defs/OpaqueId" },
-        "source_revision": { "$ref": "#/$defs/Revision" },
-        "resource": { "type": "string", "enum": ["account.metrics", "market.quote", "market.candle", "positions", "pending_orders"] },
-        "resource_id": { "$ref": "#/$defs/OpaqueId" }
+        "channel_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "source_revision": {
+          "$ref": "#/$defs/Revision"
+        },
+        "resource": {
+          "type": "string",
+          "enum": [
+            "account.metrics",
+            "market.quote",
+            "market.candle",
+            "positions",
+            "pending_orders"
+          ]
+        },
+        "resource_id": {
+          "$ref": "#/$defs/OpaqueId"
+        }
       }
     },
     "AuditChangedData": {
       "type": "object",
-      "required": ["source_type", "source_id"],
+      "required": [
+        "source_type",
+        "source_id"
+      ],
       "additionalProperties": false,
       "properties": {
-        "source_type": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "source_id": { "$ref": "#/$defs/OpaqueId" }
+        "source_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "source_id": {
+          "$ref": "#/$defs/OpaqueId"
+        }
       }
     },
     "MacroChangedData": {
       "type": "object",
-      "required": ["change", "published_at", "status"],
+      "required": [
+        "change",
+        "published_at",
+        "status"
+      ],
       "additionalProperties": false,
       "properties": {
-        "change": { "type": "string", "enum": ["created", "updated", "superseded", "invalidated"] },
-        "published_at": { "$ref": "#/$defs/UtcDateTime" },
-        "status": { "type": "string", "enum": ["fresh", "stale", "partial", "unavailable"] }
+        "change": {
+          "type": "string",
+          "enum": [
+            "created",
+            "updated",
+            "superseded",
+            "invalidated"
+          ]
+        },
+        "published_at": {
+          "$ref": "#/$defs/UtcDateTime"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "fresh",
+            "stale",
+            "partial",
+            "unavailable"
+          ]
+        }
       }
     },
     "CalendarChangedData": {
       "type": "object",
-      "required": ["change", "scheduled_at", "importance", "status"],
+      "required": [
+        "change",
+        "scheduled_at",
+        "importance",
+        "status"
+      ],
       "additionalProperties": false,
       "properties": {
-        "change": { "type": "string", "enum": ["created", "updated", "superseded", "invalidated"] },
-        "scheduled_at": { "$ref": "#/$defs/UtcDateTime" },
-        "importance": { "type": "string", "enum": ["low", "medium", "high", "unknown"] },
-        "status": { "type": "string", "enum": ["scheduled", "released", "revised", "delayed", "cancelled"] }
+        "change": {
+          "type": "string",
+          "enum": [
+            "created",
+            "updated",
+            "superseded",
+            "invalidated"
+          ]
+        },
+        "scheduled_at": {
+          "$ref": "#/$defs/UtcDateTime"
+        },
+        "importance": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "unknown"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "scheduled",
+            "released",
+            "revised",
+            "delayed",
+            "cancelled"
+          ]
+        }
       }
     },
     "MacroSourceHealthChangedData": {
       "type": "object",
-      "required": ["source_id", "health", "observed_at"],
+      "required": [
+        "source_id",
+        "health",
+        "observed_at"
+      ],
       "additionalProperties": false,
       "properties": {
-        "source_id": { "$ref": "#/$defs/OpaqueId" },
-        "health": { "type": "string", "minLength": 1, "maxLength": 64 },
-        "observed_at": { "$ref": "#/$defs/UtcDateTime" }
+        "source_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "health": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "observed_at": {
+          "$ref": "#/$defs/UtcDateTime"
+        }
       }
     },
     "SummaryData": {
       "type": "object",
-      "required": ["id", "status"],
+      "required": [
+        "id",
+        "status"
+      ],
       "additionalProperties": true,
       "properties": {
-        "id": { "$ref": "#/$defs/OpaqueId" },
-        "status": { "type": "string", "maxLength": 64 }
+        "id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "status": {
+          "type": "string",
+          "maxLength": 64
+        }
       }
     },
     "TypedEvent": {
       "allOf": [
-        { "$ref": "#/$defs/BaseEvent" },
+        {
+          "$ref": "#/$defs/BaseEvent"
+        },
         {
           "oneOf": [
             {
               "properties": {
-                "type": { "const": "runtime.bridge.changed" },
-                "data": { "$ref": "#/$defs/RuntimeBridgeData" }
+                "type": {
+                  "const": "runtime.bridge.changed"
+                },
+                "data": {
+                  "$ref": "#/$defs/RuntimeBridgeData"
+                }
               }
             },
             {
               "properties": {
-                "type": { "const": "runtime.market.changed" },
-                "data": { "$ref": "#/$defs/RuntimeMarketData" }
+                "type": {
+                  "const": "runtime.market.changed"
+                },
+                "data": {
+                  "$ref": "#/$defs/RuntimeMarketData"
+                }
               }
             },
             {
               "properties": {
-                "type": { "const": "runtime.analysis.changed" },
-                "data": { "$ref": "#/$defs/RuntimeAnalysisData" }
+                "type": {
+                  "const": "runtime.analysis.changed"
+                },
+                "data": {
+                  "$ref": "#/$defs/RuntimeAnalysisData"
+                }
               }
             },
             {
               "properties": {
-                "type": { "const": "terminal.timezone.changed" },
-                "data": { "$ref": "#/$defs/TerminalTimezoneData" }
+                "type": {
+                  "const": "terminal.timezone.changed"
+                },
+                "data": {
+                  "$ref": "#/$defs/TerminalTimezoneData"
+                }
               }
             },
             {
               "properties": {
-                "type": { "const": "account.metrics.changed" },
-                "data": { "$ref": "#/$defs/AccountMetricsData" }
+                "type": {
+                  "const": "account.metrics.changed"
+                },
+                "data": {
+                  "$ref": "#/$defs/AccountMetricsData"
+                }
               }
             },
             {
               "properties": {
-                "type": { "const": "market.quote.updated" },
-                "data": { "$ref": "#/$defs/QuoteData" }
+                "type": {
+                  "const": "market.quote.updated"
+                },
+                "data": {
+                  "$ref": "#/$defs/QuoteData"
+                }
               }
             },
             {
               "properties": {
-                "type": { "enum": ["market.candle.updated", "market.candle.closed"] },
-                "data": { "$ref": "#/$defs/CandleData" }
+                "type": {
+                  "enum": [
+                    "market.candle.updated",
+                    "market.candle.closed"
+                  ]
+                },
+                "data": {
+                  "$ref": "#/$defs/CandleData"
+                }
               }
             },
             {
               "properties": {
-                "type": { "enum": ["positions.changed", "pending_orders.changed"] },
-                "data": { "$ref": "#/$defs/CollectionDeltaData" }
+                "type": {
+                  "enum": [
+                    "positions.changed",
+                    "pending_orders.changed"
+                  ]
+                },
+                "data": {
+                  "$ref": "#/$defs/CollectionDeltaData"
+                }
               }
             },
-            { "properties": { "type": { "const": "analysis.job.changed" }, "data": { "$ref": "#/$defs/AnalysisJobData" } } },
-            { "properties": { "type": { "const": "market_analysis.created" }, "data": { "$ref": "#/$defs/MarketAnalysisSummaryData" } } },
-            { "properties": { "type": { "const": "trader.job.changed" }, "data": { "$ref": "#/$defs/TraderJobData" } } },
-            { "properties": { "type": { "const": "trade_decision.created" }, "data": { "$ref": "#/$defs/TradeDecisionSummaryData" } } },
-            { "properties": { "type": { "const": "risk.policy.changed" }, "data": { "$ref": "#/$defs/RiskPolicyChangedData" } } },
-            { "properties": { "type": { "const": "risk.summary.changed" }, "data": { "$ref": "#/$defs/RiskSummaryChangedData" } } },
-            { "properties": { "type": { "const": "risk.decision.created" }, "data": { "$ref": "#/$defs/RiskDecisionData" } } },
-            { "properties": { "type": { "const": "risk.manual_release.changed" }, "data": { "$ref": "#/$defs/RiskManualReleaseData" } } },
-            { "properties": { "type": { "const": "review.case.changed" }, "data": { "$ref": "#/$defs/ReviewCaseChangedData" } } },
-            { "properties": { "type": { "const": "strategy.memory.changed" }, "data": { "$ref": "#/$defs/StrategyMemoryChangedData" } } },
-            { "properties": { "type": { "const": "trade.history.changed" }, "data": { "$ref": "#/$defs/TradeHistoryChangedData" } } },
             {
               "properties": {
-                "type": { "const": "observer.publication.changed" },
+                "type": {
+                  "const": "analysis.job.changed"
+                },
+                "data": {
+                  "$ref": "#/$defs/AnalysisJobData"
+                }
+              }
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "market_analysis.created"
+                },
+                "data": {
+                  "$ref": "#/$defs/MarketAnalysisSummaryData"
+                }
+              }
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "trader.job.changed"
+                },
+                "data": {
+                  "$ref": "#/$defs/TraderJobData"
+                }
+              }
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "trade_decision.created"
+                },
+                "data": {
+                  "$ref": "#/$defs/TradeDecisionSummaryData"
+                }
+              }
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "risk.policy.changed"
+                },
+                "data": {
+                  "$ref": "#/$defs/RiskPolicyChangedData"
+                }
+              }
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "risk.summary.changed"
+                },
+                "data": {
+                  "$ref": "#/$defs/RiskSummaryChangedData"
+                }
+              }
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "risk.decision.created"
+                },
+                "data": {
+                  "$ref": "#/$defs/RiskDecisionData"
+                }
+              }
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "risk.manual_release.changed"
+                },
+                "data": {
+                  "$ref": "#/$defs/RiskManualReleaseData"
+                }
+              }
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "review.case.changed"
+                },
+                "data": {
+                  "$ref": "#/$defs/ReviewCaseChangedData"
+                }
+              }
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "strategy.memory.changed"
+                },
+                "data": {
+                  "$ref": "#/$defs/StrategyMemoryChangedData"
+                }
+              }
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "trade.history.changed"
+                },
+                "data": {
+                  "$ref": "#/$defs/TradeHistoryChangedData"
+                }
+              }
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "observer.publication.changed"
+                },
                 "scope": {
                   "type": "object",
-                  "required": ["user_id", "trading_account_id", "terminal_instance_id", "observer_channel_id"],
+                  "required": [
+                    "user_id",
+                    "trading_account_id",
+                    "terminal_instance_id",
+                    "observer_channel_id"
+                  ],
                   "additionalProperties": false,
                   "properties": {
-                    "user_id": { "$ref": "#/$defs/OpaqueId" },
-                    "trading_account_id": { "$ref": "#/$defs/OpaqueId" },
-                    "terminal_instance_id": { "type": "null" },
-                    "observer_channel_id": { "$ref": "#/$defs/OpaqueId" }
+                    "user_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    },
+                    "trading_account_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    },
+                    "terminal_instance_id": {
+                      "type": "null"
+                    },
+                    "observer_channel_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
                   }
                 },
                 "resource": {
                   "type": "object",
-                  "required": ["kind", "id"],
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
                   "additionalProperties": false,
                   "properties": {
-                    "kind": { "const": "observer_publication" },
-                    "id": { "$ref": "#/$defs/OpaqueId" }
+                    "kind": {
+                      "const": "observer_publication"
+                    },
+                    "id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
                   }
                 },
-                "data": { "$ref": "#/$defs/ObserverPublicationChangedData" }
-              }
-            },
-            { "properties": { "type": { "const": "audit.changed" }, "data": { "$ref": "#/$defs/AuditChangedData" } } },
-            { "properties": { "type": { "const": "market.macro.changed" }, "data": { "$ref": "#/$defs/MacroChangedData" }, "resource": { "type": "object", "required": ["kind", "id"], "additionalProperties": false, "properties": { "kind": { "const": "macro_snapshot" }, "id": { "$ref": "#/$defs/OpaqueId" } } } } },
-            { "properties": { "type": { "const": "market.calendar.changed" }, "data": { "$ref": "#/$defs/CalendarChangedData" }, "resource": { "type": "object", "required": ["kind", "id"], "additionalProperties": false, "properties": { "kind": { "const": "calendar_event" }, "id": { "$ref": "#/$defs/OpaqueId" } } } } },
-            { "properties": { "type": { "const": "market.source_health.changed" }, "data": { "$ref": "#/$defs/MacroSourceHealthChangedData" }, "resource": { "type": "object", "required": ["kind", "id"], "additionalProperties": false, "properties": { "kind": { "const": "macro_source_health" }, "id": { "$ref": "#/$defs/OpaqueId" } } } } },
-            {
-              "properties": {
-                "type": { "const": "operation.changed" },
-                "data": { "$ref": "#/$defs/OperationData" }
+                "data": {
+                  "$ref": "#/$defs/ObserverPublicationChangedData"
+                }
               }
             },
             {
               "properties": {
-                "type": { "enum": ["risk.status.changed", "risk.alert.created", "notification.created", "payment.status.changed", "admin.alert.created"] },
-                "data": { "$ref": "#/$defs/SummaryData" }
+                "type": {
+                  "const": "audit.changed"
+                },
+                "data": {
+                  "$ref": "#/$defs/AuditChangedData"
+                }
+              }
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "market.macro.changed"
+                },
+                "data": {
+                  "$ref": "#/$defs/MacroChangedData"
+                },
+                "resource": {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "macro_snapshot"
+                    },
+                    "id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "market.calendar.changed"
+                },
+                "data": {
+                  "$ref": "#/$defs/CalendarChangedData"
+                },
+                "resource": {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "calendar_event"
+                    },
+                    "id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "market.source_health.changed"
+                },
+                "data": {
+                  "$ref": "#/$defs/MacroSourceHealthChangedData"
+                },
+                "resource": {
+                  "type": "object",
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "kind": {
+                      "const": "macro_source_health"
+                    },
+                    "id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "operation.changed"
+                },
+                "data": {
+                  "$ref": "#/$defs/OperationData"
+                }
+              }
+            },
+            {
+              "properties": {
+                "type": {
+                  "enum": [
+                    "risk.status.changed",
+                    "risk.alert.created",
+                    "notification.created",
+                    "payment.status.changed",
+                    "admin.alert.created"
+                  ]
+                },
+                "data": {
+                  "$ref": "#/$defs/SummaryData"
+                }
+              }
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "market.public.updated"
+                },
+                "data": {
+                  "$ref": "#/$defs/PublicMarketData"
+                },
+                "scope": {
+                  "properties": {
+                    "trading_account_id": {
+                      "type": "null"
+                    },
+                    "terminal_instance_id": {
+                      "type": "null"
+                    },
+                    "observer_channel_id": {
+                      "type": "null"
+                    }
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "public_market"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "properties": {
+                "type": {
+                  "const": "market.public.history.updated"
+                },
+                "data": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "symbol",
+                    "timeframe"
+                  ],
+                  "properties": {
+                    "symbol": {
+                      "type": "string",
+                      "pattern": "^[A-Z0-9]{1,32}$"
+                    },
+                    "timeframe": {
+                      "enum": [
+                        "M1",
+                        "M5",
+                        "M15",
+                        "M30",
+                        "H1",
+                        "H4",
+                        "D1"
+                      ]
+                    }
+                  }
+                },
+                "scope": {
+                  "properties": {
+                    "trading_account_id": {
+                      "type": "null"
+                    },
+                    "terminal_instance_id": {
+                      "type": "null"
+                    },
+                    "observer_channel_id": {
+                      "type": "null"
+                    }
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "public_market"
+                    }
+                  }
+                }
               }
             }
           ]
@@ -547,35 +1641,79 @@
     },
     "Welcome": {
       "type": "object",
-      "required": ["v", "type", "connection_id", "server_time", "heartbeat_interval_ms", "max_frame_bytes"],
+      "required": [
+        "v",
+        "type",
+        "connection_id",
+        "server_time",
+        "heartbeat_interval_ms",
+        "max_frame_bytes"
+      ],
       "additionalProperties": false,
       "properties": {
-        "v": { "const": 4 },
-        "type": { "const": "system.welcome" },
-        "connection_id": { "$ref": "#/$defs/OpaqueId" },
-        "server_time": { "$ref": "#/$defs/UtcDateTime" },
-        "heartbeat_interval_ms": { "type": "integer", "minimum": 5000, "maximum": 60000 },
-        "max_frame_bytes": { "type": "integer", "minimum": 1024, "maximum": 65536 }
+        "v": {
+          "const": 4
+        },
+        "type": {
+          "const": "system.welcome"
+        },
+        "connection_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "server_time": {
+          "$ref": "#/$defs/UtcDateTime"
+        },
+        "heartbeat_interval_ms": {
+          "type": "integer",
+          "minimum": 5000,
+          "maximum": 60000
+        },
+        "max_frame_bytes": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 65536
+        }
       }
     },
     "SubscriptionReady": {
       "type": "object",
-      "required": ["v", "type", "request_id", "subscriptions"],
+      "required": [
+        "v",
+        "type",
+        "request_id",
+        "subscriptions"
+      ],
       "additionalProperties": false,
       "properties": {
-        "v": { "const": 4 },
-        "type": { "const": "subscription.ready" },
-        "request_id": { "$ref": "#/$defs/OpaqueId" },
+        "v": {
+          "const": 4
+        },
+        "type": {
+          "const": "subscription.ready"
+        },
+        "request_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
         "subscriptions": {
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["subscription_id", "target", "revision"],
+            "required": [
+              "subscription_id",
+              "target",
+              "revision"
+            ],
             "additionalProperties": false,
             "properties": {
-              "subscription_id": { "$ref": "#/$defs/OpaqueId" },
-              "target": { "$ref": "#/$defs/SubscriptionTarget" },
-              "revision": { "$ref": "#/$defs/Revision" }
+              "subscription_id": {
+                "$ref": "#/$defs/OpaqueId"
+              },
+              "target": {
+                "$ref": "#/$defs/SubscriptionTarget"
+              },
+              "revision": {
+                "$ref": "#/$defs/Revision"
+              }
             }
           }
         }
@@ -583,143 +1721,627 @@
     },
     "ResyncRequired": {
       "type": "object",
-      "required": ["v", "type", "request_id", "targets", "reason"],
+      "required": [
+        "v",
+        "type",
+        "request_id",
+        "targets",
+        "reason"
+      ],
       "additionalProperties": false,
       "properties": {
-        "v": { "const": 4 },
-        "type": { "const": "subscription.resync_required" },
-        "request_id": { "$ref": "#/$defs/OpaqueId" },
-        "targets": { "type": "array", "items": { "$ref": "#/$defs/SubscriptionTarget" } },
-        "reason": { "type": "string", "enum": ["revision_unknown", "revision_gap", "scope_changed", "authorization_changed"] }
+        "v": {
+          "const": 4
+        },
+        "type": {
+          "const": "subscription.resync_required"
+        },
+        "request_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SubscriptionTarget"
+          }
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "revision_unknown",
+            "revision_gap",
+            "scope_changed",
+            "authorization_changed"
+          ]
+        }
       }
     },
     "Heartbeat": {
       "type": "object",
-      "required": ["v", "type", "sent_at"],
+      "required": [
+        "v",
+        "type",
+        "sent_at"
+      ],
       "additionalProperties": false,
       "properties": {
-        "v": { "const": 4 },
-        "type": { "const": "system.heartbeat" },
-        "sent_at": { "$ref": "#/$defs/UtcDateTime" }
+        "v": {
+          "const": 4
+        },
+        "type": {
+          "const": "system.heartbeat"
+        },
+        "sent_at": {
+          "$ref": "#/$defs/UtcDateTime"
+        }
       }
     },
     "ProtocolError": {
       "type": "object",
-      "required": ["v", "type", "code", "message", "retryable"],
+      "required": [
+        "v",
+        "type",
+        "code",
+        "message",
+        "retryable"
+      ],
       "additionalProperties": false,
       "properties": {
-        "v": { "const": 4 },
-        "type": { "const": "protocol.error" },
-        "request_id": {
-          "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+        "v": {
+          "const": 4
         },
-        "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]{1,127}$" },
-        "message": { "type": "string", "maxLength": 512 },
-        "retryable": { "type": "boolean" }
+        "type": {
+          "const": "protocol.error"
+        },
+        "request_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OpaqueId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{1,127}$"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "retryable": {
+          "type": "boolean"
+        }
       }
     },
     "SubscriptionTarget": {
       "type": "object",
-      "required": ["kind", "after_revision"],
+      "required": [
+        "kind",
+        "after_revision"
+      ],
       "additionalProperties": false,
       "properties": {
-        "kind": { "type": "string", "enum": ["runtime", "account", "market", "signals", "risk", "reviews", "trades", "operations", "audit", "notifications", "payment", "admin_alerts", "admin"] },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "runtime",
+            "account",
+            "market",
+            "signals",
+            "risk",
+            "reviews",
+            "trades",
+            "operations",
+            "audit",
+            "notifications",
+            "payment",
+            "admin_alerts",
+            "admin"
+          ]
+        },
         "trading_account_id": {
-          "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OpaqueId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "observer_channel_id": {
-          "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OpaqueId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "symbol": {
-          "oneOf": [{ "$ref": "#/$defs/Symbol" }, { "type": "null" }]
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Symbol"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "timeframe": {
-          "oneOf": [{ "$ref": "#/$defs/Timeframe" }, { "type": "null" }]
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Timeframe"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "resource_id": {
-          "oneOf": [{ "$ref": "#/$defs/OpaqueId" }, { "type": "null" }]
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OpaqueId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "after_revision": {
-          "oneOf": [{ "$ref": "#/$defs/Revision" }, { "type": "null" }]
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Revision"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "allOf": [
         {
-          "if": { "properties": { "kind": { "const": "market" }, "resource_id": { "enum": ["macro", "calendar"] } }, "required": ["kind", "resource_id"] },
-          "then": {
-            "required": ["trading_account_id", "observer_channel_id", "symbol", "timeframe", "resource_id", "after_revision"],
+          "if": {
             "properties": {
-              "trading_account_id": { "type": "null" }, "observer_channel_id": { "type": "null" },
-              "symbol": { "type": "null" }, "timeframe": { "type": "null" },
-              "resource_id": { "enum": ["macro", "calendar"] }, "after_revision": { "type": "null" }
+              "kind": {
+                "const": "market"
+              },
+              "resource_id": {
+                "enum": [
+                  "macro",
+                  "calendar"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "resource_id"
+            ]
+          },
+          "then": {
+            "required": [
+              "trading_account_id",
+              "observer_channel_id",
+              "symbol",
+              "timeframe",
+              "resource_id",
+              "after_revision"
+            ],
+            "properties": {
+              "trading_account_id": {
+                "type": "null"
+              },
+              "observer_channel_id": {
+                "type": "null"
+              },
+              "symbol": {
+                "type": "null"
+              },
+              "timeframe": {
+                "type": "null"
+              },
+              "resource_id": {
+                "enum": [
+                  "macro",
+                  "calendar"
+                ]
+              },
+              "after_revision": {
+                "type": "null"
+              }
             }
           }
         },
         {
-          "if": { "properties": { "kind": { "const": "admin" } }, "required": ["kind"] },
-          "then": { "properties": { "resource_id": { "const": "macro_source_health" } }, "required": ["resource_id"] }
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "admin"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "properties": {
+              "resource_id": {
+                "const": "macro_source_health"
+              }
+            },
+            "required": [
+              "resource_id"
+            ]
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "kind",
+              "resource_id"
+            ],
+            "properties": {
+              "kind": {
+                "const": "market"
+              },
+              "resource_id": {
+                "const": "public_quote"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "trading_account_id",
+              "observer_channel_id",
+              "symbol",
+              "timeframe"
+            ],
+            "properties": {
+              "trading_account_id": {
+                "type": "null"
+              },
+              "observer_channel_id": {
+                "type": "null"
+              },
+              "after_revision": {
+                "type": "null"
+              },
+              "symbol": {
+                "type": "string",
+                "pattern": "^[A-Z0-9]{1,32}$"
+              },
+              "timeframe": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "kind",
+              "resource_id"
+            ],
+            "properties": {
+              "kind": {
+                "const": "market"
+              },
+              "resource_id": {
+                "const": "public_candle"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "trading_account_id",
+              "observer_channel_id",
+              "symbol",
+              "timeframe"
+            ],
+            "properties": {
+              "trading_account_id": {
+                "type": "null"
+              },
+              "observer_channel_id": {
+                "type": "null"
+              },
+              "after_revision": {
+                "type": "null"
+              },
+              "symbol": {
+                "type": "string",
+                "pattern": "^[A-Z0-9]{1,32}$"
+              },
+              "timeframe": {
+                "$ref": "#/$defs/Timeframe"
+              }
+            }
+          }
         }
       ]
     },
     "Subscribe": {
       "type": "object",
-      "required": ["v", "type", "request_id", "targets"],
+      "required": [
+        "v",
+        "type",
+        "request_id",
+        "targets"
+      ],
       "additionalProperties": false,
       "properties": {
-        "v": { "const": 4 },
-        "type": { "const": "subscription.subscribe" },
-        "request_id": { "$ref": "#/$defs/OpaqueId" },
+        "v": {
+          "const": 4
+        },
+        "type": {
+          "const": "subscription.subscribe"
+        },
+        "request_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
         "targets": {
           "type": "array",
           "minItems": 1,
           "maxItems": 32,
-          "items": { "$ref": "#/$defs/SubscriptionTarget" }
+          "items": {
+            "$ref": "#/$defs/SubscriptionTarget"
+          }
         }
       }
     },
     "Unsubscribe": {
       "type": "object",
-      "required": ["v", "type", "request_id", "subscription_ids"],
+      "required": [
+        "v",
+        "type",
+        "request_id",
+        "subscription_ids"
+      ],
       "additionalProperties": false,
       "properties": {
-        "v": { "const": 4 },
-        "type": { "const": "subscription.unsubscribe" },
-        "request_id": { "$ref": "#/$defs/OpaqueId" },
+        "v": {
+          "const": 4
+        },
+        "type": {
+          "const": "subscription.unsubscribe"
+        },
+        "request_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
         "subscription_ids": {
           "type": "array",
           "minItems": 1,
           "maxItems": 32,
           "uniqueItems": true,
-          "items": { "$ref": "#/$defs/OpaqueId" }
+          "items": {
+            "$ref": "#/$defs/OpaqueId"
+          }
         }
       }
     },
     "Ping": {
       "type": "object",
-      "required": ["v", "type", "request_id", "sent_at"],
+      "required": [
+        "v",
+        "type",
+        "request_id",
+        "sent_at"
+      ],
       "additionalProperties": false,
       "properties": {
-        "v": { "const": 4 },
-        "type": { "const": "system.ping" },
-        "request_id": { "$ref": "#/$defs/OpaqueId" },
-        "sent_at": { "$ref": "#/$defs/UtcDateTime" }
+        "v": {
+          "const": 4
+        },
+        "type": {
+          "const": "system.ping"
+        },
+        "request_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "sent_at": {
+          "$ref": "#/$defs/UtcDateTime"
+        }
       }
     },
     "ClientMessage": {
       "oneOf": [
-        { "$ref": "#/$defs/Subscribe" },
-        { "$ref": "#/$defs/Unsubscribe" },
-        { "$ref": "#/$defs/Ping" }
+        {
+          "$ref": "#/$defs/Subscribe"
+        },
+        {
+          "$ref": "#/$defs/Unsubscribe"
+        },
+        {
+          "$ref": "#/$defs/Ping"
+        }
       ]
     },
     "ServerMessage": {
       "oneOf": [
-        { "$ref": "#/$defs/Welcome" },
-        { "$ref": "#/$defs/SubscriptionReady" },
-        { "$ref": "#/$defs/ResyncRequired" },
-        { "$ref": "#/$defs/Heartbeat" },
-        { "$ref": "#/$defs/ProtocolError" },
-        { "$ref": "#/$defs/TypedEvent" }
+        {
+          "$ref": "#/$defs/Welcome"
+        },
+        {
+          "$ref": "#/$defs/SubscriptionReady"
+        },
+        {
+          "$ref": "#/$defs/ResyncRequired"
+        },
+        {
+          "$ref": "#/$defs/Heartbeat"
+        },
+        {
+          "$ref": "#/$defs/ProtocolError"
+        },
+        {
+          "$ref": "#/$defs/TypedEvent"
+        }
+      ]
+    },
+    "PublicMarketQuote": {
+      "type": "object",
+      "required": [
+        "bid",
+        "ask",
+        "spread",
+        "observed_at",
+        "revision"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "bid": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "ask": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "last": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Decimal"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "spread": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "observed_at": {
+          "$ref": "#/$defs/UtcDateTime"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        }
+      }
+    },
+    "PublicMarketCandle": {
+      "type": "object",
+      "required": [
+        "open_time",
+        "open",
+        "high",
+        "low",
+        "close",
+        "tick_volume",
+        "closed",
+        "revision"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "open_time": {
+          "$ref": "#/$defs/UtcDateTime"
+        },
+        "open": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "high": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "low": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "close": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "tick_volume": {
+          "$ref": "#/$defs/Decimal"
+        },
+        "closed": {
+          "type": "boolean"
+        },
+        "revision": {
+          "$ref": "#/$defs/Revision"
+        }
+      }
+    },
+    "PublicMarketData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "symbol",
+        "timeframe",
+        "source_key",
+        "source_generation",
+        "quote",
+        "candle"
+      ],
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "pattern": "^[A-Z0-9]{1,32}$"
+        },
+        "timeframe": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Timeframe"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_key": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "source_generation": {
+          "type": "string",
+          "pattern": "^\\d{1,20}$"
+        },
+        "quote": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PublicMarketQuote"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "candle": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/PublicMarketCandle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "timeframe": {
+              "type": "null"
+            },
+            "quote": {
+              "$ref": "#/$defs/PublicMarketQuote"
+            },
+            "candle": {
+              "type": "null"
+            }
+          }
+        },
+        {
+          "properties": {
+            "timeframe": {
+              "$ref": "#/$defs/Timeframe"
+            },
+            "quote": {
+              "type": "null"
+            },
+            "candle": {
+              "$ref": "#/$defs/PublicMarketCandle"
+            }
+          }
+        }
       ]
     }
   }

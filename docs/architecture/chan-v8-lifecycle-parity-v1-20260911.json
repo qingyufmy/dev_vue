@@ -1,0 +1,36 @@
+{
+  "kind": "chan-v8-lifecycle-parity/v1",
+  "passed": true,
+  "checks": 800,
+  "states": {
+    "unavailable": 3,
+    "active": 39,
+    "origin_breached": 38
+  },
+  "referenceSha256": "b945ae29ab5df61648d5d8da86af27835ef7874be60bc7f43aa441820780b796",
+  "pureRangeSha256": "2ab275d56c87682a7a93b1d43f8ce99028dc938a6aab229e7d03accbc7f9b9c6",
+  "targetHashes": [
+    {
+      "path": "server/src/modules/market/domain/chan-v8/pivot-lifecycle.ts",
+      "sha256": "1684a97c746a2344b7325fa5c9b9920ff51ccf345695937d928e1939830d5d5d"
+    },
+    {
+      "path": "server/src/modules/market/domain/chan-v8/bi-summary.ts",
+      "sha256": "af4a31c982279531e1d226868374500b32dd27d611febd87c61cda1fba9a62cd"
+    },
+    {
+      "path": "server/src/modules/market/domain/chan-v8/segment-summary.ts",
+      "sha256": "c145993d1bb2553b6999f5a1c6bd7759e318369a58c068f703e1f4d3a35278ff"
+    },
+    {
+      "path": "server/src/modules/market/domain/chan-v8/center-summary.ts",
+      "sha256": "ea2271a061fa1e4677051490ac822882b4dfc4ca3a2e7b1df59b3e01abfa7ba3"
+    },
+    {
+      "path": "server/src/modules/market/domain/chan-v8/latest-structure.ts",
+      "sha256": "0354d9332c2c44a5741e0d2449a53191b09d1f1f19ac1faf05d30d47fcbe061c"
+    }
+  ],
+  "scope": "synthetic lifecycle and summaries only; no full window or Worker validation",
+  "observedAt": "2026-09-11T10:13:43.674Z"
+}

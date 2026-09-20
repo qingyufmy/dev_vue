@@ -1,0 +1,1 @@
+{"passed":false,"identity":{"db":"dev_vue","serverUuid":"ac423207-6ef3-11f1-b302-000c29fda104","timezone":"+00:00"},"missingTables":["risk_manual_releases"],"checks":[],"code":"risk_receipt_scope_probe_failed","failureKind":"assertion","driverCode":"ERR_ASSERTION"}

@@ -1,5 +1,4 @@
-import type { JsonObject, TraderAction, TraderExecutableActionKind } from '../../inference/domain/inference.js'
-import type { RiskEvaluationResult } from '../../risk/domain/risk.js'
+import type { ExecutionJsonObject, ExecutionAction, ExecutionActionKind, ExecutionRiskEvaluation } from './execution-input.js'
 import type { ExecutionIntentStatus, ExecutionOperationStatus, RiskReservationStatus } from './execution.js'
 import { sha256Canonical } from './execution.js'
 
@@ -7,7 +6,7 @@ import { sha256Canonical } from './execution.js'
  * Commands accepted from the authenticated trading UI.
  *
  * This is deliberately a small command vocabulary.  A command is converted to
- * the same TraderAction shape used by the automated path, but it never invents
+ * the same ExecutionAction shape used by the automated path, but it never invents
  * an AI trade/risk decision.  The user-command source remains explicit all the
  * way through persistence so that the execution worker can apply the same
  * Bridge lifecycle without weakening the AI lineage rules.
@@ -27,7 +26,7 @@ export interface UserExecutionExpectedRevisions {
   quoteRevision: number
   contractRevision: number
   riskRevision: number
-  /** The exact position/order revision for a resource command; null for opens. */
+  /** Resource confirmation token (or legacy exact revision); evaluation resolves it to the current row revision. Null for opens. */
   resourceRevision: number | null
 }
 
@@ -150,8 +149,8 @@ export interface UserExecutionIntent {
   userId: number
   accountId: string
   actionId: string
-  actionKind: TraderExecutableActionKind
-  action: TraderAction
+  actionKind: ExecutionActionKind
+  action: ExecutionAction
   sourceType: UserExecutionCommandSourceType
   sourceId: string
   parentOperationId: string | null
@@ -198,7 +197,7 @@ export interface PreparedUserExecutionBundle {
   operation: UserExecutionOperation
   intent: UserExecutionIntent
   reservations: UserExecutionRiskReservation[]
-  riskEvaluation: RiskEvaluationResult
+  riskEvaluation: ExecutionRiskEvaluation
 }
 
 export interface RejectedUserExecutionCommandResult {
@@ -208,7 +207,7 @@ export interface RejectedUserExecutionCommandResult {
   operation: UserExecutionOperation
   intent: null
   reservations: []
-  riskEvaluation: RiskEvaluationResult
+  riskEvaluation: ExecutionRiskEvaluation
 }
 
 export type UserExecutionCommandResult = PreparedUserExecutionBundle | RejectedUserExecutionCommandResult
@@ -217,7 +216,7 @@ export class UserExecutionCommandError extends Error {
   constructor(
     public readonly code: string,
     public readonly status: number,
-    public readonly details: JsonObject = {},
+    public readonly details: ExecutionJsonObject = {},
   ) {
     super(code)
     this.name = 'UserExecutionCommandError'
@@ -252,9 +251,9 @@ export function normalizeUserExecutionCommand(input: UserExecutionCommandInput, 
   return normalized
 }
 
-/** Convert the normalized command into the shared immutable TraderAction contract. */
-export function userCommandAction(command: NormalizedUserExecutionCommand): TraderAction {
-  const expectedState: JsonObject = {
+/** Convert the normalized command into the shared immutable ExecutionAction contract. */
+export function userCommandAction(command: NormalizedUserExecutionCommand): ExecutionAction {
+  const expectedState: ExecutionJsonObject = {
     // Manual commands do not bind an AI analysis/subscription revision.  The
     // risk adapter explicitly narrows requiredRevisionKeys to the six values
     // captured below; zero is never treated as an authoritative AI revision.
@@ -277,8 +276,8 @@ export function userCommandAction(command: NormalizedUserExecutionCommand): Trad
  */
 export function buildPreparedUserExecutionBundle(input: {
   command: NormalizedUserExecutionCommand
-  action: TraderAction
-  riskEvaluation: RiskEvaluationResult
+  action: ExecutionAction
+  riskEvaluation: ExecutionRiskEvaluation
   accountCurrency: string
   operationId: string
   intentId: string
@@ -362,7 +361,7 @@ export function buildPreparedUserExecutionBundle(input: {
  */
 export function buildRejectedUserExecutionResult(input: {
   command: NormalizedUserExecutionCommand
-  riskEvaluation: RiskEvaluationResult
+  riskEvaluation: ExecutionRiskEvaluation
   operationId: string
   now: Date
 }): RejectedUserExecutionCommandResult {
@@ -470,7 +469,7 @@ function normalizeParameters(commandType: UserExecutionCommandType, value: UserE
   }
 }
 
-function commandParametersForAction(command: NormalizedUserExecutionCommand): JsonObject {
+function commandParametersForAction(command: NormalizedUserExecutionCommand): ExecutionJsonObject {
   const p = command.parameters
   switch (command.commandType) {
     case 'market_order': {
@@ -500,20 +499,20 @@ function commandParametersForAction(command: NormalizedUserExecutionCommand): Js
   }
 }
 
-function compact(value: Record<string, unknown>): JsonObject {
-  const result: JsonObject = {}
+function compact(value: Record<string, unknown>): ExecutionJsonObject {
+  const result: ExecutionJsonObject = {}
   for (const [key, candidate] of Object.entries(value)) {
-    if (candidate === undefined) continue
+    if (candidate === undefined || candidate === null || candidate === false) continue
     if (candidate === null || typeof candidate === 'string' || typeof candidate === 'number' || typeof candidate === 'boolean') result[key] = candidate
   }
   return result
 }
 
-function reservationFor(input: { command: NormalizedUserExecutionCommand; intentId: string; reservationId?: string; riskEvaluation: RiskEvaluationResult; accountCurrency: string }, expiresAt: string, createdAt: string): UserExecutionRiskReservation | null {
+function reservationFor(input: { command: NormalizedUserExecutionCommand; intentId: string; reservationId?: string; riskEvaluation: ExecutionRiskEvaluation; accountCurrency: string }, expiresAt: string, createdAt: string): UserExecutionRiskReservation | null {
   if (input.command.commandType !== 'market_order' && input.command.commandType !== 'pending_order') return null
   const action = input.riskEvaluation.approvedActions[0]
   const details = input.riskEvaluation.rules.find(rule => rule.code === 'RISK_ACTION_APPROVED' && rule.actionId === action?.actionId)?.details
-  if (!details || typeof details !== 'object') throw commandError('user_command_risk_data_missing', 422)
+  if (!details || typeof details !== 'object') return null
   const riskAmount = positiveOrZero(details.risk_amount)
   const riskPercent = positiveOrZero(details.risk_percent)
   const volume = positive(details.volume)
@@ -541,8 +540,8 @@ function side(value: unknown): 'buy' | 'sell' {
 }
 
 function symbol(value: unknown) {
-  const normalized = String(value ?? '').trim().toUpperCase()
-  if (!/^[A-Z0-9][A-Z0-9._-]{0,63}$/.test(normalized)) throw commandError('user_command_symbol_invalid', 422)
+  const normalized = String(value ?? '').trim()
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(normalized)) throw commandError('user_command_symbol_invalid', 422)
   return normalized
 }
 
@@ -616,6 +615,6 @@ function assertDate(value: Date) {
   if (!(value instanceof Date) || !Number.isFinite(value.getTime())) throw commandError('user_command_time_invalid', 422)
 }
 
-function commandError(code: string, status: number, details: JsonObject = {}) {
+function commandError(code: string, status: number, details: ExecutionJsonObject = {}) {
   return new UserExecutionCommandError(code, status, details)
 }

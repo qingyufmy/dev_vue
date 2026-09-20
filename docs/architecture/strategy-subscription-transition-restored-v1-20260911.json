@@ -1,0 +1,14 @@
+{
+  "kind": "strategy-subscription-data-transition/v1",
+  "mode": "--restored-only",
+  "target": "dev_vue_m1_source_20260910_02",
+  "passed": false,
+  "currentDevVueWrites": 0,
+  "runtimeEnabled": false,
+  "stage": "freeze_inputs",
+  "errorCode": "ERR_ASSERTION",
+  "errorLocations": [
+    "    at file:///D:/dev_codex/dev_vue/scripts/strategy-subscription-transition-local.mjs:103:12"
+  ],
+  "observedAt": "2026-09-11T01:36:07.397Z"
+}

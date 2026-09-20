@@ -8,8 +8,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@auru
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@aurum/ui/empty'
 import { Skeleton } from '@aurum/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@aurum/ui/table'
-import { Ban, CircleAlert, ClipboardCheck, Clock3, Info } from '@lucide/vue'
-import { actionLabel, formatDateTime } from '../model/trader-presentation'
+import { Ban, CircleAlert, ClipboardCheck, Info } from '@lucide/vue'
+import { formatDateTime } from '../model/trader-presentation'
+
+import { executionExplanation } from '~/features/audit'
 
 const props = withDefaults(defineProps<{
   operations: Operation[]
@@ -53,25 +55,16 @@ function operationLabel(kind: string) {
     manual_order: '手动交易',
     user_execution_command: '账户交易指令',
   }
-  return labels[kind] ?? actionLabel(kind)
+  return labels[kind] ?? '交易操作'
 }
 
 function operationSummary(operation: Operation) {
   const summary = operation.resultSummary
-  if (summary) {
-    for (const key of ['message', 'detail', 'reason', 'summary']) {
-      const value = summary[key]
-      if (typeof value === 'string' && value.trim()) return value
-    }
-    const counts = ['succeeded', 'failed', 'uncertain', 'rejected']
-      .filter((key) => typeof summary[key] === 'number')
-      .map((key) => `${key} ${summary[key]}`)
-    if (counts.length) return counts.join(' · ')
-  }
-  if (operation.errorCode) return `错误码：${operation.errorCode}`
-  if (operation.status === 'uncertain') return '结果尚未精确对账'
-  if (operation.status === 'accepted' || operation.status === 'queued' || operation.status === 'running') return '等待终端回执与资源复核'
-  return '--'
+  const labels: Record<string, string> = { succeeded: '完成', failed: '失败', uncertain: '待核实', rejected: '未通过' }
+  const counts = summary ? Object.entries(labels)
+    .filter(([key]) => typeof summary[key] === 'number')
+    .map(([key, label]) => `${label} ${summary[key]}`) : []
+  return counts.length ? counts.join(' · ') : executionExplanation(operation.errorCode, operation.status)
 }
 
 function time(value: string | null | undefined) {
@@ -84,8 +77,8 @@ function time(value: string | null | undefined) {
     <CardHeader class="gap-2 border-b">
       <div class="flex items-start justify-between gap-3">
         <div class="min-w-0">
-          <CardTitle class="flex items-center gap-2 text-base"><ClipboardCheck aria-hidden="true" />执行操作中心</CardTitle>
-          <CardDescription>记录本次页面会话提交的交易操作；最终状态以服务端对账和终端资源为准。</CardDescription>
+          <CardTitle class="flex items-center gap-2 text-base"><ClipboardCheck aria-hidden="true" />本次操作</CardTitle>
+          <CardDescription>显示本次打开页面后提交的操作及处理结果。</CardDescription>
         </div>
         <Badge variant="outline">{{ loading ? '同步中' : `${operations.length} 条` }}</Badge>
       </div>
@@ -96,14 +89,13 @@ function time(value: string | null | undefined) {
         <div class="min-w-0">
           <p class="text-sm font-medium">最近一次策略分发</p>
           <p class="mt-1 text-xs leading-5 text-muted-foreground">目标 {{ distribution.targetCount }} 个 · 已精确归因持仓 {{ attributableTargets }} 个 · 状态 {{ operationStatusLabels[distribution.status] }}</p>
-          <p class="mt-1 truncate font-mono text-xs text-muted-foreground" :title="distribution.id">#{{ distribution.id }}</p>
         </div>
         <Button variant="destructive" size="lg" :disabled="loading || !attributableTargets" @click="emit('close-distribution')"><Ban data-icon="inline-start" />分发平仓</Button>
       </div>
       <Alert v-if="hasUncertain" variant="destructive">
         <CircleAlert aria-hidden="true" />
         <AlertTitle>有操作等待核实</AlertTitle>
-        <AlertDescription>待核实（uncertain）表示指令可能已经送达终端但结果暂时不能确认，系统不会自动重发；请等待精确对账。</AlertDescription>
+        <AlertDescription>指令可能已送达终端，但结果尚未确认。请等待核实，不要重复提交。</AlertDescription>
       </Alert>
       <Alert v-else>
         <Info aria-hidden="true" />
@@ -128,7 +120,6 @@ function time(value: string | null | undefined) {
             <TableRow>
               <TableHead>操作</TableHead>
               <TableHead>状态</TableHead>
-              <TableHead>目标</TableHead>
               <TableHead>受理时间</TableHead>
               <TableHead>更新时间</TableHead>
               <TableHead>结果 / 说明</TableHead>
@@ -138,18 +129,12 @@ function time(value: string | null | undefined) {
             <TableRow v-for="operation in operations" :key="operation.operationId">
               <TableCell>
                 <p class="font-medium">{{ operationLabel(operation.kind) }}</p>
-                <p class="mt-1 max-w-44 truncate font-mono text-xs text-muted-foreground" :title="operation.operationId">#{{ operation.operationId }}</p>
               </TableCell>
               <TableCell><Badge :variant="statusVariant(operation.status)">{{ operationStatusLabels[operation.status] }}</Badge></TableCell>
-              <TableCell>
-                <p class="font-mono text-sm tabular-nums">{{ operation.resourceId ? `#${operation.resourceId}` : '--' }}</p>
-                <p v-if="operation.distributionId" class="mt-1 text-xs text-muted-foreground">分发 {{ operation.distributionId }}</p>
-              </TableCell>
               <TableCell class="whitespace-nowrap text-xs tabular-nums">{{ time(operation.acceptedAt) }}</TableCell>
               <TableCell class="whitespace-nowrap text-xs tabular-nums">{{ time(operation.updatedAt) }}</TableCell>
               <TableCell class="max-w-64 text-sm leading-5">
                 <p>{{ operationSummary(operation) }}</p>
-                <p v-if="operation.revision" class="mt-1 flex items-center gap-1 text-xs text-muted-foreground"><Clock3 aria-hidden="true" />版本 {{ operation.revision }}</p>
               </TableCell>
             </TableRow>
           </TableBody>
@@ -162,14 +147,12 @@ function time(value: string | null | undefined) {
             <div class="flex items-start justify-between gap-3">
               <div class="min-w-0">
                 <CardTitle class="truncate text-sm">{{ operationLabel(operation.kind) }}</CardTitle>
-                <CardDescription class="truncate font-mono">#{{ operation.operationId }}</CardDescription>
               </div>
               <Badge class="shrink-0" :variant="statusVariant(operation.status)">{{ operationStatusLabels[operation.status] }}</Badge>
             </div>
           </CardHeader>
           <CardContent class="grid gap-3 pt-0 text-sm">
             <div class="grid grid-cols-2 gap-3">
-              <div><p class="text-xs text-muted-foreground">目标</p><p class="mt-1 font-mono tabular-nums">{{ operation.resourceId ? `#${operation.resourceId}` : '--' }}</p></div>
               <div><p class="text-xs text-muted-foreground">更新时间</p><p class="mt-1 text-xs tabular-nums">{{ time(operation.updatedAt) }}</p></div>
             </div>
             <p class="rounded-lg bg-muted/40 px-3 py-2 text-sm leading-5">{{ operationSummary(operation) }}</p>

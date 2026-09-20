@@ -1,0 +1,41 @@
+{
+  "kind": "strategy-reference-current-negative-path/v1",
+  "passed": true,
+  "writes": 0,
+  "checks": [
+    "actual-execution-schema-admitted",
+    "missing-analysis-source-rejected-before-live-route-lookup",
+    "repeated-errors-rollback-and-release-pooled-connection"
+  ],
+  "artifacts": [
+    {
+      "path": "server/src/entrypoints/worker-trader.ts",
+      "sha256": "f7f6bb6492958d7e53edeef5d440158a2bfb5ca7e3d6a2f86a9b41abac50e125"
+    },
+    {
+      "path": "server/dist-v4/entrypoints/worker-trader.js",
+      "sha256": "69e5d7e125238c19cdebe60e225a5ab3dfc5ff95d8df4abcbf6b9d050f5e1f22"
+    },
+    {
+      "path": "server/dist-v4/bootstrap/strategy-reference-evidence.js",
+      "sha256": "cbdf93ab01fc28b7fe81106e939eaa1daa7a890a3f01a2f6ffbdf8b2741d25c2"
+    },
+    {
+      "path": "server/dist-v4/modules/inference/infrastructure/mysql-strategy-reference-source-reader.js",
+      "sha256": "e054de71bd0e3eef1be1efff5c8eb393dd4502c53c0ddce3807107304c571283"
+    },
+    {
+      "path": "server/dist-v4/modules/execution/infrastructure/execution-workflow-schema.js",
+      "sha256": "0d77e444b50aae09bbfea850b19d51126a63bfc4620ef0bae23fdff346a8aef6"
+    }
+  ],
+  "database": {
+    "host": "192.168.1.254",
+    "port": 3306,
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "databaseName": "dev_vue",
+    "timezone": "+00:00"
+  },
+  "positivePortfolioVerified": false,
+  "observedAt": "2026-09-10T15:24:21.628Z"
+}

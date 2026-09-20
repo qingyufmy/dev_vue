@@ -18,6 +18,21 @@ import { ExecutionService } from '../src/modules/execution/application/execution
 const NOW = new Date('2026-09-03T08:00:00.000Z')
 
 describe('execution intent preparation state machine', () => {
+  it('keeps the reservation symbol identical to the approved action broker symbol', () => {
+    const source = sourceWith([action('open-case', 'market_order', { symbol: 'XAUUSD.a', side: 'buy', volume: '0.10' })],
+      [approvedRule('open-case', { risk_amount: 10, risk_percent: 0.1, volume: 0.1 })])
+    const result = prepareExecutionBundle(source, NOW)
+    expect(result.kind).toBe('prepared')
+    if (result.kind !== 'prepared') throw new Error('expected prepared')
+    expect(result.reservations[0]?.symbol).toBe('XAUUSD.a')
+    expect(result.intents[0]?.action.parameters.symbol).toBe(result.reservations[0]?.symbol)
+  })
+
+  it('rejects surrounding whitespace rather than reserving a different symbol from the action', () => {
+    const source = sourceWith([action('open-space', 'market_order', { symbol: ' XAUUSD ', side: 'buy', volume: '0.10' })],
+      [approvedRule('open-space', { risk_amount: 10, risk_percent: 0.1, volume: 0.1 })])
+    expect(() => prepareExecutionBundle(source, NOW)).toThrow('execution_action_invalid')
+  })
   it('creates one independent prepared intent per approved action and one reservation per new-risk action', () => {
     const source = sourceWith([
       action('open-1', 'market_order', { symbol: 'XAUUSD', side: 'buy', volume: '0.10' }),
@@ -115,7 +130,10 @@ describe('execution intent preparation state machine', () => {
     const second = await service.prepare(42, source.riskDecisionId, NOW)
 
     expect(second).toEqual(first)
-    expect(repository.persistCalls).toBe(2)
+    expect(repository.persistCalls).toBe(1)
+    const afterDeadline = await service.prepare(42, source.riskDecisionId, new Date(NOW.getTime() + 60_000))
+    expect(afterDeadline).toEqual(first)
+    expect(repository.persistCalls).toBe(1)
     if (first.kind !== 'prepared' || second.kind !== 'prepared') return
     expect(first.operation.id).toBe(second.operation.id)
     expect(first.intents[0]?.idempotencyKey).toBe(sha256Canonical({ riskDecisionId: source.riskDecisionId, actionId: 'open-1' }))
@@ -190,6 +208,15 @@ class MemoryExecutionRepository implements ExecutionRepository {
   async loadApprovedRiskSource(userId: number, riskDecisionId: string) {
     const source = this.sources.get(riskDecisionId)
     return source?.userId === userId ? source : null
+  }
+
+  async replayPreparedExecution(input: { userId: number; accountId: string; riskDecisionId: string; sourceHash: string }) {
+    const saved = [...this.operations.values()].find(bundle => bundle.riskDecisionId === input.riskDecisionId)
+    if (!saved) return null
+    if (saved.operation.userId !== input.userId || saved.operation.accountId !== input.accountId || saved.sourceHash !== input.sourceHash) {
+      throw new ExecutionError('execution_persistence_conflict', 409)
+    }
+    return saved
   }
 
   async persistPreparedExecution(input: PersistPreparedExecutionInput) {

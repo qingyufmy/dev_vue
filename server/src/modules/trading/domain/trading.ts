@@ -82,6 +82,8 @@ export interface MarketCandle {
 
 export interface OpenPosition {
   ticket: string
+  /** Stable terminal position identifier for history correlation; never a command target. Missing/null is unknown. */
+  positionIdentifier?: string | null
   accountId: string
   symbol: string
   side: 'buy' | 'sell'
@@ -117,7 +119,7 @@ export type RealtimeResource = 'runtime.bridge' | 'account.metrics' | 'market.qu
 
 export class TradingAccessError extends Error {
   constructor(
-    readonly code: 'trading_account_not_found' | 'trading_account_forbidden' | 'trading_context_invalid' | 'bridge_capacity_exceeded' | 'revision_conflict' | 'market_candle_limit_invalid' | 'position_page_invalid' | 'position_cursor_invalid' | 'position_snapshot_invalid' | 'position_snapshot_changed' | 'trading_context_commit_unknown' | 'trading_context_rollback_unknown' | 'trading_context_write_failed' | 'trading_context_idempotency_conflict' | 'trading_context_receipt_unavailable',
+    readonly code: 'trading_account_not_found' | 'trading_account_forbidden' | 'trading_context_invalid' | 'bridge_capacity_exceeded' | 'revision_conflict' | 'market_candle_limit_invalid' | 'position_page_invalid' | 'position_cursor_invalid' | 'position_snapshot_invalid' | 'position_snapshot_changed' | 'trading_context_commit_unknown' | 'trading_context_rollback_unknown' | 'trading_context_write_failed' | 'trading_context_idempotency_conflict' | 'trading_context_receipt_unavailable' | 'terminal_market_busy' | 'terminal_market_unavailable' | 'terminal_market_timeout' | 'terminal_market_data_invalid' | 'terminal_market_symbol_unsupported',
     readonly status: number,
   ) {
     super(code)
@@ -134,7 +136,7 @@ export function assertOpaqueId(value: string, field = 'id') {
 }
 
 export function assertSymbol(value: string) {
-  const normalized = String(value ?? '').trim().toUpperCase()
-  if (!/^[A-Z0-9._-]{1,64}$/.test(normalized)) throw new TradingAccessError('trading_context_invalid', 400)
+  const normalized = String(value ?? '').trim()
+  if (!/^[A-Za-z0-9._-]{1,64}$/.test(normalized)) throw new TradingAccessError('trading_context_invalid', 400)
   return normalized
 }

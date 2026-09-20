@@ -1,0 +1,62 @@
+{
+  "passed": true,
+  "observedAt": "2026-09-14T03:01:46.165Z",
+  "config": {
+    "api_base": "http://localhost:4174",
+    "web_base": "http://localhost:4174",
+    "gateway_base": "http://localhost:3012"
+  },
+  "checks": [
+    {
+      "port": 3010,
+      "path": "/health/live",
+      "status": 200,
+      "role": "api-v4",
+      "ready": true,
+      "connections": null
+    },
+    {
+      "port": 3010,
+      "path": "/health/ready",
+      "status": 200,
+      "role": "api-v4",
+      "ready": true,
+      "connections": null
+    },
+    {
+      "port": 3012,
+      "path": "/health/live",
+      "status": 200,
+      "role": "bridge-gateway",
+      "ready": true,
+      "connections": 0
+    },
+    {
+      "port": 3012,
+      "path": "/health/ready",
+      "status": 200,
+      "role": "bridge-gateway",
+      "ready": true,
+      "connections": 0
+    },
+    {
+      "name": "invalid-native-body",
+      "status": 400,
+      "code": "api_request_invalid",
+      "cacheControl": "no-store"
+    },
+    {
+      "name": "native-origin-rejected",
+      "status": 403,
+      "code": "bridge_installation_origin_rejected",
+      "cacheControl": "no-store"
+    },
+    {
+      "name": "confirmation-requires-session",
+      "status": 401,
+      "code": "auth_session_required",
+      "cacheControl": "no-store"
+    }
+  ],
+  "scope": "local live MySQL/Redis startup and rejected HTTP requests; no installation approval or terminal connection"
+}

@@ -17,7 +17,7 @@ let pool, updater, lockedReader, phase = 'identity', versionAdvance = 'not_attem
 const checks = []
 try {
   const env = parse(await readFile(new URL('../server/.env', import.meta.url)))
-  assert.equal(env.MYSQL_HOST, '192.168.31.254'); assert.equal(env.MYSQL_DATABASE, 'dev_vue')
+  assert.equal(env.MYSQL_HOST, '192.168.1.254'); assert.equal(env.MYSQL_DATABASE, 'dev_vue')
   pool = createMysqlPool({ host: env.MYSQL_HOST, port: Number(env.MYSQL_PORT || 3306), user: env.MYSQL_USER,
     password: env.MYSQL_PASSWORD, database: env.MYSQL_DATABASE, poolSize: 2 })
   updater = await pool.getConnection()

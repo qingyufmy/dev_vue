@@ -1,0 +1,28 @@
+# 历史来源覆盖声明 v1
+
+本文件补充bridge-v4.schema.json的可选query.response.payload.history_coverage。状态：服务端合同/接收/分页一致性及任务摘要持久化已实现；Bridge生产者与完整性消费准入尚未接通。
+
+声明字段：version=1、status=complete、range_start_utc_msc、range_end_utc_msc、source_revision、collected_at_utc_msc。只允许history.orders/history.deals/history.trades；声明覆盖范围须等于请求范围，source_revision等于响应冻结版本，结束时间不晚于采集时间，采集时间不晚于响应观察时间。一次分页链的声明必须逐字段一致，不能中途出现、消失或变化。已有payload.source区分terminal与local_projection；缓存来源必须自身具备已验证的完整范围，不能由分页结束推导complete。
+
+字段缺失表示没有完整性声明；兼容既有生产者并继续普通历史采集，不影响旧回执语义。声明非法时拒绝该响应。旧服务端合同additionalProperties=false，因此生产者启用必须等待支持该扩展的服务端就绪；本批没有开启Bridge发送。
+
+生产者必须先检查确切profile/account/epoch的覆盖记录与冻结快照，只有完整范围成功读取才能发complete。MT5实际API失败、缓存不全、MT4终端历史可见范围不足均不能发complete。ProjectionQueryCoordinator已存在缓存覆盖检查，但其内部状态尚未映射到本字段，也不能仅因内部状态名为complete便当成真实终端完整历史证明。
+
+持久化沿用053任务completion_json中的pageChains.historyCoverage可选v1对象，同时保存completion_sha256；taskId、accountId、routeHash、请求窗口、receiptHash与pageChainHash均由原任务摘要绑定。无声明时不新增字段，保持旧v1摘要。声明在prepare前再校验，接管恢复也重建验证；完成事务仍由原receipt/sync/outbox/task原子提交。051回执保持原义，不单独表示完整覆盖。无需新表或修改已执行迁移。
+
+最终消费必须先证明任务succeeded、确切回执关系和摘要hash，再使用覆盖声明；还需核对每笔成交来源与订单创建证据。供应方声明本身不能直接授权执行。reference-v32在真实MySQL/Redis中验证覆盖声明持久化、完成确认丢失和队列重建重放，终端为合成query port。
+
+
+第一轮复核：保留既有历史采集与任务状态机，只补缺失的来源事实；明确生产者责任和消费者证据等级，不把has_more=false或数量一致等同完整覆盖。
+
+第二轮复核：检查兼容部署顺序、UTC、身份、分页漂移与缓存缺口。跨字段比较由服务端运行校验完成，JSON Schema负责字段形状及资源范围；真实终端覆盖和消费准入仍需后续验证，旧记录保持未知。
+
+## 精确分页成员补充方案（2026-09-10）
+
+现有052来源写入已校验factHash属于原始响应items。新增可选pageMembership v1到053 completion_json各resource链，保存每页requestedCursor、responseHash、request/query/response标识、原始itemCount与去重排序factHashes。消费者必须同时匹配来源三标识及原文hash；重建原pageChainHash，清单由任务completion_sha256绑定。无需修改已执行DDL或旧摘要。
+
+每资源最多2000页、10000个去重后逐页成员，总量超限时整个清单不输出，普通历史采集继续，精确成员消费保持未决，不能截断后声称完整。后续应通过较小采集窗口满足容量。缺清单的旧任务不能凭sourceRevision获取精确成员资格。
+
+第一轮复核：复用已存在事务、来源成员验证和completion_json，不新增表或重复事实存储；原文hash直接区别同一响应标识复用时不同事实。第二轮复核：清单重建链摘要并校验长度、序号、标识、哈希排序/唯一和页itemCount；旧任务恢复保持原摘要，新字段通过完成确认丢失与恢复测试。限制只影响新精确证据准入，不中断原历史采集。真实Bridge覆盖发送及全链权限验收仍单列未完成。
+
+实现验收：history-page-membership.ts、HistoryPageChain、historyTaskCompletionEvidence及MysqlHistoryTaskDealSourceReader已接通。新分页摘要种子排除installationId/credentialGeneration，匹配持久化任务身份；凭证仍由访问授权层校验，不能据此跳过权限。69项测试和最终reference-v41通过，确切成员检查已生效；缺清单或容量超限返回source_missing。真实Bridge生产者声明尚未接通，不能把服务端证据能力表述为真实终端覆盖已验证。

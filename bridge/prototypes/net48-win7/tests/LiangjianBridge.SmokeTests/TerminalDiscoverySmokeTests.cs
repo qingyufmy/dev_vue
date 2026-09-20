@@ -25,9 +25,12 @@ namespace Liangjian.BridgeV4.SmokeTests
             DiscoveredTerminal selected = null;
             foreach (DiscoveredTerminal item in listed) if (item.TerminalPath == first) selected = item;
             Check(selected != null, "missing_selected_path");
-            string id = selected.TerminalInstanceId;
             DiscoveredTerminal identified = discovery.Identify(selected, "python", "worker");
-            Check(identified.Login == "200" && identified.TerminalInstanceId == id && selected.Login == null,
+            DiscoveredTerminal portableResult = discovery.Identify(selected, "python", "worker", true, Path.GetDirectoryName(first));
+            Check(portableResult.Portable && probe.Portable && probe.ExpectedDataPath == Path.GetDirectoryName(first), "portable_data_path_not_forwarded");
+            Expect(() => discovery.Identify(selected, "python", "worker", true, @"C:\OtherData"), "bridge_discovery_data_path_mismatch");
+            string id = identified.TerminalInstanceId;
+            Check(identified.Login == "200" && identified.TerminalInstanceId != selected.TerminalInstanceId && selected.Login == null,
                 "identify_mutated_selection_or_lost_account");
             probe.Body = Body(first, "201");
             Check(discovery.Identify(selected, "python", "worker").Login == "201", "account_change_was_cached");
@@ -56,9 +59,10 @@ namespace Liangjian.BridgeV4.SmokeTests
         }
 
         // Runs only inside a spawned copy of this test executable. Never imports MT5.
-        public static int RunFixture(string file, string terminal)
+        public static int RunFixture(string file, string terminal, bool portable = false)
         {
             string mode = File.ReadAllText(file);
+            if (mode == "portable" && (!portable || Environment.GetEnvironmentVariable("AURUM_BRIDGE_WORKER_DATA_PATH") != Path.GetDirectoryName(terminal))) return 3;
             if (mode == "timeout") { Thread.Sleep(30000); return 0; }
             if (mode == "oversize") { Console.Write(new string('x', 9000)); return 0; }
             if (mode == "error") { Console.Error.Write("fixture_private_error"); return 2; }
@@ -80,6 +84,8 @@ namespace Liangjian.BridgeV4.SmokeTests
                 Mt5TerminalProbeProcess process = new Mt5TerminalProbeProcess();
                 string result = process.Read(executable, worker, terminal);
                 Check(result.Contains("456"), "probe_process_arguments_or_output");
+                File.WriteAllText(worker, "portable");
+                Check(process.Read(executable, worker, terminal, true, directory).Contains("456"), "probe_portable_arguments_or_data_path");
                 File.WriteAllText(worker, "error");
                 Expect(() => process.Read(executable, worker, terminal), "bridge_discovery_probe_failed");
                 File.WriteAllText(worker, "oversize");
@@ -96,6 +102,7 @@ namespace Liangjian.BridgeV4.SmokeTests
         private static string Body(string path, string login)
         {
             return new JavaScriptSerializer().Serialize(new { probe_version = 1, terminal_path = path,
+                data_path = Path.GetDirectoryName(path),
                 account_ref = new { broker_server = "Demo", login = login } });
         }
 
@@ -113,9 +120,12 @@ namespace Liangjian.BridgeV4.SmokeTests
             public string Body;
             public int Calls;
             public Action AfterRead;
-            public string Read(string python, string worker, string terminal)
+            public bool Portable;
+            public string ExpectedDataPath;
+            public string Read(string python, string worker, string terminal, bool portable = false, string expectedDataPath = null)
             {
                 Calls++;
+                Portable = portable; ExpectedDataPath = expectedDataPath;
                 if (AfterRead != null) AfterRead();
                 return Body;
             }

@@ -147,6 +147,44 @@ describe('MysqlObserverAccessReader', () => {
   })
 })
 
+describe('strategy-bound observer source', () => {
+  const scope = { userId: 9, sourceAccountId: '7', analysisStrategyId: '20' }
+  it('selects an authorized publication only for the frozen account and strategy', async () => {
+    const executor = new FakeExecutor()
+    executor.listPages = [[row({ channel_id: '11', analysis_strategy_id: '20', audience: 'assigned' }), row({ analysis_strategy_id: '20' })]]
+    expect(await reader(executor).authorizeStrategySource(scope)).toMatchObject({ analysisStrategyId: '20', authorization: { channelId: '12', accountId: '7', sourceRevision: expect.any(String) } })
+    expect(executor.calls[0]?.params).toEqual([9, now.toISOString(), '7', '20', '0'])
+    expect(executor.calls[0]?.sql).toContain('s.analysis_strategy_id=?')
+  })
+  it.each([
+    { analysis_strategy_id: '21' }, { source_account_id: '8', source_trading_account_id: '8' },
+    { source_configuration_status: 'pending' }, { source_status: 'disabled' },
+    { audience: 'assigned' }, { viewer_deletion_status: 'disabled' }, { operator_deletion_status: 'disabled' },
+    { audience: 'pro', viewer_plan: 'pro', viewer_plan_expires_at: new Date('2026-09-05T07:59:59.000Z') },
+  ])('does not authorize mismatched or unavailable evidence %j', async patch => {
+    const executor = new FakeExecutor(); executor.listPages = [[row({ analysis_strategy_id: '20', ...patch })]]
+    expect(await reader(executor).authorizeStrategySource(scope)).toBeNull()
+  })
+  it('continues past a full page of inaccessible channels', async () => {
+    const executor = new FakeExecutor()
+    executor.listPages = [Array.from({ length: 100 }, (_, index) => row({ channel_id: String(index + 1), analysis_strategy_id: '20', audience: 'assigned' })),
+      [row({ channel_id: '101', analysis_strategy_id: '20' })]]
+    expect(await reader(executor).authorizeStrategySource(scope)).toMatchObject({ authorization: { channelId: '101' } })
+    expect(executor.calls[1]?.params.at(-1)).toBe('100')
+  })
+  it('rejects a proof that expires during principal lookup', async () => {
+    const executor = new FakeExecutor(); executor.listPages = [[row({ analysis_strategy_id: '20' })]]
+    expect(await readerWithClock(executor, [now, new Date(now.getTime() + 30_000)]).authorizeStrategySource(scope)).toBeNull()
+  })
+  it('returns null before SQL for invalid scope and propagates database failures', async () => {
+    const executor = new FakeExecutor()
+    expect(await reader(executor).authorizeStrategySource({ ...scope, analysisStrategyId: '0' })).toBeNull()
+    expect(executor.calls).toHaveLength(0)
+    executor.failure = Error('database_unavailable')
+    await expect(reader(executor).authorizeStrategySource(scope)).rejects.toThrow('database_unavailable')
+  })
+})
+
 function principals(rows: () => Record<string, unknown>[]) {
   return { async readMany(ids: readonly number[]) {
     const row = rows()[0]

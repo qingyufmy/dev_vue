@@ -1,0 +1,135 @@
+{
+  "kind": "pending-command-mysql-reference/v1",
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "dataCopied": false,
+  "foreignKeysVerified": false,
+  "syntheticPorts": [
+    "policy",
+    "analysis",
+    "instrument",
+    "pending-projection",
+    "historical-origin"
+  ],
+  "checks": [
+    "creation-rollback-no-partial-command"
+  ],
+  "tables": [
+    {
+      "table": "trading_accounts",
+      "sha256": "216f7f7cd8151e7dd296f8ce3b6e17eb8f97a48060cf78050f66eecbe44899ac"
+    },
+    {
+      "table": "trading_account_ownerships",
+      "sha256": "cf8a69ef08b8f29ea405796838bc8abcf347fec3a4f0e9ffab3cfb39e62e54d1"
+    },
+    {
+      "table": "terminal_profiles",
+      "sha256": "cd1cb41fc4bdb7270f292e2682cbfc8ccfda814d51c150da078cb37aed5ecbe2"
+    },
+    {
+      "table": "terminal_account_bindings",
+      "sha256": "d6cbfddedf81c880a0e615a52362c8f683ae9b32bf5be75e633283ae9c56875f"
+    },
+    {
+      "table": "bridge_connection_sessions",
+      "sha256": "e1aaf82ed9334287fcda0e5c7bb01924decfab7faea60b6ccb9b89aa90917eed"
+    },
+    {
+      "table": "account_runtime_snapshots",
+      "sha256": "6df92a77561d6592901e84bbe41055ce90fe61c018069c0e2cad67e5b1af35b8"
+    },
+    {
+      "table": "execution_intents",
+      "sha256": "168dc7796ba11005402af8b04925f5e701a578eb897dfbdab01b0aaaa1ab1bb6"
+    },
+    {
+      "table": "execution_intent_payloads",
+      "sha256": "34e077334ceac64debadcf051441d15d025b83774dc41369e67416e6cb3a206a"
+    },
+    {
+      "table": "execution_intent_events",
+      "sha256": "14968fd862f69892c961bf2ec7b3f9857180d86eb3db44e2c25a3af8f6a8ebe7"
+    },
+    {
+      "table": "bridge_commands_v4",
+      "sha256": "ea516a73bd3a1078a91eec0ba425fb2036dac48ea91ea0742bca12475a027fd1"
+    },
+    {
+      "table": "bridge_command_payloads_v4",
+      "sha256": "ad78a41ddeed4971e3f56058a049c6c1cc50519d8f3c204d343d4856e8c14d9f"
+    },
+    {
+      "table": "bridge_command_events_v4",
+      "sha256": "3709fe89be1cc6e928e2fee2adc844267feac96cd6363888e95b598af16b1fe0"
+    },
+    {
+      "table": "outbox_events",
+      "sha256": "585c428dc5a7e552c62e0ac58941c436bb05d162b26f9fda9582f81fb0fdd110"
+    },
+    {
+      "table": "operations",
+      "sha256": "04a0d98abdb3bc6b097a66c89851447761854f1abd3e8db819a73824e25298df"
+    },
+    {
+      "table": "operation_events",
+      "sha256": "625c106c9fa011e1f598573dd9d7a7593f30038059e6456e085352963af6781d"
+    },
+    {
+      "table": "execution_distribution_targets",
+      "sha256": "4bc4089091c7515c22042c2297b44ed665ad136a1f3cf1bf81457ef51ed2ff6a"
+    },
+    {
+      "table": "execution_distributions",
+      "sha256": "2e9df186d3342eec7ddba605eca4db3742c2bdc9ea5a83d00750a9139366fdaa"
+    },
+    {
+      "table": "strategies",
+      "sha256": "9734d399dadd17e8932c7df82170c905c61afcd842943cb59302725218a3c4f8"
+    },
+    {
+      "table": "strategy_versions",
+      "sha256": "f36550c4d3159c149e036b16d0ec3609dd99432e5830008d0b2c94f4c2676b6d"
+    },
+    {
+      "table": "strategy_subscriptions",
+      "sha256": "1cdd803bed4fb554faa6f7cd4c78d9ff2494ec47a060f07d73204ea7a5be5475"
+    },
+    {
+      "table": "subscription_schedules",
+      "sha256": "1a350a9d1a8e575a765752a952fa693c649a19d6d2d504e8c87379faec517913"
+    },
+    {
+      "table": "subscription_execution_preferences",
+      "sha256": "10ca630536ebbc1cd6a5b2cf20c92497266983ec5504512fc344e552e37a1096"
+    },
+    {
+      "table": "risk_decisions_v4",
+      "sha256": "759b351e072b2f5ab2124f924ebcd09f0457334704b6d7bb3d3d2d8a1c7b078b"
+    },
+    {
+      "table": "trade_decisions",
+      "sha256": "887749d941ed5f50be8a0959908338ba73de7804519e711d5b0de5858d8f6291"
+    },
+    {
+      "table": "ai_trader_runs",
+      "sha256": "898aea25b197efade6fbd90f2b00eb6a3580730a6bf35d14a43a6b2b439d35de"
+    },
+    {
+      "table": "inference_snapshots",
+      "sha256": "d9e1290a1814bf17ae5fd51e2ce135d8c8dbd281938c91e79662edb64d42b3a2"
+    },
+    {
+      "table": "inference_snapshot_payloads",
+      "sha256": "9ae277e9528e8f34df816f89e8d4829583330faf835fb78f9c8a792b1c3ead49"
+    }
+  ],
+  "errorCode": "execution_dedup_snapshot_stale",
+  "locations": [
+    "    at MysqlBridgeCommandRepository.reviewOrder (file:///D:/dev_codex/dev_vue/server/dist-v4/modules/execution/infrastructure/mysql-bridge-command-repository.js:221:23)",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)",
+    "    at async file:///D:/dev_codex/dev_vue/server/dist-v4/modules/execution/infrastructure/mysql-bridge-command-repository.js:107:17"
+  ],
+  "referenceDatabaseRemoved": true,
+  "observedAt": "2026-09-11T02:42:02.588Z"
+}

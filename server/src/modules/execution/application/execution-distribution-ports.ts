@@ -13,7 +13,7 @@ import type {
   ExecutionDistributionPreview,
 } from '../domain/execution-distribution.js'
 import type { Operation } from '../domain/execution.js'
-import type { JsonObject } from '../../inference/domain/inference.js'
+import type { JsonObject } from '../../inference/index.js'
 
 export interface ActiveTraderStrategyVersion {
   strategyId: string

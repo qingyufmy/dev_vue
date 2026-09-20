@@ -24,13 +24,28 @@ function database(results: unknown[]) {
     return [result, []]
   })
   const connection = { execute, beginTransaction: vi.fn(async () => {}), commit: vi.fn(async () => {}),
-    rollback: vi.fn(async () => {}), release: vi.fn() }
+    rollback: vi.fn(async () => {}), release: vi.fn(), destroy: vi.fn() }
   const lookup = vi.fn(async () => [[{ user_id: 7 }], []])
   const pool = { execute: lookup, getConnection: async () => connection } as unknown as Pool
   return { pool, connection, execute, lookup, repository: new MysqlBridgePairingRepository(pool) }
 }
 
 describe('V4 pairing persistence (SQL double, not real MySQL)', () => {
+  it('destroys an uncertain committed connection and does not pretend to roll it back', async () => {
+    const f = database([[{ id: 7 }], [pair]])
+    f.connection.commit.mockRejectedValueOnce(new Error('lost_ack'))
+    await expect(f.repository.create(7, 'request-0001', hash(code))).rejects.toMatchObject({ code: 'bridge_pairing_commit_unknown', status: 503 })
+    expect(f.connection.destroy).toHaveBeenCalledOnce()
+    expect(f.connection.rollback).not.toHaveBeenCalled()
+    expect(f.connection.release).not.toHaveBeenCalled()
+  })
+  it('keeps the original permission failure when rollback also fails', async () => {
+    const f = database([[]])
+    f.connection.rollback.mockRejectedValueOnce(new Error('rollback_failed'))
+    await expect(f.repository.create(7, 'request-0001', hash(code))).rejects.toMatchObject({ status: 403 })
+    expect(f.connection.destroy).toHaveBeenCalledOnce()
+    expect(f.connection.release).not.toHaveBeenCalled()
+  })
   it('creates a code receipt under the user lock without a plaintext secret or account grant', async () => {
     const f = database([[{ id: 7 }], [], [{ count: 0 }], { affectedRows: 1 }, [pair]])
     await expect(f.repository.create(7, 'request-0001', hash(code))).resolves.toMatchObject({ profileId: pair.profile_id })
@@ -110,15 +125,17 @@ describe('V4 pairing persistence (SQL double, not real MySQL)', () => {
     await expect(f.repository.redeem(hash(code), 'install-1', hash(token))).rejects.toMatchObject({ code: 'bridge_pairing_profile_conflict' })
   })
   it('revokes pending codes and credentials in one user-locked transaction', async () => {
-    const f = database([[{ id: 7 }], { affectedRows: 1 }, { affectedRows: 1 }])
+    const f = database([[{ id: 7 }], { affectedRows: 1 }, { affectedRows: 1 }, { affectedRows: 1 }, { affectedRows: 1 }])
     await createBridgeDeviceRevoker(f.pool).revokeUserDevices(7, 'revoke_all_devices', new Date())
     expect(String(f.execute.mock.calls[0]![0])).toContain('FOR UPDATE')
-    expect(String(f.execute.mock.calls[1]![0])).toContain('UPDATE bridge_v4_pairing_requests')
-    expect(String(f.execute.mock.calls[2]![0])).toContain('UPDATE bridge_refresh_sessions')
+    expect(String(f.execute.mock.calls[1]![0])).toContain('UPDATE bridge_installation_authorizations')
+    expect(String(f.execute.mock.calls[2]![0])).toContain('UPDATE bridge_installation_requests')
+    expect(String(f.execute.mock.calls[3]![0])).toContain('UPDATE bridge_v4_pairing_requests')
+    expect(String(f.execute.mock.calls[4]![0])).toContain('UPDATE bridge_refresh_sessions')
     expect(f.connection.commit).toHaveBeenCalledOnce()
   })
   it('rolls back both device invalidations and releases the connection when credential storage fails', async () => {
-    const f = database([[{ id: 7 }], { affectedRows: 1 }, new Error('credential_storage_failed')])
+    const f = database([[{ id: 7 }], { affectedRows: 1 }, { affectedRows: 1 }, { affectedRows: 1 }, new Error('credential_storage_failed')])
     await expect(createBridgeDeviceRevoker(f.pool).revokeUserDevices(7, 'revoke_all_devices', new Date()))
       .rejects.toThrow('credential_storage_failed')
     expect(f.connection.commit).not.toHaveBeenCalled()
@@ -139,7 +156,7 @@ describe('V4 pairing HTTP and machine contract', () => {
   it('requires trade write auth, hashes machine secrets and never echoes them', async () => {
     const f = await fixture()
     try {
-      const created = await f.app.inject({ method: 'POST', url: '/api/v4/bridge/pairing-requests', headers: { 'idempotency-key': 'request-00000001-0001' }, payload: { code_hash: hash(code) } })
+      const created = await f.app.inject({ method: 'POST', url: '/api/v4/bridge/pairing-requests', headers: { 'x-csrf-token': 'test-csrf-token-valid', 'idempotency-key': 'request-00000001-0001' }, payload: { code_hash: hash(code) } })
       expect(created.statusCode).toBe(201)
       expect(f.auth.assertWrite).toHaveBeenCalledOnce()
       expect(f.repository.create).toHaveBeenCalledWith(7, 'request-00000001-0001', hash(code))
@@ -179,6 +196,28 @@ describe('V4 pairing HTTP and machine contract', () => {
       }
       expect(f.repository.create).not.toHaveBeenCalled()
       expect(f.repository.redeem).not.toHaveBeenCalled()
+    } finally { await f.app.close() }
+  })
+  it('rejects extra fields with Fastify defaults and reports a bad committed result without secrets', async () => {
+    const f = await fixture()
+    const request = { method: 'POST' as const, url: '/api/v4/bridge/pairing-requests',
+      headers: { 'x-csrf-token': 'test-csrf-token-valid', 'idempotency-key': 'request-00000001-0001' }, payload: { code_hash: hash(code) } }
+    const redemption = { method: 'POST' as const, url: '/api/v4/bridge/pairing-redemptions',
+      payload: { pairing_code: code, installation_id: 'install-1', refresh_token: token } }
+    try {
+      expect((await f.app.inject({ ...request, payload: { ...request.payload, user_id: 8 } })).statusCode).toBe(400)
+      expect((await f.app.inject({ ...redemption, payload: { ...redemption.payload, user_id: 8 } })).statusCode).toBe(400)
+      expect((await f.app.inject({ ...redemption, url: redemption.url + '?user_id=8' })).statusCode).toBe(400)
+      expect(f.repository.create).not.toHaveBeenCalled()
+      expect(f.repository.redeem).not.toHaveBeenCalled()
+      f.repository.create.mockResolvedValueOnce({ pairingId: 'invalid', profileId: 'profile-1', expiresAt: '2026-09-09T08:00:00.000Z' })
+      const result = await f.app.inject(request)
+      expect(result.statusCode).toBe(503)
+      expect(result.json()).toMatchObject({ code: 'bridge_pairing_commit_unknown', retryable: false })
+      expect(result.headers['content-type']).toContain('application/problem+json')
+      expect(result.headers['cache-control']).toBe('no-store')
+      expect(result.body).not.toContain(code)
+      expect(result.body).not.toContain(token)
     } finally { await f.app.close() }
   })
   it('keeps domain errors stable and redacts storage details', async () => {

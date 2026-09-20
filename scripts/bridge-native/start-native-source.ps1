@@ -198,6 +198,9 @@ $workerSource = Resolve-ExistingFile `
 $tradeSource = Resolve-ExistingFile `
     -Path (Join-Path $nativeRoot 'workers\mt5\trade.py') `
     -ErrorCode 'native_source_trade_source_missing'
+$completionSource = Resolve-ExistingFile `
+    -Path (Join-Path $nativeRoot 'workers\mt5\order_completion.py') `
+    -ErrorCode 'native_source_completion_source_missing'
 $workerDirectory = Assert-PathWithinRoot `
     -Path (Join-Path $debugRoot 'modules\adapter.mt5.python') `
     -Root $repoRoot `
@@ -276,12 +279,17 @@ $debugTrade = Assert-PathWithinRoot `
     -Path (Join-Path $workerDirectory 'trade.py') `
     -Root $repoRoot `
     -ErrorCode 'native_source_debug_path_invalid'
-foreach ($destination in @($debugWorker, $debugTrade, $debugEndpoints)) {
+$debugCompletion = Assert-PathWithinRoot `
+    -Path (Join-Path $workerDirectory 'order_completion.py') `
+    -Root $repoRoot `
+    -ErrorCode 'native_source_debug_path_invalid'
+foreach ($destination in @($debugWorker, $debugTrade, $debugCompletion, $debugEndpoints)) {
     Assert-NotReparsePoint -Path $destination -ErrorCode 'native_source_debug_path_invalid'
 }
 try {
     Copy-Item -LiteralPath $workerSource -Destination $debugWorker -Force
     Copy-Item -LiteralPath $tradeSource -Destination $debugTrade -Force
+    Copy-Item -LiteralPath $completionSource -Destination $debugCompletion -Force
     Copy-Item -LiteralPath $developmentEndpoints -Destination $debugEndpoints -Force
 }
 catch {

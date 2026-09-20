@@ -1,0 +1,48 @@
+{
+  "passed": true,
+  "sources": [
+    {
+      "path": "docs/architecture/inference-restored-prepare-20260910.json",
+      "sha256": "67eeea06c2464b94dd32abe42872462a48bbe372492b55387a094f1011b5f53c"
+    },
+    {
+      "path": "docs/architecture/inference-restored-start-loss-20260910.json",
+      "sha256": "237bb9cdea15f08653ca0bb9f56a85b5d0a5d60f71a9d92afac9f26b94732744"
+    },
+    {
+      "path": "docs/architecture/inference-restored-ddl-loss-20260910.json",
+      "sha256": "7640abfa46d727e15ef9eb8e1c68a52568b776fad40197d048ff7c5596d39979"
+    },
+    {
+      "path": "docs/architecture/inference-restored-complete-loss-20260910.json",
+      "sha256": "ddf01bc1df45be19247edfa3351d347d4cc5bde776bfae6a910114cf2d800c7f"
+    },
+    {
+      "path": "docs/architecture/inference-restored-cycle-ddl-loss-20260910.json",
+      "sha256": "0fc2153b0c225901ec364cb51b3b3dc4229d1c56085c5d3efe812a8fc1c3b65d"
+    },
+    {
+      "path": "docs/architecture/inference-restored-resume-20260910.json",
+      "sha256": "80cc120f9d8837bac7283071172a6fa1ed7ee1b2abb0694b1b2f9f99c660c086"
+    },
+    {
+      "path": "docs/architecture/inference-restored-replay-20260910.json",
+      "sha256": "472b48077ffe8952ca886e30ed3a36027a942496d9af215c411afe24a270b9f4"
+    }
+  ],
+  "target": "dev_vue_m1_source_20260910_02",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "receiptSha256": "5c3901ad66471bc14618f285e0ce041091ed84639a9aee1d6b381843fb9aab9d",
+  "baselineProofSha256": "16d66a45654964b2df73eb38de8f10b9998ebe336d3afea68c20808bffd8810d",
+  "planHash": "0bfcfa5268cbdc519ac1d3b7bae3712b073bc463c64bb17c93c1f9fe93364866",
+  "protectedSnapshotHash": "e67adba1668fdda5cf17eb4c6fd93f2be29439a71e6901473017a9146e158944",
+  "protectedTableCount": 257,
+  "completedSteps": 204,
+  "tableCount": 270,
+  "buildTableCount": 12,
+  "totalDdl": 13,
+  "replayDdl": 0,
+  "originalHistoryUnchanged": true,
+  "currentDevVueWrites": 0,
+  "observedAt": "2026-09-10T09:12:29.423Z"
+}

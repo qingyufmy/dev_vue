@@ -22,7 +22,7 @@ namespace Liangjian.BridgeV4.Transport
 
         public static string BuildRequest(Uri uri, string clientKey, string bearerToken)
         {
-            if (uri == null || !string.Equals(uri.Scheme, "wss", StringComparison.OrdinalIgnoreCase))
+            if (!WebSocketEndpointPolicy.IsAllowed(uri))
             {
                 throw new ArgumentException("bridge_wss_uri_required", "uri");
             }

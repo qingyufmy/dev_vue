@@ -1,7 +1,6 @@
+import type { ExecutionJsonObject, ExecutionAction, ExecutionActionKind, ExecutionRiskRule } from './execution-input.js'
 import { createHash } from 'node:crypto'
 import { canonicalJson as encodeCanonicalJson, CanonicalJsonError } from '../../../shared/canonical-json.js'
-import type { JsonObject, TraderAction, TraderExecutableActionKind } from '../../inference/domain/inference.js'
-import type { RiskRuleResult } from '../../risk/domain/risk.js'
 
 /** The preparation window is intentionally short: it starts at risk evaluation time. */
 export const PREPARED_EXECUTION_TTL_MS = 30_000
@@ -21,7 +20,7 @@ export type ExecutionIntentStatus = typeof EXECUTION_INTENT_STATUSES[number]
 export const RISK_RESERVATION_STATUSES = ['active', 'committed', 'absorbed', 'released', 'expired'] as const
 export type RiskReservationStatus = typeof RISK_RESERVATION_STATUSES[number]
 
-export type ExecutionPreparationNoopReason = 'no_approved_actions'
+export type ExecutionPreparationNoopReason = 'no_approved_actions' | 'risk_reapproval_requested'
 
 /**
  * A read-only, immutable view of one approved risk decision.
@@ -47,8 +46,8 @@ export interface ApprovedRiskExecutionSource {
   policyHash: string
   evaluatedAt: string
   revision: number
-  approvedActions: TraderAction[]
-  riskRules: RiskRuleResult[]
+  approvedActions: ExecutionAction[]
+  riskRules: ExecutionRiskRule[]
 }
 
 export interface Operation {
@@ -72,7 +71,7 @@ export interface Operation {
   intentIds: string[]
   parentOperationId?: string | null
   distributionId?: string | null
-  resultSummary?: JsonObject | null
+  resultSummary?: ExecutionJsonObject | null
 }
 
 export interface ExecutionIntent {
@@ -83,8 +82,8 @@ export interface ExecutionIntent {
   userId: number
   accountId: string
   actionId: string
-  actionKind: TraderExecutableActionKind
-  action: TraderAction
+  actionKind: ExecutionActionKind
+  action: ExecutionAction
   sourceType: 'risk_decision' | 'user_command' | 'strategy_distribution' | 'distribution_close'
   sourceId: string
   idempotencyKey: string
@@ -167,10 +166,10 @@ export class ExecutionError extends Error {
   }
 }
 
-const executableKinds = new Set<TraderExecutableActionKind>([
+const executableKinds = new Set<ExecutionActionKind>([
   'market_order', 'pending_order', 'modify_position', 'close_position', 'modify_order', 'cancel_order',
 ])
-const reservingKinds = new Set<TraderExecutableActionKind>(['market_order', 'pending_order'])
+const reservingKinds = new Set<ExecutionActionKind>(['market_order', 'pending_order'])
 const riskRuleCode = 'RISK_ACTION_APPROVED'
 
 /**
@@ -278,13 +277,13 @@ function assertSource(source: ApprovedRiskExecutionSource) {
   }
 }
 
-function assertAction(action: TraderAction) {
+function assertAction(action: ExecutionAction) {
   if (!action || typeof action !== 'object' || typeof action.actionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(action.actionId)) throw new ExecutionError('execution_action_invalid', 422)
   if (!executableKinds.has(action.kind) || !isJsonObject(action.parameters) || !isJsonObject(action.expectedState)) throw new ExecutionError('execution_action_invalid', 422)
   if (Object.keys(action.parameters).length === 0 || Object.keys(action.expectedState).length === 0) throw new ExecutionError('execution_action_invalid', 422)
 }
 
-function approvedRiskData(source: ApprovedRiskExecutionSource, action: TraderAction) {
+function approvedRiskData(source: ApprovedRiskExecutionSource, action: ExecutionAction) {
   const matches = source.riskRules.filter(rule => rule.code === riskRuleCode && rule.actionId === action.actionId && rule.outcome === 'passed')
   if (matches.length !== 1) throw new ExecutionError('execution_risk_data_missing', 422)
   const details = matches[0]!.details
@@ -297,8 +296,8 @@ function approvedRiskData(source: ApprovedRiskExecutionSource, action: TraderAct
   if (riskAmount === null || riskPercent === null || volume === null) throw new ExecutionError('execution_risk_data_invalid', 422)
   const actionVolume = finitePositive(action.parameters.volume)
   if (actionVolume === null || !nearlyEqual(actionVolume, volume)) throw new ExecutionError('execution_risk_data_mismatch', 422)
-  const symbol = typeof action.parameters.symbol === 'string' ? action.parameters.symbol.trim().toUpperCase() : ''
-  if (!/^[A-Z0-9][A-Z0-9._-]{0,63}$/.test(symbol)) throw new ExecutionError('execution_action_invalid', 422)
+  const symbol = typeof action.parameters.symbol === 'string' ? action.parameters.symbol : ''
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(symbol)) throw new ExecutionError('execution_action_invalid', 422)
   return { riskAmount, riskPercent, volume, symbol }
 }
 
@@ -324,7 +323,7 @@ function nearlyEqual(left: number, right: number) {
   return Math.abs(left - right) <= scale * 1e-9
 }
 
-function isJsonObject(value: unknown): value is JsonObject {
+function isJsonObject(value: unknown): value is ExecutionJsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 

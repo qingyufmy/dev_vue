@@ -7,7 +7,7 @@ export interface ExecutionDispatchCandidate {
 }
 
 export interface ExecutionCommandSource {
-  loadPrepared(intentId: string, now: string): Promise<ExecutionDispatchCandidate | null>
+  loadPrepared(intentId: string, now: string): Promise<ExecutionDispatchCandidate | { blocked: true; accountId: string } | null>
 }
 
 export interface AccountExecutionLeaseStore {

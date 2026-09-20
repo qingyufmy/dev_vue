@@ -1,0 +1,46 @@
+{
+  "kind": "review-write-receipt-reference/v1",
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "referenceDatabaseRemoved": true,
+  "checks": [
+    "six_action_receipts_four_concurrent_same_key_one_effect_each_and_body_conflict",
+    "actual_commit_followed_by_injected_ack_loss_replays_once",
+    "receipt_failure_rolls_back_actual_effect",
+    "current_authorization_rechecked_and_corrupt_receipt_not_reexecuted",
+    "actual_foreign_key_and_five_check_constraints_reject_invalid_receipts"
+  ],
+  "scope": "Real receipt primitive and migration 049; scaffold users/effects; not six domain repositories, history upgrade or restoration proof.",
+  "migrationSha256": "c02eef5973761396b7c25721a89ea3b99bebae37ea6980e5e7dbea4cbbbe8a13",
+  "artifacts": [
+    {
+      "path": "scripts/verify-review-write-reference-local.mjs",
+      "sha256": "fec4ac3be770c82eebb95df576de980039979152658150ed3c66ca3bc2aa300e"
+    },
+    {
+      "path": "scripts/run-review-write-reference-local.py",
+      "sha256": "51d94c929cfd4f9f76fd9e66ca9a47d22cb39f219e128112e7a01193eddaf05d"
+    },
+    {
+      "path": "server/dist-v4/modules/reviews/application/review-write-command.js",
+      "sha256": "289987e0e6152d6e39cd33eab75ab59002ab678760cdf58b776e376652be451f"
+    },
+    {
+      "path": "server/dist-v4/modules/reviews/infrastructure/mysql-review-write-receipts.js",
+      "sha256": "1fd784493a0df71c8ed253747db27e0d2bef4eae1d89224d74a966675293807f"
+    },
+    {
+      "path": "server/dist-v4/modules/reviews/infrastructure/review-transaction.js",
+      "sha256": "88e84147e7431d96a3b5756c253d78bbe349531e403498e7f158bfef84f97a4e"
+    }
+  ],
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "serverVersion": "8.4.8",
+  "canonicalDdl": "CREATE TABLE `review_write_receipts_v4` (\n  `actor_user_id` int NOT NULL,\n  `idempotency_key` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `action` varchar(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `request_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `resource_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `result_revision` bigint unsigned NOT NULL,\n  `result_json` json NOT NULL,\n  `result_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `recorded_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`actor_user_id`,`idempotency_key`),\n  KEY `idx_review_receipt_actor_time` (`actor_user_id`,`recorded_at_utc`,`idempotency_key`),\n  CONSTRAINT `fk_review_receipt_actor` FOREIGN KEY (`actor_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_review_receipt_action` CHECK ((`action` in (_utf8mb4'create_manual_case',_utf8mb4'request_generation',_utf8mb4'create_version',_utf8mb4'confirm_version',_utf8mb4'return_case',_utf8mb4'decide_memory_update'))),\n  CONSTRAINT `chk_review_receipt_hashes` CHECK ((regexp_like(`request_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c') and (not(regexp_like(`request_sha256`,_utf8mb4'[^0-9a-f]',_utf8mb4'c'))) and regexp_like(`result_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c') and (not(regexp_like(`result_sha256`,_utf8mb4'[^0-9a-f]',_utf8mb4'c'))))),\n  CONSTRAINT `chk_review_receipt_key` CHECK ((char_length(`idempotency_key`) between 16 and 128)),\n  CONSTRAINT `chk_review_receipt_result` CHECK ((json_type(`result_json`) = _utf8mb4'OBJECT')),\n  CONSTRAINT `chk_review_receipt_revision` CHECK (((`result_revision` > 0) and (`result_revision` <= 9007199254740991)))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+  "stage": "rollback",
+  "counts": {
+    "effects": 7,
+    "receipts": 7
+  },
+  "observedAt": "2026-09-09T10:29:36.938Z"
+}

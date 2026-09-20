@@ -12,6 +12,8 @@ namespace Liangjian.BridgeV4.Terminal
         private readonly Dictionary<string, TerminalReadOnlySession> sessions = new Dictionary<string, TerminalReadOnlySession>(StringComparer.Ordinal);
         private readonly string pipeName;
         private Thread acceptThread;
+        private Timer heartbeatTimer;
+        private int heartbeatRunning;
         private volatile bool stopping;
         private bool disposed;
 
@@ -40,6 +42,7 @@ namespace Liangjian.BridgeV4.Terminal
                 acceptThread.Name = "LiangjianBridgeV4.TerminalAccept";
                 acceptThread.IsBackground = true;
                 acceptThread.Start();
+                heartbeatTimer = new Timer(CheckHeartbeats, null, 3000, 3000);
             }
         }
 
@@ -141,6 +144,7 @@ namespace Liangjian.BridgeV4.Terminal
                 }
                 disposed = true;
                 stopping = true;
+                if (heartbeatTimer != null) { heartbeatTimer.Dispose(); heartbeatTimer = null; }
                 thread = acceptThread;
                 acceptThread = null;
                 active = new List<TerminalReadOnlySession>(sessions.Values);
@@ -155,6 +159,32 @@ namespace Liangjian.BridgeV4.Terminal
                 thread.Join(2500);
             }
             RaiseSessionsChanged();
+        }
+
+        private void CheckHeartbeats(object ignored)
+        {
+            if (Interlocked.Exchange(ref heartbeatRunning, 1) != 0) return;
+            try
+            {
+                List<TerminalReadOnlySession> active;
+                lock (stateLock)
+                {
+                    if (disposed || stopping) return;
+                    active = new List<TerminalReadOnlySession>(sessions.Values);
+                }
+                foreach (TerminalReadOnlySession session in active)
+                {
+                    if (stopping) return;
+                    TerminalReadOnlySession target = session;
+                    ThreadPool.QueueUserWorkItem(delegate
+                    {
+                        if (stopping) return;
+                        try { target.CheckHeartbeat(); }
+                        catch (Exception) { RemoveIfCurrent(target.TerminalInstanceId, target); }
+                    });
+                }
+            }
+            finally { Interlocked.Exchange(ref heartbeatRunning, 0); }
         }
 
         private void AcceptLoop()
@@ -262,6 +292,8 @@ namespace Liangjian.BridgeV4.Terminal
         public int TerminalBuild { get; private set; }
         public bool Connected { get; private set; }
         public bool TradeAllowed { get; private set; }
+        public bool? CurrentTradePermission { get; private set; }
+        public int[] CurrentPermissionFlags { get; private set; }
         public int ServerOffsetMinutes { get; private set; }
         public string ClockStatus { get; private set; }
 
@@ -277,6 +309,8 @@ namespace Liangjian.BridgeV4.Terminal
                 TerminalBuild = session.Hello.TerminalBuild,
                 Connected = session.Hello.Connected,
                 TradeAllowed = session.Hello.TradeAllowed,
+                CurrentTradePermission = session.CurrentTradePermission,
+                CurrentPermissionFlags = session.CurrentPermissionFlags,
                 ServerOffsetMinutes = session.Hello.ServerOffsetMinutes,
                 ClockStatus = session.Hello.ClockStatus
             };

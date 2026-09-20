@@ -87,6 +87,14 @@ namespace Liangjian.BridgeV4.SmokeTests
                     {
                         queries.Query(runtime, CandleRequest(first.SnapshotId, first.Candles.NextCursor), now + 6);
                     }, "projection_stale_snapshot_accepted");
+                    runtime.DataStore.UpsertCoverage(1, new CoverageRangeRecord {
+                        Resource = "history.orders", ScopeKey = "*", RangeStartUtcMsc = now,
+                        RangeEndUtcMsc = now + 2000, Completeness = "complete", SourceRevision = "history-1", UpdatedAtUtcMsc = now + 5 });
+                    var history = new ProjectionQueryRequest { Resource = "history.orders", ScopeKey = "*",
+                        RangeStartUtcMsc = now, RangeEndUtcMsc = now + 3000, Limit = 1 };
+                    var tail = queries.Query(runtime, history, now + 6);
+                    Assert(runtime.DataStore.ReadSyncJob(tail.SyncJobId).RangeStartUtcMsc == now + 2000, "history_rescanned_cached_prefix");
+                    Assert(queries.Query(runtime, history, now + 7).SyncJobId == tail.SyncJobId, "history_tail_job_not_reused");
                 }
             }
             finally

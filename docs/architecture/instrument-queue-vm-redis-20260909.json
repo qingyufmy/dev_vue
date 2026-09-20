@@ -1,0 +1,18 @@
+{
+  "passed": true,
+  "scope": "local_bullmq_worker_vm_redis_with_stub_business_port",
+  "redis": {
+    "host": "192.168.31.254",
+    "port": 6379,
+    "db": 3
+  },
+  "checks": [
+    "delayed_redelivery_succeeds_with_one_attempt_budget",
+    "unknown_completion_uses_failure_retry_then_rereads_terminal_state"
+  ],
+  "mysqlWrites": 0,
+  "terminalQueries": 0,
+  "processorSha256": "a1896fd08d6aa99b0360275d785399401886abfc41c34e55620b0a885d1b481c",
+  "queueRemoved": true,
+  "observedAt": "2026-09-09T04:34:26.726Z"
+}

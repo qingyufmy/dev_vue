@@ -28,6 +28,7 @@ export interface BridgeGatewayLeaseStore {
 }
 
 export interface BridgeGatewayCapacityRepository {
+  getIncludedCapacity(userId: number): Promise<number>
   getPurchasedCapacity(userId: number): Promise<number>
 }
 

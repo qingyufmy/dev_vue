@@ -1,0 +1,440 @@
+{
+  "kind": "strategy-write-schema-reference/v1",
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "referenceDatabaseRemoved": true,
+  "scaffoldParents": [
+    "users",
+    "trading_accounts",
+    "trading_account_ownerships"
+  ],
+  "checks": [
+    "real_create_commit_then_injected_ack_loss_recovered_and_conflict_rejected",
+    "concurrent_same_key_one_strategy",
+    "real_schedule_query_and_compare_swap_utc_bindings",
+    "seven_real_write_kinds_and_historical_replay_after_retirement_or_end",
+    "failed_prepare_no_receipt_and_revoked_authority_replay_rejected",
+    "receipt_foreign_key_and_five_check_rejections",
+    "role_legacy_keys_real_unique_constraints_and_composite_version_fk",
+    "source_and_maps_atomic_rollback_commit_ack_loss_and_replay",
+    "subscription_build_three_table_write_and_conflict_replay",
+    "subscription_source_and_parent_maps_atomic_backfill"
+  ],
+  "migrationSha256": "7a7b1cdb5c345ddbe7f6734a4e6b3063067ef0fbc10f7b96043ec72a88dcf54a",
+  "parentSources": {
+    "strategy": "b5252c385357b9cccec2513a6d3f17634f8a73f194818420de88ed76b0790960",
+    "preferences": "87c8d3e026442c73bf502c251828d719962b0dfbe3609a2b3150aabf8b651b99"
+  },
+  "artifacts": [
+    {
+      "path": "scripts/lib/inference-build-reference.mjs",
+      "sha256": "8225c2b28c9d12bd515d6cd47fa10078949abcc8a9b1846c4d07ae96de200b1e"
+    },
+    {
+      "path": "scripts/lib/inference-build-schema.mjs",
+      "sha256": "4c95c23e2b16ef8ca9ac8e90bc6dea9fd66dd7b684e857f9138a8cec3549b5a4"
+    },
+    {
+      "path": "server/src/modules/inference/application/reference-position-creation.ts",
+      "sha256": "39ed6ce8e6b662f5582a70d1896b49d58c250cb1c8b083e8aea1b85463ccd728"
+    },
+    {
+      "path": "server/dist-v4/modules/inference/application/reference-position-creation.js",
+      "sha256": "1a90939e191c8e2b8aa161680d734d5ff7b368e3c5f0970edb1a4302653d0a75"
+    },
+    {
+      "path": "server/src/modules/execution/domain/opening-order-ticket.ts",
+      "sha256": "eb75fc773fa962059d10edc889f5ab4714290712b2ccb780c23192ddcf2826f2"
+    },
+    {
+      "path": "server/dist-v4/modules/execution/domain/opening-order-ticket.js",
+      "sha256": "ce51b0bc750fde06d508f559ec68d56ba87c8ef6d137dd7d05133649df799ccc"
+    },
+    {
+      "path": "scripts/verify-strategy-write-reference-local.mjs",
+      "sha256": "db28168c8470f7dbcc3330979e92fcfde6982c3d28bf35f3e5de09fe9dd2bd96"
+    },
+    {
+      "path": "scripts/run-strategy-write-reference-local.py",
+      "sha256": "0ea4fa83d26e0917d5a49c19365ac08716d7c34706bc0a5770e363e0de3e0274"
+    },
+    {
+      "path": "scripts/lib/strategy-role-identity-reference.mjs",
+      "sha256": "5b98a2c040957586a972279be25b9c7139a2438f76bfe66b618e0d71584dc220"
+    },
+    {
+      "path": "scripts/lib/strategy-role-legacy-identity.mjs",
+      "sha256": "c3b70322e57ac52fec5f79e8160090ee00b9913842ca186e8ddd56fe047e67c6"
+    },
+    {
+      "path": "scripts/lib/mysql-strategy-role-writer.mjs",
+      "sha256": "c05a6590dfe70389b3e5e43d5ec22251bccd9435feac6002258f0bfe508d919e"
+    },
+    {
+      "path": "scripts/lib/strategy-source-write-reference.mjs",
+      "sha256": "d0c2b1d4ada058a66720ec08140de7aa8c7aa6260c28fbddd50d96ca29f7e5f8"
+    },
+    {
+      "path": "scripts/lib/mysql-strategy-source-writer.mjs",
+      "sha256": "20e8703811fccc68f119c5d248dafc1c0e647e608f6f31680a3b02256307cce4"
+    },
+    {
+      "path": "scripts/lib/strategy-source-batch.mjs",
+      "sha256": "10b848c46762e6e2459af58939899934bfeaabae29da52d0bb86f0e94ba3ce85"
+    },
+    {
+      "path": "scripts/lib/proposed-evidence-reference.mjs",
+      "sha256": "bc1a8299bf6473a88e25dce9c4c22021667001e64d850f9f21cbda414e198aa6"
+    },
+    {
+      "path": "scripts/lib/frozen-source-batch.mjs",
+      "sha256": "b228c3127b2607a64bb677ee362c22bcb060d11e47948986fbad4a00a1bb046f"
+    },
+    {
+      "path": "scripts/lib/subscription-source-batch.mjs",
+      "sha256": "d4942cc1a80966c534b0ad0eed96026847b79b25f39abb8514b2a52c80c44e28"
+    },
+    {
+      "path": "scripts/lib/v4-subscription-preferences-conversion.mjs",
+      "sha256": "8d3bcfb57fcb9816582b521b2e7dd6df1fcff56d911a46eb37e5e3a15a7f5bc1"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/domain/subscription-take-profit.js",
+      "sha256": "609bb7d46d1a34c52ee7392c3a670d136541dba3195d962d2466572ae331004b"
+    },
+    {
+      "path": "scripts/lib/runtime-memory-reference.mjs",
+      "sha256": "de53ee368a213dbfa0445ec398518503e9293f140d31bd2c59d0394eca94d078"
+    },
+    {
+      "path": "server/dist-v4/modules/reviews/infrastructure/mysql-runtime-strategy-memory-reader.js",
+      "sha256": "0ef3c117fb1795905a1e12970bb01027a41d85e0f8cae6eb5233e574858c5136"
+    },
+    {
+      "path": "server/db/migrations/inplace/050_strategy_memory_runtime_audit.sql",
+      "sha256": "fecf4433e0800b26cf2e64de33c6e975ee52763de373425d2eb544aec25b363b"
+    },
+    {
+      "path": "scripts/lib/runtime-memory-preparation-reference.mjs",
+      "sha256": "29635711f5b8712416d015d2359e97f705405133226cacd8dc028f2079d6fe15"
+    },
+    {
+      "path": "scripts/lib/subscription-execution-window-reference.mjs",
+      "sha256": "d85954096e55235a15c0ba299a5c7b58f1f3c7e58ef466cc39b53f4c46aae06c"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/mysql-subscription-execution-window-reader.js",
+      "sha256": "c41db8afcd545fbe167e3e884df0e8fd018b712fe8d3da7df2ea3ac1268f51bd"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/mysql-analysis-subscriber-reader.js",
+      "sha256": "136e42d4639059e703d838891f719220d2497c74be4854dffc54d62064468477"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/mysql-analysis-window-reader.js",
+      "sha256": "65db60cd99312a648df20a93fddc105b8f7de401a9c23682d1504e3d98785984"
+    },
+    {
+      "path": "scripts/lib/model-access-reference.mjs",
+      "sha256": "1a08d92ae5c4cd0dea13c043dac3b244b18b2633c8380c2100f7792bd5469572"
+    },
+    {
+      "path": "scripts/lib/analysis-source-reference.mjs",
+      "sha256": "3b6040a26bc24b678b3bbabba291eed160a147d49271a953b926f0e5d006bc5c"
+    },
+    {
+      "path": "scripts/lib/history-collection-receipt-reference.mjs",
+      "sha256": "dd2c8c8e22f5d140cfe11c8e7d51d23f70ec8db01557b5450155a7e8bf446a66"
+    },
+    {
+      "path": "server/db/migrations/inplace/051_history_collection_receipts.sql",
+      "sha256": "bd41a044f29f305dcde3f51e1b623b346ca3fe064aa3ce334a4ec5ee2655b0fe"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/application/history-collection-receipt.js",
+      "sha256": "669063533a40709eb66b93ca6f1fe6eedcefe5f2ac8116d8959caddf2eb943fc"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/mysql-history-collection-receipt-writer.js",
+      "sha256": "d00520f9e5b8845524bd368288f6aeba96adcf8269cc84f50ab03a36a485dbd7"
+    },
+    {
+      "path": "scripts/lib/strategy-reference-source-reference.mjs",
+      "sha256": "ecb6057646f2aac1963fc9e83b76a043bb94302315f058e43a443cff53cd417b"
+    },
+    {
+      "path": "contracts/bridge-v4.schema.json",
+      "sha256": "a0e910d0cb09a774853059385df45dddcbab5f7426e45da2e9275142113c3f14"
+    },
+    {
+      "path": "server/dist-v4/modules/bridge/application/bridge-trade-projection-decoder.js",
+      "sha256": "83ba5a21c356dff146caa1178af21adcc3b58d5dad131bc7b6775a0c20312473"
+    },
+    {
+      "path": "server/dist-v4/bootstrap/strategy-reference-evidence.js",
+      "sha256": "6a3267cd5f2d0bccd627be0dd2278184b24f148b9ed5f9aa0f18b99487d51b0e"
+    },
+    {
+      "path": "server/dist-v4/modules/inference/application/reference-pending-creation.js",
+      "sha256": "133c91bcb734049431235561796aac36a52f885d977e3d3e86bc2f518993f578"
+    },
+    {
+      "path": "server/dist-v4/modules/inference/infrastructure/mysql-strategy-reference-source-reader.js",
+      "sha256": "56b003bfa48a60719f54a4a14b02fdef6a8c6eeb682dc886bd639cdd1b57eb8c"
+    },
+    {
+      "path": "scripts/lib/strategy-observer-access-reference.mjs",
+      "sha256": "df105549f973d5609846f85a78b860f79eef6be47b2e9f8ff4f775a5637c0bc1"
+    },
+    {
+      "path": "scripts/lib/strategy-observer-inventory-reference.mjs",
+      "sha256": "38e3018306f8be4b8128da93ef5221c243c636eaea3b544c2c891c4558c76be4"
+    },
+    {
+      "path": "server/dist-v4/modules/trading/infrastructure/mysql-strategy-observer-inventory-reader.js",
+      "sha256": "80c9ea07883f421b78a237d0946a4af8b41c11f152f0249c52a0b5896282e434"
+    },
+    {
+      "path": "server/dist-v4/modules/trading/infrastructure/mysql-observer-access-reader.js",
+      "sha256": "0547bc9e5964d0a6b7e8ac9fc5311145cf621e74ef9f13057e849561d6b4a24c"
+    },
+    {
+      "path": "server/dist-v4/modules/inference/infrastructure/mysql-analysis-source-reader.js",
+      "sha256": "ea954a2f074c1ad0350458b39e3ce4b50cd019d3d9e73abd5d7d07af8a26f8be"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/mysql-runtime-strategy-access.js",
+      "sha256": "5215ceb04591d1aa04200190a69136a7b68f15a51a7bb86a0ddafb894763e4e3"
+    },
+    {
+      "path": "server/dist-v4/modules/inference/infrastructure/mysql-model-gateway-resolver.js",
+      "sha256": "8688d98adb7da66acadd9da9aeeb625e4f957bf97240d1dc3d64950833cdb17d"
+    },
+    {
+      "path": "server/dist-v4/modules/inference/infrastructure/mysql-model-usage-ledger.js",
+      "sha256": "167c96877511521e8ab1035a1dbda0d1fe3fa79e26cf0c2965162c04103aac44"
+    },
+    {
+      "path": "server/dist-v4/modules/auth/infrastructure/mysql-account-principal-reader.js",
+      "sha256": "8b1a6b5229fbcb0e6d8ad3464619958a403aacb39f6b1501b1c86bfd2920ec9e"
+    },
+    {
+      "path": "server/dist-v4/modules/auth/infrastructure/mysql-active-principal-access.js",
+      "sha256": "e63d68e6a9c60c99e9de04a3f3144b84f5368f85d10ef6b82249de199c35be1e"
+    },
+    {
+      "path": "server/dist-v4/modules/trading/infrastructure/mysql-account-inventory-summary-reader.js",
+      "sha256": "1999f4749e340483d5dfb1fefb14475f99cef724d10a50eadba5749381afd4c6"
+    },
+    {
+      "path": "server/dist-v4/modules/risk/infrastructure/mysql-account-risk-summary-reader.js",
+      "sha256": "010697c087363cca938dbe25b4db8c87f8f4f77096585d0269ceae5ca2210c67"
+    },
+    {
+      "path": "scripts/lib/subscription-root-promotion.mjs",
+      "sha256": "228917919b96e5f2f733ee73a8a02d6a8e5236b4fe72b67bd7f0a531c4fb79a9"
+    },
+    {
+      "path": "scripts/lib/subscription-root-promotion-reference.mjs",
+      "sha256": "84a6600cc43f0ebb2640b3400ef9320dadfd00dcf514a5b26891ce2ae95fe14a"
+    },
+    {
+      "path": "scripts/lib/pending-origin-reference.mjs",
+      "sha256": "ec7cf61222857f86a03d1341abe3298828bda48abf37963750d8897b3dff9793"
+    },
+    {
+      "path": "server/dist-v4/modules/execution/infrastructure/mysql-pending-origin-reader.js",
+      "sha256": "ba52eff9d679faa638e696581b6de133a3a297cb2ee317ce5dfe1c89ac57b667"
+    },
+    {
+      "path": "server/dist-v4/modules/execution/infrastructure/mysql-pending-order-origin-reader.js",
+      "sha256": "553cc8bfefbe57b5500ea5338b54be003e7cca6217fae974582778d35b76a309"
+    },
+    {
+      "path": "server/dist-v4/modules/inference/infrastructure/mysql-trade-decision-origin-reader.js",
+      "sha256": "0205f8c53fcb30a7b41263b0c7a1f1d10fe5f013f25e1691d8b60799d3c0dd98"
+    },
+    {
+      "path": "server/dist-v4/modules/reviews/infrastructure/mysql-runtime-memory-preparation-writer.js",
+      "sha256": "60b7bd1d3366862130e8885692061687a615c48ffb4131fb343acbe589aceee3"
+    },
+    {
+      "path": "server/dist-v4/modules/inference/application/memory-preparation-for-snapshot.js",
+      "sha256": "27575830bac5621737ad5cecbc7efe137b0ef76e54157701431f768c006320a9"
+    },
+    {
+      "path": "server/dist-v4/modules/inference/infrastructure/mysql-inference-repository.js",
+      "sha256": "b10119659abe38890af5cd7fb952bd16107ef1fed6f74812fb691a0d56686f9e"
+    },
+    {
+      "path": "scripts/lib/mysql-subscription-build-writer.mjs",
+      "sha256": "2fdeda5a6c2d05a75c17e53976f7c3961cd52ce436714a034a1fd73c380cb08e"
+    },
+    {
+      "path": "scripts/lib/subscription-build-writer-reference.mjs",
+      "sha256": "122796cf503fa529f0b2136a37b1f24c06f6c01ec9fc7a23d77b16a119ef01d0"
+    },
+    {
+      "path": "scripts/lib/mysql-subscription-source-writer.mjs",
+      "sha256": "236997fe22ebeefb8d54291b54e7916a97a75afdf9d134a0633a6aca5c1db479"
+    },
+    {
+      "path": "scripts/lib/subscription-source-write-reference.mjs",
+      "sha256": "e47f38165e69243847eb22346c52cd2c03c77fabb64640c45dfab3d405ba44ad"
+    },
+    {
+      "path": "scripts/lib/subscription-legacy-identity.mjs",
+      "sha256": "1a15ad8f20d7183481433fa8e6cdb035329c8964bf982fd82acb2df7ab0b1d08"
+    },
+    {
+      "path": "server/dist-v4/modules/inference/infrastructure/mysql-proposed-decision-evidence-reader.js",
+      "sha256": "ae4debe911efe36240a677b85e4e6298cd10e21e176f1dfef51d92e9558cf696"
+    },
+    {
+      "path": "server/db/migrations/inplace/005_source_row_evidence.sql",
+      "sha256": "4d7b0151f8ab3bc68228b1cd644435d6d7d4810c58e24678439e45432ba60183"
+    },
+    {
+      "path": "scripts/lib/v4-backfill-mysql-repository.mjs",
+      "sha256": "c10905a49e99e8c12dabcb9e86434634eeb34344f4c0769f0fb88f543eb31c92"
+    },
+    {
+      "path": "server/db/migrations/20260906_025_data_migration_batch_ledger.sql",
+      "sha256": "6523e515b62147be2157c3b8a6e1e6fd1dc96d131343cbfbd02c180cc8cdb107"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/application/strategy-service.js",
+      "sha256": "22b85fb3e3ec2c364c89239923850368915adaad36316e62e5d627d0409a8a8d"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/application/strategy-write-command.js",
+      "sha256": "1c5244f08f01511f40459c6f6638a86ef9b7ffb26ea75d006ded69baf63684eb"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/mysql-strategy-catalog.js",
+      "sha256": "3dc8d238683711ba6972aa2c2e922550b978c93f8e433708e51d9dd48565303f"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/mysql-strategy-create.js",
+      "sha256": "31578023eb5489d6cc478cfeebda5210ef60d08194c6bf4ac5a0a214ff47f06b"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/mysql-strategy-metadata.js",
+      "sha256": "4c63fdfc653b8514001e1c1d1d6f80084eb01a569ea67ce39f4794b0d5862979"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/mysql-owned-strategy-write.js",
+      "sha256": "b5bc4b1d3509383342861305f9a3e1bc706a89a79c04571fe59a1c0e8e570150"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/mysql-strategy-version-writes.js",
+      "sha256": "a958a7c0bd4ff353e2bd2de8da4a5880fabc0eb2d626dca94d895f8030e7ee4c"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/mysql-strategy-write-receipts.js",
+      "sha256": "f6a44bc215124308069081af508d9a7d9e83414e6c85424d0ef01bbc3455c01b"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/strategy-transaction.js",
+      "sha256": "b906873f8aaa9bbdf195bb5fec47a6db8b5c046d7cb2b1e3323de19cca793213"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/strategy-sql-time.js",
+      "sha256": "09e58ad0f159b8e22e77c53809f022a30391f16c056193666bdcf87a4960db3e"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/mysql-analysis-schedule-store.js",
+      "sha256": "210dd3960420b475d3279c56b0ec0e87dd376dcaaae908dd99ff0e2ada6853fb"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/mysql-subscription-execution-preferences.js",
+      "sha256": "31caa9d81e5d269d048f952c83acb545f51a134019da588f26a76e073eaf014c"
+    }
+  ],
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "serverVersion": "8.4.8",
+  "canonicalDdl": "CREATE TABLE `strategy_write_receipts_v4` (\n  `actor_user_id` int NOT NULL,\n  `idempotency_key` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `action` varchar(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `request_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `resource_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `result_revision` bigint unsigned NOT NULL,\n  `result_json` json NOT NULL,\n  `result_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `recorded_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`actor_user_id`,`idempotency_key`),\n  KEY `idx_strategy_receipt_actor_time` (`actor_user_id`,`recorded_at_utc`,`idempotency_key`),\n  CONSTRAINT `fk_strategy_receipt_actor` FOREIGN KEY (`actor_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_strategy_receipt_action` CHECK ((`action` in (_utf8mb4'create_strategy',_utf8mb4'update_metadata',_utf8mb4'create_version',_utf8mb4'publish_version',_utf8mb4'retire_strategy',_utf8mb4'create_subscription',_utf8mb4'update_subscription'))),\n  CONSTRAINT `chk_strategy_receipt_hashes` CHECK ((regexp_like(`request_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c') and (not(regexp_like(`request_sha256`,_utf8mb4'[^0-9a-f]',_utf8mb4'c'))) and regexp_like(`result_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c') and (not(regexp_like(`result_sha256`,_utf8mb4'[^0-9a-f]',_utf8mb4'c'))))),\n  CONSTRAINT `chk_strategy_receipt_key` CHECK ((char_length(`idempotency_key`) between 16 and 128)),\n  CONSTRAINT `chk_strategy_receipt_result` CHECK ((json_type(`result_json`) = _utf8mb4'OBJECT')),\n  CONSTRAINT `chk_strategy_receipt_revision` CHECK (((`result_revision` > 0) and (`result_revision` <= 9007199254740991)))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+  "stage": "inference_build_schema",
+  "roleIdentity": {
+    "roleCount": 2,
+    "duplicateStrategyRejected": true,
+    "duplicateVersionLegacyKeyRejected": true,
+    "crossRoleActiveVersionRejected": true,
+    "largeSourceIdPreserved": true,
+    "projectionWriter": {
+      "roles": 2,
+      "replayInserted": 0,
+      "verifyOnlyChecked": true,
+      "changedInputRejected": true,
+      "existingConflictPreserved": true
+    }
+  },
+  "sourceWrite": {
+    "mapFailureRolledBackAllRows": true,
+    "sourceDriftRejected": true,
+    "committedAckLossRecovered": true,
+    "concurrentReplayInserted": 0,
+    "sourceFixture": "named-columns-longtext",
+    "batch": {
+      "archiveFailureRolledBackSixTables": true,
+      "committedAckLossReplayed": true,
+      "checkpointRows": "1",
+      "corruptedArchiveRejected": true
+    }
+  },
+  "subscriptionBuild": {
+    "passed": true,
+    "checks": [
+      "three-target-rollback-on-child-failure",
+      "verify-only-missing-rejected",
+      "committed-projection-replay-no-duplicates",
+      "conflicting-child-preserved",
+      "partial-projection-not-silently-repaired",
+      "natural-and-legacy-key-collisions-preserved",
+      "real-composite-version-foreign-key"
+    ],
+    "migrationSha256": "ecfb7c443cb5f87a242972c6f5f99ff97e68f728dd6840fef9b2991e2897b067",
+    "fixture": "Original 007 build tables with a scaffold trading_accounts_v4_build parent; caller drops entire reference database.",
+    "historicalBackfillProven": false,
+    "runtimeEnabled": false
+  },
+  "subscriptionSource": {
+    "passed": true,
+    "checks": [
+      "source-drift-no-target-writes",
+      "missing-account-map-no-target-writes",
+      "map-failure-rolls-back-six-target-rows",
+      "commit-ack-loss-recovered-with-two-symbol-maps",
+      "concurrent-committed-replay-no-duplicates",
+      "archive-failure-rolls-back-seven-tables-and-checkpoint",
+      "batch-ack-loss-replays-one-source-row-and-six-targets",
+      "committed-receipt-with-regressed-checkpoint-rejected",
+      "changed-source-archive-rejected-on-replay"
+    ],
+    "sourceFixture": "session-local named legacy columns; strategy source and ID maps use real reference tables",
+    "targetRows": 12,
+    "subscriptionMaps": 4,
+    "batchSourceRows": "1",
+    "historicalBackfillProven": false
+  },
+  "evidenceMigrationSources": [
+    {
+      "file": "20260903_005_analysis_scheduler_and_account_fanout.sql",
+      "sha256": "a256f46c3e6f5592f5b2c7563f471f3b425b405610e72b64586bc5f1e00c5b16"
+    },
+    {
+      "file": "20260903_006_account_trader_worker.sql",
+      "sha256": "eac86099de26cef5948bc71464269579b0a466f07ea37fa21dc64538baa9dda8"
+    },
+    {
+      "file": "20260903_007_deterministic_risk_review.sql",
+      "sha256": "ed697bb67c7c87d389575f00462a961011cd45d115287cc018bf6e40fbef7d3e"
+    }
+  ],
+  "errorCode": "ERR_ASSERTION",
+  "stageChecks": 10,
+  "assertion": {
+    "operator": "strictEqual"
+  },
+  "observedAt": "2026-09-10T08:47:46.035Z"
+}

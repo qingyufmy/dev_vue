@@ -46,8 +46,8 @@ function tradingTime(value: string | null) {
 
 <template>
   <Card class="min-w-0 shadow-none">
-    <Tabs default-value="positions">
-      <CardHeader class="gap-3 border-b sm:flex-row sm:items-center sm:justify-between">
+    <Tabs default-value="positions" class="min-w-0 flex-col gap-0">
+      <CardHeader class="flex flex-col gap-3 border-b sm:flex-row sm:items-center sm:justify-between">
         <div class="min-w-0">
           <CardTitle class="flex items-center gap-2 text-base"><ClipboardList aria-hidden="true" />持仓与挂单</CardTitle>
           <CardDescription>{{ readOnly ? '当前为只读模式；选择一项查看完整参数' : '实时查看账户资源；选择一项查看参数与可用操作' }}</CardDescription>

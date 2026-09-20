@@ -1,4 +1,4 @@
-import { applyAccountSnapshot } from '~/features/trading-context'
+import { applyPublicDisplayClock, applyAccountSnapshot } from '~/features/trading-context'
 import { applyTradingContext } from '~/features/trading-context'
 import { terminalInputTime, terminalInputUtc } from '../terminal-input-time'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -10,7 +10,7 @@ import { analysisTime } from '../../features/analyst/model/analysis-presentation
 import { formatReviewTime } from '../../features/reviewer/model/reviewer-presentation'
 
 const instant = '2026-09-06T23:30:00.000Z'
-afterEach(() => { applyAccountSnapshot(null); applyTradingContext(null) })
+afterEach(() => { applyAccountSnapshot(null); applyTradingContext(null); applyPublicDisplayClock(null) })
 
 describe('UTC storage and display policy', () => {
   it('uses Beijing outside the laboratory and UTC+3 for uncalibrated laboratory displays', () => {
@@ -24,14 +24,15 @@ describe('UTC storage and display policy', () => {
     for (const value of [null, '', 'invalid', '2026-09-06 23:30:00']) expect(formatBeijingTime(value)).toBe('--')
     expect(formatDisplayTime(instant, NaN)).toBe('--')
   })
-  it('isolates account switches and gives frozen historical offsets priority', () => {
+  it('shares the administrator display timezone across account switches and preserves frozen offsets', () => {
     applyTradingContext({ accountId: 'a' } as TradingContext)
     applyAccountSnapshot({ id: 'a', timezoneOffsetMinutes: 0, clockStatus: 'calibrated' } as AccountSnapshot)
-    expect(analysisTime(instant)).toBe('2026-09-06 23:30:00')
+    applyPublicDisplayClock({ offset_minutes: 120, status: 'calibrated', checked_at: instant })
+    expect(analysisTime(instant)).toBe('2026-09-07 01:30:00')
     expect(formatReviewTime(instant, 480)).toBe('2026-09-07 07:30:00')
     applyTradingContext({ accountId: 'b' } as TradingContext)
-    expect(analysisTime(instant)).toBe('2026-09-07 02:30:00')
-    expect(activeTerminalDisplayTimezone().isDefault).toBe(true)
+    expect(analysisTime(instant)).toBe('2026-09-07 01:30:00')
+    expect(activeTerminalDisplayTimezone().isDefault).toBe(false)
     expect(accountSnapshot.value).toBeNull()
   })
 })

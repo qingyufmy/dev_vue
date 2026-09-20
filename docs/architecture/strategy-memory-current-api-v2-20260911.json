@@ -1,0 +1,14 @@
+{
+  "kind": "strategy-current-application-readonly/v1",
+  "passed": false,
+  "writes": 0,
+  "applicationCredentialsUsed": true,
+  "memoryListStatus": 503,
+  "memoryListCode": "review_unavailable",
+  "errorCode": "ERR_ASSERTION",
+  "errorLocations": [
+    "    at file:///D:/dev_codex/dev_vue/scripts/verify-strategy-current-readonly-local.mjs:48:12",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)"
+  ],
+  "observedAt": "2026-09-11T02:06:32.571Z"
+}

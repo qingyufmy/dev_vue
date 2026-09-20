@@ -67,6 +67,8 @@ class FakeManagementPool {
   activeUsers = new Set([1, 7])
   failGetConnection = false
   failOutbox = false
+  loseCommitAcknowledgment = false
+  failRollback = false
   forceAccessUpdateConflict = false
   nextSourceId = 10
   nextChannelId = 20
@@ -98,13 +100,19 @@ class FakeManagementPool {
     commit: async () => {
       this.transactionEvents.push('commit')
       this.snapshot = null
+      if (this.loseCommitAcknowledgment) {
+        this.loseCommitAcknowledgment = false
+        throw new Error('commit_acknowledgment_lost')
+      }
     },
     rollback: async () => {
       this.transactionEvents.push('rollback')
+      if (this.failRollback) throw new Error('rollback_failed')
       if (this.snapshot) this.restoreState(this.snapshot)
       this.snapshot = null
     },
     release: () => { this.transactionEvents.push('release') },
+    destroy: () => { this.transactionEvents.push('destroy') },
   }
 
   async execute(sql: string, params: unknown[] = []) { return this.handle(sql, params, 'pool') }
@@ -328,6 +336,34 @@ function write(pool: FakeManagementPool, command: ObserverManagementCommand, key
 }
 
 describe('MysqlObserverManagementRepository', () => {
+  it('recovers an acknowledged-lost commit from the same receipt without repeating its effect', async () => {
+    const pool = new FakeManagementPool()
+    pool.loseCommitAcknowledgment = true
+    await expect(write(pool, sourceCreate())).rejects.toMatchObject({ code: 'observer_management_commit_unknown', status: 503 })
+    expect(pool.transactionEvents).toEqual(['begin', 'commit', 'destroy'])
+    expect(pool.sources.size).toBe(1)
+    expect(pool.operations).toHaveLength(1)
+    expect(pool.outbox).toHaveLength(1)
+    const committedTargetId = [...pool.sources.keys()][0]
+    const result = await write(pool, sourceCreate())
+    expect(result.target_id).toBe(committedTargetId)
+    expect(pool.sources.size).toBe(1)
+    expect(pool.operations).toHaveLength(1)
+    expect(pool.outbox).toHaveLength(1)
+    await expect(write(pool, sourceCreate(), 'source-write-1', 'b'.repeat(64)))
+      .rejects.toMatchObject({ code: 'observer_management_idempotency_conflict', status: 409 })
+    pool.admin = false
+    await expect(write(pool, sourceCreate())).rejects.toMatchObject({ status: 403 })
+  })
+
+  it('destroys a connection whose rollback failed and preserves the original domain error', async () => {
+    const pool = new FakeManagementPool()
+    pool.admin = false
+    pool.failRollback = true
+    await expect(write(pool, sourceCreate())).rejects.toMatchObject({ status: 403 })
+    expect(pool.transactionEvents).toEqual(['begin', 'rollback', 'destroy'])
+  })
+
   it('checks strategy access for the immutable operator and rolls back an unavailable strategy', async () => {
     const pool = new FakeManagementPool()
     pool.sources.set('10', sourceRow('10', { operator_user_id: 42 }))

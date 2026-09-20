@@ -1,4 +1,7 @@
+import { modelThinkingOptions } from './model-thinking-options.js'
+import { analysisContract, traderContract } from '../domain/model-context-contract.js'
 import { lookup } from 'node:dns/promises'
+import { analysisModelSnapshot } from '../application/analysis-model-snapshot.js'
 import { isIP } from 'node:net'
 import type { AnalysisModelGateway } from '../application/analysis-worker.js'
 import { ModelInvocationError } from '../application/analysis-worker.js'
@@ -13,6 +16,11 @@ export interface RuntimeModelProfile {
   protocol: 'chat_completions' | 'responses'
   endpoint: string
   apiKey: string
+  thinkingEnabled?: boolean | undefined
+  reasoningEffort?: string | null | undefined
+  contextWindowTokens?: number | null | undefined
+  maxInputTokens?: number | null | undefined
+  maxOutputTokens?: number | null | undefined
   temperature: number
   maxTokens: number
   timeoutMs: number
@@ -124,6 +132,7 @@ async function requestJson(
     : chatBody(profile, messages)
   const requestBody = JSON.stringify(body)
   if (Buffer.byteLength(requestBody) > 16 * 1024 * 1024) throw new ModelInvocationError('model_request_too_large', 'contract_invalid', false)
+  // Conservative UTF-8 byte bound avoids submitting requests beyond configured capacity.
   await assertSafeEndpoint(profile)
   const requestBytes = Buffer.byteLength(requestBody)
   const startedAt = Date.now()
@@ -190,7 +199,7 @@ async function requestJson(
   }
 }
 
-async function assertSafeEndpoint(profile: RuntimeModelProfile) {
+export async function assertSafeEndpoint(profile: Pick<RuntimeModelProfile, 'allowPrivateEndpoint' | 'endpoint'>) {
   if (profile.allowPrivateEndpoint) return
   const url = new URL(profile.endpoint)
   let addresses: Array<{ address: string }>
@@ -234,7 +243,7 @@ function logUsageSettlementError(error: unknown) {
   console.error('[model-usage] settlement failed', error instanceof Error ? error.message : 'model_usage_settlement_failed')
 }
 
-async function boundedResponseText(response: Response, maximumBytes: number) {
+export async function boundedResponseText(response: Response, maximumBytes: number) {
   const declared = Number(response.headers.get('content-length'))
   if (Number.isFinite(declared) && declared > maximumBytes) throw new Error('model_response_too_large')
   if (!response.body) return ''
@@ -259,6 +268,7 @@ function chatBody(profile: RuntimeModelProfile, messages: Array<{ role: string; 
     model: profile.model,
     messages,
     temperature: profile.temperature,
+    ...modelThinkingOptions(profile.provider,profile.protocol,profile.thinkingEnabled,profile.reasoningEffort),
     max_tokens: profile.maxTokens,
     stream: false,
     ...(profile.structuredOutput && profile.provider === 'deepseek' ? { response_format: { type: 'json_object' } } : {}),
@@ -270,6 +280,7 @@ function responsesBody(profile: RuntimeModelProfile, messages: Array<{ role: str
     model: profile.model,
     input: messages,
     temperature: profile.temperature,
+    ...modelThinkingOptions(profile.provider,profile.protocol,profile.thinkingEnabled,profile.reasoningEffort),
     max_output_tokens: profile.maxTokens,
     stream: false,
     ...(profile.structuredOutput && profile.provider === 'volcengine_agent_plan' ? { text: { format: { type: 'json_object' } } } : {}),
@@ -314,9 +325,6 @@ function stripFence(value: string) {
 }
 
 function snapshotWithoutPrompt<T extends AnalysisInputSnapshot | TraderInputSnapshot>(snapshot: T) {
-  return { ...snapshot, strategy: { ...snapshot.strategy, promptText: undefined } }
+  const visible = snapshot.kind === 'analysis' ? analysisModelSnapshot(snapshot) : snapshot
+  return { ...visible, strategy: { ...visible.strategy, promptText: undefined } }
 }
-
-const analysisContract = `只返回一个 JSON 对象，不要 Markdown。字段必须为：marketBias(bullish|bearish|neutral|uncertain)、opportunity(none|long_setup|short_setup)、confidence(0-100)、summary、marketRegime、supportingEvidence(string[])、counterEvidence(string[])、keyLevels(object)、invalidation(object)、dataGaps(string[])、analysisBody、analyzedAt(UTC ISO 8601)、validUntil(UTC ISO 8601)。策略正文是唯一分析权威；不要添加策略未声明的固定交易方法。`
-
-const traderContract = `只返回一个 JSON 对象，不要 Markdown。字段必须为：action(hold|market_order|pending_order|modify_position|close_position|modify_order|cancel_order)、side(buy|sell|null)、confidence(0-100)、summary、actions、reasoning。hold 时 actions 必须为空且 side 为 null；其他情况 actions 每项必须含唯一 actionId、kind、parameters、expectedState，并逐字复制输入中的全部 revision。开仓和挂单方式必须属于冻结输入 entryMethods，已有持仓管理不受此入场方式列表限制。若冻结输入含 executionPreferences，market_order/pending_order 的 parameters 必须包含 take_profit_prices（按第一/二/三档排列的三个正十进制价格字符串或 null）和 recommended_take_profit_tier（1/2/3 或 null）；服务端按订阅偏好选择最终 take_profit，不得用其他档位替代缺失价格。其他动作不使用这一开仓偏好。只依据冻结输入和策略正文判断，不直接调用终端。`

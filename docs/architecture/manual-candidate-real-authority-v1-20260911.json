@@ -1,0 +1,655 @@
+{
+  "kind": "history-completion-transaction-reference/v1",
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "database": "dev_vue_history_ref_1abf52f17f5f463795fb88b25216e3cb",
+  "referenceDatabaseRemoved": true,
+  "authorization": "injected-exact-route-guard",
+  "parentSchema": "minimal-users-and-trading-accounts",
+  "checks": [
+    "receipt-sync-summary-outbox-all-rollback-before-commit",
+    "real-commit-before-ack-loss-and-exact-nonempty-summary",
+    "new-connection-same-evidence-replay-zero-additional-writes",
+    "changed-evidence-cannot-reuse-committed-receipt",
+    "concurrent-identical-completion-one-revision-and-one-event"
+  ],
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "tools": [
+    {
+      "path": "scripts/lib/position-protection-outcome-reference.mjs",
+      "sha256": "84b2e76215425b942379e4bceeb10e3c8d20e25f169864b56d5c07fcaf766be6"
+    },
+    {
+      "path": "scripts/lib/position-protection-result-transaction-reference.mjs",
+      "sha256": "c59af8ac4fb1d4dc9dbb08fc403def5e213f7f78a9a01c67fb6fd863e6cec5f8"
+    },
+    {
+      "path": "scripts/lib/position-protection-binding-reference.mjs",
+      "sha256": "0a377f785054f9577606cfd17eaff7b979c042b9ec8a42912e66acde079f8732"
+    },
+    {
+      "path": "scripts/lib/bound-child-persistence-reference.mjs",
+      "sha256": "5409d5221e4000cd4380997d98a5cb6fb88f624e880b5068d75a4e9151f1bef5"
+    },
+    {
+      "path": "scripts/lib/collected-history-position-chain-reference.mjs",
+      "sha256": "bceb6b4ebf978781ef0287d35aec3246171f4cc5e339efd40e74a5e11f6b0a70"
+    },
+    {
+      "path": "scripts/lib/collected-history-parent-proof-reference.mjs",
+      "sha256": "833db762651d7390baffe73c01424fe410af02f3d97fa84cc4b60fd3ea234460"
+    },
+    {
+      "path": "server/src/modules/execution/domain/partial-close-protection.ts",
+      "sha256": "7b8667b53e0a7be9332062f0ad6348e3499a846ee21b01521bb70fae5380c7cd"
+    },
+    {
+      "path": "server/dist-v4/modules/execution/domain/partial-close-protection.js",
+      "sha256": "f6b262732824de54b5fba1bdd8cc985c78ea55fd29cdc8846a1c84e7298d83b9"
+    },
+    {
+      "path": "server/src/modules/execution/application/partial-close-history-proof-reader.ts",
+      "sha256": "9105153257234c8e115a59feffdea5ab6c449c3f4d3e9c789f8e362f06fa111a"
+    },
+    {
+      "path": "scripts/lib/closed-order-history-reference.mjs",
+      "sha256": "e0a466486d88d6ca5d421da6751394beac6b08f4b36af8d6a5e6907e1bbcc133"
+    },
+    {
+      "path": "server/src/modules/trade-history/domain/closed-order-fills.ts",
+      "sha256": "e9bed29c3130f005d03ad30196a3224b71485484b52ad001c9fd1c7bbf949ef4"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/domain/closed-order-fills.js",
+      "sha256": "a72a3b2a2af653648ae99af2562946872aa03f61fc3e757c5dfd0c7c6174b5a0"
+    },
+    {
+      "path": "server/src/modules/trade-history/application/closed-order-history-reader.ts",
+      "sha256": "b1f9852b3bd01faf422bdf15ca85422aca9118dafaca0b50518d70817ae656d1"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/application/closed-order-history-reader.js",
+      "sha256": "8f79838eda24fc1605a74ea232910d28d2752b4df9d8b591a3065ada355623ca"
+    },
+    {
+      "path": "server/src/modules/trade-history/infrastructure/mysql-closed-order-history-reader.ts",
+      "sha256": "4f58b9dab1242434e7b5c32e2996607117fd1c1996f15d87562f353424c08f41"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/mysql-closed-order-history-reader.js",
+      "sha256": "08ce05bbf5633f372e7a284c8ca7e1a79e8221cea86e893739124d477b777337"
+    },
+    {
+      "path": "server/src/bootstrap/partial-close-history-proof.ts",
+      "sha256": "e883cb9ee2efea395300ad4c6767137e9b6dbeebc284a41d96f3e36c596efced"
+    },
+    {
+      "path": "server/dist-v4/bootstrap/partial-close-history-proof.js",
+      "sha256": "97f046710b7ba664b56b205e6a0de6fa9d53a06ab4523d6db0b350771881e42d"
+    },
+    {
+      "path": "server/src/modules/trade-history/application/open-position-history-reader.ts",
+      "sha256": "8bd32fb42409326ca66b5702ded4fc8bc5bd6e4ff99336f81790942c4f42aae7"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/application/open-position-history-reader.js",
+      "sha256": "ebccf0fcfe37b58d642621ca33eb84e22e394fccfd8f57641b8ac7b8339a5334"
+    },
+    {
+      "path": "server/src/modules/trade-history/infrastructure/mysql-open-position-history-reader.ts",
+      "sha256": "db3bd7aa0515f9788b3f34ca5d429930a2edc74164cc9a99e719dcdc74dfe56c"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/mysql-open-position-history-reader.js",
+      "sha256": "049758128357d7fe9462c555f124c99033484fd128e85e502bcb2bbe4fb95065"
+    },
+    {
+      "path": "server/src/modules/trade-history/infrastructure/mysql-history-window-coverage-reader.ts",
+      "sha256": "97d24c32059e6570766da275a0b8286a35ff335221f5c6b21d3a7cf864e88e6b"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/mysql-history-window-coverage-reader.js",
+      "sha256": "2f82c528e9ff44912e2799cb08d23c93b2589df671435e4587d6d48961b76af8"
+    },
+    {
+      "path": "server/src/modules/trade-history/infrastructure/mysql-history-task-deal-source-reader.ts",
+      "sha256": "61508ee021ce3f0ce8d8c08ab44444d69087228596ad4c66e1938fdcf5155fea"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/mysql-history-task-deal-source-reader.js",
+      "sha256": "d926f85802a66f46e310f259af966d34cd90508fe0ce800282ca9256aa5d109b"
+    },
+    {
+      "path": "server/src/modules/trade-history/infrastructure/mysql-history-task-coverage-reader.ts",
+      "sha256": "a2cb4bcd2c189c70cf15cb427a25bbe21f978d376353f72cebc381e2fb600e24"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/mysql-history-task-coverage-reader.js",
+      "sha256": "5286092ce1c55dd821b658661281d91638f6f6da0a5d723d4a282a6797eea74b"
+    },
+    {
+      "path": "server/src/modules/bridge/domain/history-query-coverage.ts",
+      "sha256": "736193d365386711f9999a034e61a0c69cf1e2fc7e4a806a1a14f3e553376504"
+    },
+    {
+      "path": "server/dist-v4/modules/bridge/domain/history-query-coverage.js",
+      "sha256": "75fc6cf2d01360b544becb2aada8a488b177404369dcc9ffe8651ddb12f1dc0c"
+    },
+    {
+      "path": "server/src/modules/trade-history/application/history-page-chain.ts",
+      "sha256": "6b950e1edf387f5952c4c95c9b70aafa1d38bd978088a33b593f8375a9cf15d0"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/application/history-page-chain.js",
+      "sha256": "92eddf5c4878f27fa8bee55be10ce37b34d94d3048a4fa98fa4fed4649db8fd6"
+    },
+    {
+      "path": "scripts/lib/history-traversal-reference.mjs",
+      "sha256": "1948381832acaa1b301f7eabc9f55d20bd733321d97cbd7dcc89374175fa2ae6"
+    },
+    {
+      "path": "server/src/modules/trade-history/infrastructure/mysql-history-traversal-reader.ts",
+      "sha256": "af98b72dab92aea61a9b2c9ca9430d1d3444e05d8a7c0d02232c51e6ed0c4cfd"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/mysql-history-traversal-reader.js",
+      "sha256": "e3bc4d48d1b6ef6e715c33f98bef9e5db749c6cc34ed305f2eba1099a398bf31"
+    },
+    {
+      "path": "scripts/lib/open-position-lifecycle-reference.mjs",
+      "sha256": "266649bb2381a346166b3242c0df0e50af8ed16360b9556d24806cb97445f123"
+    },
+    {
+      "path": "server/src/modules/trade-history/infrastructure/mysql-open-position-lifecycle-reader.ts",
+      "sha256": "3708047853817c5dfb7134c3108f3423027ddaadbbc1a18b432e7534c418abdf"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/mysql-open-position-lifecycle-reader.js",
+      "sha256": "c9a8b0f6afb0be9dc7642cbbf29ba4782a5721f5b836b1674effa2c74a6fe8ad"
+    },
+    {
+      "path": "server/src/modules/inference/application/reference-position-lifecycle.ts",
+      "sha256": "bb1c02c763732d4bc06cd26f0f2d2ef9dd4b0832b9e91680dc18fcad9eba1c55"
+    },
+    {
+      "path": "server/dist-v4/modules/inference/application/reference-position-lifecycle.js",
+      "sha256": "c8b26b4e2942be80da82cc2a131f42bca5b978f0266fdcfe02b8b50c62297995"
+    },
+    {
+      "path": "server/src/modules/inference/infrastructure/mysql-strategy-reference-source-reader.ts",
+      "sha256": "6ffb49db4d2c028b96fe61e76552211af4a419dcb888fb4b9cb9a71c3be5c6f7"
+    },
+    {
+      "path": "server/dist-v4/modules/inference/infrastructure/mysql-strategy-reference-source-reader.js",
+      "sha256": "e054de71bd0e3eef1be1efff5c8eb393dd4502c53c0ddce3807107304c571283"
+    },
+    {
+      "path": "scripts/verify-history-completion-reference-local.mjs",
+      "sha256": "05116ae5bc853d4c992285285699c641bbeae6f4e9eadaa1e5df7b68b69eb9d7"
+    },
+    {
+      "path": "scripts/run-history-completion-reference-local.py",
+      "sha256": "f0071ca9eecfb91661de892459039aae96e84b54b6416900302f60a0df28dcfd"
+    },
+    {
+      "path": "server/src/modules/trade-history/infrastructure/mysql-trade-history-collector-repository.ts",
+      "sha256": "79afa7a0fb7ee0f0d9efbac78dee728a452c847612498f552e00f8cc255237f0"
+    },
+    {
+      "path": "server/src/modules/trade-history/infrastructure/history-transaction.ts",
+      "sha256": "d74f5993be5c5af9911d6c63bcb9314bc65c2b49ec922f25f4878b4d737a93a0"
+    },
+    {
+      "path": "server/src/modules/trade-history/infrastructure/mysql-history-collection-receipt-writer.ts",
+      "sha256": "a34e5698e0585a3685487e4af3ffd5f32879bcf26482d6a25f917d6f42b77e4e"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/mysql-trade-history-collector-repository.js",
+      "sha256": "5320a3a2a6aa3cbe5ca2967145c6e992a136afaf87f6cddc254bbfccfb129890"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/history-transaction.js",
+      "sha256": "045ba83a1f388164540779740b5f194e5391cf6807c840c876b86d4c4c080023"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/mysql-history-collection-receipt-writer.js",
+      "sha256": "d00520f9e5b8845524bd368288f6aeba96adcf8269cc84f50ab03a36a485dbd7"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/application/history-collection-receipt.js",
+      "sha256": "669063533a40709eb66b93ca6f1fe6eedcefe5f2ac8116d8959caddf2eb943fc"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/trade-history-ownership-sql.js",
+      "sha256": "0174730fa9e64e99c3d7e5cb946fa3b5a1abd7ae889061c1f6c7d686b66f0083"
+    },
+    {
+      "path": "server/db/migrations/inplace/051_history_collection_receipts.sql",
+      "sha256": "bd41a044f29f305dcde3f51e1b623b346ca3fe064aa3ce334a4ec5ee2655b0fe"
+    },
+    {
+      "path": "scripts/lib/history-deal-provenance-reference.mjs",
+      "sha256": "b9638ea31d2f0722b6e2b54676c2fabd1919cf36c50d9f44879ce4379621524a"
+    },
+    {
+      "path": "server/src/modules/trade-history/application/history-deal-provenance.ts",
+      "sha256": "70690187f79dd578e5c5fefefd059dde2bd38f4fed9156c0091ba4532363972d"
+    },
+    {
+      "path": "server/src/modules/trade-history/infrastructure/mysql-history-deal-provenance-writer.ts",
+      "sha256": "c2c0c89e06a6b81d5d9e26dd93d9157f0924f561ac735647b93103c1f01382e1"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/application/history-deal-provenance.js",
+      "sha256": "7d34b960c4801d69ea74c5f88183ba1dde351ff635adb3a6e071bfcae11b61ff"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/mysql-history-deal-provenance-writer.js",
+      "sha256": "35f4a3a8decabc269c04755fbd4f5f2fdb0d0d9edc5c948643cdf4aae4085e34"
+    },
+    {
+      "path": "server/db/migrations/inplace/052_terminal_history_deal_provenance.sql",
+      "sha256": "65399deb7cd50b116e958f43c0816d00594939933127ad57038ac9238304bf98"
+    },
+    {
+      "path": "scripts/lib/history-task-reference.mjs",
+      "sha256": "d9dfd19ce390fb376bc1fd07b56e899f5922c923fd3691a5721fe326fa771b4f"
+    },
+    {
+      "path": "server/db/migrations/inplace/053_history_collection_tasks.sql",
+      "sha256": "6718ed61079d08a1d2c3b71355f2d41d6ad0ae397ab3aa8c1ddaa7c8fa4b4b5c"
+    },
+    {
+      "path": "server/src/modules/trade-history/application/history-collection-task.ts",
+      "sha256": "a9b7bef776a43632171fc932fd6096b3979f315c0973f2c1ef75d5fecae16764"
+    },
+    {
+      "path": "server/src/modules/trade-history/infrastructure/mysql-history-task-lock.ts",
+      "sha256": "c03891a2de3b34adfb71903c82b5fc457cfd8a31087997def7282ba1bc77deb0"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/application/history-collection-task.js",
+      "sha256": "a9e13889bbb49fba5629a1af8f60ee25f0eb27d7491d6d1b594cbe5a728b53b1"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/mysql-history-task-lock.js",
+      "sha256": "d1480940ec7e58f822e8a0b465f7f146deacfaf26a89c5efcfb4b230dfcf7091"
+    },
+    {
+      "path": "server/src/modules/trade-history/application/history-task-completion.ts",
+      "sha256": "889d2640e3e498072f025c341606565cad696f4a06d612f1c121976408238bc1"
+    },
+    {
+      "path": "server/src/modules/trade-history/infrastructure/mysql-history-task-completion.ts",
+      "sha256": "0e8954e51a74d613f6b076a5e79bb24d201a04dbfcedb97d4fd7da7bfa19a9b4"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/application/history-task-completion.js",
+      "sha256": "f05d83f691f76f940c16916c07ed5756beebfd3e6487dd58566ff515012cbf0d"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/mysql-history-task-completion.js",
+      "sha256": "c2ecd0074ad979f39c44a871638a3ec669b170160ef841fe16bec593235d1159"
+    },
+    {
+      "path": "server/src/modules/trade-history/application/history-collection-tasks.ts",
+      "sha256": "398c76d30d2db122f445a0947e6a756c69a2f6f32b8dee02a2828d4ed65cd282"
+    },
+    {
+      "path": "server/src/modules/trade-history/infrastructure/mysql-history-collection-tasks.ts",
+      "sha256": "665b91eb194481b755c927e303a38ae25e33eec9cadf8b589219749c2fc2de4b"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/mysql-history-collection-tasks.js",
+      "sha256": "cbb3f87b6b351482008521903268026d238a45d759ab6b08646edcc713f497ba"
+    },
+    {
+      "path": "server/src/modules/trade-history/application/history-page-membership.ts",
+      "sha256": "7a55de0ad8ca1c7a451ad87d1f20c1023adc1bfb569e42f451bb12461f8d0af4"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/application/history-page-membership.js",
+      "sha256": "42a826faffa8676637ecdd7a89d9043af5e857d692ea159d4ea49af604c189ff"
+    },
+    {
+      "path": "server/src/modules/inference/application/read-strategy-reference-portfolio.ts",
+      "sha256": "d0a4e00ded2cb22afff182848e717dff2546e9e98a25ae3523ed57f58b858b03"
+    },
+    {
+      "path": "server/dist-v4/modules/inference/application/read-strategy-reference-portfolio.js",
+      "sha256": "2ade4a590b5be1719571d541001d663e107c80e96024d0ae7333d8b445864188"
+    },
+    {
+      "path": "server/src/bootstrap/strategy-reference-evidence.ts",
+      "sha256": "231dfcf0f8372889c6bb15b657bbe4ece8dbdfae0879ccc10743479d28a7f957"
+    },
+    {
+      "path": "server/src/entrypoints/worker-trader.ts",
+      "sha256": "f7f6bb6492958d7e53edeef5d440158a2bfb5ca7e3d6a2f86a9b41abac50e125"
+    },
+    {
+      "path": "server/src/bootstrap/strategy-reference-position-evidence.ts",
+      "sha256": "f26af731aa5d1b6e4daaf379f4c7f8f3b169a1c0138889ecda63674d76b4d42e"
+    },
+    {
+      "path": "server/dist-v4/bootstrap/strategy-reference-position-evidence.js",
+      "sha256": "ca98b48ecd2bec6bab62568c229d5cc3728715423b61123b6a2f536e3b92046f"
+    },
+    {
+      "path": "server/src/modules/inference/application/reference-position-evidence.ts",
+      "sha256": "422f4a88bfc9066b3f86b361214890da1cd3385ad78a5bf13aff63928e8148b9"
+    },
+    {
+      "path": "server/dist-v4/bootstrap/strategy-reference-evidence.js",
+      "sha256": "cbdf93ab01fc28b7fe81106e939eaa1daa7a890a3f01a2f6ffbdf8b2741d25c2"
+    },
+    {
+      "path": "server/dist-v4/modules/bridge/infrastructure/redis-bridge-gateway-lease-store.js",
+      "sha256": "ebe539a3031678626a9be8db518ef114de81b2a406e5c15060bc15e0fda97e2b"
+    },
+    {
+      "path": "server/dist-v4/modules/execution/infrastructure/mysql-pending-origin-reader.js",
+      "sha256": "fc7efbc563e5bb0db30e4661e52cf6d84baa8f9c18b9158acdcb56a17868ef54"
+    },
+    {
+      "path": "server/dist-v4/modules/inference/infrastructure/mysql-trade-decision-origin-reader.js",
+      "sha256": "0205f8c53fcb30a7b41263b0c7a1f1d10fe5f013f25e1691d8b60799d3c0dd98"
+    },
+    {
+      "path": "server/dist-v4/modules/inference/infrastructure/mysql-trade-decision-entry-analysis-reader.js",
+      "sha256": "3abd8b1bd6f58011deab807e1401253ef83df3784844594220fb6c41e8b773cf"
+    },
+    {
+      "path": "scripts/lib/reference-gateway-lease-fixture.mjs",
+      "sha256": "ec507e4b568dbbae9c2b7cc4fb13957f3c6142aa4095327edc0a122493f18f08"
+    },
+    {
+      "path": "scripts/lib/reference-observer-sql-fixture.mjs",
+      "sha256": "c41b0cf2a5878246ab55a101d55fb01701c912d2e734ddf48e2e08a664f72379"
+    },
+    {
+      "path": "scripts/lib/reference-entry-sql-fixture.mjs",
+      "sha256": "6fdb0299fe79479892ac85099e3945f7bdf4666b2aa4351b2a28d0f3ce4e7116"
+    },
+    {
+      "path": "scripts/lib/history-task-queued-collection-reference.mjs",
+      "sha256": "f842bd47438a878597cfdc1a964a7bc3e4995fa28a25624ea19f1155864acaf4"
+    },
+    {
+      "path": "scripts/lib/history-task-queue-reference.mjs",
+      "sha256": "3429672c261d035ab4395cccd830d4b393874e3e84e142c5f0c7e36ffffcf4d9"
+    },
+    {
+      "path": "scripts/lib/development-redis.mjs",
+      "sha256": "0ad84b0297f2ee2f1470c9b03a744d70b2552fd57fdabe73604fa37265e15298"
+    },
+    {
+      "path": "server/dist-v4/outbox/infrastructure/mysql-outbox-repository.js",
+      "sha256": "bcac440894a54665d9e0a3ca72c5896ef2c457d35d4e464f49da4b8861b428ca"
+    },
+    {
+      "path": "server/dist-v4/outbox/infrastructure/bullmq-outbox-task-publisher.js",
+      "sha256": "59d0b696f0525832a6f8825a0e99889833ccdfb3de00a556ce7fa3f79e16c479"
+    },
+    {
+      "path": "server/dist-v4/queue/bridge-history-task-processor.js",
+      "sha256": "9193433b7e3163e3fbd656832e57c058d0dae3e08ed94c2d3c9045d21992bf08"
+    },
+    {
+      "path": "server/dist-v4/queue/task-queues.js",
+      "sha256": "e04a2e20080283796aea58dfcaffadada4160dbb51eeb677156569cf750f30d4"
+    },
+    {
+      "path": "scripts/lib/history-task-scheduler-reference.mjs",
+      "sha256": "7aa2b3c0fe9a21b6f48db2e174b73c6192da959dcf3f10a172fdc481c291e04d"
+    },
+    {
+      "path": "server/src/modules/trade-history/infrastructure/history-schedule-transaction.ts",
+      "sha256": "c930dd187cc20a66b24c42f76f95bbf6252abe78c7ccd937cdc8740de8bed5e9"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/history-schedule-transaction.js",
+      "sha256": "f61f514154eccf537a6b0986d8012a0981ebc2489ff4ffb0b22b8a378e5f257b"
+    },
+    {
+      "path": "server/src/modules/trade-history/infrastructure/mysql-trade-history-schedule-repository.ts",
+      "sha256": "34fed0181224114c2a967b402e25e1e0f205afc96a088063728f990018b30c81"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/mysql-trade-history-schedule-repository.js",
+      "sha256": "6e64d3fea155d05ed222725fff7fb2334994c8e92feaf2602df90f3c4d090d53"
+    },
+    {
+      "path": "scripts/lib/history-task-recovery-reference.mjs",
+      "sha256": "55c4aa15d967ade9d973373fee3fed982b4d123d55d6eda2abe5c3c1ccb3de1a"
+    },
+    {
+      "path": "server/src/modules/trade-history/infrastructure/mysql-history-task-recovery.ts",
+      "sha256": "096ce615661a8f03df92e030462be6886bd99d055131081e3a04a6505185fbdd"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/mysql-history-task-recovery.js",
+      "sha256": "8f50757c42e1a26dc62b5af7ed39626ad9caad0d1bf551dc118669b194f60805"
+    },
+    {
+      "path": "scripts/lib/history-task-registration-reference.mjs",
+      "sha256": "3a1f6cbdf30774c9f0321c39b8228a1f2fb2f004e0752b0c49f1e629c2178273"
+    },
+    {
+      "path": "scripts/lib/history-task-collector-reference.mjs",
+      "sha256": "c752f458f5fa29e40660eb00e52367853d37b3def39feaf03397ac0eafd6f0bc"
+    },
+    {
+      "path": "server/src/modules/trade-history/application/history-task-processor.ts",
+      "sha256": "4cf9a00a6cce3dbee7e28adf501d59f3519d357b15a5eed699d587e73a033b54"
+    },
+    {
+      "path": "server/src/modules/trade-history/application/history-task-worker.ts",
+      "sha256": "3d1f238d77b274a2648f7b25e940f1a05051e9884dd57300db1ae06944d0303c"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/application/history-task-worker.js",
+      "sha256": "4c777d018ba8f311ce6dfaec8e86ea196345b017536c8a4c9cc1c1aa23ec3dd0"
+    },
+    {
+      "path": "server/src/modules/trade-history/infrastructure/mysql-history-task-locator.ts",
+      "sha256": "4912acf043fac45479106c0f903c37590d2e0cff12f25f057120a93f1ad5be83"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/mysql-history-task-locator.js",
+      "sha256": "0073aaf6d046dd401964180cfd3a9f773160a5ccf16235539b841979555c8acb"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/application/history-task-processor.js",
+      "sha256": "ba996ad0ad2c7a2dbcc6e2e27d60ece93ccfa2477bf3d6ee452e63db53d22453"
+    },
+    {
+      "path": "server/src/modules/trade-history/composition.ts",
+      "sha256": "15bd5f90fd41fdf001c9d9af7f00e180146803fbe7a062dee6fbd915ad1db385"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/composition.js",
+      "sha256": "a529d79023dd55a9ab440bfb790555d20a7fc23f57677f8579250e819cf8917a"
+    },
+    {
+      "path": "server/src/modules/trade-history/infrastructure/mysql-history-task-result.ts",
+      "sha256": "2e8072267f142e05624e6a222837c92854d75801f0addd56976f71d1e27b7fc1"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/mysql-history-task-result.js",
+      "sha256": "97335d825d4bbd281f152bb7cd678fe677812b6726ed8d1823536223a90ad53b"
+    },
+    {
+      "path": "server/src/modules/trade-history/infrastructure/mysql-history-task-registration.ts",
+      "sha256": "1189d95d074f67211525721b0d9ef0e5a7b00e962a935a444ea214f503dc0b51"
+    },
+    {
+      "path": "server/dist-v4/modules/trade-history/infrastructure/mysql-history-task-registration.js",
+      "sha256": "272d35baab252581a68fba7057040d0d89cb007ec6c65495674e464affe4fa1a"
+    },
+    {
+      "path": "server/dist-v4/modules/trading/infrastructure/mysql-account-inventory-summary-reader.js",
+      "sha256": "1999f4749e340483d5dfb1fefb14475f99cef724d10a50eadba5749381afd4c6"
+    }
+  ],
+  "definitions": [
+    {
+      "table": "trading_account_ownership_intervals",
+      "sourceDdlHash": "e827fad29157bb609d8cfe080370e89c6b9b3fcf1bcb9fda297d4995e582a8d1"
+    },
+    {
+      "table": "trade_history_sync_states_v4",
+      "sourceDdlHash": "4c08b0a050a28609deddd2da34a25e62942b5c1dea5c74f97c523f1c07352d64"
+    },
+    {
+      "table": "account_trade_records_v4",
+      "sourceDdlHash": "bf95fd479f9763c1800c8a7d12d0c8e28dce98e149b84d44fd2ed3a0e5716b4b"
+    },
+    {
+      "table": "account_trade_daily_summaries_v4",
+      "sourceDdlHash": "36c6f642e167bdb41fb2d28e7924096c4c8ca930cce0f96b965d3ddace8a4ebc"
+    },
+    {
+      "table": "outbox_events",
+      "sourceDdlHash": "d2adcef37fd71b0f3050a79f7631c360c67f102de07d290b44d361ff7ad5de3c"
+    }
+  ],
+  "finalStateHash": "4b825a5a4b3dd5baf4689bcb57aa4b3b6638200798cc1f94ba682896e7363b29",
+  "connectionsAcquired": 6,
+  "dealProvenance": {
+    "passed": true,
+    "checks": [
+      "provenance-rollback-with-caller-transaction",
+      "same-deal-response-replay-one-association",
+      "same-response-different-provenance-rejected",
+      "actual-deal-account-user-foreign-keys",
+      "positive-revisions-and-case-sensitive-hash-constraints"
+    ],
+    "canonicalDdl": "CREATE TABLE `terminal_history_deal_provenance_v4` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `terminal_history_deal_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `user_id` int NOT NULL,\n  `platform` enum('mt4','mt5') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `terminal_instance_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `terminal_profile_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `broker_server` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `account_login` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `connection_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `connection_epoch` bigint unsigned NOT NULL,\n  `ownership_revision` bigint unsigned NOT NULL,\n  `request_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `query_message_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `response_message_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_revision` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_kind` enum('terminal','local_projection') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `fact_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `provenance_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `observed_at_utc` datetime(3) NOT NULL,\n  `received_at_utc` datetime(3) NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_history_deal_provenance_response` (`terminal_history_deal_id`,`response_message_id`),\n  KEY `idx_history_deal_provenance_identity` (`trading_account_id`,`terminal_instance_id`,`terminal_history_deal_id`),\n  KEY `fk_history_deal_provenance_user` (`user_id`),\n  CONSTRAINT `fk_history_deal_provenance_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_history_deal_provenance_deal` FOREIGN KEY (`terminal_history_deal_id`) REFERENCES `terminal_history_deals_v4` (`id`),\n  CONSTRAINT `fk_history_deal_provenance_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_history_deal_provenance_hashes` CHECK ((regexp_like(`fact_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c') and regexp_like(`provenance_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c'))),\n  CONSTRAINT `chk_history_deal_provenance_revisions` CHECK (((`connection_epoch` > 0) and (`ownership_revision` > 0)))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "migrationSha256": "65399deb7cd50b116e958f43c0816d00594939933127ad57038ac9238304bf98",
+    "collectorIntegrationVerified": false
+  },
+  "dealCollector": {
+    "passed": true,
+    "checks": [
+      "actual-persist-page-fact-provenance-and-sync-rollback",
+      "actual-persist-page-commit-and-idempotent-provenance"
+    ],
+    "platform": "mt5",
+    "closedPositionProjectionVerified": false
+  },
+  "collectionTasks": {
+    "passed": true,
+    "checks": [
+      "one-active-task-per-account-enforced-by-mysql",
+      "actual-utc-window-route-and-live-lease-row-lock",
+      "old-token-and-expired-lease-rejected",
+      "persisted-route-body-rehashed-before-acceptance",
+      "mysql-lease-window-route-completion-and-result-checks",
+      "actual-account-foreign-key",
+      "completion-preparation-rolls-back-with-caller-transaction",
+      "same-prepared-completion-replays-without-updating-state",
+      "changed-completion-does-not-overwrite-prepared-evidence",
+      "new-lease-reads-original-completion-and-old-lease-is-fenced",
+      "corrupt-persisted-completion-rejected",
+      "terminal-task-retained-and-replacement-task-isolated"
+    ],
+    "canonicalDdl": "CREATE TABLE `history_collection_tasks_v4` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `status` enum('pending','running','completing','succeeded','failed') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',\n  `range_start_utc` datetime(3) NOT NULL,\n  `range_end_utc` datetime(3) NOT NULL,\n  `attempts` int unsigned NOT NULL DEFAULT '0',\n  `lease_token` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `lease_expires_at_utc` datetime(3) DEFAULT NULL,\n  `route_json` json DEFAULT NULL,\n  `route_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `completion_json` json DEFAULT NULL,\n  `completion_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `result_receipt_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `error_code` varchar(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  `completed_at_utc` datetime(3) DEFAULT NULL,\n  `active_account_id` bigint unsigned GENERATED ALWAYS AS ((case when (`status` in (_utf8mb4'pending',_utf8mb4'running',_utf8mb4'completing')) then `trading_account_id` else NULL end)) STORED,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_history_task_active_account` (`active_account_id`),\n  KEY `idx_history_task_recovery` (`status`,`lease_expires_at_utc`,`id`),\n  KEY `idx_history_task_account` (`trading_account_id`,`created_at_utc`,`id`),\n  KEY `fk_history_task_receipt` (`result_receipt_id`),\n  CONSTRAINT `fk_history_task_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_history_task_receipt` FOREIGN KEY (`result_receipt_id`) REFERENCES `terminal_history_collection_receipts_v4` (`id`),\n  CONSTRAINT `chk_history_task_completion` CHECK ((((`completion_json` is null) and (`completion_sha256` is null) and (`status` in (_utf8mb4'pending',_utf8mb4'running',_utf8mb4'failed'))) or ((`completion_json` is not null) and (`completion_sha256` is not null) and regexp_like(`completion_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c') and (`status` in (_utf8mb4'completing',_utf8mb4'succeeded',_utf8mb4'failed'))))),\n  CONSTRAINT `chk_history_task_lease` CHECK ((((`status` in (_utf8mb4'running',_utf8mb4'completing')) and (`lease_token` is not null) and (`lease_expires_at_utc` is not null)) or ((`status` not in (_utf8mb4'running',_utf8mb4'completing')) and (`lease_token` is null) and (`lease_expires_at_utc` is null)))),\n  CONSTRAINT `chk_history_task_result` CHECK ((((`status` in (_utf8mb4'pending',_utf8mb4'running',_utf8mb4'completing')) and (`completed_at_utc` is null) and (`result_receipt_id` is null)) or ((`status` = _utf8mb4'succeeded') and (`completed_at_utc` is not null) and (`result_receipt_id` is not null)) or ((`status` = _utf8mb4'failed') and (`completed_at_utc` is not null) and (`result_receipt_id` is null)))),\n  CONSTRAINT `chk_history_task_route` CHECK ((((`route_json` is null) and (`route_sha256` is null) and (`status` in (_utf8mb4'pending',_utf8mb4'failed'))) or ((`route_json` is not null) and (`route_sha256` is not null) and regexp_like(`route_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c')))),\n  CONSTRAINT `chk_history_task_window` CHECK ((`range_end_utc` > `range_start_utc`))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "migrationSha256": "6718ed61079d08a1d2c3b71355f2d41d6ad0ae397ab3aa8c1ddaa7c8fa4b4b5c",
+    "leaseRotationMethod": "direct-fixture-update",
+    "queueIntegrationVerified": false
+  },
+  "taskClaims": {
+    "passed": true,
+    "checks": [
+      "two-real-connections-only-one-claim",
+      "real-expired-lease-takeover-and-old-token-renewal-rejection",
+      "claim-service-recovers-original-prepared-completion",
+      "new-route-clears-preparation-and-retains-original-window",
+      "fifth-live-attempt-preserved-and-sixth-claim-refused",
+      "lost-claim-commit-does-not-consume-another-attempt"
+    ],
+    "claimTakeoverVerified": true,
+    "queueIntegrationVerified": false,
+    "authorization": "injected-route-guard"
+  },
+  "taskRegistration": {
+    "passed": true,
+    "checks": [
+      "actual-account-lock-task-and-outbox-rollback-together",
+      "committed-registration-recovered-without-second-task-or-event",
+      "changed-window-and-missing-event-rejected",
+      "concurrent-registration-reuses-winning-fixed-window"
+    ],
+    "accountLockProvider": "actual-trading-public-composition",
+    "queuePublicationVerified": false
+  },
+  "taskCollector": {
+    "passed": true,
+    "checks": [
+      "begin-preserves-claimed-window",
+      "bound-page-fact-provenance-sync-and-task-rollback",
+      "actual-claim-takeover-fences-old-page-and-failure-writes",
+      "new-lease-page-commits-and-replay-keeps-one-fact-and-source",
+      "prepared-task-survives-business-transaction-rollback",
+      "actual-worker-resolves-persisted-account-and-acknowledges-terminal-without-route",
+      "actual-composition-resumes-expired-prepared-task-and-confirms-unknown-without-terminal-query",
+      "task-success-and-business-results-committed-before-ack-loss",
+      "completed-task-replay-confirms-without-lease-or-additional-writes",
+      "ended-task-cannot-restart-or-fail-current-sync"
+    ],
+    "queueIntegrationVerified": false,
+    "terminalPaginationVerified": false,
+    "boundMt5PageVerified": true,
+    "leaseTakeoverFencingVerified": true
+  },
+  "taskRecovery": {
+    "passed": true,
+    "checks": [
+      "pending-outbox-prevents-duplicate-recovery",
+      "recovery-event-and-cooldown-rollback-together",
+      "concurrent-pending-recovery-one-delivery-original-task-and-cooldown",
+      "live-running-lease-is-not-republished",
+      "expired-completing-republished-without-changing-evidence-and-unknown-commit-recovers"
+    ],
+    "queueDeliveryVerified": false
+  },
+  "taskScheduler": {
+    "passed": true,
+    "concurrencyRounds": 20,
+    "checks": [
+      "actual-due-query-and-registration-rollback-on-event-failure",
+      "concurrent-schedulers-create-only-online-due-accounts-with-fixed-windows",
+      "active-tasks-excluded-without-premature-sync-state-change",
+      "failed-task-replaced-once-and-commit-unknown-does-not-duplicate-batch",
+      "twenty-concurrent-rounds-preserve-one-active-task-per-account"
+    ],
+    "sessionDdlHash": "e1aaf82ed9334287fcda0e5c7bb01924decfab7faea60b6ccb9b89aa90917eed",
+    "parents": "minimal-account-profile-user-fixtures",
+    "actualTerminalConnectivity": false
+  },
+  "taskQueueDiagnostics": {
+    "prefix": "history-reference-31c778ad5a104d279547160db67b7ad0",
+    "localNow": "2026-09-11T05:54:18.976Z",
+    "databaseNow": "2026-09-11T05:54:22.879Z",
+    "delayed": 1,
+    "failures": [],
+    "job": {
+      "state": "completed",
+      "delay": 0,
+      "timestamp": 1789106051906,
+      "attemptsMade": 1
+    }
+  },
+  "error": {
+    "code": "history_completion_reference_failed",
+    "databaseCode": "ER_DUP_FIELDNAME",
+    "trace": [
+      "    at verifyQueuedCollection (file:///D:/dev_codex/dev_vue/scripts/lib/history-task-queued-collection-reference.mjs:35:15)",
+      "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)",
+      "    at async verifyHistoryTaskQueueReference (file:///D:/dev_codex/dev_vue/scripts/lib/history-task-queue-reference.mjs:72:24)",
+      "    at async file:///D:/dev_codex/dev_vue/scripts/verify-history-completion-reference-local.mjs:234:22"
+    ]
+  },
+  "observedAt": "2026-09-11T05:54:19.028Z"
+}

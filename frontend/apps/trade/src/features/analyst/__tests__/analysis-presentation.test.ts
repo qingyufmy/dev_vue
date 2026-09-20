@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { marketAnalysisSummarySchema } from '@aurum/contracts'
-import { analysisValidity, biasLabel, opportunityLabel, readableRecord } from '../model/analysis-presentation'
+import { analysisValidity, biasLabel, opportunityLabel, readableRecord, marketRegimeLabel } from '../model/analysis-presentation'
 
 const summary = marketAnalysisSummarySchema.parse({
   analysis_id: 'analysis-1', strategy_id: 'strategy-1', strategy_version_id: 'version-1', symbol: 'XAUUSD',
@@ -9,6 +9,10 @@ const summary = marketAnalysisSummarySchema.parse({
 })
 
 describe('analysis presentation', () => {
+  it('does not expose internal market state codes', () => {
+    expect(marketRegimeLabel('unavailable')).toBe('市场环境暂无法判断')
+    expect(marketRegimeLabel('unknown_internal_state')).toBe('暂未说明')
+  })
   it('uses plain Chinese labels for direction and opportunity', () => {
     expect(biasLabel(summary.marketBias)).toBe('偏多')
     expect(opportunityLabel(summary.opportunity)).toBe('发现做多机会')
@@ -18,10 +22,9 @@ describe('analysis presentation', () => {
     expect(analysisValidity(summary, Date.parse('2026-09-04T04:06:00.000Z'))).toBe('结论已过有效期')
   })
 
-  it('renders unknown structured values without unsafe HTML', () => {
+  it('preserves price arrays and omits unknown internal fields', () => {
     expect(readableRecord({ support: [4630, 4620], missing: null })).toEqual([
-      { key: 'support', label: '支撑位', value: '[4630,4620]' },
-      { key: 'missing', label: 'missing', value: '--' },
+      { key: 'support', label: '支撑位', value: '4630、4620' },
     ])
   })
 })

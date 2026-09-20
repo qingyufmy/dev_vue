@@ -1,3 +1,6 @@
+export const PARTIAL_CLOSE_OUTBOX_TYPES = ['execution.partial-close.requested','execution.partial-close.progressed',
+  'execution.partial-close.reviewed','execution.partial-close.expired'] as const
+
 export interface ClaimedOutboxEvent {
   id: string
   eventId: string
@@ -6,8 +9,10 @@ export interface ClaimedOutboxEvent {
     | 'risk.policy.changed' | 'risk.summary.changed' | 'risk.decision.created' | 'risk.manual_release.changed'
     | 'review.job.requested' | 'review.case.changed' | 'strategy.memory.changed'
     | 'operation.changed' | 'execution.intent.prepared' | 'execution.distribution.target.requested' | 'bridge.command.queued'
-    | 'trade.history.changed'
-    | 'trade.history.requested'
+    | 'bridge.command.reconcile.requested' | 'trade.history.changed'
+    | 'trade.history.requested' | 'trade.history.task.requested' | 'trade.history.task.completed'
+    | 'instrument.collection.requested'
+    | 'execution.partial-close.requested' | 'execution.partial-close.progressed' | 'execution.partial-close.reviewed' | 'execution.partial-close.expired'
     | 'observer.authorization.changed'
   occurredAt: string
   payload: Record<string, unknown>

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { AlertCircle, Play, RefreshCw, RadioTower } from '@lucide/vue'
 import { computed, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { activeMarketSymbol } from '~/features/trading-context'
+import { RouterLink, useRoute, useRouter } from 'vue-router'
 import { Alert, AlertDescription, AlertTitle } from '@aurum/ui/alert'
 import { Badge } from '@aurum/ui/badge'
 import { Button } from '@aurum/ui/button'
@@ -37,7 +38,7 @@ async function runManual(strategyId: string, symbol: string) {
       <div>
         <div class="flex items-center gap-2 text-xs font-medium text-primary"><RadioTower />AI 交易团队</div>
         <h1 class="mt-1 text-2xl font-semibold tracking-tight">AI 分析师</h1>
-        <p class="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">专注分析行情、判断市场方向与交易机会。账户是否执行，由后续 AI 交易员和服务端风控独立决定。</p>
+        <p class="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">查看行情判断、交易机会和分析依据。</p>
       </div>
       <div class="flex flex-wrap items-center gap-2">
         <Badge variant="outline">{{ realtimeLabel }}</Badge>
@@ -46,10 +47,13 @@ async function runManual(strategyId: string, symbol: string) {
       </div>
     </header>
 
-    <div class="grid min-w-0 gap-4 lg:grid-cols-[20rem_minmax(0,1fr)] xl:grid-cols-[22rem_minmax(0,1fr)]">
+    <Alert v-if="workspace.strategiesError.value" variant="destructive"><AlertTitle>策略读取失败</AlertTitle><AlertDescription>{{ workspace.strategiesError.value }}<Button variant="outline" @click="workspace.refresh()">重新读取</Button></AlertDescription></Alert>
+    <Alert v-else-if="!workspace.strategiesLoading.value && !workspace.strategies.value.length"><AlertTitle>暂无可用分析策略</AlertTitle><AlertDescription>请先在策略师中配置可用的分析策略，再发起分析。<Button as-child variant="link"><RouterLink to="/strategist">前往策略师</RouterLink></Button></AlertDescription></Alert>
+
+    <div class="grid min-w-0 gap-4 lg:grid-cols-[18rem_minmax(0,1fr)] xl:grid-cols-[19rem_minmax(0,1fr)]">
       <AnalysisHistoryPanel
         :items="workspace.analyses.value"
-        :strategies="workspace.strategies.value"
+        :strategies="workspace.historyStrategies.value"
         :selected-id="selectedId"
         :loading="workspace.loadingList.value"
         :refreshing="workspace.refreshing.value"
@@ -57,10 +61,10 @@ async function runManual(strategyId: string, symbol: string) {
         @select="selectAnalysis"
       />
 
-      <section class="min-w-0" aria-label="分析详情">
-        <div v-if="workspace.loadingDetail.value && !workspace.detail.value" class="grid gap-4"><Skeleton class="h-48" /><Skeleton class="h-64" /><Skeleton class="h-80" /></div>
-        <Alert v-else-if="workspace.detailError.value" variant="destructive"><AlertCircle /><AlertTitle>完整推理读取失败</AlertTitle><AlertDescription>{{ workspace.detailError.value }}</AlertDescription></Alert>
-        <AnalysisDetailPanel v-else-if="workspace.detail.value" :detail="workspace.detail.value" :strategies="workspace.strategies.value" />
+      <section class="min-w-0" aria-label="分析详情" :aria-busy="workspace.loadingDetail.value">
+        <div v-if="workspace.loadingDetail.value && (!workspace.detail.value || workspace.detail.value.summary.analysisId !== selectedId)" class="grid gap-4"><Skeleton class="h-48" /><Skeleton class="h-64" /><Skeleton class="h-80" /></div>
+        <Alert v-else-if="workspace.detailError.value" variant="destructive"><AlertCircle /><AlertTitle>完整推理读取失败</AlertTitle><AlertDescription>{{ workspace.detailError.value }}<Button variant="outline" @click="workspace.retryDetail()">重试</Button></AlertDescription></Alert>
+        <AnalysisDetailPanel v-else-if="workspace.detail.value" :detail="workspace.detail.value" :strategies="workspace.historyStrategies.value" />
         <Empty v-else class="min-h-[30rem]">
           <EmptyHeader><EmptyMedia variant="icon"><RadioTower /></EmptyMedia><EmptyTitle>选择一条分析记录</EmptyTitle><EmptyDescription>左侧记录只显示品种、策略、信号类型和时间；完整结论与推理在这里展示。</EmptyDescription></EmptyHeader>
         </Empty>
@@ -70,7 +74,7 @@ async function runManual(strategyId: string, symbol: string) {
     <ManualAnalysisSheet
       v-model:open="manualOpen"
       :strategies="workspace.strategies.value"
-      :default-symbol="workspace.detail.value?.summary.symbol ?? workspace.analyses.value[0]?.symbol ?? 'XAUUSD'"
+      :default-symbol="activeMarketSymbol"
       :pending="workspace.manualPending.value"
       :cooling-down="workspace.manualCoolingDown.value"
       :job="workspace.currentJob.value"

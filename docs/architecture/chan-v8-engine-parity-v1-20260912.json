@@ -1,0 +1,32 @@
+{
+  "passed": true,
+  "checks": 327,
+  "nonemptySegments": 76,
+  "nonemptyCenters": 3,
+  "statuses": [
+    "insufficient_klines",
+    "partial",
+    "insufficient_bis",
+    "unreliable_segments",
+    "segment_history_unresolved"
+  ],
+  "selections": [
+    "full_window_unanchored",
+    "full_window_unresolved",
+    "full_window_cross_confirmed",
+    "trusted_anchor"
+  ],
+  "referenceSha256": "b945ae29ab5df61648d5d8da86af27835ef7874be60bc7f43aa441820780b796",
+  "sources": {
+    "compute-chan": "d03312bdc7eeae8678825626e8aacf4120dd7b124e497b44308b9527518d8768",
+    "select-result": "f9bcfdd4f6b77bc144d8d7c1e20700138cadb92b9e44bd32de4d6d80bcfec9b2",
+    "evidence-remapping": "fc7519c3c283b34c60a2dce4d443a335f25cf5477869b0bead1be0199c0e557b",
+    "evidence-voting": "8824808ed4ec83c6f74587d9e3cf212b21f0f17efb15235fb9fe2de6c40617b2",
+    "result-update": "2c9d2596ffb1acd8fdc02983aa875ea19d459b3aa59a06cf2f427a4c1b6c0b06",
+    "result-protection": "eeb5aaa58e8cc99ee8ffa23680ca462ec74ae7aa2da95e13b8be7f3a99e343d3",
+    "temporal-window": "fe8de77d8aaa5db02aa55ada35dcf692388eb8eb1e68482e7dad4a5ff05b2eb1",
+    "window-policy": "905ccc43ebe224328705e8d7a8a2a20a28a71998b0fe5c8dad067bc79050a60f",
+    "chan-result": "62e4ab2533b2e1974a8a718e8dfc3327c0678a9bc084f24168b6a6183dc04fdb"
+  },
+  "scope": "Full v8 engine parity including window policy, terminal chain/center selection and temporal bootstrap; synthetic prices/metadata, no Worker or external dependencies."
+}

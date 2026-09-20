@@ -1,0 +1,57 @@
+{
+  "kind": "memory-upgrade-current-inventory/v1",
+  "passed": true,
+  "writes": 0,
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "tables": {
+    "strategy_memory_libraries_v4": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `strategy_memory_libraries_v4` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `strategy_id` bigint unsigned NOT NULL,\n  `owner_user_id` int DEFAULT NULL,\n  `mode` enum('off','shadow','active') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'shadow',\n  `status` enum('active','revalidating','retired') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',\n  `current_revision_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `max_context_tokens` int unsigned NOT NULL DEFAULT '800',\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_strategy_memory_strategy` (`strategy_id`),\n  UNIQUE KEY `uk_strategy_memory_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `idx_strategy_memory_owner` (`owner_user_id`,`updated_at_utc`,`id`),\n  KEY `fk_strategy_memory_current_revision` (`current_revision_id`,`id`),\n  CONSTRAINT `fk_strategy_memory_current_revision` FOREIGN KEY (`current_revision_id`, `id`) REFERENCES `strategy_memory_library_revisions_v4` (`id`, `library_id`),\n  CONSTRAINT `fk_strategy_memory_owner` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_strategy_memory_strategy` FOREIGN KEY (`strategy_id`) REFERENCES `strategies` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "definitionHash": "0d735d68cdaf5675252cd37fcc7b54f25e344b85f37f84f3ba3d82ee887c4935"
+    },
+    "strategy_memory_versions_v4": {
+      "exists": false
+    },
+    "strategy_memory_injection_logs_v4": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `strategy_memory_injection_logs_v4` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `strategy_id` bigint unsigned NOT NULL,\n  `library_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `library_revision_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `runtime_kind` enum('analysis','review','memory_compression') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `runtime_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `injected` tinyint(1) NOT NULL,\n  `matched_context_json` json NOT NULL,\n  `token_count` int unsigned NOT NULL,\n  `occurred_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_strategy_memory_injection` (`runtime_kind`,`runtime_id`,`library_revision_id`),\n  KEY `idx_strategy_memory_injection_strategy` (`strategy_id`,`occurred_at_utc`,`id`),\n  KEY `fk_strategy_memory_injection_user` (`user_id`),\n  KEY `fk_strategy_memory_injection_library` (`library_id`),\n  KEY `fk_strategy_memory_injection_revision` (`library_revision_id`,`library_id`),\n  CONSTRAINT `fk_strategy_memory_injection_library` FOREIGN KEY (`library_id`) REFERENCES `strategy_memory_libraries_v4` (`id`),\n  CONSTRAINT `fk_strategy_memory_injection_revision` FOREIGN KEY (`library_revision_id`, `library_id`) REFERENCES `strategy_memory_library_revisions_v4` (`id`, `library_id`),\n  CONSTRAINT `fk_strategy_memory_injection_strategy` FOREIGN KEY (`strategy_id`) REFERENCES `strategies` (`id`),\n  CONSTRAINT `fk_strategy_memory_injection_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "definitionHash": "183e2689d0cc176f4fe69d2bac550f59bc5f597a99119686870a10adbd43775b"
+    },
+    "strategies": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `strategies` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `kind` enum('analysis','trader') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `scope` enum('platform','user') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `owner_user_id` int DEFAULT NULL,\n  `name` varchar(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `description` varchar(2000) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',\n  `status` enum('draft','active','retired') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',\n  `active_version_id` bigint unsigned DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  `deleted_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_strategies_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `idx_strategies_catalog` (`kind`,`status`,`scope`,`owner_user_id`,`deleted_at_utc`,`id`),\n  KEY `fk_strategies_owner` (`owner_user_id`),\n  KEY `fk_strategies_active_version` (`active_version_id`,`id`),\n  CONSTRAINT `fk_strategies_active_version` FOREIGN KEY (`active_version_id`, `id`) REFERENCES `strategy_versions` (`id`, `strategy_id`),\n  CONSTRAINT `fk_strategies_owner` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_strategies_owner` CHECK ((((`scope` = _utf8mb4'platform') and (`owner_user_id` is null)) or ((`scope` = _utf8mb4'user') and (`owner_user_id` is not null))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "definitionHash": "8435f65723f4c195d0b8767fa7cf1d9eefa4eae7ca20177d141946fcd8768bab"
+    },
+    "strategy_versions": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `strategy_versions` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `strategy_id` bigint unsigned NOT NULL,\n  `version_number` int unsigned NOT NULL,\n  `prompt_text` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `prompt_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `input_contract_version` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `output_contract_version` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `config_json` json NOT NULL,\n  `created_by_user_id` int NOT NULL,\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_strategy_versions_identity` (`id`,`strategy_id`),\n  UNIQUE KEY `uk_strategy_versions_number` (`strategy_id`,`version_number`),\n  UNIQUE KEY `uk_strategy_versions_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `idx_strategy_versions_created` (`strategy_id`,`created_at_utc`,`id`),\n  KEY `fk_strategy_versions_creator` (`created_by_user_id`),\n  CONSTRAINT `fk_strategy_versions_creator` FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_strategy_versions_strategy` FOREIGN KEY (`strategy_id`) REFERENCES `strategies` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "definitionHash": "768295142175363f8f381a4bc6b68d56ec1171e5e9211bf7ffa5a2ec90db31ee"
+    },
+    "inference_snapshots": {
+      "exists": true,
+      "rows": "789",
+      "ddl": "CREATE TABLE `inference_snapshots` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `signal_id` bigint DEFAULT NULL,\n  `strategy_id` int DEFAULT NULL,\n  `strategy_version` int NOT NULL DEFAULT '1',\n  `strategy_scope` varchar(20) NOT NULL,\n  `owner_user_id` int NOT NULL DEFAULT '0',\n  `standard_symbol` varchar(64) NOT NULL,\n  `market_source` varchar(64) NOT NULL,\n  `system_prompt` longtext NOT NULL,\n  `user_prompt` longtext NOT NULL,\n  `prompt_hash` char(64) NOT NULL,\n  `model_profile_id` int DEFAULT NULL,\n  `provider` varchar(50) DEFAULT NULL,\n  `model_name` varchar(150) DEFAULT NULL,\n  `credential_source` varchar(32) NOT NULL,\n  `output_schema_version` char(64) NOT NULL,\n  `klines_json` longtext,\n  `market_snapshot_json` longtext NOT NULL,\n  `strategy_runtime_json` longtext,\n  `memory_mode` varchar(20) NOT NULL DEFAULT 'off',\n  `evidence_status` varchar(24) NOT NULL DEFAULT 'complete',\n  `omitted_fields_json` text,\n  `content_hash` char(64) NOT NULL,\n  `byte_size` int NOT NULL,\n  `created_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_inference_snapshot_signal` (`signal_id`),\n  KEY `idx_inference_snapshot_strategy` (`strategy_id`,`created_at`),\n  KEY `idx_inference_snapshot_owner` (`owner_user_id`,`created_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=10272 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+      "definitionHash": "549474c7c20dcb37d990eeb91bd65e71d7d69cc5bbfd509cce1aeb8243cff28e"
+    },
+    "users": {
+      "exists": true,
+      "rows": "27",
+      "ddl": "CREATE TABLE `users` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `uid` varchar(32) DEFAULT NULL,\n  `email` varchar(255) DEFAULT NULL,\n  `email_verified` tinyint DEFAULT NULL,\n  `auth_method` varchar(20) DEFAULT NULL,\n  `password` varchar(255) NOT NULL,\n  `nickname` varchar(100) NOT NULL DEFAULT '',\n  `avatar` varchar(500) NOT NULL DEFAULT '',\n  `role` varchar(20) NOT NULL DEFAULT 'user',\n  `plan` varchar(20) NOT NULL DEFAULT 'free',\n  `plan_period` varchar(20) DEFAULT NULL,\n  `plan_expires_at` datetime(3) DEFAULT NULL,\n  `telegram_id` varchar(100) DEFAULT NULL,\n  `telegram_username` varchar(100) DEFAULT NULL,\n  `telegram_name` varchar(100) DEFAULT NULL,\n  `telegram_chat_id` varchar(100) DEFAULT NULL,\n  `telegram_group_status` varchar(50) DEFAULT '',\n  `telegram_bot_started_at` datetime DEFAULT NULL,\n  `telegram_joined_at` datetime DEFAULT NULL,\n  `telegram_last_invite_sent_at` datetime DEFAULT NULL,\n  `referral_code` varchar(50) DEFAULT NULL,\n  `referral_credit` decimal(20,8) NOT NULL DEFAULT '0.00000000',\n  `referred_by` varchar(50) DEFAULT NULL,\n  `last_seen_at` datetime DEFAULT NULL,\n  `bridge_heartbeat` datetime DEFAULT NULL,\n  `created_at` datetime(3) NOT NULL DEFAULT (now(3)),\n  `updated_at` datetime(3) NOT NULL DEFAULT (now(3)),\n  `phone` varchar(20) DEFAULT NULL,\n  `phone_verified` tinyint DEFAULT NULL,\n  `changelog_seen_version` int DEFAULT NULL,\n  `token_version` int NOT NULL DEFAULT '0',\n  `plan_source` varchar(20) DEFAULT NULL,\n  `deleted_at` datetime(3) DEFAULT NULL,\n  `deletion_status` varchar(24) NOT NULL DEFAULT 'active',\n  `last_seen_at_utc` datetime(3) DEFAULT NULL,\n  `profile_revision` bigint unsigned NOT NULL DEFAULT '1',\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `email` (`email`),\n  UNIQUE KEY `uid` (`uid`),\n  UNIQUE KEY `referral_code` (`referral_code`),\n  UNIQUE KEY `idx_users_phone` (`phone`),\n  KEY `idx_users_last_seen` (`last_seen_at`),\n  KEY `idx_users_deletion_status` (`deletion_status`,`deleted_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=33 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+      "definitionHash": "cac027f809fae6396dd31254f9e3ec1e632158b6f64784540def3635985f4ffc"
+    }
+  },
+  "upgradeJournal": {
+    "count": 191,
+    "expected": 191,
+    "completed": true
+  },
+  "observedAt": "2026-09-10T08:32:08.809Z"
+}

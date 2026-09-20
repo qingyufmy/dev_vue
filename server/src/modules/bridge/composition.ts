@@ -15,6 +15,22 @@ import { MysqlBridgeCredentialRepository } from './infrastructure/mysql-bridge-c
 import { MysqlBridgePairingRepository } from './infrastructure/mysql-bridge-pairing-repository.js'
 import { RedisBridgeSessionTicketStore } from './infrastructure/redis-bridge-session-ticket-store.js'
 import { RedisBridgeGatewayLeaseStore } from './infrastructure/redis-bridge-gateway-lease-store.js'
+import { BridgeInstallationService, type InstallationCapacityReader } from './application/bridge-installation-service.js'
+import { MysqlBridgeInstallationRepository } from './infrastructure/mysql-bridge-installation-repository.js'
+import { bridgeInstallationRoutes, type BridgeInstallationRoutesOptions } from './transport/http/bridge-installation-routes.js'
+import { assertBridgeInstallationSchema } from './infrastructure/mysql-bridge-installation-schema-readiness.js'
+import { bridgeInstallationSchema } from './infrastructure/bridge-installation-schema.js'
+
+export function assertMysqlBridgeInstallationSchemaReady(pool: Pick<Pool, 'getConnection'>) {
+  return assertBridgeInstallationSchema(pool, bridgeInstallationSchema)
+}
+
+export function createBridgeInstallationService(pool: Pool, capacity: InstallationCapacityReader) {
+  return new BridgeInstallationService(new MysqlBridgeInstallationRepository(pool), capacity)
+}
+export function createBridgeInstallationHttp(options: BridgeInstallationRoutesOptions): FastifyPluginAsync {
+  return async app => { await app.register(bridgeInstallationRoutes, { prefix: '/api/v4', ...options }) }
+}
 
 export function createBridgeCredentialRepository(pool: Pool): BridgeCredentialRepository {
   return new MysqlBridgeCredentialRepository(pool)
@@ -28,7 +44,7 @@ export function createBridgeSessionTickets(cache: Redis): BridgeSessionTicketSto
   return new RedisBridgeSessionTicketStore(cache)
 }
 
-export function createBridgeGatewayLeases(cache: Redis): BridgeGatewayLeaseStore {
+export function createBridgeGatewayLeases(cache: Redis): BridgeGatewayLeaseStore & { count(userId: number): Promise<number> } {
   return new RedisBridgeGatewayLeaseStore(cache)
 }
 
@@ -48,3 +64,7 @@ export function createBridgeDeviceRevoker(pool: Pool) {
 export function createBridgeGatewayRoutes(pool: Pool, accountRegistrationForTransaction: (connection: PoolConnection) => BridgeAccountRegistration) {
   return new MysqlBridgeGatewayRouteRepository(pool, accountRegistrationForTransaction)
 }
+
+export { RedisBridgeMarketDemandSubscriber } from './infrastructure/redis-bridge-market-demand-subscriber.js'
+
+export { RedisBridgeMarketReadSubscriber } from './infrastructure/redis-bridge-market-read-subscriber.js'

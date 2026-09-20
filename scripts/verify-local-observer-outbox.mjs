@@ -24,7 +24,7 @@ const deliveries = [], checks = []
 try {
   const base = parse(await readFile(new URL('../server/.env', import.meta.url)))
   const env = localAccountEnvironment(base, parse(await readFile(runtimeConfigPath)))
-  assert.equal(env.MYSQL_HOST, '192.168.31.254')
+  assert.equal(env.MYSQL_HOST, '192.168.1.254')
   pool = createMysqlPool({ host: env.MYSQL_HOST, port: Number(env.MYSQL_PORT || 3306), user: env.MYSQL_USER,
     password: env.MYSQL_PASSWORD, database: env.MYSQL_DATABASE, poolSize: 2 })
   const [[identity]] = await pool.query('SELECT DATABASE() db,@@server_uuid serverUuid,@@session.time_zone timezone')

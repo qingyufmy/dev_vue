@@ -1,0 +1,50 @@
+{
+  "kind": "quote-provenance-current-proof/v1",
+  "passed": true,
+  "target": "dev_vue",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "planHash": "4fe6ef4674bb54f3fe1cd4c726d7cf1e5685d703cfb00b0869937455e3285944",
+  "receiptSha256": "5c3901ad66471bc14618f285e0ce041091ed84639a9aee1d6b381843fb9aab9d",
+  "sources": [
+    {
+      "path": "docs/architecture/quote-current-prepare-v4-20260910.json",
+      "sha256": "7f4181fad4147b307db7e2d17447216a4ea6c72fcf42c286dc64d9bb8b360fe3"
+    },
+    {
+      "path": "docs/architecture/quote-current-apply-v4-20260910.json",
+      "sha256": "7ab10a0a5601b14e500fa96a324a52023df9957793999576e043d4d159f4f0be"
+    },
+    {
+      "path": "docs/architecture/quote-current-replay-v4-20260910.json",
+      "sha256": "9ecd48f3eb4823368e99289129309861e43e750e8cb45cd993e88be709874730"
+    }
+  ],
+  "rehearsalSources": [
+    {
+      "path": "docs/architecture/quote-restored-prepare-20260910.json",
+      "sha256": "5cfaf068fdb27ab02a329150d025e6811ecbd44000fe31a73b9b601f5d19ec07"
+    },
+    {
+      "path": "docs/architecture/quote-restored-apply-20260910.json",
+      "sha256": "aa6d903b2dc2b4aefb447b1f7acaf0f48671cde142672538abeaaa4f4df1169d"
+    },
+    {
+      "path": "docs/architecture/quote-restored-replay-20260910.json",
+      "sha256": "8c8ed0f3eeae1b9ced4b30c5e66993e7c3b9f54b4538abee8ee0ea14d5b171ee"
+    }
+  ],
+  "completedSteps": 205,
+  "startedSteps": 0,
+  "tableCount": 270,
+  "protectedTableCount": 269,
+  "protectedSnapshotHash": "e4fe7bed3ab88eb76255137c680be2a0d32a9003320833d78a1d3badcda62376",
+  "rehearsalParityHash": "9a2f3d6ee683972fabb790a6c264a9babe37e138822a9ab615a52490e6056059",
+  "targetRows": 0,
+  "targetRowsSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "ddlApplied": 1,
+  "replayDdl": 0,
+  "priorHistoryUnchanged": true,
+  "businessDataWrites": 0,
+  "executionCapabilityEnabled": false,
+  "observedAt": "2026-09-10T12:15:02.071Z"
+}

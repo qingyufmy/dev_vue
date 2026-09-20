@@ -63,7 +63,7 @@ namespace Liangjian.BridgeV4.Terminal
             timeoutMilliseconds = timeout;
         }
 
-        public string Read(string pythonPath, string workerPath, string terminalPath)
+        public string Read(string pythonPath, string workerPath, string terminalPath, bool portable = false, string expectedDataPath = null)
         {
             RequireFile(pythonPath);
             RequireFile(workerPath);
@@ -71,13 +71,15 @@ namespace Liangjian.BridgeV4.Terminal
             ProcessStartInfo start = new ProcessStartInfo
             {
                 FileName = pythonPath,
-                Arguments = Quote(workerPath) + " --probe --terminal " + Quote(terminalPath),
+                Arguments = Quote(workerPath) + " --probe --terminal " + Quote(terminalPath)
+                    + (portable ? " --portable" : string.Empty),
                 WorkingDirectory = Path.GetDirectoryName(workerPath),
                 UseShellExecute = false, CreateNoWindow = true,
                 RedirectStandardOutput = true, RedirectStandardError = true,
                 StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8
             };
             start.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
+            start.EnvironmentVariables["AURUM_BRIDGE_WORKER_DATA_PATH"] = expectedDataPath ?? string.Empty;
             using (Process process = new Process { StartInfo = start })
             {
                 if (!process.Start()) throw new IOException("bridge_discovery_probe_failed");

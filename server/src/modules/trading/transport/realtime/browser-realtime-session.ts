@@ -13,7 +13,7 @@ interface Target {
 }
 
 export class BrowserRealtimeSession implements BrowserRealtimeConnection {
-  private stops: Array<() => void> = []
+  private stops: Array<(() => void) & { renew?: () => Promise<void> }> = []
   private closed = false
   private generation = 0
   private readonly sink: BrowserRealtimeSink
@@ -62,6 +62,8 @@ export class BrowserRealtimeSession implements BrowserRealtimeConnection {
     this.stops.push(stop)
     for (const release of previous) release()
   }
+
+  async heartbeat() { if (!this.closed) await Promise.all(this.stops.map(stop => stop.renew?.())) }
 
   close() { this.closed = true; this.closeSubscriptions() }
   closeSubscriptions() { this.generation += 1; for (const stop of this.stops.splice(0)) stop() }
@@ -118,6 +120,11 @@ function validRequestId(value: unknown): value is string {
 }
 
 function validScope(target: Required<Target>) {
+  if (target.kind === 'market' && ['public_quote', 'public_candle'].includes(target.resource_id ?? '')) {
+    return target.trading_account_id === null && target.observer_channel_id === null && target.after_revision === null
+      && typeof target.symbol === 'string' && /^[A-Z0-9]{1,32}$/.test(target.symbol)
+      && (target.resource_id === 'public_quote' ? target.timeframe === null : ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'].includes(target.timeframe ?? ''))
+  }
   if (target.kind === 'market' && ['macro', 'calendar'].includes(target.resource_id ?? '')) {
     return target.trading_account_id === null && target.observer_channel_id === null
       && target.symbol === null && target.timeframe === null && target.after_revision === null
@@ -139,6 +146,8 @@ function validScope(target: Required<Target>) {
 }
 
 function resourcesFor(target: Required<Target>): string[] | null {
+  if (target.kind === 'market' && target.resource_id === 'public_quote') return [`public_market:${target.symbol}:quote`]
+  if (target.kind === 'market' && target.resource_id === 'public_candle') return [`public_market:${target.symbol}:${target.timeframe}`]
   if (target.kind === 'runtime' && target.resource_id === 'bridge') return ['runtime.bridge:current']
   if (target.kind === 'account' && target.resource_id === 'metrics') return ['account.metrics:current']
   if (target.kind === 'account' && target.resource_id === 'positions') return ['positions:open']

@@ -1,0 +1,22 @@
+{
+  "kind": "history-task-current-upgrade-proof/v1",
+  "passed": true,
+  "target": "dev_vue",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "priorSteps": 190,
+  "completedSteps": 191,
+  "originalTables": 257,
+  "finalTables": 258,
+  "originalRows": 338747,
+  "protectedTableCount": 256,
+  "protectedSnapshotHash": "5b71ade327effb016d1e80dd2715a6d140ae7c85a6a86d8aca3f61d11bcb3d00",
+  "oldJournalUnchanged": true,
+  "ddlCount": 1,
+  "replayDdlCount": 0,
+  "newTableRows": 0,
+  "businessWritesPerformed": false,
+  "taskSchemaReady": true,
+  "evidenceHash": "7dc6351d9e35c2b50aa17b0009902f33d5b4038a439a081eba6b8c56eeaef423",
+  "planHash": "633e5629c1ef758cbb2838aea56d53ed56d356697f062ffea02ea4f475dddac4",
+  "observedAt": "2026-09-10T05:59:37.259Z"
+}

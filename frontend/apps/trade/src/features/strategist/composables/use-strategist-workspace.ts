@@ -1,3 +1,10 @@
+import { subscriptionTimeWindowSchema } from '@aurum/contracts'
+import { prepareSubscriptionUpdate, clearSubscriptionUpdate } from '../model/subscription-update-request'
+import { prepareSubscriptionCreate, clearSubscriptionCreate } from '../model/subscription-create-request'
+import { prepareStrategyVersion, clearStrategyVersion, type StrategyVersionIntent } from '../model/strategy-version-request'
+import { prepareStrategyMetadata, clearStrategyMetadata } from '../model/strategy-metadata-request'
+import { ApiClientError } from '@aurum/api-client'
+import { prepareStrategyCreate, clearStrategyCreate } from '../model/strategy-create-request'
 import type {
   StrategyCompileResult, StrategyDetail, StrategySubscription, StrategySubscriptionPatchBody,
   StrategySummary, TradingAccount,
@@ -9,14 +16,14 @@ import type {
   CompileResultView, StrategyDetailView, StrategyDraft, StrategySubscriptionView, SubscriptionDraft,
 } from '../model/strategy-presentation'
 
-export function useStrategistWorkspace() {
+export function useStrategistWorkspace(options: { autoLoad?: boolean } = {}) {
   const { session } = useTradeSession()
   const strategies = ref<StrategySummary[]>([])
   const accounts = ref<TradingAccount[]>([])
   const detail = ref<StrategyDetailView | null>(null)
   const subscriptions = ref<StrategySubscriptionView[]>([])
   const symbols = ref<string[]>([])
-  const loading = ref(false)
+  const loading = ref(options.autoLoad !== false)
   const detailLoading = ref(false)
   const subscriptionLoading = ref(false)
   const refreshing = ref(false)
@@ -46,6 +53,7 @@ export function useStrategistWorkspace() {
   async function loadDetail(strategyId: string) {
     const generation = ++detailGeneration
     detail.value = null
+    detailLoading.value = false
     if (!strategyId) return
     detailLoading.value = true
     actionError.value = ''
@@ -57,7 +65,8 @@ export function useStrategistWorkspace() {
   }
 
   async function compile(draft: StrategyDraft) {
-    if (!session.value) return
+    if (!session.value || compiling.value) return false
+    const userId = session.value.user.id
     compiling.value = true
     actionError.value = ''
     compileResult.value = null
@@ -65,75 +74,94 @@ export function useStrategistWorkspace() {
       const response = await strategistApi.compileStrategy(session.value.csrf_token, {
         kind: draft.kind, prompt_text: draft.promptText, config: draft.config,
       })
+      if (session.value?.user.id !== userId) return false
       compileResult.value = mapCompile(response.data)
-    } catch (reason) { actionError.value = readableError(reason, '策略合同校验失败') }
+      return compileResult.value.valid
+    } catch (reason) { actionError.value = readableError(reason, '策略检查失败，请重试'); return false }
     finally { compiling.value = false }
   }
 
   async function createStrategy(draft: StrategyDraft) {
-    if (!session.value) return null
+    if (!session.value || submitting.value) return null
+    const userId = String(session.value.user.id), csrfToken = session.value.csrf_token
     return mutate(async () => {
-      const response = await strategistApi.createStrategy(session.value!.csrf_token, {
+      const pending = prepareStrategyCreate(sessionStorage, userId, {
         kind: draft.kind, name: draft.name, description: draft.description, prompt_text: draft.promptText, config: draft.config,
       })
-      await refreshStrategies()
+      let response
+      try { response = await strategistApi.createStrategy(csrfToken, pending.body, pending.idempotencyKey) }
+      catch (reason) {
+        if (reason instanceof ApiClientError && [400, 401, 403, 422].includes(reason.status)) clearStrategyCreate(sessionStorage, userId)
+        throw reason
+      }
+      clearStrategyCreate(sessionStorage, userId)
+      if (String(session.value?.user.id) !== userId) return null
       detail.value = mapDetail(response.data)
+      // A list refresh failure must not turn an acknowledged create into another create attempt.
+      try { await refreshStrategies() } catch { error.value = '策略已创建，列表刷新失败，请重新加载列表' }
       return response.data.id
     }, '策略草稿已保存', '策略创建失败')
   }
 
   async function updateMetadata(name: string, description: string) {
-    if (!session.value || !detail.value) return false
-    const current = detail.value.strategy
+    if (!session.value || !detail.value || submitting.value) return false
+    const current = detail.value.strategy, userId = String(session.value.user.id), csrfToken = session.value.csrf_token
     const result = await mutate(async () => {
-      const response = await strategistApi.updateStrategyMetadata(session.value!.csrf_token, current.id, { name, description }, current.revision)
-      detail.value = mapDetail(response.data)
-      await refreshStrategies()
+      const pending = prepareStrategyMetadata(sessionStorage, userId, current.id, { name, description }, current.revision)
+      let response
+      try { response = await strategistApi.updateStrategyMetadata(csrfToken, current.id, pending.body, pending.expectedRevision, pending.idempotencyKey) }
+      catch (reason) {
+        if (reason instanceof ApiClientError && [400, 401, 403, 404, 409, 412, 422, 428].includes(reason.status)) clearStrategyMetadata(sessionStorage, userId, current.id)
+        throw reason
+      }
+      clearStrategyMetadata(sessionStorage, userId, current.id)
+      if (String(session.value?.user.id) !== userId) return false
+      if (detail.value?.strategy.id === current.id) detail.value = mapDetail(response.data)
+      try { await refreshStrategies() } catch { error.value = '资料已保存，列表刷新失败，请重新加载列表' }
       return true
     }, '策略资料已更新', '策略资料保存失败')
     return result === true
   }
 
+  async function versionMutation(intent: StrategyVersionIntent, success: string, fallback: string) {
+    if (!session.value || !detail.value || submitting.value) return false
+    const current = detail.value.strategy, userId = String(session.value.user.id), csrfToken = session.value.csrf_token
+    const result = await mutate(async () => {
+      const pending = prepareStrategyVersion(sessionStorage, userId, current.id, intent, current.revision)
+      let response
+      try {
+        const saved = pending.intent
+        if (saved.action === 'create_version') response = await strategistApi.createStrategyVersion(csrfToken, current.id, saved.body, pending.expectedRevision, pending.idempotencyKey)
+        else if (saved.action === 'publish_version') response = await strategistApi.publishStrategyVersion(csrfToken, current.id, saved.versionId, pending.expectedRevision, pending.idempotencyKey)
+        else response = await strategistApi.retireStrategy(csrfToken, current.id, pending.expectedRevision, pending.idempotencyKey)
+      } catch (reason) {
+        if (reason instanceof ApiClientError && [400, 401, 403, 404, 409, 412, 422, 428].includes(reason.status)) clearStrategyVersion(sessionStorage, userId, current.id)
+        throw reason
+      }
+      clearStrategyVersion(sessionStorage, userId, current.id)
+      if (String(session.value?.user.id) !== userId) return false
+      if (detail.value?.strategy.id === current.id) detail.value = mapDetail(response.data)
+      try { await refreshStrategies() } catch { error.value = '操作已完成，列表刷新失败，请重新加载列表' }
+      return true
+    }, success, fallback)
+    return result === true
+  }
+
   async function createVersion(draft: StrategyDraft) {
-    if (!session.value || !detail.value) return false
-    const current = detail.value.strategy
-    const result = await mutate(async () => {
-      const response = await strategistApi.createStrategyVersion(session.value!.csrf_token, current.id, { prompt_text: draft.promptText, config: draft.config }, current.revision)
-      detail.value = mapDetail(response.data)
-      await refreshStrategies()
-      return true
-    }, '新版本已保存，尚未发布', '策略版本保存失败')
-    return result === true
+    return versionMutation({ action: 'create_version', body: { name: draft.name, description: draft.description, ...(draft.status ? { status: draft.status } : {}), prompt_text: draft.promptText, config: draft.config } }, '策略已保存', '策略版本保存失败')
   }
-
   async function publish(versionId: string) {
-    if (!session.value || !detail.value) return false
-    const current = detail.value.strategy
-    const result = await mutate(async () => {
-      const response = await strategistApi.publishStrategyVersion(session.value!.csrf_token, current.id, versionId, current.revision)
-      detail.value = mapDetail(response.data)
-      await refreshStrategies()
-      return true
-    }, '策略版本已发布', '策略发布失败')
-    return result === true
+    return versionMutation({ action: 'publish_version', versionId }, '策略版本已发布', '策略发布失败')
   }
-
   async function retire() {
-    if (!session.value || !detail.value) return false
-    const current = detail.value.strategy
-    const result = await mutate(async () => {
-      const response = await strategistApi.retireStrategy(session.value!.csrf_token, current.id, current.revision)
-      detail.value = mapDetail(response.data)
-      await refreshStrategies()
-      return true
-    }, '策略已退役，历史版本仍保留', '策略退役失败')
-    return result === true
+    return versionMutation({ action: 'retire_strategy' }, '策略已退役，历史版本仍保留', '策略退役失败')
   }
 
   async function loadSubscriptions(accountId: string) {
     const generation = ++accountGeneration
     subscriptions.value = []
     symbols.value = []
+    subscriptionLoading.value = false
     if (!accountId) return
     subscriptionLoading.value = true
     actionError.value = ''
@@ -156,36 +184,61 @@ export function useStrategistWorkspace() {
   }
 
   async function saveSubscription(draft: SubscriptionDraft, current?: StrategySubscriptionView | null) {
-    if (!session.value) return false
+    if (!session.value || submitting.value) return false
+    const userId = String(session.value.user.id), csrfToken = session.value.csrf_token
+    const generation = accountGeneration
     const result = await mutate(async () => {
       if (current) {
         const patch: StrategySubscriptionPatchBody = {
+          analysis_strategy_id: draft.analysisStrategyId,
+          ...(draft.receiveWindow ? { receive_window: draft.receiveWindow } : {}),
           trader_strategy_id: draft.traderEnabled ? draft.traderStrategyId : null,
           analysis_enabled: draft.analysisEnabled,
           trader_enabled: draft.traderEnabled,
           trade_send_enabled: draft.tradeSendEnabled,
           status: draft.status,
         }
-        await strategistApi.updateSubscription(session.value!.csrf_token, current.id, patch, current.revision)
+        await sendSubscriptionPatch(userId, csrfToken, current, patch)
       } else {
-        await strategistApi.createSubscription(session.value!.csrf_token, {
+        const pending = prepareSubscriptionCreate(sessionStorage, userId, {
           trading_account_id: draft.accountId, symbol: draft.symbol, analysis_strategy_id: draft.analysisStrategyId,
+          ...(draft.receiveWindow ? { receive_window: draft.receiveWindow } : {}),
           trader_strategy_id: draft.traderEnabled ? draft.traderStrategyId : null,
           analysis_enabled: draft.analysisEnabled, trader_enabled: draft.traderEnabled,
           trade_send_enabled: draft.tradeSendEnabled, status: draft.status === 'paused' ? 'paused' : 'active',
         })
+        try { await strategistApi.createSubscription(csrfToken, pending.body, pending.idempotencyKey) }
+        catch (reason) {
+          if (reason instanceof ApiClientError && [400, 401, 403, 404, 422].includes(reason.status)) clearSubscriptionCreate(sessionStorage, userId, draft.accountId)
+          throw reason
+        }
+        clearSubscriptionCreate(sessionStorage, userId, draft.accountId)
       }
-      await loadSubscriptions(draft.accountId)
+      if (String(session.value?.user.id) !== userId) return false
+      if (generation === accountGeneration) await loadSubscriptions(draft.accountId)
       return true
     }, current ? '账户订阅已更新' : '账户订阅已创建', current ? '账户订阅更新失败' : '账户订阅创建失败')
     return result === true
   }
 
+  async function sendSubscriptionPatch(userId: string, csrfToken: string, item: StrategySubscriptionView, patch: StrategySubscriptionPatchBody) {
+    const pending = prepareSubscriptionUpdate(sessionStorage, userId, item.id, patch, item.revision)
+    try { await strategistApi.updateSubscription(csrfToken, item.id, pending.body, pending.expectedRevision, pending.idempotencyKey) }
+    catch (reason) {
+      if (reason instanceof ApiClientError && [400, 401, 403, 404, 409, 412, 422, 428].includes(reason.status)) clearSubscriptionUpdate(sessionStorage, userId, item.id)
+      throw reason
+    }
+    clearSubscriptionUpdate(sessionStorage, userId, item.id)
+  }
+
   async function endSubscription(item: StrategySubscriptionView) {
-    if (!session.value) return false
+    if (!session.value || submitting.value) return false
+    const userId = String(session.value.user.id), csrfToken = session.value.csrf_token
+    const generation = accountGeneration
     const result = await mutate(async () => {
-      await strategistApi.updateSubscription(session.value!.csrf_token, item.id, { status: 'ended' }, item.revision)
-      await loadSubscriptions(item.accountId)
+      await sendSubscriptionPatch(userId, csrfToken, item, { status: 'ended' })
+      if (String(session.value?.user.id) !== userId) return false
+      if (generation === accountGeneration) await loadSubscriptions(item.accountId)
       return true
     }, '账户订阅已结束', '账户订阅结束失败')
     return result === true
@@ -207,7 +260,7 @@ export function useStrategistWorkspace() {
   function clearCompile() { compileResult.value = null; actionError.value = '' }
   function clearNotice() { notice.value = '' }
 
-  onMounted(load)
+  onMounted(() => { if (options.autoLoad !== false) void load() })
   return {
     strategies, accounts, detail, subscriptions, symbols, loading, detailLoading, subscriptionLoading, refreshing, compiling,
     submitting, error, actionError, notice, compileResult, personalStrategies, activeStrategies,
@@ -241,8 +294,19 @@ function mapSubscription(value: StrategySubscription): StrategySubscriptionView 
     analysisStrategyId: value.analysisStrategyId, analysisStrategyVersionId: value.analysisStrategyVersionId,
     traderStrategyId: value.traderStrategyId, traderStrategyVersionId: value.traderStrategyVersionId,
     analysisEnabled: value.analysisEnabled, traderEnabled: value.traderEnabled, tradeSendEnabled: value.tradeSendEnabled,
-    status: value.status, cadenceSeconds: value.schedule.cadenceSeconds, revision: value.revision, updatedAt: value.updatedAt,
+    receiveWindow: subscriptionTimeWindowSchema.parse(value.schedule.receiveWindow), status: value.status, cadenceSeconds: value.schedule.cadenceSeconds, revision: value.revision, updatedAt: value.updatedAt,
   }
 }
 
-function readableError(reason: unknown, fallback: string) { return reason instanceof Error && reason.message ? reason.message : fallback }
+function readableError(reason: unknown, fallback: string) {
+  if (reason instanceof ApiClientError) {
+    if (reason.status === 401) return '登录已失效，请重新登录后再试。'
+    if (reason.status === 403) return '当前账户没有此操作权限。'
+    if (reason.problem?.code === 'strategy_subscription_strategy_unavailable') return '所选策略当前不可用，请确认策略已发布后再试。'
+    if (reason.problem?.code === 'strategy_subscription_execution_conflict') return '此账户和品种已有启用的交易员订阅，请先关闭另一条订阅的 AI 交易员。'
+    if (reason.status === 409) return '订阅与现有配置冲突，请检查是否重复或已结束。'
+    if (reason.status === 412) return '设置已发生变化，请刷新后重新编辑。'
+    if (reason.status === 429) return '操作较频繁，请稍后再试。'
+  }
+  return fallback
+}

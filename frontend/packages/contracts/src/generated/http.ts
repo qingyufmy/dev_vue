@@ -195,6 +195,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/strategies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Administrator platform strategy listPlatformStrategies */
+        get: operations["listPlatformStrategies"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/strategies/{strategy_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Administrator platform strategy getPlatformStrategy */
+        get: operations["getPlatformStrategy"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/strategies/{strategy_id}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create an administrator-managed platform strategy draft version */
+        post: operations["createPlatformStrategyVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/strategies/{strategy_id}/versions/{version_id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Administrator platform strategy publishPlatformStrategyVersion */
+        post: operations["publishPlatformStrategyVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/analysis-jobs": {
         parameters: {
             query?: never;
@@ -204,7 +272,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Create a manual analysis job */
+        /**
+         * Create a manual analysis job
+         * @description Retain the original idempotency key and complete body after an uncertain submission. A queued task is not a completed analysis or terminal trade.
+         */
         post: operations["createAnalysisJob"];
         delete?: never;
         options?: never;
@@ -343,6 +414,125 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/bridge/installation-authorizations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** startBridgeInstallationAuthorization */
+        post: operations["startBridgeInstallationAuthorization"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bridge/installation-authorizations/{authorization_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** getBridgeInstallationAuthorization */
+        get: operations["getBridgeInstallationAuthorization"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bridge/installation-authorizations/{authorization_id}/decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** decideBridgeInstallationAuthorization */
+        post: operations["decideBridgeInstallationAuthorization"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bridge/installation-authorizations/{authorization_id}/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** pollBridgeInstallationAuthorization */
+        post: operations["pollBridgeInstallationAuthorization"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bridge/installations/profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** registerBridgeInstallationProfile */
+        post: operations["registerBridgeInstallationProfile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bridge/installations/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** revokeBridgeInstallation */
+        post: operations["revokeBridgeInstallation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/bridge/installations/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** getBridgeInstallationStatus */
+        post: operations["getBridgeInstallationStatus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/bridge/legacy-credential-exchanges": {
         parameters: {
             query?: never;
@@ -442,7 +632,7 @@ export interface paths {
         put?: never;
         /**
          * Create an asynchronous strategy distribution
-         * @description The server resolves and freezes the eligible subscribers for the strategy version. Each target is independently authorized, risk checked and executed.
+         * @description The server resolves and freezes the eligible subscribers for the strategy version. Each target is independently authorized, risk checked and executed. Retain the original key and complete body after an uncertain result.
          */
         post: operations["createExecutionDistribution"];
         delete?: never;
@@ -479,7 +669,7 @@ export interface paths {
         put?: never;
         /**
          * Create an exact asynchronous close for distribution targets
-         * @description Targets are selected only by frozen distribution target IDs. An empty target_ids value means all still-attributable targets; symbol, strategy and ticket filters are not accepted.
+         * @description Targets are selected only by frozen distribution target IDs. An empty target_ids value means all still-attributable targets; symbol, strategy and ticket filters are not accepted. Retain the original key and complete body after an uncertain result.
          */
         post: operations["createDistributionCloseCommand"];
         delete?: never;
@@ -500,6 +690,106 @@ export interface paths {
          * @description This is a read-only estimate. The immutable target set is resolved and frozen again when the distribution is accepted.
          */
         get: operations["previewExecutionDistribution"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/history/executions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List personally owned retained historical executions
+         * @description Original legacy IDs and UTC times. Authenticated original user only; system owner 0 is not a browser identity. Does not create or retry runtime work.
+         */
+        get: operations["listArchivedExecutions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/history/executions/{legacy_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get personally owned retained historical executions
+         * @description Original legacy IDs and UTC times. Authenticated original user only; system owner 0 is not a browser identity. Does not create or retry runtime work.
+         */
+        get: operations["getArchivedExecution"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/history/executions/{legacy_id}/deals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List exact retained deals for an originally owned legacy execution
+         * @description Original user and legacy account identity only; no ticket/time proximity matching. Decimal values are strings. Empty history is not proof that no trade occurred.
+         */
+        get: operations["listArchivedExecutionDeals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/history/signals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List personally owned retained historical signals
+         * @description Original legacy IDs and UTC times. Authenticated original user only; system owner 0 is not a browser identity. Does not create or retry runtime work.
+         */
+        get: operations["listArchivedSignals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/history/signals/{legacy_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get personally owned retained historical signals
+         * @description Original legacy IDs and UTC times. Authenticated original user only; system owner 0 is not a browser identity. Does not create or retry runtime work.
+         */
+        get: operations["getArchivedSignal"];
         put?: never;
         post?: never;
         delete?: never;
@@ -645,7 +935,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Explicitly submit one valid market analysis for one account evaluation */
+        /**
+         * Explicitly submit one valid market analysis for one account evaluation
+         * @description Retain the original idempotency key and complete body after an uncertain submission. A queued task is not a completed analysis or terminal trade.
+         */
         post: operations["createTraderEvaluation"];
         delete?: never;
         options?: never;
@@ -789,6 +1082,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/market/public-snapshot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the shared administrator market cache without exposing provider accounts */
+        get: operations["getPublicMarketSnapshot"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/market/public-symbols": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the administrator-managed base-symbol catalog */
+        get: operations["listPublicMarketSymbols"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/market/quotes/{symbol}": {
         parameters: {
             query?: never;
@@ -799,6 +1126,122 @@ export interface paths {
         /** Get the current quote for one symbol */
         get: operations["getMarketQuote"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/market/symbols": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read current owned terminal market data */
+        get: operations["listTerminalMarketSymbols"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/market/terminal-window": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read current owned terminal market data */
+        get: operations["getTerminalMarketWindow"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/model-assignments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getModelAssignments"];
+        put: operations["setModelAssignments"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/model-configurations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listModelConfigurations"];
+        put?: never;
+        post: operations["createModelConfiguration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/model-configurations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["saveModelConfiguration"];
+        post?: never;
+        delete: operations["deleteModelConfiguration"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/model-configurations/{id}/verification": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["verifyModelConfiguration"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/model-selection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read or select an available runtime model */
+        get: operations["getModelSelection"];
+        /** Read or select an available runtime model */
+        put: operations["setModelSelection"];
         post?: never;
         delete?: never;
         options?: never;
@@ -833,6 +1276,58 @@ export interface paths {
         /** Get an asynchronous operation */
         get: operations["getOperation"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/personal/notifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** getPersonalNotifications */
+        get: operations["getPersonalNotifications"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/personal/notifications/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** readPersonalNotification */
+        post: operations["readPersonalNotification"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/personal/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** getPersonalSettings */
+        get: operations["getPersonalSettings"];
+        /** savePersonalSettings */
+        put: operations["savePersonalSettings"];
         post?: never;
         delete?: never;
         options?: never;
@@ -887,7 +1382,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List the current user's daily, monthly and manual review cases */
+        /** List the current user's daily, monthly, manual and single-trade review cases */
         get: operations["listReviewCases"];
         put?: never;
         post?: never;
@@ -948,6 +1443,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/review-cases/{review_case_id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** getReviewHistoricalMetadata */
+        get: operations["getReviewHistoricalMetadata"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/review-cases/{review_case_id}/history/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取归档复盘事件 */
+        get: operations["listArchivedReviewEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/review-cases/{review_case_id}/history/jobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取归档复盘作业 */
+        get: operations["listArchivedReviewJobs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/review-cases/{review_case_id}/history/stages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取归档复盘阶段 */
+        get: operations["listArchivedReviewStages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/review-cases/{review_case_id}/return": {
         parameters: {
             query?: never;
@@ -972,10 +1535,28 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** listReviewVersions */
+        get: operations["listReviewVersions"];
         put?: never;
         /** Create an immutable user-edited review version */
         post: operations["createReviewVersion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/review-cases/{review_case_id}/versions/{version_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** getReviewVersion */
+        get: operations["getReviewVersion"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1000,6 +1581,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/risk-accounts/{account_id}/manual-release-receipt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Confirm the exact manual release request receipt
+         * @description Rechecks current account ownership. An unconfirmed result does not establish transaction failure and must not cause a new idempotency key. Confirmed identifies the stored operation, not current release validity.
+         */
+        get: operations["getManualRiskReleaseReceipt"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/risk-accounts/{account_id}/policy": {
         parameters: {
             query?: never;
@@ -1011,6 +1612,26 @@ export interface paths {
         get: operations["getRiskPolicy"];
         /** Replace an account risk policy */
         put: operations["replaceRiskPolicy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/risk-accounts/{account_id}/policy-receipt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the exact original policy write receipt
+         * @description Rechecks current account ownership. An unconfirmed result does not establish transaction failure and must not cause a new idempotency key. Confirmed identifies the stored operation, not current release validity.
+         */
+        get: operations["getRiskPolicyReceipt"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -1344,6 +1965,23 @@ export interface paths {
         patch: operations["updateStrategySubscription"];
         trace?: never;
     };
+    "/strategy-subscriptions/trader-control": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Atomically enable or disable account AI trader subscriptions */
+        post: operations["setAccountTrader"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/trade-decisions": {
         parameters: {
             query?: never;
@@ -1443,7 +2081,7 @@ export interface paths {
         put?: never;
         /**
          * Create one asynchronous command for an owned trading account
-         * @description The server validates authorization, idempotency, optimistic revisions and risk before creating an execution intent. Accepted means durably recorded, not executed by MT.
+         * @description The server validates authorization, idempotency, optimistic revisions and risk before creating an execution intent. Accepted means durably recorded, not executed by MT. After an uncertain result, retain the same idempotency key and complete request body; do not create a replacement command.
          */
         post: operations["createExecutionCommand"];
         delete?: never;
@@ -1630,6 +2268,148 @@ export interface components {
             data: components["schemas"]["AnalysisJob"];
             meta: components["schemas"]["Meta"];
         };
+        ArchivedExecutionDeal: {
+            commission: string;
+            deal_ticket: string;
+            entry_type: number | null;
+            fee: string;
+            legacy_id: string;
+            legacy_outcome_id: string;
+            /** Format: date-time */
+            occurred_at_utc: string | null;
+            order_ticket: string | null;
+            position_id: string | null;
+            price: string | null;
+            profit: string;
+            swap: string;
+            volume: string;
+        };
+        ArchivedExecutionDealsResponse: {
+            data: {
+                /** @enum {boolean} */
+                executable: false;
+                /** @enum {string} */
+                identity_namespace: "retained-legacy";
+                items: components["schemas"]["ArchivedExecutionDeal"][];
+                legacy_execution_id: string;
+                next_cursor: string | null;
+            };
+            meta: components["schemas"]["Meta"];
+        };
+        ArchivedExecutionDetail: {
+            action: string;
+            /** Format: date-time */
+            completed_at_utc: string | null;
+            /** Format: date-time */
+            created_at_utc: string;
+            error_code: string | null;
+            /** @enum {boolean} */
+            executable: false;
+            /** @enum {string} */
+            identity_namespace: "retained-legacy";
+            legacy_account_id: string | null;
+            legacy_id: string;
+            pending_ticket: string | null;
+            status: string;
+            symbol: string | null;
+            trade_ticket: string | null;
+        };
+        ArchivedExecutionSummary: {
+            action: string;
+            /** Format: date-time */
+            created_at_utc: string;
+            legacy_account_id: string | null;
+            legacy_id: string;
+            status: string;
+            symbol: string | null;
+        };
+        ArchivedReviewEvent: {
+            id: string;
+            job_id: string;
+            message_code: string | null;
+            /** Format: date-time */
+            occurred_at: string;
+            original_status: string;
+            stage: string | null;
+        };
+        ArchivedReviewEventPageResponse: {
+            data: {
+                items: components["schemas"]["ArchivedReviewEvent"][];
+                next_offset: number | null;
+                total: number;
+            };
+            meta: components["schemas"]["Meta"];
+        };
+        ArchivedReviewJob: {
+            attempts: number;
+            /** Format: date-time */
+            completed_at: string | null;
+            /** Format: date-time */
+            created_at: string;
+            error_code: string | null;
+            id: string;
+            original_status: string;
+            source_id: string;
+            /** @enum {string} */
+            source_table: "period_review_jobs" | "manual_trade_review_jobs";
+            stage: string | null;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        ArchivedReviewJobPageResponse: {
+            data: {
+                items: components["schemas"]["ArchivedReviewJob"][];
+                next_offset: number | null;
+                total: number;
+            };
+            meta: components["schemas"]["Meta"];
+        };
+        ArchivedReviewStage: {
+            /** Format: date-time */
+            completed_at: string | null;
+            /** Format: date-time */
+            created_at: string;
+            error_code: string | null;
+            generation: number;
+            has_output: boolean;
+            id: string;
+            input_hash: string | null;
+            job_id: string;
+            original_status: string;
+            output_hash: string | null;
+            stage: string;
+        };
+        ArchivedReviewStagePageResponse: {
+            data: {
+                items: components["schemas"]["ArchivedReviewStage"][];
+                next_offset: number | null;
+                total: number;
+            };
+            meta: components["schemas"]["Meta"];
+        };
+        ArchivedSignalDetail: {
+            analysis: string | null;
+            /** Format: date-time */
+            created_at_utc: string;
+            /** @enum {boolean} */
+            executable: false;
+            /** @enum {string} */
+            identity_namespace: "retained-legacy";
+            inference_task_id: string | null;
+            legacy_id: string;
+            reasoning: string | null;
+            signal_type: string;
+            symbol: string;
+            timeframe: string;
+        };
+        ArchivedSignalSummary: {
+            /** Format: date-time */
+            created_at_utc: string;
+            legacy_id: string;
+            signal_type: string;
+            symbol: string;
+            timeframe: string;
+        };
         /** @enum {string} */
         AuditActor: "ai" | "user" | "system" | "bridge";
         /** @enum {string} */
@@ -1678,9 +2458,9 @@ export interface components {
             meta: components["schemas"]["Meta"];
         };
         /** @enum {string} */
-        AuditSourceKind: "analysis_run" | "trader_run" | "risk_decision" | "operation" | "bridge_command" | "risk_policy_change" | "risk_manual_release" | "terminal_trade";
+        AuditSourceKind: "analysis_run" | "trader_run" | "trade_decision" | "risk_decision" | "operation" | "bridge_command" | "risk_policy_change" | "risk_manual_release" | "terminal_trade";
         /** @enum {string} */
-        AuditStatus: "queued" | "running" | "succeeded" | "rejected" | "failed" | "uncertain" | "cancelled" | "info";
+        AuditStatus: "queued" | "running" | "succeeded" | "partially_succeeded" | "rejected" | "failed" | "uncertain" | "cancelled" | "info";
         AuditSummary: {
             active: number;
             failed: number;
@@ -1690,8 +2470,19 @@ export interface components {
             uncertain: number;
         };
         AuditTraceNode: {
+            action_kind?: string | null;
             detail: string;
+            intent_id?: string | null;
             occurred_at: components["schemas"]["UtcDateTime"];
+            parameters?: {
+                price?: string;
+                side?: string;
+                stop_loss?: string;
+                symbol?: string;
+                take_profit?: string;
+                ticket?: string;
+                volume?: string;
+            };
             reason_code: string | null;
             source_id: components["schemas"]["OpaqueId"];
             source_kind: string;
@@ -1710,10 +2501,10 @@ export interface components {
             };
             meta: components["schemas"]["Meta"];
         };
-        AuthLoginRequest: components["schemas"]["AuthorizationRequest"] & {
+        AuthLoginRequest: components["schemas"]["AuthorizationFields"] & {
             login: string;
             password: string;
-            remember: boolean;
+            remember?: boolean;
         };
         AuthLoginResponse: {
             data: {
@@ -1722,7 +2513,7 @@ export interface components {
             };
             meta: components["schemas"]["Meta"];
         };
-        AuthorizationRequest: {
+        AuthorizationFields: {
             /** @enum {string} */
             client_id: "www-web" | "trade-web" | "admin-web";
             code_challenge: string;
@@ -1737,6 +2528,7 @@ export interface components {
             scope: "openid profile";
             state: string;
         };
+        AuthorizationRequest: components["schemas"]["AuthorizationFields"];
         BridgeCredentialRevocationResponse: {
             data: {
                 /** @constant */
@@ -1750,6 +2542,130 @@ export interface components {
             meta: components["schemas"]["Meta"];
         };
         BridgeDeviceId: string;
+        BridgeInstallationConfirmation: {
+            /** Format: uuid */
+            authorization_id: string;
+            /** Format: date-time */
+            created_at: string;
+            current_user: components["schemas"]["BridgeInstallationUser"];
+            device_name: string;
+            /** Format: date-time */
+            expires_at: string;
+            installation_id: string;
+            revision: string;
+            /** @enum {unknown} */
+            status: "pending" | "approved" | "denied" | "expired" | "revoked";
+        };
+        BridgeInstallationConfirmationResponse: {
+            data: components["schemas"]["BridgeInstallationConfirmation"];
+            meta: components["schemas"]["Meta"];
+        };
+        BridgeInstallationDecision: {
+            current_user_id: string;
+            /** @enum {unknown} */
+            decision: "approved" | "denied";
+            expected_revision: string;
+        };
+        BridgeInstallationPoll: {
+            installation_token: string;
+            poll_secret: string;
+        };
+        BridgeInstallationPolled: {
+            /** @constant */
+            poll_interval_seconds: 5;
+            /** @enum {unknown} */
+            status: "pending" | "denied" | "expired" | "revoked";
+        } | {
+            /** @constant */
+            authorized: true;
+            generation: number;
+            installation_id: string;
+            /** @constant */
+            poll_interval_seconds: 5;
+            /** @constant */
+            status: "approved";
+            user: components["schemas"]["BridgeInstallationUser"];
+        };
+        BridgeInstallationPolledResponse: {
+            data: components["schemas"]["BridgeInstallationPolled"];
+            meta: components["schemas"]["Meta"];
+        };
+        BridgeInstallationProfile: {
+            /** @constant */
+            credential_type: "bridge_refresh";
+            generation: number;
+            installation_id: string;
+            profile_id: string;
+            /** @constant */
+            session_token_path: "/api/v4/bridge/session-tokens";
+            /** @constant */
+            websocket_path: "/bridge/v4/ws";
+        };
+        BridgeInstallationProfileRequest: {
+            installation_id: string;
+            installation_token: string;
+            refresh_token: string;
+            request_key: string;
+        };
+        BridgeInstallationProfileResponse: {
+            data: components["schemas"]["BridgeInstallationProfile"];
+            meta: components["schemas"]["Meta"];
+        };
+        BridgeInstallationProof: {
+            installation_id: string;
+            installation_token: string;
+        };
+        BridgeInstallationRevoked: {
+            installation_id: string;
+            /** @constant */
+            revoked: true;
+        };
+        BridgeInstallationRevokedResponse: {
+            data: components["schemas"]["BridgeInstallationRevoked"];
+            meta: components["schemas"]["Meta"];
+        };
+        BridgeInstallationStart: {
+            device_name: string;
+            installation_id: string;
+            installation_token_hash: string;
+            poll_secret_hash: string;
+            request_key: string;
+        };
+        BridgeInstallationStarted: {
+            /** Format: uuid */
+            authorization_id: string;
+            confirmation_path: string;
+            /** Format: date-time */
+            expires_at: string;
+            /** @constant */
+            poll_interval_seconds: 5;
+        };
+        BridgeInstallationStartedResponse: {
+            data: components["schemas"]["BridgeInstallationStarted"];
+            meta: components["schemas"]["Meta"];
+        };
+        BridgeInstallationStatus: {
+            /** @constant */
+            authorized: true;
+            capacity: {
+                active: number;
+                available: number;
+                included: number;
+                purchased: number;
+                total: number;
+            };
+            generation: number;
+            installation_id: string;
+            user: components["schemas"]["BridgeInstallationUser"];
+        };
+        BridgeInstallationStatusResponse: {
+            data: components["schemas"]["BridgeInstallationStatus"];
+            meta: components["schemas"]["Meta"];
+        };
+        BridgeInstallationUser: {
+            display_name: string;
+            id: string;
+        };
         BridgePairingCredentialResponse: {
             data: {
                 /** @constant */
@@ -2048,6 +2964,14 @@ export interface components {
             field: string;
             message: string;
         };
+        getArchivedExecutionResponse: {
+            data: components["schemas"]["ArchivedExecutionDetail"];
+            meta: components["schemas"]["Meta"];
+        };
+        getArchivedSignalResponse: {
+            data: components["schemas"]["ArchivedSignalDetail"];
+            meta: components["schemas"]["Meta"];
+        };
         LearningCompletionRequest: {
             completed: boolean;
             /** @description Exact unsigned revision text, at most 18446744073709551614. */
@@ -2125,6 +3049,38 @@ export interface components {
             /** @constant */
             schema_version: 1;
             source_fingerprint: string;
+        };
+        LegacyReviewContent: {
+            original_content_hash: string | null;
+            raw_text: string;
+            /** @constant */
+            schema_version: "review.legacy.v1";
+            source_id: string;
+            source_sha256: string;
+            /** @enum {string} */
+            source_table: "period_review_versions" | "manual_trade_review_versions" | "trade_review_versions";
+        };
+        listArchivedExecutionsResponse: {
+            data: {
+                /** @enum {boolean} */
+                executable: false;
+                /** @enum {string} */
+                identity_namespace: "retained-legacy";
+                items: components["schemas"]["ArchivedExecutionSummary"][];
+                next_cursor: string | null;
+            };
+            meta: components["schemas"]["Meta"];
+        };
+        listArchivedSignalsResponse: {
+            data: {
+                /** @enum {boolean} */
+                executable: false;
+                /** @enum {string} */
+                identity_namespace: "retained-legacy";
+                items: components["schemas"]["ArchivedSignalSummary"][];
+                next_cursor: string | null;
+            };
+            meta: components["schemas"]["Meta"];
         };
         MacroFactor: {
             available_at: components["schemas"]["UtcDateTime"];
@@ -2287,6 +3243,18 @@ export interface components {
             acknowledge_risk: true;
             reason: string;
         };
+        ManualRiskReleaseReceiptResponse: {
+            data: {
+                release: null;
+                /** @constant */
+                state: "unconfirmed";
+            } | {
+                release: components["schemas"]["ManualRiskRelease"];
+                /** @constant */
+                state: "confirmed";
+            };
+            meta: components["schemas"]["Meta"];
+        };
         ManualRiskReleaseResponse: {
             data: components["schemas"]["ManualRiskReleaseState"];
             meta: components["schemas"]["Meta"];
@@ -2297,6 +3265,26 @@ export interface components {
         };
         MarketAnalysisDetail: {
             analysis_body: string;
+            bearish_score?: number | null;
+            bullish_score?: number | null;
+            chart?: {
+                bars: {
+                    close: number;
+                    closed: boolean;
+                    high: number;
+                    low: number;
+                    open: number;
+                    time: string;
+                }[];
+                lines: {
+                    end: number;
+                    from: string;
+                    kind: string;
+                    start: number;
+                    to: string;
+                }[];
+                timeframe: string;
+            }[];
             counter_evidence: string[];
             data_gaps: string[];
             input_snapshot_hash: string;
@@ -2317,6 +3305,7 @@ export interface components {
         MarketAnalysisListResponse: {
             data: {
                 items: components["schemas"]["MarketAnalysisSummary"][];
+                next_cursor: string | null;
             };
             meta: components["schemas"]["Meta"];
         };
@@ -2353,6 +3342,78 @@ export interface components {
         Meta: {
             generated_at: components["schemas"]["UtcDateTime"];
             request_id: components["schemas"]["OpaqueId"];
+        };
+        ModelAssignmentsResponse: {
+            data: {
+                analysis: string | null;
+                review: string | null;
+                revision: string;
+                trader: string | null;
+            };
+            meta: {
+                generated_at: string;
+                request_id: string;
+            };
+        };
+        ModelConfiguration: {
+            base_url: string;
+            context_window_tokens?: number | null;
+            has_key: boolean;
+            id: string;
+            max_input_tokens?: number | null;
+            max_output_tokens?: number | null;
+            max_tokens: number | null;
+            name: string;
+            /** @enum {string} */
+            protocol: "chat_completions" | "responses";
+            provider: string;
+            /** @enum {string|null} */
+            reasoning_effort?: null | "low" | "medium" | "high" | "max";
+            request_timeout_ms?: number | null;
+            revision: string;
+            /** @enum {string} */
+            scope: "user" | "platform";
+            temperature?: number | null;
+            thinking_enabled?: boolean;
+            verified: boolean;
+        };
+        ModelConfigurationListResponse: {
+            data: components["schemas"]["ModelConfiguration"][];
+            meta: {
+                generated_at: string;
+                request_id: string;
+            };
+        };
+        ModelConfigurationResponse: {
+            data: components["schemas"]["ModelConfiguration"];
+            meta: {
+                generated_at: string;
+                request_id: string;
+            };
+        };
+        ModelDeletedResponse: {
+            data: {
+                deleted: boolean;
+                id: string;
+            };
+            meta: {
+                generated_at: string;
+                request_id: string;
+            };
+        };
+        ModelSelectionResponse: {
+            data: {
+                items: {
+                    available: boolean;
+                    id: string;
+                    name: string;
+                    reason: string | null;
+                    /** @enum {unknown} */
+                    scope: "user" | "platform";
+                }[];
+                selected_model_profile_id: string | null;
+            };
+            meta: components["schemas"]["Meta"];
         };
         ModifyOrderCommand: {
             /**
@@ -2667,6 +3728,76 @@ export interface components {
             /** Format: uri-reference */
             type: string;
         };
+        PublicMarketCandle: {
+            close: components["schemas"]["Decimal"];
+            closed: boolean;
+            high: components["schemas"]["Decimal"];
+            low: components["schemas"]["Decimal"];
+            open: components["schemas"]["Decimal"];
+            open_time: components["schemas"]["UtcDateTime"];
+            revision: components["schemas"]["Revision"];
+            tick_volume: components["schemas"]["Decimal"];
+        };
+        PublicMarketQuote: {
+            ask: components["schemas"]["Decimal"];
+            bid: components["schemas"]["Decimal"];
+            last?: components["schemas"]["Decimal"] | null;
+            observed_at: components["schemas"]["UtcDateTime"];
+            revision: components["schemas"]["Revision"];
+            spread: components["schemas"]["Decimal"];
+        };
+        PublicMarketSnapshotResponse: {
+            data: {
+                candles: components["schemas"]["PublicMarketCandle"][];
+                quote: components["schemas"]["PublicMarketQuote"] | null;
+                source_generation: components["schemas"]["Revision"] | null;
+                source_key: string | null;
+                /** @enum {string} */
+                status: "cached" | "unavailable";
+                structure: components["schemas"]["PublicMarketStructure"] | null;
+                symbol: components["schemas"]["Symbol"];
+                timeframe: components["schemas"]["Timeframe"];
+            };
+            meta: components["schemas"]["Meta"];
+        };
+        PublicMarketStructure: {
+            /** @enum {string} */
+            algorithm: "chan_structure_v8";
+            based_on_closed_bars: number;
+            lines: components["schemas"]["PublicMarketStructureLine"][];
+            /** @enum {string} */
+            reliability: "high" | "medium" | "low";
+            status: string;
+        };
+        PublicMarketStructureLine: {
+            end: number;
+            from: components["schemas"]["UtcDateTime"];
+            /** @enum {string} */
+            kind: "bi" | "segment" | "forming_segment" | "center" | "fractal_top" | "fractal_bottom";
+            start: number;
+            to: components["schemas"]["UtcDateTime"];
+        };
+        PublicMarketSymbolsResponse: {
+            data: {
+                items: string[];
+                market_states?: {
+                    /** Format: date-time */
+                    checked_at: string | null;
+                    reason: string;
+                    /** @enum {string} */
+                    state: "open" | "closed" | "restricted" | "stale" | "unknown";
+                    symbol: string;
+                }[];
+                timezone?: {
+                    /** Format: date-time */
+                    checked_at: string;
+                    offset_minutes: number;
+                    /** @enum {string} */
+                    status: "calibrated" | "stale";
+                } | null;
+            };
+            meta: components["schemas"]["Meta"];
+        };
         Quote: {
             account_id: components["schemas"]["OpaqueId"];
             ask: components["schemas"]["Decimal"];
@@ -2727,10 +3858,10 @@ export interface components {
             evidence_status: "pending" | "incomplete" | "complete" | "stale";
             id: components["schemas"]["OpaqueId"];
             /** @enum {string} */
-            kind: "daily" | "monthly" | "manual";
+            kind: "daily" | "monthly" | "manual" | "trade";
             revision: components["schemas"]["Revision"];
             /** @enum {string} */
-            status: "awaiting_evidence" | "queued" | "running" | "awaiting_confirmation" | "needs_changes" | "confirmed" | "failed";
+            status: "awaiting_evidence" | "queued" | "running" | "awaiting_confirmation" | "needs_changes" | "confirmed" | "failed" | "archived";
             subscription_id: components["schemas"]["OpaqueId"] | null;
             subscription_revision: components["schemas"]["Revision"] | null;
             symbol: string | null;
@@ -2772,6 +3903,21 @@ export interface components {
                 [key: string]: unknown;
             }[];
         };
+        ReviewHistoricalMetadata: {
+            review_case_id: string;
+            source_evidence_status: string;
+            source_id: string;
+            source_status: string;
+            source_strategy_id: string | null;
+            source_strategy_version: string | null;
+            source_table: string;
+            /** @enum {string} */
+            timezone_source: "legacy_evidence" | "legacy_case" | "default_utc_plus_3";
+        };
+        ReviewHistoricalMetadataResponse: {
+            data: components["schemas"]["ReviewHistoricalMetadata"] | null;
+            meta: components["schemas"]["Meta"];
+        };
         ReviewMemoryCandidate: {
             content: string;
             evidence_refs: components["schemas"]["OpaqueId"][];
@@ -2790,9 +3936,36 @@ export interface components {
         ReviewVersion: {
             /** @enum {string} */
             author_kind: "ai" | "user";
+            /** @enum {string|null} */
+            conclusion: "effective" | "mixed" | "ineffective" | "insufficient_evidence" | "manual_trade_reviewed" | null;
+            content: components["schemas"]["ReviewContent"] | components["schemas"]["LegacyReviewContent"];
+            created_at: components["schemas"]["UtcDateTime"];
+            id: components["schemas"]["OpaqueId"];
+            review_case_id: components["schemas"]["OpaqueId"];
+            version: number;
+        } & ({
+            conclusion?: null;
+            content?: components["schemas"]["LegacyReviewContent"];
+        } | {
+            conclusion?: string;
+            content?: components["schemas"]["ReviewContent"];
+        });
+        ReviewVersionHistoryResponse: {
+            data: {
+                items: components["schemas"]["ReviewVersionSummary"][];
+                next_before_version: number | null;
+            };
+            meta: components["schemas"]["Meta"];
+        };
+        ReviewVersionResponse: {
+            data: components["schemas"]["ReviewVersion"];
+            meta: components["schemas"]["Meta"];
+        };
+        ReviewVersionSummary: {
             /** @enum {string} */
-            conclusion: "effective" | "mixed" | "ineffective" | "insufficient_evidence" | "manual_trade_reviewed";
-            content: components["schemas"]["ReviewContent"];
+            author_kind: "ai" | "user";
+            /** @enum {string|null} */
+            conclusion: "effective" | "mixed" | "ineffective" | "insufficient_evidence" | "manual_trade_reviewed" | null;
             created_at: components["schemas"]["UtcDateTime"];
             id: components["schemas"]["OpaqueId"];
             review_case_id: components["schemas"]["OpaqueId"];
@@ -2869,6 +4042,7 @@ export interface components {
             readonly max_decision_age_seconds: number;
             max_drawdown_percent: components["schemas"]["Decimal"];
             max_open_positions: number;
+            max_order_volume?: components["schemas"]["Decimal"];
             max_pending_orders: number;
             readonly max_price_deviation_percent: components["schemas"]["Decimal"];
             readonly max_quote_age_seconds: number;
@@ -2877,6 +4051,16 @@ export interface components {
             max_spread_points: components["schemas"]["Decimal"];
             max_total_volume: components["schemas"]["Decimal"];
             min_open_interval_seconds: number;
+            numeric_controls?: {
+                [key: string]: {
+                    allowed_max: components["schemas"]["Decimal"];
+                    allowed_min: components["schemas"]["Decimal"];
+                    locked_value: components["schemas"]["Decimal"] | null;
+                    user_editable: boolean;
+                };
+            };
+            /** @description System-only pending-order price tolerance in ATR units. Optional for older V4 responses; not an account-editable field. */
+            pending_dedup_atr_multiplier?: string;
             pending_valid_minutes: number;
             platform_policy_version_id: components["schemas"]["OpaqueId"];
             /** @constant */
@@ -2894,6 +4078,7 @@ export interface components {
             max_daily_open_count?: number;
             max_drawdown_percent?: components["schemas"]["Decimal"];
             max_open_positions?: number;
+            max_order_volume?: components["schemas"]["Decimal"];
             max_pending_orders?: number;
             max_risk_per_trade_percent?: components["schemas"]["Decimal"];
             max_spread_points?: components["schemas"]["Decimal"];
@@ -2903,6 +4088,18 @@ export interface components {
             reason: string;
             trade_send_enabled?: boolean;
             weekend_close_minutes?: number;
+        };
+        RiskPolicyReceiptResponse: {
+            data: {
+                policy: null;
+                /** @constant */
+                state: "unconfirmed";
+            } | {
+                policy: components["schemas"]["RiskPolicy"];
+                /** @constant */
+                state: "confirmed";
+            };
+            meta: components["schemas"]["Meta"];
         };
         RiskPolicyResponse: {
             data: components["schemas"]["RiskPolicy"];
@@ -3000,7 +4197,7 @@ export interface components {
             type: "same_key_content_changed";
         };
         StrategyMemoryDetailResponse: {
-            data: components["schemas"]["StrategyMemorySummary"] & {
+            data: components["schemas"]["StrategyMemoryFields"] & {
                 content_hash: string | null;
                 content_text: string;
                 current_revision_id: string | null;
@@ -3008,19 +4205,7 @@ export interface components {
             };
             meta: components["schemas"]["Meta"];
         };
-        StrategyMemoryListResponse: {
-            data: {
-                items: components["schemas"]["StrategyMemorySummary"][];
-            };
-            meta: components["schemas"]["Meta"];
-        };
-        StrategyMemoryProposal: {
-            content: string;
-            evidence_refs: string[];
-            memory_key: string;
-            title: string;
-        };
-        StrategyMemorySummary: {
+        StrategyMemoryFields: {
             current_version: number;
             id: components["schemas"]["OpaqueId"];
             /** @enum {string} */
@@ -3036,6 +4221,19 @@ export interface components {
             strategy_name: string;
             updated_at: components["schemas"]["UtcDateTime"];
         };
+        StrategyMemoryListResponse: {
+            data: {
+                items: components["schemas"]["StrategyMemorySummary"][];
+            };
+            meta: components["schemas"]["Meta"];
+        };
+        StrategyMemoryProposal: {
+            content: string;
+            evidence_refs: string[];
+            memory_key: string;
+            title: string;
+        };
+        StrategyMemorySummary: components["schemas"]["StrategyMemoryFields"];
         StrategyMemoryUpdate: {
             conflicts: components["schemas"]["StrategyMemoryConflict"][];
             created_at: components["schemas"]["UtcDateTime"];
@@ -3089,6 +4287,23 @@ export interface components {
             /** @default true */
             analysis_enabled?: boolean;
             analysis_strategy_id: components["schemas"]["OpaqueId"];
+            receive_window?: {
+                /** @constant */
+                enabled: false;
+            } | {
+                enabled: boolean;
+                /** @enum {string} */
+                outsideBehavior: "pause_all" | "signals_only";
+                /** @constant */
+                timezone: "terminal_server";
+                /** @constant */
+                version: 1;
+                weekdays: number[];
+                windows: {
+                    end: string;
+                    start: string;
+                }[];
+            };
             /**
              * @default active
              * @enum {string}
@@ -3111,6 +4326,23 @@ export interface components {
         StrategySubscriptionPatch: {
             analysis_enabled?: boolean;
             analysis_strategy_id?: components["schemas"]["OpaqueId"];
+            receive_window?: {
+                /** @constant */
+                enabled: false;
+            } | {
+                enabled: boolean;
+                /** @enum {string} */
+                outsideBehavior: "pause_all" | "signals_only";
+                /** @constant */
+                timezone: "terminal_server";
+                /** @constant */
+                version: 1;
+                weekdays: number[];
+                windows: {
+                    end: string;
+                    start: string;
+                }[];
+            };
             /** @enum {string} */
             status?: "active" | "paused" | "ended";
             symbol?: components["schemas"]["Symbol"];
@@ -3165,9 +4397,38 @@ export interface components {
             config: {
                 [key: string]: unknown;
             };
+            description?: string;
+            name?: string;
             prompt_text: string;
+            /** @enum {string} */
+            status?: "draft" | "active";
         };
         Symbol: string;
+        TerminalMarketSymbol: {
+            currency_base: string | null;
+            currency_profit: string | null;
+            description: string;
+            selected: boolean;
+            symbol: string;
+            trade_mode: number | null;
+            visible: boolean;
+        };
+        TerminalMarketSymbolsResponse: {
+            data: {
+                items: components["schemas"]["TerminalMarketSymbol"][];
+                next_cursor: string | null;
+                /** Format: date-time */
+                observed_at: string;
+            };
+            meta: components["schemas"]["Meta"];
+        };
+        TerminalMarketWindowResponse: {
+            data: {
+                before: string;
+                items: components["schemas"]["Candle"][];
+            };
+            meta: components["schemas"]["Meta"];
+        };
         TerminalProfileListResponse: {
             data: {
                 items: {
@@ -3538,8 +4799,11 @@ export interface operations {
                     "application/json": components["schemas"]["ObserverChannelPageResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     createObserverChannel: {
@@ -3570,8 +4834,10 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     updateObserverChannel: {
@@ -3606,6 +4872,8 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     listObserverChannelAccesses: {
@@ -3632,9 +4900,11 @@ export interface operations {
                     "application/json": components["schemas"]["ObserverAccessPageResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     setObserverChannelAccess: {
@@ -3670,6 +4940,8 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     setObserverDefaultChannel: {
@@ -3702,6 +4974,8 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     listObserverManagementOperations: {
@@ -3726,8 +5000,11 @@ export interface operations {
                     "application/json": components["schemas"]["ObserverOperationPageResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     listObserverSourcesForAdmin: {
@@ -3752,8 +5029,11 @@ export interface operations {
                     "application/json": components["schemas"]["ObserverSourcePageResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     createObserverSource: {
@@ -3784,8 +5064,10 @@ export interface operations {
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     updateObserverSource: {
@@ -3820,6 +5102,8 @@ export interface operations {
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     listReferralRules: {
@@ -4043,6 +5327,137 @@ export interface operations {
             503: components["responses"]["Problem"];
         };
     };
+    listPlatformStrategies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Strategy catalog */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyListResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    getPlatformStrategy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                strategy_id: components["schemas"]["OpaqueId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Strategy detail */
+            200: {
+                headers: {
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyDetailResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    createPlatformStrategyVersion: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "If-Match": components["parameters"]["IfMatch"];
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                strategy_id: components["schemas"]["OpaqueId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StrategyVersionCreate"];
+            };
+        };
+        responses: {
+            /** @description Version created */
+            201: {
+                headers: {
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyDetailResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            412: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            428: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    publishPlatformStrategyVersion: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "If-Match": components["parameters"]["IfMatch"];
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                strategy_id: components["schemas"]["OpaqueId"];
+                version_id: components["schemas"]["OpaqueId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Version published */
+            200: {
+                headers: {
+                    ETag: components["headers"]["ETag"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrategyDetailResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            412: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            428: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
     createAnalysisJob: {
         parameters: {
             query?: never;
@@ -4068,9 +5483,14 @@ export interface operations {
                     "application/json": components["schemas"]["AnalysisJobResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
             429: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     listAuditEvents: {
@@ -4160,7 +5580,10 @@ export interface operations {
             };
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
             429: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     logoutAuthCenterSession: {
@@ -4185,10 +5608,11 @@ export interface operations {
                 };
                 content?: never;
             };
-            401: components["responses"]["AuthCenterProblem"];
-            403: components["responses"]["AuthCenterProblem"];
-            404: components["responses"]["AuthCenterProblem"];
-            503: components["responses"]["AuthCenterProblem"];
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     getAuthCenterSession: {
@@ -4210,9 +5634,11 @@ export interface operations {
                     "application/json": components["schemas"]["AuthCenterSessionResponse"];
                 };
             };
-            401: components["responses"]["AuthCenterProblem"];
-            404: components["responses"]["AuthCenterProblem"];
-            503: components["responses"]["AuthCenterProblem"];
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     getBridgeConnectionCapacity: {
@@ -4263,6 +5689,235 @@ export interface operations {
             };
             400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
+            429: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    startBridgeInstallationAuthorization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BridgeInstallationStart"];
+            };
+        };
+        responses: {
+            /** @description Authoritative installation result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BridgeInstallationStartedResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            410: components["responses"]["Problem"];
+            429: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    getBridgeInstallationAuthorization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                authorization_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Authoritative installation result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BridgeInstallationConfirmationResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            410: components["responses"]["Problem"];
+            429: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    decideBridgeInstallationAuthorization: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                authorization_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BridgeInstallationDecision"];
+            };
+        };
+        responses: {
+            /** @description Authoritative installation result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BridgeInstallationConfirmationResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            410: components["responses"]["Problem"];
+            429: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    pollBridgeInstallationAuthorization: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                authorization_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BridgeInstallationPoll"];
+            };
+        };
+        responses: {
+            /** @description Authoritative installation result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BridgeInstallationPolledResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            410: components["responses"]["Problem"];
+            429: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    registerBridgeInstallationProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BridgeInstallationProfileRequest"];
+            };
+        };
+        responses: {
+            /** @description Authoritative installation result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BridgeInstallationProfileResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            410: components["responses"]["Problem"];
+            429: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    revokeBridgeInstallation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BridgeInstallationProof"];
+            };
+        };
+        responses: {
+            /** @description Authoritative installation result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BridgeInstallationRevokedResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            410: components["responses"]["Problem"];
+            429: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    getBridgeInstallationStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BridgeInstallationProof"];
+            };
+        };
+        responses: {
+            /** @description Authoritative installation result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BridgeInstallationStatusResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            410: components["responses"]["Problem"];
             429: components["responses"]["Problem"];
             503: components["responses"]["Problem"];
         };
@@ -4438,6 +6093,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
@@ -4464,8 +6120,12 @@ export interface operations {
                     "application/json": components["schemas"]["ExecutionDistributionDetailResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     createDistributionCloseCommand: {
@@ -4496,6 +6156,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
@@ -4524,8 +6185,152 @@ export interface operations {
                     "application/json": components["schemas"]["ExecutionDistributionPreviewResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    listArchivedExecutions: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Historical data only */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["listArchivedExecutionsResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    getArchivedExecution: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                legacy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Historical data only */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["getArchivedExecutionResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    listArchivedExecutionDeals: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                page_size?: number;
+            };
+            header?: never;
+            path: {
+                legacy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Historical deals */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchivedExecutionDealsResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    listArchivedSignals: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Historical data only */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["listArchivedSignalsResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    getArchivedSignal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                legacy_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Historical data only */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["getArchivedSignalResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     listLearningCourses: {
@@ -4553,35 +6358,45 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
             };
             /** @description Invalid www session */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
             };
             /** @description Course not published or absent */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
             };
             /** @description Wrong application host */
             421: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
             };
             /** @description Read unavailable */
             503: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
             };
         };
     };
@@ -4647,35 +6462,45 @@ export interface operations {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
             };
             /** @description Invalid www session */
             401: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
             };
             /** @description Course not published or absent */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
             };
             /** @description Wrong application host */
             421: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
             };
             /** @description Read unavailable */
             503: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/problem+json": components["schemas"]["Problem"];
+                };
             };
         };
     };
@@ -4683,7 +6508,7 @@ export interface operations {
         parameters: {
             query?: {
                 account_id?: components["schemas"]["OpaqueId"];
-                page_size?: components["parameters"]["PageSize"];
+                page_size?: number;
             };
             header?: never;
             path?: never;
@@ -4700,6 +6525,12 @@ export interface operations {
                     "application/json": components["schemas"]["ManualReviewCandidateListResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     createManualReviewCase: {
@@ -4727,8 +6558,15 @@ export interface operations {
                     "application/json": components["schemas"]["ReviewCaseDetailResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
+            412: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
+            428: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     listMarketAnalyses: {
@@ -4754,7 +6592,10 @@ export interface operations {
                     "application/json": components["schemas"]["MarketAnalysisListResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     getMarketAnalysis: {
@@ -4777,7 +6618,11 @@ export interface operations {
                     "application/json": components["schemas"]["MarketAnalysisDetailResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     createTraderEvaluation: {
@@ -4807,8 +6652,14 @@ export interface operations {
                     "application/json": components["schemas"]["TraderRunResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
+            429: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     listEconomicCalendarEvents: {
@@ -5045,6 +6896,62 @@ export interface operations {
             503: components["responses"]["Problem"];
         };
     };
+    getPublicMarketSnapshot: {
+        parameters: {
+            query: {
+                /** @description Read candles strictly before this UTC timestamp. */
+                before?: string;
+                page_size?: components["parameters"]["CandlePageSize"];
+                symbol: components["parameters"]["SymbolQuery"];
+                timeframe: components["parameters"]["Timeframe"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Historical candle window */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicMarketSnapshotResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    listPublicMarketSymbols: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Shared base symbols */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicMarketSymbolsResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
     getMarketQuote: {
         parameters: {
             query: {
@@ -5073,6 +6980,394 @@ export interface operations {
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    listTerminalMarketSymbols: {
+        parameters: {
+            query: {
+                account_id: components["parameters"]["AccountIdQuery"];
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Historical candle window */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TerminalMarketSymbolsResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    getTerminalMarketWindow: {
+        parameters: {
+            query: {
+                account_id: components["parameters"]["AccountIdQuery"];
+                before: string;
+                page_size?: components["parameters"]["CandlePageSize"];
+                symbol: components["parameters"]["SymbolQuery"];
+                timeframe: components["parameters"]["Timeframe"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Historical candle window */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TerminalMarketWindowResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    getModelAssignments: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Model configuration */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelAssignmentsResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    setModelAssignments: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    analysis: string | null;
+                    review: string | null;
+                    revision: string;
+                    trader: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Model configuration */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelAssignmentsResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    listModelConfigurations: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Model configuration */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelConfigurationListResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    createModelConfiguration: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    api_key: string;
+                    base_url: string;
+                    context_window_tokens?: number | null;
+                    max_input_tokens?: number | null;
+                    max_output_tokens: number | null;
+                    name: string;
+                    /** @enum {string} */
+                    protocol: "chat_completions" | "responses";
+                    /** @enum {string} */
+                    provider: "volcengine_agent_plan" | "deepseek" | "openai_compatible";
+                    /** @enum {string|null} */
+                    reasoning_effort?: null | "low" | "medium" | "high" | "max";
+                    request_timeout_ms?: number | null;
+                    /** @enum {string} */
+                    scope: "user" | "platform";
+                    temperature?: number | null;
+                    thinking_enabled?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Model configuration */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelConfigurationResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    saveModelConfiguration: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    api_key?: string;
+                    base_url: string;
+                    context_window_tokens?: number | null;
+                    expected_revision: string;
+                    max_input_tokens?: number | null;
+                    max_output_tokens?: number | null;
+                    /**
+                     * @deprecated
+                     * @description Legacy compatibility only; requests use max_output_tokens from model capabilities.
+                     */
+                    max_tokens?: number | null;
+                    name: string;
+                    /** @enum {string} */
+                    protocol: "chat_completions" | "responses";
+                    /** @enum {string|null} */
+                    reasoning_effort?: null | "low" | "medium" | "high" | "max";
+                    request_timeout_ms?: number | null;
+                    temperature?: number | null;
+                    thinking_enabled?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description Model configuration */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelConfigurationResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    deleteModelConfiguration: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    expected_revision: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Model configuration */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelDeletedResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    verifyModelConfiguration: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": string;
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    expected_revision: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Model configuration */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelConfigurationResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    getModelSelection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Model selection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSelectionResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    setModelSelection: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    expected_model_profile_id: string | null;
+                    model_profile_id: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Model selection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelSelectionResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
             503: components["responses"]["Problem"];
         };
     };
@@ -5120,7 +7415,166 @@ export interface operations {
                     "application/json": components["schemas"]["OperationResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    getPersonalNotifications: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            items: {
+                                actionable: boolean;
+                                createdAt: string;
+                                id: string;
+                                /** @enum {string} */
+                                kind: "analysis" | "decision";
+                                read: boolean;
+                                resourceId: string;
+                                summary: string;
+                                title: string;
+                            }[];
+                            unread: number;
+                        };
+                        meta: Record<string, never>;
+                    };
+                };
+            };
+        };
+    };
+    readPersonalNotification: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @enum {boolean} */
+                    all?: true;
+                    id?: string;
+                } & (unknown | unknown);
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            read: boolean;
+                        };
+                        meta: Record<string, never>;
+                    };
+                };
+            };
+        };
+    };
+    getPersonalSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            emailAvailable: boolean;
+                            hasFeishu: boolean;
+                            nickname: string;
+                            preferences: {
+                                /** @enum {string} */
+                                analysis: "off" | "effective" | "all";
+                                /** @enum {string} */
+                                analysisSound: "off" | "bell" | "chime" | "pulse";
+                                /** @enum {string} */
+                                decision: "off" | "effective" | "all";
+                                /** @enum {string} */
+                                decisionSound: "off" | "bell" | "chime" | "pulse";
+                                emailEnabled: boolean;
+                                feishuEnabled: boolean;
+                            };
+                            revision: number;
+                        };
+                        meta: Record<string, never>;
+                    };
+                };
+            };
+        };
+    };
+    savePersonalSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    feishuSecret?: string;
+                    feishuWebhook?: string;
+                    nickname: string;
+                    preferences: {
+                        /** @enum {string} */
+                        analysis: "off" | "effective" | "all";
+                        /** @enum {string} */
+                        analysisSound: "off" | "bell" | "chime" | "pulse";
+                        /** @enum {string} */
+                        decision: "off" | "effective" | "all";
+                        /** @enum {string} */
+                        decisionSound: "off" | "bell" | "chime" | "pulse";
+                        emailEnabled: boolean;
+                        feishuEnabled: boolean;
+                    };
+                    revision: number;
+                };
+            };
+        };
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            revision: number;
+                        };
+                        meta: Record<string, never>;
+                    };
+                };
+            };
         };
     };
     listPositions: {
@@ -5175,17 +7629,20 @@ export interface operations {
                     "application/json": components["schemas"]["RealtimeTicketResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
             429: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     listReviewCases: {
         parameters: {
             query?: {
                 account_id?: components["schemas"]["OpaqueId"];
-                kind?: "daily" | "monthly" | "manual";
-                page_size?: components["parameters"]["PageSize"];
+                kind?: "daily" | "monthly" | "manual" | "trade";
+                page_size?: number;
             };
             header?: never;
             path?: never;
@@ -5202,6 +7659,12 @@ export interface operations {
                     "application/json": components["schemas"]["ReviewCaseListResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     getReviewCase: {
@@ -5225,13 +7688,19 @@ export interface operations {
                     "application/json": components["schemas"]["ReviewCaseDetailResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     confirmReviewVersion: {
         parameters: {
             query?: never;
             header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 "If-Match": components["parameters"]["IfMatch"];
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -5257,14 +7726,22 @@ export interface operations {
                     "application/json": components["schemas"]["ReviewCaseDetailResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             412: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            428: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     requestReviewGeneration: {
         parameters: {
             query?: never;
             header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 "If-Match": components["parameters"]["IfMatch"];
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -5291,14 +7768,143 @@ export interface operations {
                     "application/json": components["schemas"]["ReviewCaseDetailResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             412: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            428: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    getReviewHistoricalMetadata: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                review_case_id: components["parameters"]["ReviewCaseId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Review case */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewHistoricalMetadataResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    listArchivedReviewEvents: {
+        parameters: {
+            query?: {
+                offset?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path: {
+                review_case_id: components["parameters"]["ReviewCaseId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Review case */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchivedReviewEventPageResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    listArchivedReviewJobs: {
+        parameters: {
+            query?: {
+                offset?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path: {
+                review_case_id: components["parameters"]["ReviewCaseId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Review case */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchivedReviewJobPageResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    listArchivedReviewStages: {
+        parameters: {
+            query?: {
+                offset?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path: {
+                review_case_id: components["parameters"]["ReviewCaseId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Review case */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchivedReviewStagePageResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     returnReviewCase: {
         parameters: {
             query?: never;
             header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 "If-Match": components["parameters"]["IfMatch"];
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -5324,13 +7930,53 @@ export interface operations {
                     "application/json": components["schemas"]["ReviewCaseDetailResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
             412: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            428: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    listReviewVersions: {
+        parameters: {
+            query?: {
+                before_version?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path: {
+                review_case_id: components["parameters"]["ReviewCaseId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Review case */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewVersionHistoryResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     createReviewVersion: {
         parameters: {
             query?: never;
             header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 "If-Match": components["parameters"]["IfMatch"];
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -5350,13 +7996,51 @@ export interface operations {
             /** @description Immutable version created */
             201: {
                 headers: {
+                    ETag: components["headers"]["ETag"];
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["ReviewCaseDetailResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
             412: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            428: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    getReviewVersion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                review_case_id: components["parameters"]["ReviewCaseId"];
+                version_id: components["schemas"]["OpaqueId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Review case */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewVersionResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     getManualRiskRelease: {
@@ -5379,7 +8063,13 @@ export interface operations {
                     "application/json": components["schemas"]["ManualRiskReleaseResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     createManualRiskRelease: {
@@ -5411,10 +8101,44 @@ export interface operations {
                     "application/json": components["schemas"]["ManualRiskReleaseCreatedResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             412: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
             428: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    getManualRiskReleaseReceipt: {
+        parameters: {
+            query: {
+                idempotency_key: string;
+            };
+            header?: never;
+            path: {
+                account_id: components["parameters"]["AccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Exact receipt or unconfirmed result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManualRiskReleaseReceiptResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     getRiskPolicy: {
@@ -5438,13 +8162,20 @@ export interface operations {
                     "application/json": components["schemas"]["RiskPolicyResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     replaceRiskPolicy: {
         parameters: {
             query?: never;
             header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 "If-Match": components["parameters"]["IfMatch"];
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -5469,9 +8200,44 @@ export interface operations {
                     "application/json": components["schemas"]["RiskPolicyResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
             412: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
             428: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    getRiskPolicyReceipt: {
+        parameters: {
+            query: {
+                idempotency_key: string;
+            };
+            header?: never;
+            path: {
+                account_id: components["parameters"]["AccountId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Exact receipt or unconfirmed result */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RiskPolicyReceiptResponse"];
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     getAccountRiskSummary: {
@@ -5494,7 +8260,13 @@ export interface operations {
                     "application/json": components["schemas"]["AccountRiskSummaryResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     listRiskDecisions: {
@@ -5518,7 +8290,13 @@ export interface operations {
                     "application/json": components["schemas"]["RiskDecisionListResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     getRiskDecision: {
@@ -5541,7 +8319,13 @@ export interface operations {
                     "application/json": components["schemas"]["RiskDecisionDetailResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     getApplicationSession: {
@@ -5562,8 +8346,11 @@ export interface operations {
                     "application/json": components["schemas"]["SessionResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     logoutCurrentApplication: {
@@ -5584,8 +8371,11 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     logoutAllWebApplications: {
@@ -5606,8 +8396,11 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     revokeAllSessionsAndDevices: {
@@ -5628,8 +8421,11 @@ export interface operations {
                 };
                 content?: never;
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     listStrategies: {
@@ -5652,13 +8448,18 @@ export interface operations {
                     "application/json": components["schemas"]["StrategyListResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     createStrategy: {
         parameters: {
             query?: never;
             header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -5680,9 +8481,12 @@ export interface operations {
                     "application/json": components["schemas"]["StrategyDetailResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     getStrategy: {
@@ -5706,14 +8510,19 @@ export interface operations {
                     "application/json": components["schemas"]["StrategyDetailResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     updateStrategyMetadata: {
         parameters: {
             query?: never;
             header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 "If-Match": components["parameters"]["IfMatch"];
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -5738,18 +8547,22 @@ export interface operations {
                     "application/json": components["schemas"]["StrategyDetailResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
             412: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
             428: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     retireStrategy: {
         parameters: {
             query?: never;
             header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 "If-Match": components["parameters"]["IfMatch"];
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -5770,18 +8583,22 @@ export interface operations {
                     "application/json": components["schemas"]["StrategyDetailResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             412: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
             428: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     createStrategyVersion: {
         parameters: {
             query?: never;
             header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 "If-Match": components["parameters"]["IfMatch"];
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -5806,18 +8623,22 @@ export interface operations {
                     "application/json": components["schemas"]["StrategyDetailResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
             412: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
             428: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     publishStrategyVersion: {
         parameters: {
             query?: never;
             header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 "If-Match": components["parameters"]["IfMatch"];
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -5839,12 +8660,15 @@ export interface operations {
                     "application/json": components["schemas"]["StrategyDetailResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             412: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
             428: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     compileStrategy: {
@@ -5871,8 +8695,11 @@ export interface operations {
                     "application/json": components["schemas"]["StrategyCompileResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     listStrategyMemories: {
@@ -5893,6 +8720,12 @@ export interface operations {
                     "application/json": components["schemas"]["StrategyMemoryListResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     getStrategyMemory: {
@@ -5915,7 +8748,12 @@ export interface operations {
                     "application/json": components["schemas"]["StrategyMemoryDetailResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     listStrategyMemoryUpdates: {
@@ -5938,12 +8776,19 @@ export interface operations {
                     "application/json": components["schemas"]["StrategyMemoryUpdateListResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     decideStrategyMemoryUpdate: {
         parameters: {
             query?: never;
             header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 "If-Match": components["parameters"]["IfMatch"];
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -5970,7 +8815,15 @@ export interface operations {
                     "application/json": components["schemas"]["StrategyMemoryUpdateResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
             412: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            428: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     listStrategySubscriptions: {
@@ -5993,13 +8846,18 @@ export interface operations {
                     "application/json": components["schemas"]["StrategySubscriptionListResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     createStrategySubscription: {
         parameters: {
             query?: never;
             header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -6021,16 +8879,20 @@ export interface operations {
                     "application/json": components["schemas"]["StrategySubscriptionResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     updateStrategySubscription: {
         parameters: {
             query?: never;
             header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 "If-Match": components["parameters"]["IfMatch"];
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -6055,6 +8917,7 @@ export interface operations {
                     "application/json": components["schemas"]["StrategySubscriptionResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
@@ -6062,6 +8925,55 @@ export interface operations {
             412: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
             428: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
+        };
+    };
+    setAccountTrader: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    account_id: components["schemas"]["OpaqueId"];
+                    enabled: boolean;
+                    expected: {
+                        id: components["schemas"]["OpaqueId"];
+                        revision: number;
+                    }[];
+                };
+            };
+        };
+        responses: {
+            /** @description Account trader updated */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            enabled: boolean;
+                        };
+                        meta: components["schemas"]["Meta"];
+                    };
+                };
+            };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
+            409: components["responses"]["Problem"];
+            412: components["responses"]["Problem"];
+            422: components["responses"]["Problem"];
+            428: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     listTradeDecisions: {
@@ -6085,8 +8997,10 @@ export interface operations {
                     "application/json": components["schemas"]["TradeDecisionListResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
             401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     getTradeDecision: {
@@ -6109,7 +9023,11 @@ export interface operations {
                     "application/json": components["schemas"]["TradeDecisionDetailResponse"];
                 };
             };
+            400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
+            403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
+            503: components["responses"]["Problem"];
         };
     };
     listTradeHistory: {
@@ -6145,6 +9063,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
         };
     };
@@ -6168,6 +9087,7 @@ export interface operations {
                     "application/json": components["schemas"]["TradeRecordDetailResponse"];
                 };
             };
+            401: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
         };
     };
@@ -6225,9 +9145,12 @@ export interface operations {
                 };
             };
             400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
+            404: components["responses"]["Problem"];
             409: components["responses"]["Problem"];
             422: components["responses"]["Problem"];
+            428: components["responses"]["Problem"];
             503: components["responses"]["Problem"];
         };
     };
@@ -6255,6 +9178,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["Problem"];
+            401: components["responses"]["Problem"];
             403: components["responses"]["Problem"];
             404: components["responses"]["Problem"];
             503: components["responses"]["Problem"];

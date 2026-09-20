@@ -38,7 +38,7 @@ export class BridgeGatewayService {
     const route = await this.routes.authorizeAndOpen({ claims, hello, connectionId, connectedAt: openedAt.toISOString() })
     let claimAttempted = false
     try {
-      const capacity = 1 + await this.capacities.getPurchasedCapacity(claims.userId)
+      const capacity = await this.capacities.getIncludedCapacity(claims.userId) + Math.max(0, await this.capacities.getPurchasedCapacity(claims.userId))
       claimAttempted = true
       const lease = await this.leases.claim({ route, capacity, ttlSeconds: 45 })
       await this.routes.activate(route, this.now().toISOString())

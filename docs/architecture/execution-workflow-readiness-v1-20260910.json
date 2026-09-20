@@ -1,0 +1,12 @@
+{
+  "kind": "execution-workflow-readiness/v1",
+  "passed": true,
+  "writes": 0,
+  "checks": [
+    "current-205-step-database-rejected",
+    "restored-238-step-database-41-table-gate-passed",
+    "non-UTC-session-rejected",
+    "upgrade-lock-contention-rejected-and-retry-releases-lock"
+  ],
+  "observedAt": "2026-09-10T14:59:51.625Z"
+}

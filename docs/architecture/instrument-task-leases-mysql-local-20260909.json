@@ -1,0 +1,24 @@
+{
+  "passed": true,
+  "scope": "temporary_table_sequential_lease_transitions",
+  "persistentWrites": 0,
+  "checks": [
+    "pending_claim_and_active_lease_exclusion",
+    "exact_symbol_user_and_account_scope_fenced",
+    "expired_and_replaced_lease_cannot_complete_or_release",
+    "release_reclaim_and_terminal_result_immutable",
+    "migration_check_rejects_running_without_lease"
+  ],
+  "sources": {
+    "server/db/migrations/inplace/045_instrument_collection_requests.sql": "f1821bf57bbffac9f10dce3039cb016b8de073badb135251a49e144fe3342e90",
+    "server/src/modules/trading/infrastructure/mysql-instrument-collection-tasks.ts": "eecfa370bd95023091adfd699edd6ef06548cced1e530d27e59e4ee6f1f495b4",
+    "server/dist-v4/modules/trading/infrastructure/mysql-instrument-collection-tasks.js": "1d7231b1704dcdb628349db606331d1a28f165cd4436822235ce15409116a3fc"
+  },
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "tz": "+00:00",
+    "version": "8.4.8"
+  },
+  "finishedAt": "2026-09-09T03:21:20.525Z"
+}

@@ -1,0 +1,17 @@
+{
+  "kind":"strategy-role-section-review/v1",
+  "sourceId":"2",
+  "sourceVersion":"1",
+  "sourceHash":"6188d7ae3349483b4e925b1746508e07c37ac55375078908f0d2cc65f16cb6aa",
+  "promptHash":"f6e0a1e2ac41945a9aa7ff8a8aaa0cebc12a3bcc981a929ad5cf810a090e11ae",
+  "introductions":{
+    "analysis":"这是历史提示词归档候选。原文没有可解释的市场分析规则，不得从中补造策略或据此启用分析任务。保留原文仅用于历史数据核对，不能当作已完成语义迁移的运行提示词。",
+    "trader":"这是历史提示词归档候选。原文没有可解释的交易规则，不得从中补造策略或据此启用交易任务。保留原文仅用于历史数据核对，不能当作已完成语义迁移的运行提示词。"
+  },
+  "sections":[{"index":0,"heading":"111","roles":["analysis","trader"]}],
+  "runtimeBlockers":["legacy_prompt_has_no_strategy_semantics","preserve_retired_status"],
+  "reviews":[
+    {"focus":"role-responsibility-and-coverage","result":"全部三个字符按历史源保留，禁止补造角色策略。"},
+    {"focus":"compatibility-and-retirement","result":"配置可转换不意味着提示词可运行；保持退休状态，候选不授予激活权限。"}
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "syntheticPorts": [
+    "model-result",
+    "trader-context-builder",
+    "instrument-reader"
+  ],
+  "foreignKeysVerified": false,
+  "checks": [
+    "analysis-result-and-trader-task-commit-with-UTC-and-outbox",
+    "duplicate-completion-rejected",
+    "real-outbox-to-BullMQ-consumer-preserves-run-and-analysis-identity",
+    "replayed-publication-does-not-deliver-a-second-job",
+    "real-TraderWorker-commits-nonempty-decision-once",
+    "persisted-decision-published-to-real-risk-queue",
+    "real-risk-worker-approves-once-with-frozen-strategy-evidence",
+    "approved-risk-event-reaches-execution-queue",
+    "real-execution-preparation-persists-one-intent-reservation-and-operation",
+    "execution-preparation-replay-preserves-original-identity",
+    "same-intent-creates-one-command-and-persists-simulated-result-before-ack",
+    "duplicate-result-and-wrong-user-do-not-repeat-effects",
+    "actual-operation-HTTP-contract-returns-success-and-denies-another-user",
+    "real-revoked-ownership-excludes-trader-fanout"
+  ],
+  "traderResult": {
+    "status": "succeeded"
+  },
+  "riskResult": {
+    "status": "approved",
+    "rejectCode": null
+  },
+  "operationHttp": {
+    "status": 200
+  },
+  "referenceQueueRemoved": true,
+  "referenceRiskQueueRemoved": true,
+  "referenceExecutionQueueRemoved": true,
+  "referenceDatabaseRemoved": true
+}

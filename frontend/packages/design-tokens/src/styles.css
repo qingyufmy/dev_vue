@@ -100,7 +100,7 @@
 }
 
 .dark,
-[data-surface="trade"] {
+[data-surface="trade"]:not([data-theme="light"]) {
   color-scheme: dark;
   --background: oklch(0.16 0.018 260);
   --foreground: oklch(0.94 0.012 255);

@@ -1,0 +1,33 @@
+{
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "syntheticPorts": [
+    "model-result",
+    "trader-context-builder",
+    "active-strategy-reader"
+  ],
+  "foreignKeysVerified": false,
+  "checks": [
+    "analysis-result-and-trader-task-commit-with-UTC-and-outbox",
+    "duplicate-completion-rejected"
+  ],
+  "traderResult": {
+    "status": "failed",
+    "code": "subscription_take_profit_recommendation_invalid"
+  },
+  "errorCode": "Error",
+  "locations": [
+    "    at QueueEvents.onFailed (D:\\dev_codex\\dev_vue\\node_modules\\.pnpm\\bullmq@6.3.4_ioredis@5.11.1_supports-color@10.2.2_\\node_modules\\bullmq\\dist\\cjs\\classes\\job.js:749:24)",
+    "    at QueueEvents.emit (node:events:519:28)",
+    "    at QueueEvents.emit (D:\\dev_codex\\dev_vue\\node_modules\\.pnpm\\bullmq@6.3.4_ioredis@5.11.1_supports-color@10.2.2_\\node_modules\\bullmq\\dist\\cjs\\classes\\queue-base.js:89:26)"
+  ],
+  "workerError": "ERR_ASSERTION",
+  "workerLocations": [
+    "    at Worker.connection.connection [as processFn] (file:///D:/dev_codex/dev_vue/scripts/verify-analysis-completion-reference-local.mjs:116:12)",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)",
+    "    at async D:\\dev_codex\\dev_vue\\node_modules\\.pnpm\\bullmq@6.3.4_ioredis@5.11.1_supports-color@10.2.2_\\node_modules\\bullmq\\dist\\cjs\\classes\\worker.js:582:32"
+  ],
+  "referenceQueueRemoved": true,
+  "referenceRiskQueueRemoved": true,
+  "referenceDatabaseRemoved": true
+}

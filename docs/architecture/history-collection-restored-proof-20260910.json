@@ -1,0 +1,22 @@
+{
+  "kind": "history-collection-restored-upgrade-proof/v1",
+  "passed": true,
+  "target": "dev_vue_m1_source_20260910_01",
+  "priorSteps": 188,
+  "completedSteps": 189,
+  "originalTableCount": 255,
+  "originalRows": 338766,
+  "protectedTableCount": 254,
+  "protectedSnapshotHash": "0a6f7f981a160ceba80f951c749255f37628e4c4e2e8e8c2abb5abf7e19198a0",
+  "oldJournalUnchanged": true,
+  "totalDdlCount": 1,
+  "startedAcknowledgementLossRecovered": true,
+  "ddlAcknowledgementLossRecovered": true,
+  "completionAcknowledgementLossRecovered": true,
+  "replayDdlCount": 0,
+  "newTableRows": 0,
+  "currentDevVueWrites": 0,
+  "rehearsalEvidenceHash": "f5c3338178990be10529b581ae2f0bbc747248ac28ae89f1f025efb723107afb",
+  "planHash": "008893e1f6ed3b626449f30e79c5707b54324c8ea9d11b853bdf6db6727fe7a9",
+  "observedAt": "2026-09-10T04:24:43.078Z"
+}

@@ -1,4 +1,4 @@
-import type { StrategyService } from '../../strategies/application/strategy-service.js'
+import type { ActiveStrategyVersionReader } from '../../strategies/index.js'
 import type { JsonObject, TraderDecisionResult, TraderInputSnapshot } from '../domain/inference.js'
 import { InferenceError } from '../domain/inference.js'
 import { ModelInvocationError } from './analysis-worker.js'
@@ -24,7 +24,7 @@ export class TraderWorker {
   constructor(
     private readonly repository: InferenceRepository,
     private readonly inference: InferenceService,
-    private readonly strategies: StrategyService,
+    private readonly strategies: ActiveStrategyVersionReader,
     private readonly contexts: TraderContextBuilder,
     private readonly modelSource: TraderModelGateway | TraderModelGatewayResolver,
     private readonly workerId: string,
@@ -62,6 +62,10 @@ export class TraderWorker {
       snapshot = await this.contexts.build(run, strategy, now)
       snapshot.subscriptionWindowHash = windowHash
     } catch (error) {
+      if (error instanceof InferenceError && error.code === 'trader_contract_pending') {
+        return { status: 'deferred' as const, code: error.code, retryAfterMs: 5000 }
+      }
+      if (isPreparationConflict(error)) return { status: 'deferred' as const, code: error.code, retryAfterMs: 1000 }
       await this.repository.failQueuedTrader(run.id, errorCode(error))
       return { status: 'failed' as const, code: errorCode(error) }
     }
@@ -76,6 +80,7 @@ export class TraderWorker {
         this.workerId, new Date(now.getTime() + timeoutMs * maxAttempts).toISOString(),
       )
     } catch (error) {
+      if (isPreparationConflict(error)) return { status: 'deferred' as const, code: error.code, retryAfterMs: 1000 }
       if (error instanceof InferenceError && error.code === 'trader_account_busy') return { status: 'deferred' as const, code: error.code, retryAfterMs: error.retryAfterMs }
       if (error instanceof InferenceError && ['trader_schedule_changed', 'trader_preferences_changed'].includes(error.code)) {
         await this.repository.failQueuedTrader(run.id, error.code)
@@ -130,4 +135,12 @@ function modelFailure(error: unknown) {
   if (error instanceof DOMException && (error.name === 'TimeoutError' || error.name === 'AbortError')) return new ModelInvocationError('model_timeout', 'timed_out', true)
   if (error instanceof InferenceError) return new ModelInvocationError(error.code, 'contract_invalid', false)
   return new ModelInvocationError('model_request_failed', 'failed', true)
+}
+
+function isPreparationConflict(error: unknown): error is InferenceError {
+  return error instanceof InferenceError && [
+    'trader_context_torn_read', 'trader_account_revision_conflict',
+    'trader_projection_revision_conflict', 'trader_quote_revision_conflict',
+    'trader_contract_revision_conflict', 'trader_risk_revision_conflict',
+  ].includes(error.code)
 }

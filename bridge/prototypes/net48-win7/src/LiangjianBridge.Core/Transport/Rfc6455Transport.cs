@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
@@ -11,7 +12,7 @@ namespace Liangjian.BridgeV4.Transport
     {
         private readonly object sendLock = new object();
         private TcpClient client;
-        private SslStream stream;
+        private Stream stream;
         private bool disposed;
 
         public bool Connected
@@ -29,7 +30,7 @@ namespace Liangjian.BridgeV4.Transport
             {
                 throw new InvalidOperationException("bridge_wss_already_connected");
             }
-            if (uri == null || !string.Equals(uri.Scheme, "wss", StringComparison.OrdinalIgnoreCase))
+            if (!WebSocketEndpointPolicy.IsAllowed(uri))
             {
                 throw new ArgumentException("bridge_wss_uri_required", "uri");
             }
@@ -38,10 +39,20 @@ namespace Liangjian.BridgeV4.Transport
                 throw new ArgumentOutOfRangeException("timeoutMilliseconds");
             }
 
-            TcpClient pendingClient = new TcpClient();
+            bool useTls = uri.Scheme == "wss";
+            IPAddress loopback = null;
+            if (!useTls)
+            {
+                // Pin plaintext connections to a numeric loopback address, without DNS resolution.
+                loopback = string.Equals(uri.DnsSafeHost, "localhost", StringComparison.OrdinalIgnoreCase)
+                    ? IPAddress.Loopback : IPAddress.Parse(uri.DnsSafeHost);
+            }
+            TcpClient pendingClient = useTls ? new TcpClient() : new TcpClient(loopback.AddressFamily);
             try
             {
-                IAsyncResult connect = pendingClient.BeginConnect(uri.Host, uri.Port, null, null);
+                IAsyncResult connect = useTls
+                    ? pendingClient.BeginConnect(uri.DnsSafeHost, uri.Port, null, null)
+                    : pendingClient.BeginConnect(loopback, uri.Port, null, null);
                 if (!connect.AsyncWaitHandle.WaitOne(timeoutMilliseconds))
                 {
                     throw new TimeoutException("bridge_wss_connect_timeout");
@@ -51,8 +62,13 @@ namespace Liangjian.BridgeV4.Transport
                 pendingClient.ReceiveTimeout = timeoutMilliseconds;
                 pendingClient.SendTimeout = timeoutMilliseconds;
 
-                SslStream pendingStream = new SslStream(pendingClient.GetStream(), false);
-                pendingStream.AuthenticateAsClient(uri.Host, null, SslProtocols.Tls12, true);
+                Stream pendingStream = pendingClient.GetStream();
+                if (useTls)
+                {
+                    SslStream tlsStream = new SslStream(pendingStream, false);
+                    tlsStream.AuthenticateAsClient(uri.DnsSafeHost, null, SslProtocols.Tls12, true);
+                    pendingStream = tlsStream;
+                }
 
                 string key = WebSocketHandshake.CreateClientKey();
                 byte[] request = Encoding.ASCII.GetBytes(WebSocketHandshake.BuildRequest(uri, key, bearerToken));
@@ -60,6 +76,11 @@ namespace Liangjian.BridgeV4.Transport
                 pendingStream.Flush();
                 string response = ReadHeaders(pendingStream);
                 WebSocketHandshake.ValidateResponse(response, key);
+
+                // The connect/upgrade timeout is not the established session's idle limit.
+                // Welcome permits a 60s heartbeat interval and two intervals for its ACK.
+                // Keep a bounded transport fallback beyond that application deadline.
+                pendingClient.ReceiveTimeout = 185000;
 
                 client = pendingClient;
                 stream = pendingStream;
@@ -102,8 +123,11 @@ namespace Liangjian.BridgeV4.Transport
                     }
                     if (frame.Opcode == WebSocketOpcode.Close)
                     {
-                        SendControl(WebSocketOpcode.Close, frame.Payload);
-                        Dispose();
+                        string reason = CloseError(frame.Payload);
+                        try { SendControl(WebSocketOpcode.Close, frame.Payload); }
+                        catch (IOException) { }
+                        finally { Dispose(); }
+                        if (reason != null) throw new WebSocketProtocolException(reason);
                         return null;
                     }
                     if (frame.Opcode == WebSocketOpcode.Binary)
@@ -156,6 +180,17 @@ namespace Liangjian.BridgeV4.Transport
                 client.Close();
                 client = null;
             }
+        }
+
+        private static string CloseError(byte[] payload)
+        {
+            if (payload.Length == 0) return null;
+            if (payload.Length < 2) return "bridge_wss_close_invalid";
+            int code = (payload[0] << 8) | payload[1];
+            if (code == 1000 || code == 1001) return null;
+            string reason = Encoding.UTF8.GetString(payload, 2, payload.Length - 2);
+            if (System.Text.RegularExpressions.Regex.IsMatch(reason, @"\Abridge_[a-z0-9_]{1,116}\z")) return reason;
+            return "bridge_wss_closed_" + code.ToString(System.Globalization.CultureInfo.InvariantCulture);
         }
 
         private void SendControl(WebSocketOpcode opcode, byte[] payload)

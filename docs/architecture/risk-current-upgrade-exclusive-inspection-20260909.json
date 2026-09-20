@@ -1,0 +1,13 @@
+{
+  "kind": "risk-current-upgrade-inspection/v1",
+  "passed": false,
+  "code": "risk_current_inspection_failed",
+  "trace": [
+    "    at isAbsolute (node:path:503:5)",
+    "    at file:///D:/dev_codex/dev_vue/scripts/lib/mysql-current-legacy-candle-promotion.mjs:51:90",
+    "    at Array.every (<anonymous>)",
+    "    at mysqlLegacyCandlePromotionStore (file:///D:/dev_codex/dev_vue/scripts/lib/mysql-current-legacy-candle-promotion.mjs:51:77)",
+    "    at mysqlContextChangesStore (file:///D:/dev_codex/dev_vue/scripts/lib/mysql-current-context-changes.mjs:47:23)"
+  ],
+  "sourceWrites": 0
+}

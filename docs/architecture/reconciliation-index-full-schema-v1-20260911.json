@@ -1,0 +1,9 @@
+{
+  "kind": "reconciliation-index-full-schema-reference/v1",
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "dataCopied": false,
+  "referenceDatabaseRemoved": false,
+  "errorCode": "ER_BAD_FIELD_ERROR",
+  "observedAt": "2026-09-10T16:15:32.685Z"
+}

@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "scope": "real_local_bullmq_with_stub_business_port",
+  "checks": [
+    "delayed_redelivery_succeeds_with_one_attempt_budget",
+    "unknown_completion_uses_failure_retry_then_rereads_terminal_state"
+  ],
+  "mysqlWrites": 0,
+  "terminalQueries": 0,
+  "processorSha256": "a1896fd08d6aa99b0360275d785399401886abfc41c34e55620b0a885d1b481c",
+  "queueRemoved": true,
+  "observedAt": "2026-09-09T03:54:44.458Z"
+}

@@ -121,7 +121,7 @@ export class BrowserRealtimeWebSocketServer {
       sink.send({ v: 4, type: 'system.heartbeat', occurred_at: new Date().toISOString() })
     }, HEARTBEAT_INTERVAL_MS)
     heartbeat.unref?.()
-    socket.on('pong', () => { alive = true })
+    socket.on('pong', () => { alive = true; void session.heartbeat?.().catch(() => socket.close(1011, 'market_subscription_unavailable')) })
     socket.on('message', (data, isBinary) => {
       if (isBinary || bytes(data) > MAX_UPSTREAM_FRAME_BYTES) return socket.close(1009, 'realtime_message_too_large')
       if (pending >= MAX_PENDING_MESSAGES) return socket.close(4008, 'realtime_slow_consumer')

@@ -1,3 +1,5 @@
+import type { StrategySubscriptionCreateBody } from '@aurum/contracts'
+export type SubscriptionTimeWindow = NonNullable<StrategySubscriptionCreateBody['receive_window']>
 import { formatLaboratoryTime } from '~/lib/laboratory-display-time'
 import type { StrategyKind, StrategySummary } from '@aurum/contracts'
 
@@ -36,6 +38,7 @@ export interface CompileResultView {
 }
 
 export interface StrategyDraft {
+  status?: 'draft' | 'active'
   kind: StrategyKind
   name: string
   description: string
@@ -44,6 +47,7 @@ export interface StrategyDraft {
 }
 
 export interface SubscriptionDraft {
+  receiveWindow?: SubscriptionTimeWindow
   accountId: string
   symbol: string
   analysisStrategyId: string
@@ -55,6 +59,7 @@ export interface SubscriptionDraft {
 }
 
 export interface StrategySubscriptionView {
+  receiveWindow?: SubscriptionTimeWindow
   id: string
   accountId: string
   symbol: string
@@ -90,7 +95,7 @@ export const subscriptionStatusLabel = {
 
 export function findStrategyName(items: StrategySummary[], id: string | null) {
   if (!id) return '未配置'
-  return items.find((item) => item.id === id)?.name ?? `策略 #${id}`
+  return items.find((item) => item.id === id)?.name ?? '策略暂不可用'
 }
 
 export function versionLabel(version: StrategyVersionView | undefined) {

@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   api: {
     getTradingContext: vi.fn(), listTradingAccounts: vi.fn(), listObserverChannels: vi.fn(),
     listMarketAnalyses: vi.fn(), listStrategies: vi.fn(), selectTradingAccount: vi.fn(),
-    getTradingWorkspace: vi.fn(), getMarketQuote: vi.fn(), getMarketCandles: vi.fn(),
+    getPublicMarketSymbols: vi.fn(), getPublicMarketSnapshot: vi.fn(), getTradingWorkspace: vi.fn(), quotePayload: vi.fn(), getMarketCandles: vi.fn(),
     enterObserverMode: vi.fn(), leaveObserverMode: vi.fn(),
   },
   start: vi.fn(), stop: vi.fn(),
@@ -52,7 +52,13 @@ beforeEach(() => {
   mocks.api.listStrategies.mockResolvedValue({ data: { items: [] } })
   mocks.api.getTradingWorkspace.mockImplementation(async (id: string) => workspace(id))
   mocks.api.selectTradingAccount.mockResolvedValue({ data: { mode: 'full', accountId: '2', observerChannelId: null, revision: 2 } })
-  mocks.api.getMarketQuote.mockImplementation(async (accountId: string, symbol: string) => ({ data: { accountId, symbol, revision: 1 } }))
+  mocks.api.quotePayload.mockImplementation(async (accountId: string, symbol: string) => ({ data: { accountId, symbol, revision: 1 } }))
+  mocks.api.getPublicMarketSymbols.mockResolvedValue({ data: { items: ['XAUUSD', 'EURUSD', 'GBPUSD'] } })
+  mocks.api.getPublicMarketSnapshot.mockImplementation(async (symbol: string, timeframe: string) => {
+    const { data } = await mocks.api.quotePayload('public', symbol)
+    return { data: { symbol: data.symbol, timeframe, source_key: 'a'.repeat(64), source_generation: '1', status: 'cached', candles: [],
+      quote: { bid: '1', ask: '2', last: null, spread: '1', observed_at: '2026-09-14T00:00:00Z', revision: String(data.revision) } } }
+  })
   mocks.api.getMarketCandles.mockResolvedValue({ data: { items: [] } })
   mocks.api.enterObserverMode.mockResolvedValue({ data: { mode: 'observer', accountId: null, observerChannelId: '12', revision: 2 } })
   mocks.api.leaveObserverMode.mockResolvedValue({ data: { mode: 'blocked', accountId: null, observerChannelId: null, revision: 2 } })
@@ -199,7 +205,7 @@ describe('observer HTTP resync scope protection', () => {
     pending.resolve(workspace('1'))
     await oldRefresh
     expect(accountSnapshot.value?.id).toBe('2')
-    expect(marketQuote.value?.accountId).toBe('2')
+    expect(marketQuote.value).not.toHaveProperty('accountId')
     home.stop()
   })
 
@@ -207,8 +213,9 @@ describe('observer HTTP resync scope protection', () => {
     const home = useHomeWorkspace()
     await home.load()
     const pending = deferred<{ data: { accountId: string; symbol: string; revision: number } }>()
-    mocks.api.getMarketQuote.mockReturnValueOnce(pending.promise)
+    mocks.api.quotePayload.mockReturnValueOnce(pending.promise)
     const oldMarket = home.selectSymbol('GBPUSD')
+    await vi.waitFor(() => expect(mocks.api.quotePayload).toHaveBeenCalledWith('public', 'GBPUSD'))
     await home.selectSymbol('EURUSD')
     pending.resolve({ data: { accountId: '1', symbol: 'GBPUSD', revision: 1 } })
     await oldMarket
@@ -220,7 +227,7 @@ describe('observer HTTP resync scope protection', () => {
     const home = useHomeWorkspace()
     await home.load()
     const pending = deferred<unknown>()
-    mocks.api.getMarketQuote.mockReturnValueOnce(pending.promise)
+    mocks.api.quotePayload.mockReturnValueOnce(pending.promise)
     const changing = home.selectSymbol('EURUSD')
     expect(home.marketLoading.value).toBe(true)
     expect(home.quote.value).toBeNull()
@@ -240,8 +247,9 @@ describe('observer HTTP resync scope protection', () => {
     const home = useHomeWorkspace()
     await home.load()
     const pending = deferred<unknown>()
-    mocks.api.getMarketQuote.mockReturnValueOnce(pending.promise)
+    mocks.api.quotePayload.mockReturnValueOnce(pending.promise)
     const older = home.selectSymbol('GBPUSD')
+    await vi.waitFor(() => expect(mocks.api.quotePayload).toHaveBeenCalledWith('public', 'GBPUSD'))
     await home.selectSymbol('EURUSD')
     pending.reject(new Error('old_market_failure'))
     await older
@@ -289,7 +297,7 @@ describe('observer HTTP resync scope protection', () => {
     const home = useHomeWorkspace()
     await home.load()
     const pending = deferred<{ data: { accountId: string; symbol: string; revision: number } }>()
-    mocks.api.getMarketQuote.mockReturnValueOnce(pending.promise)
+    mocks.api.quotePayload.mockReturnValueOnce(pending.promise)
     const market = home.selectSymbol('EURUSD')
     mocks.api.getTradingWorkspace.mockRejectedValueOnce(new ApiClientError(403, null))
     await expect(latestResync()()).rejects.toMatchObject({ status: 403 })
@@ -300,7 +308,7 @@ describe('observer HTTP resync scope protection', () => {
     await home.selectAccount('2')
     expect(home.hasAccount.value).toBe(true)
     expect(accountSnapshot.value?.id).toBe('2')
-    expect(marketQuote.value?.accountId).toBe('2')
+    expect(marketQuote.value).not.toHaveProperty('accountId')
     expect(home.error.value).toBe('')
     home.stop()
   })
@@ -325,7 +333,7 @@ describe('observer HTTP resync scope protection', () => {
   it('clears the snapshot if authorization is revoked before the market read completes', async () => {
     const home = useHomeWorkspace()
     await home.load()
-    mocks.api.getMarketQuote.mockRejectedValueOnce(new ApiClientError(403, null))
+    mocks.api.quotePayload.mockRejectedValueOnce(new ApiClientError(403, null))
     await expect(latestResync()()).rejects.toMatchObject({ status: 403 })
     expect(accountSnapshot.value).toBeNull()
     expect(marketQuote.value).toBeNull()

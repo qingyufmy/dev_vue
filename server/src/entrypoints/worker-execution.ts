@@ -1,3 +1,8 @@
+import { createTradeDecisionReapprovalWriter } from '../modules/inference/composition.js'
+import { createExecutionProcessor } from '../queue/execution-processor.js'
+import { createPendingPreparationRuntime } from '../bootstrap/pending-preparation-runtime.js'
+import { createTransactionRiskDecisionExecutionWriter } from '../modules/risk/composition.js'
+import { createStrategyExecutionConfigReader } from '../modules/strategies/composition.js'
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import { Worker } from 'bullmq'
 import {
@@ -5,12 +10,17 @@ import {
   installProcessLifecycle, loadServerEnvironment, loadV4RuntimeConfig, RoleHealth, startRoleHealthServer,
 } from '../bootstrap/index.js'
 import {
-  BridgeCommandService, ExecutionDistributionTargetWorker, ExecutionPreparationWorker, ExecutionService,
-  MysqlBridgeCommandRepository, MysqlExecutionCommandSource, MysqlExecutionDistributionRepository,
-  MysqlExecutionRepository, MysqlUserExecutionCommandRepository, RedisAccountExecutionLeaseStore,
+  ExecutionDistributionTargetWorker, ExecutionPreparationWorker, ExecutionService,
   UserExecutionCommandService,
 } from '../modules/execution/index.js'
+import { MysqlExecutionCommandSource, MysqlExecutionDistributionRepository,
+  MysqlExecutionRepository, MysqlUserExecutionCommandRepository, RedisAccountExecutionLeaseStore,
+} from '../modules/execution/composition.js'
 import { EXECUTION_QUEUE, type ExecutionJob } from '../queue/task-queues.js'
+import { PARTIAL_CLOSE_WORKFLOW_QUEUE, type PartialCloseWorkflowJob } from '../queue/partial-close-workflow-queue.js'
+import { createBridgeGatewayLeases } from '../modules/bridge/composition.js'
+import { createPositionProtectionPreparationRuntime } from '../bootstrap/position-protection-preparation-runtime.js'
+import { createPartialCloseWorkflowRuntime } from '../bootstrap/partial-close-workflow-runtime.js'
 
 loadServerEnvironment()
 
@@ -21,56 +31,54 @@ async function main() {
   const pool = createMysqlPool(config.mysql)
   const cache = createCacheRedis(config.cacheRedis)
   await Promise.all([pool.query('SELECT 1'), connectCacheRedis(cache)])
-  const commands = new BridgeCommandService(new MysqlBridgeCommandRepository(pool, createTransactionAccountClock))
+  const routes = createBridgeGatewayLeases(cache)
+  const limits = { maxAgeMs: config.positionProtectionMaxAgeMs, maxInstrumentAgeMs: config.positionProtectionMaxInstrumentAgeMs }
+  const receivers = await createPositionProtectionPreparationRuntime({ pool, cache, routes, limits,
+    magic: config.executionMagic, deviation: config.executionDeviation })
+  const { commands } = receivers
+  const workflows = await createPartialCloseWorkflowRuntime({ pool, routes, limits, prepared: receivers.prepared, reconcile: receivers.reconcile })
   const preparation = new ExecutionPreparationWorker(
     new MysqlExecutionCommandSource(pool, { magic: config.executionMagic, deviation: config.executionDeviation }),
     new RedisAccountExecutionLeaseStore(cache),
     commands,
   )
-  const planning = new ExecutionService(new MysqlExecutionRepository(pool, createTransactionAccountClock))
+  const planning = new ExecutionService(new MysqlExecutionRepository(pool, createTransactionAccountClock, createTransactionRiskDecisionExecutionWriter, createStrategyExecutionConfigReader, createPendingPreparationRuntime(routes), createTradeDecisionReapprovalWriter))
   const distributionRepository = new MysqlExecutionDistributionRepository(pool)
   const distributionTargets = new ExecutionDistributionTargetWorker(
     distributionRepository,
     new UserExecutionCommandService(new MysqlUserExecutionCommandRepository(pool, createTransactionAccountClock)),
   )
-  const worker = new Worker<ExecutionJob>(EXECUTION_QUEUE, async job => {
-    if (job.name === 'execution.risk-decision.prepare') {
-      if (!('riskDecisionId' in job.data) || !Number.isSafeInteger(job.data.userId) || job.data.userId < 1) throw new Error('risk_decision_job_invalid')
-      const result = await planning.prepare(job.data.userId, job.data.riskDecisionId)
-      health.workSucceeded()
-      return { riskDecisionId: job.data.riskDecisionId, kind: result.kind }
-    }
-    if (job.name === 'execution.distribution.target') {
-      if (!('distributionTargetId' in job.data) || !job.data.distributionTargetId) throw new Error('distribution_target_job_invalid')
-      const result = await distributionTargets.run(job.data.distributionTargetId)
-      health.workSucceeded()
-      return result
-    }
-    if (!('intentId' in job.data)) throw new Error('execution_intent_job_invalid')
-    if (!job.data.intentId) throw new Error('execution_intent_job_invalid')
-    const result = await preparation.run(job.data.intentId)
-    if (result.kind === 'busy') throw new Error('execution_prepare_busy')
+  const processExecution = createExecutionProcessor({ planning, preparation, distributionTargets })
+  const worker = new Worker<ExecutionJob>(EXECUTION_QUEUE, async (job, token) => {
+    const result = await processExecution(job, token)
     health.workSucceeded()
-    if (result.kind === 'no_work') return { intentId: job.data.intentId, kind: result.kind }
-    return { intentId: job.data.intentId, kind: result.kind, commandId: result.command.id }
+    return result
   }, { connection: config.queueRedis, prefix: config.queuePrefix, concurrency: config.executionConcurrency, autorun: false })
   worker.on('failed', (_job, error) => health.workFailed(publicError(error)))
+  const workflowWorker = new Worker<PartialCloseWorkflowJob>(PARTIAL_CLOSE_WORKFLOW_QUEUE, async (job, token) => {
+    const result = await workflows.processor(job, token)
+    health.workSucceeded()
+    return result
+  }, { connection: config.queueRedis, prefix: config.queuePrefix, concurrency: config.executionConcurrency, autorun: false })
+  workflowWorker.on('failed', (_job, error) => health.workFailed(publicError(error)))
+  await Promise.all([worker.waitUntilReady(), workflowWorker.waitUntilReady()])
 
   const healthServer = await startRoleHealthServer({
     host: config.host,
     port: config.executionHealthPort,
     health,
     dependencyReady: async () => {
-      try { await Promise.all([pool.query('SELECT 1'), cache.ping()]); return worker.isRunning() } catch { return false }
+      try { await Promise.all([pool.query('SELECT 1'), cache.ping()]); return worker.isRunning() && workflowWorker.isRunning() } catch { return false }
     },
   })
   void worker.run()
+  void workflowWorker.run()
   health.setReady(true)
   health.setAccepting(true)
   installProcessLifecycle('worker-execution', async () => {
     health.setAccepting(false)
     health.setReady(false)
-    await worker.close()
+    await Promise.all([worker.close(), workflowWorker.close()])
     await closeHttpServer(healthServer)
     await Promise.allSettled([cache.quit(), pool.end()])
   })

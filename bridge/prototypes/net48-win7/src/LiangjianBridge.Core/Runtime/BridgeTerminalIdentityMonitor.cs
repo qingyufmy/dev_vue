@@ -9,7 +9,7 @@ namespace Liangjian.BridgeV4.Runtime
     // permission decision. All reads use the existing account-only adapter.
     public sealed class BridgeTerminalIdentityMonitor
     {
-        public const int ProbeIntervalMilliseconds = 10000;
+        public const int ProbeIntervalMilliseconds = 1000;
         public const int MaximumObservationAgeMilliseconds = 25000;
         private readonly object gate = new object();
         private readonly Func<long, IDictionary<string, object>> source;

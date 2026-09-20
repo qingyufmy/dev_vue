@@ -176,3 +176,20 @@ describe('reviewer presentation adapters', () => {
     expect(memory).toMatchObject({ id: 'memory-1', strategyLabel: '趋势分析', version: 3, status: '生效中', content: '确认后的经验正文。' })
   })
 })
+
+it('keeps historical raw text readable without invented metrics or editable V4 content', () => {
+  const now = '2026-09-11T00:00:00.000Z'
+  const rawText = ' {"period_summary":"历史摘要"}\r\n'
+  const detail = mapReviewCaseDetail({ summary: { id: 'c1', kind: 'daily', userId: '7', tradingAccountId: 'a1',
+    accountLabel: 'Demo', symbol: null, subscriptionId: null, subscriptionRevision: null, analysisStrategyId: null,
+    analysisStrategyName: null, traderStrategyId: null, traderStrategyName: null, terminalPeriodStart: now,
+    terminalPeriodEnd: now, terminalTimezoneOffsetMinutes: 180, status: 'awaiting_confirmation',
+    evidenceStatus: 'complete', evidenceRevision: 1, evidenceHash: null, currentVersionId: 'v1',
+    confirmedVersionId: null, updatedAt: now, revision: 1 }, sources: [], currentJob: null, returnReason: null,
+    currentVersion: { id: 'v1', caseId: 'c1', versionNumber: 1, authorKind: 'ai', conclusion: null, createdAt: now,
+      content: { schemaVersion: 'review.legacy.v1', sourceTable: 'period_review_versions', sourceId: '1',
+        sourceSha256: 'a'.repeat(64), originalContentHash: null, rawText } } })
+  expect(detail).toMatchObject({ legacy: true, fullText: rawText, content: null, layers: [], memoryCandidates: [], confidence: null })
+  expect(detail.versions[0]?.status).toBe('历史原文')
+  expect(() => reviewContentForVersion(detail, 'edit')).toThrow()
+})

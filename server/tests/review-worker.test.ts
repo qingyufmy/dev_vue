@@ -1,3 +1,4 @@
+import { ReviewError } from '../src/modules/reviews/domain/review.js'
 import { describe, expect, it, vi } from 'vitest'
 import { ReviewWorker, type ReviewJobClaim, type ReviewWorkerRepository } from '../src/modules/reviews/index.js'
 
@@ -61,4 +62,16 @@ describe('Stage 12R review worker', () => {
     await expect(worker.process(claim.jobId)).resolves.toEqual({ status: 'failed', code: 'review_memory_strategy_invalid' })
     expect(repository.completed).toBe(false)
   })
+})
+
+it('does not record a model failure or invoke again when completion commit is unknown', async () => {
+  const repository = new MemoryWorkerRepository()
+  const error = new ReviewError('review_commit_unknown', 503)
+  vi.spyOn(repository, 'completeJob').mockRejectedValue(error)
+  const invoke = vi.fn(async () => ({ value: wireContent, usage: null }))
+  const worker = new ReviewWorker(repository, { resolve: async () => ({ profileId: '1', provider: 'provider', model: 'model', timeoutMs: 10000, maxAttempts: 3, invoke }) }, 'review:test')
+  await expect(worker.process(claim.jobId)).rejects.toBe(error)
+  expect(invoke).toHaveBeenCalledOnce()
+  expect(repository.failures).toEqual([])
+  expect(repository.failedJob).toBeNull()
 })

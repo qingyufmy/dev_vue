@@ -1,10 +1,5 @@
-import { referralRuleRoutes, type ReferralRuleManagementService } from '../modules/commerce/index.js'
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import type { AuthService } from '../modules/auth/index.js'
-import {
-  executionDistributionRoutes, executionRoutes, userExecutionCommandRoutes, type ExecutionDistributionService,
-  type ExecutionService, type UserExecutionCommandService,
-} from '../modules/execution/index.js'
 import {
   type TradeSessionAuthenticator, type ObserverManagementRequestAuthenticator,
 } from '../modules/trading/index.js'
@@ -18,16 +13,15 @@ export interface ApiV4RouteServices {
   marketHttp: FastifyPluginAsync
   inferenceHttp: FastifyPluginAsync
   strategiesHttp: FastifyPluginAsync
+  platformStrategiesHttp?: FastifyPluginAsync
   riskHttp: FastifyPluginAsync
   reviewsHttp: FastifyPluginAsync
-  execution: ExecutionService
-  userExecution: UserExecutionCommandService
-  executionDistribution: ExecutionDistributionService
+  executionHttp: FastifyPluginAsync
   tradeHistoryHttp: FastifyPluginAsync
   auditHttp: FastifyPluginAsync
   tradeAuth: TradeSessionAuthenticator
   settingsHttp: FastifyPluginAsync
-  referralRules: ReferralRuleManagementService
+  referralRulesHttp: FastifyPluginAsync
   observerManagementHttp: FastifyPluginAsync
   observerAdminAuth: ObserverManagementRequestAuthenticator
 }
@@ -41,10 +35,9 @@ export async function registerApiV4Routes(
   await fastify.register(services.authHttp)
   await fastify.register(async admin => {
     admin.addHook('onRequest', exactAdminHostHook(input.adminOrigin))
+    if (services.platformStrategiesHttp) await admin.register(services.platformStrategiesHttp)
     await admin.register(services.settingsHttp)
-    await admin.register(referralRuleRoutes, {
-      prefix: '/api/v4/admin/referrals', service: services.referralRules, auth: services.observerAdminAuth,
-    })
+    await admin.register(services.referralRulesHttp)
     await admin.register(services.observerManagementHttp)
   })
   await fastify.register(async trade => {
@@ -56,9 +49,7 @@ export async function registerApiV4Routes(
     await trade.register(services.strategiesHttp)
     await trade.register(services.riskHttp)
     await trade.register(services.reviewsHttp)
-    await trade.register(executionRoutes, { prefix: '/api/v4', service: services.execution, auth: services.tradeAuth })
-    await trade.register(userExecutionCommandRoutes, { prefix: '/api/v4', service: services.userExecution, auth: services.tradeAuth })
-    await trade.register(executionDistributionRoutes, { prefix: '/api/v4', service: services.executionDistribution, auth: services.tradeAuth })
+    await trade.register(services.executionHttp)
     await trade.register(services.tradeHistoryHttp)
     await trade.register(services.auditHttp, { prefix: '/api/v4' })
   })

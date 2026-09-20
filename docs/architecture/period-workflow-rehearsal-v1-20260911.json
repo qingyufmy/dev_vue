@@ -1,0 +1,14 @@
+{
+  "kind": "period-workflow-empty-schema-rehearsal/v1",
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "dataCopied": false,
+  "referenceDatabaseRemoved": true,
+  "planHash": "05bbaeccc9aca569e0fb7edddc5062c9cfaf2cf21ef28ba772c9e92ed82fcb41",
+  "ddlAckLossRecovered": true,
+  "replayNoDDL": true,
+  "ddlAttempts": 1,
+  "steps": 265,
+  "scope": "Cloned current DDL and migration journal; no business data copied. Current upgrade separately checks every old table data hash.",
+  "observedAt": "2026-09-11T08:19:18.491Z"
+}

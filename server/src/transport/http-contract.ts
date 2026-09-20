@@ -22,11 +22,14 @@ export function createHttpContractValidator(contracts: HttpRuntimeContracts, ope
   const addFormats = createRequire(import.meta.url)('ajv-formats') as (validator: Ajv2020) => void
   addFormats(ajv)
   ajv.addKeyword('components')
-  const compiled = new Map<string, { parameters: (HttpParameterContract & { validate: ValidateFunction })[]; body?: { required: boolean; validate: ValidateFunction }; responses: Map<string, ValidateFunction> }>()
+  // OpenAPI routing hint only; oneOf and branch const values enforce validation.
+  ajv.addKeyword({ keyword: 'discriminator', schemaType: 'object' })
+  const compiled = new Map<string, { parameters: (HttpParameterContract & { validate: ValidateFunction })[]; body?: { required: boolean; validate: ValidateFunction }; responses: Map<string, ValidateFunction>; empty204: boolean }>()
   for (const id of operationIds) {
     const operation = contracts.operations[id]
     if (!operation) throw new Error(`http_contract_not_registered:${id}`)
     compiled.set(id, {
+      empty204: operation.responses['204'] !== undefined && Object.keys(operation.responses['204']).length === 0,
       parameters: operation.parameters.map(parameter => ({ ...parameter, validate: ajv.compile({ ...parameter.schema, components: contracts.components }) })),
       ...(operation.body ? { body: { required: operation.body.required, validate: ajv.compile({ ...operation.body.schema, components: contracts.components }) } } : {}),
       responses: new Map(Object.entries(operation.responses).flatMap(([status, media]) => Object.entries(media).map(([mediaType, schema]) => [
@@ -55,6 +58,10 @@ export function createHttpContractValidator(contracts: HttpRuntimeContracts, ope
       if (body && (request.body !== undefined || body.required) && !body.validate(request.body)) throw new HttpContractError('api_request_invalid', 400)
     },
     response<T>(id: string, value: T, status = 200, mediaType = 'application/json'): T {
+      if (status === 204) {
+        if (!operation(id).empty204 || value !== undefined) throw new HttpContractError('api_response_invalid', 503)
+        return value
+      }
       const validate = operation(id).responses.get(`${status}:${mediaType}`)
       if (!validate || !validate(value)) throw new HttpContractError('api_response_invalid', 503)
       if (mediaType === 'application/problem+json' && (!value || typeof value !== 'object' || !('status' in value) || value.status !== status)) {

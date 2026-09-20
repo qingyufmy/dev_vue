@@ -1,0 +1,26 @@
+{
+  "kind": "strategy-current-application-readonly/v1",
+  "passed": true,
+  "writes": 0,
+  "applicationCredentialsUsed": true,
+  "schemaReady": true,
+  "counts": [
+    {
+      "userId": 1,
+      "visibleStrategies": 4,
+      "visibleSubscriptions": 2
+    },
+    {
+      "userId": 28,
+      "visibleStrategies": 4,
+      "visibleSubscriptions": 1
+    },
+    {
+      "userId": 29,
+      "visibleStrategies": 4,
+      "visibleSubscriptions": 0
+    }
+  ],
+  "historicalSubscriptionsHidden": 2,
+  "observedAt": "2026-09-11T01:55:51.417Z"
+}

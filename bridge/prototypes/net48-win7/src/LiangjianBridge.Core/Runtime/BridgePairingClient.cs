@@ -21,14 +21,16 @@ namespace Liangjian.BridgeV4.Runtime
     public sealed class BridgePairingClient
     {
         private readonly IBridgeSessionTokenHttpClient http;
+        private readonly string trustedControlBase;
         private readonly JavaScriptSerializer serializer = new JavaScriptSerializer
         { MaxJsonLength = 16384, RecursionLimit = 8 };
 
-        public BridgePairingClient() : this(new HttpWebRequestSessionTokenClient()) { }
-        public BridgePairingClient(IBridgeSessionTokenHttpClient transport)
+        public BridgePairingClient(string trustedControlBase = null) : this(new HttpWebRequestSessionTokenClient(), trustedControlBase) { }
+        public BridgePairingClient(IBridgeSessionTokenHttpClient transport, string trustedControlBase = null)
         {
             if (transport == null) throw new ArgumentNullException("transport");
             http = transport;
+            this.trustedControlBase = TrustedBridgeControlOrigin.Validate(trustedControlBase);
         }
 
         public static string CreateRefreshToken()
@@ -52,8 +54,7 @@ namespace Liangjian.BridgeV4.Runtime
                     || !Matches(pairingCode, "^bpc_[A-Za-z0-9_-]{43}$")
                     || !Matches(refreshToken, "^br4_[A-Za-z0-9_-]{64}$")) throw Invalid();
                 Uri realtime = BridgeV4EndpointPolicy.ValidateRealtimeUri(realtimeAddress);
-                Uri control = BridgeV4EndpointPolicy.ValidateControlUri(
-                    (realtime.Scheme == "wss" ? "https://" : "http://") + realtime.Authority);
+                Uri control = TrustedBridgeControlOrigin.Resolve(realtime, trustedControlBase);
                 Uri endpoint = BridgeV4EndpointPolicy.BuildControlPath(control, "/api/v4/bridge/pairing-redemptions");
                 body = Encoding.UTF8.GetBytes(serializer.Serialize(new Dictionary<string, object>
                 {

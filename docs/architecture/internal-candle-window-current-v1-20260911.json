@@ -1,0 +1,25 @@
+{
+  "kind": "internal-candle-window-current-readonly/v1",
+  "passed": true,
+  "writes": 0,
+  "results": [
+    {
+      "limit": 1000,
+      "returned": 1000,
+      "ascending": true
+    },
+    {
+      "limit": 1800,
+      "returned": 1800,
+      "ascending": true
+    },
+    {
+      "limit": 2000,
+      "returned": 2000,
+      "ascending": true
+    }
+  ],
+  "overLimitRejected": true,
+  "scope": "SQL parameter and ordering verification only; does not prove full Chan history coverage or Chan calculation",
+  "observedAt": "2026-09-11T09:58:35.975Z"
+}

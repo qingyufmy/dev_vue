@@ -1,0 +1,18 @@
+<script setup lang="ts">
+import {ref,reactive,watch,onBeforeUnmount} from 'vue'
+import {createApiClient} from '@aurum/api-client'
+import {modelAssignmentsResponseSchema,type ModelSelection} from '@aurum/contracts'
+import {useTradeSession} from '~/features/auth'
+import {Button} from '@aurum/ui/button'
+import {Label} from '@aurum/ui/label'
+import {Select,SelectContent,SelectItem,SelectTrigger,SelectValue} from '@aurum/ui/select'
+const props=defineProps<{models:ModelSelection['items'];refresh:number}>()
+const {session}=useTradeSession(),client=createApiClient()
+const purposes=[{key:'analysis',label:'行情分析',description:'手动分析与自动分析'},{key:'trader',label:'交易决策',description:'AI 交易员的账户决策'},{key:'review',label:'复盘总结',description:'日复盘、月复盘与手动复盘'}] as const
+const draft=reactive({analysis:'default',trader:'default',review:'default'}),revision=ref<string|null>(null),busy=ref(false),notice=ref('')
+let generation=0,pending:{body:string;key:string}|null=null
+async function load(){const version=++generation;revision.value=null;notice.value='';try{const result=await client.request(modelAssignmentsResponseSchema,'/api/v4/model-assignments');if(version!==generation)return;for(const p of purposes)draft[p.key]=result.data[p.key]??'default';revision.value=result.data.revision}catch{if(version===generation)notice.value='用途配置暂不可用，请刷新后重试。'}}
+watch(()=>[session.value?.user.id,props.refresh],()=>{pending=null;busy.value=false;void load()},{immediate:true});onBeforeUnmount(()=>{generation++})
+async function save(){if(busy.value||revision.value===null||!session.value)return;const version=generation;const body=JSON.stringify({...Object.fromEntries(purposes.map(p=>[p.key,draft[p.key]==='default'?null:draft[p.key]])),revision:revision.value});if(pending?.body!==body)pending={body,key:crypto.randomUUID()};busy.value=true;notice.value='';try{const result=await client.request(modelAssignmentsResponseSchema,'/api/v4/model-assignments',{method:'PUT',csrfToken:session.value.csrf_token,headers:{'Idempotency-Key':pending.key},body});if(version!==generation)return;revision.value=result.data.revision;pending=null;notice.value='用途分配已保存，下次任务生效。'}catch{if(version===generation)notice.value='未能保存用途分配，请刷新核对后重试。'}finally{if(version===generation)busy.value=false}}
+</script>
+<template><section aria-labelledby="model-assignments-title" class="rounded-xl border bg-card p-5"><div class="flex flex-wrap items-start justify-between gap-3"><div><h2 id="model-assignments-title" class="text-sm font-semibold">按用途分配</h2><p class="mt-1.5 text-xs leading-5 text-muted-foreground">无需细分每个任务，不指定时使用默认模型。</p></div><Button size="sm" variant="outline" :disabled="busy||revision===null" @click="save">{{busy?'保存中…':'保存分配'}}</Button></div><div class="mt-5 grid gap-5 lg:grid-cols-3"><div v-for="purpose in purposes" :key="purpose.key" class="grid gap-2"><Label :for="`purpose-${purpose.key}`">{{purpose.label}}</Label><Select v-model="draft[purpose.key]" :disabled="busy||revision===null"><SelectTrigger :id="`purpose-${purpose.key}`" class="w-full"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">使用默认模型</SelectItem><SelectItem v-if="draft[purpose.key]!=='default'&&!models.some(m=>m.id===draft[purpose.key])" :value="draft[purpose.key]" disabled>原模型已不可用，请重新选择</SelectItem><SelectItem v-for="model in models" :key="model.id" :value="model.id" :disabled="!model.available">{{model.name}} · {{model.scope==='platform'?'共享':'个人'}}{{model.available?'':'（不可用）'}}</SelectItem></SelectContent></Select><p class="text-xs text-muted-foreground">{{purpose.description}}</p></div></div><p v-if="notice" role="status" class="mt-4 text-sm">{{notice}}</p></section></template>

@@ -678,3 +678,8 @@ MT4 不支持的 stop-limit、字段或历史证据必须明确返回 `capabilit
 
 
 2026-09-07 时间口径补充：遵循[时间存储与显示规则](time-storage-and-display-policy.md)，时刻存储/传输统一 UTC，实验室显示终端时间，其它应用显示北京时间。
+
+
+### 持仓历史关联标识（2026-09-10，服务端兼容扩展）
+
+Bridge V4 PositionStreamItem可选position_identifier用于传递终端稳定持仓标识，以十进制字符串保留UINT64精度；null或缺失表示未知。它与当前ticket不同，禁止用于命令目标或替换expected_state中的ticket。该字段只进入内部OpenPosition.positionIdentifier和JSON快照，不添加到当前HTTP/实时持仓DTO。旧客户端无此字段仍兼容；本次没有更新生产者，后续Bridge必须确认服务端支持该扩展后再发送。不能从ticket、magic或signal_id猜测缺失值。

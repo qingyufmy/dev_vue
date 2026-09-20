@@ -16,6 +16,19 @@ const common = {
 
 module.exports = {
   apps: [
+    { ...common, name: 'aurum-v4-worker-notifications', script: 'server/dist-v4/entrypoints/worker-notifications.js', max_memory_restart: '256M' },
+    {
+      ...common,
+      name: 'aurum-v4-worker-risk-summary',
+      script: 'server/dist-v4/entrypoints/worker-risk-summary.js',
+      max_memory_restart: '256M',
+    },
+    {
+      ...common,
+      name: 'aurum-v4-worker-public-market',
+      script: 'server/dist-v4/entrypoints/worker-public-market.js',
+      max_memory_restart: '256M',
+    },
     {
       ...common,
       name: 'aurum-v4-api',
@@ -80,6 +93,12 @@ module.exports = {
       ...common,
       name: 'aurum-v4-scheduler-trade-history',
       script: 'server/dist-v4/entrypoints/scheduler-trade-history.js',
+      max_memory_restart: '256M',
+    },
+    {
+      ...common,
+      name: 'aurum-v4-scheduler-execution',
+      script: 'server/dist-v4/entrypoints/scheduler-execution.js',
       max_memory_restart: '256M',
     },
   ],

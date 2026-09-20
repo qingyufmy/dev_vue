@@ -1,0 +1,17 @@
+{
+  "kind": "risk-policy-owner-disposition/v1",
+  "rows": [
+    {
+      "policySetId": "1",
+      "role": "owner",
+      "revoked": "0"
+    },
+    {
+      "policySetId": "3",
+      "role": "owner",
+      "revoked": "1"
+    }
+  ],
+  "observedAt": "2026-09-09T02:00:19.334Z",
+  "writes": 0
+}

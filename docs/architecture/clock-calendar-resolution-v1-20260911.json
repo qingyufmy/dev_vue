@@ -1,0 +1,23 @@
+{
+  "kind": "clock-observation-writer-reference/v1",
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "referenceDatabaseRemoved": true,
+  "checks": [
+    "actual-writer-sql",
+    "transaction-rollback",
+    "raw-status-preserved",
+    "duplicate-rejected",
+    "calibrated-null-rejected",
+    "historical-boundary-bracket",
+    "foreign-user-rejected",
+    "missing-and-late-observation-rejected",
+    "nearest-stale-not-skipped",
+    "hash-tampering-rejected",
+    "replaced-route-rejected",
+    "boundary-reference-replay",
+    "local-midnight-resolved-from-history",
+    "ambiguous-local-midnight-rejected"
+  ],
+  "scope": "Synthetic route and minimal parent fixtures; actual writer and canonical table. Not live Bridge calibration."
+}

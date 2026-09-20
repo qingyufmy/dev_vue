@@ -1,0 +1,31 @@
+{
+  "kind": "strategy-current-application-readonly/v1",
+  "passed": true,
+  "writes": 0,
+  "applicationCredentialsUsed": true,
+  "memoryListStatus": 200,
+  "memoryDetailStatus": 200,
+  "memoryReadApiVerified": true,
+  "visibleMemoryLibraries": 4,
+  "realAuthenticationVerified": false,
+  "schemaReady": true,
+  "counts": [
+    {
+      "userId": 1,
+      "visibleStrategies": 4,
+      "visibleSubscriptions": 2
+    },
+    {
+      "userId": 28,
+      "visibleStrategies": 4,
+      "visibleSubscriptions": 1
+    },
+    {
+      "userId": 29,
+      "visibleStrategies": 4,
+      "visibleSubscriptions": 0
+    }
+  ],
+  "historicalSubscriptionsHidden": 2,
+  "observedAt": "2026-09-11T09:54:09.891Z"
+}

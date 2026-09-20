@@ -1,0 +1,16 @@
+{
+  "kind": "memory-completion-schema-rehearsal/v1",
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "dataCopied": false,
+  "referenceDatabaseRemoved": true,
+  "planHash": "8210fc0af2869cb0cd7aafff5621ab1604cb216dc09a062845269ca1dd0e0bf1",
+  "ddlAckLossRecovered": true,
+  "replayNoDDL": true,
+  "ddlAttempts": 1,
+  "steps": 266,
+  "scope": "Cloned current DDL and migration journal; no business data copied. Current upgrade separately checks every old table data hash.",
+  "legacyColumnsPreserved": true,
+  "fixtureParentForeignKeysVerified": false,
+  "observedAt": "2026-09-11T09:37:48.185Z"
+}

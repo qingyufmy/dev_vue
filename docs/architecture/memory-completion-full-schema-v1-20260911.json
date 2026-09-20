@@ -1,0 +1,9 @@
+{
+  "kind": "memory-completion-full-schema-reference/v1",
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "dataCopied": false,
+  "referenceDatabaseRemoved": true,
+  "errorCode": "ERR_ASSERTION",
+  "observedAt": "2026-09-11T09:36:32.720Z"
+}

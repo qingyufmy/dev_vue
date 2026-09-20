@@ -61,7 +61,7 @@ namespace Liangjian.BridgeV4.Runtime
                 SourceRevision = revision,
                 Candles = ProjectionSourceSupport.MapCandles(root, scope[0], scope[1],
                     cursor.WindowStartUtcMsc, cursor.WindowEndUtcMsc,
-                    result.ObservedAtUtcMsc, revision),
+                    result.ObservedAtUtcMsc, revision, request.AllowOpenCandles),
                 History = new List<HistoryItemRecord>(),
                 PublishCoverage = true,
                 HasMore = hasMore,

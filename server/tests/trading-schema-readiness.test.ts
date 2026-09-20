@@ -7,17 +7,37 @@ vi.mock('../src/modules/trading/infrastructure/inplace-account-schema.js', () =>
   inplaceAccountSchema: { steps: [{ id: 'required', checksum: 'checksum' }],
     tables: ['accounts', 'users'].map(table => ({ table, schemaSha256: createHash('sha256').update(sample.ddl).digest('hex') })) },
 }))
+vi.mock('../src/modules/trading/infrastructure/quote-provenance-schema.js',()=>({quoteProvenanceSchema:{
+  step:{id:'quote',checksum:'quote-checksum'},table:'accounts',
+  beforeHash:createHash('sha256').update(sample.ddl).digest('hex'),
+  afterHash:createHash('sha256').update(sample.ddl.replace('bigint','int')).digest('hex'),
+  steps:[{id:'required',checksum:'checksum'},{id:'quote',checksum:'quote-checksum'}],
+}}))
+import { assertMysqlQuoteProvenanceSchemaReady } from '../src/modules/trading/infrastructure/mysql-schema-readiness.js'
 import { assertMysqlTradingSchemaReady } from '../src/modules/trading/infrastructure/mysql-schema-readiness.js'
+
+it('requires extra capability history and guards its tables from triggers', async () => {
+  const f = fixture()
+  const extra = { steps: [{ id: 'instrument', checksum: 'instrument-checksum' }],
+    tables: [{ table: 'instrument_collection_requests_v4', schemaSha256: createHash('sha256').update(sample.ddl).digest('hex') }] }
+  const check = () => assertMysqlTradingSchemaReady(f.pool as unknown as Pool, undefined, extra)
+  await expect(check()).rejects.toThrow('trading_schema_not_ready')
+  f.state.history.push({ id: 'instrument', checksum: 'instrument-checksum', status: 'completed' })
+  await check()
+  expect(f.connection.query).toHaveBeenCalledWith('SHOW CREATE TABLE `instrument_collection_requests_v4`')
+  f.state.triggers.push({ tableName: 'instrument_collection_requests_v4' })
+  await expect(check()).rejects.toThrow('trading_schema_not_ready')
+})
 
 function fixture() {
   const state = { timezone: '+00:00', acquired: 1, released: 1, ddl: sample.ddl,
     history: [{ id: 'required', checksum: 'checksum', status: 'completed' }], triggers: [] as { tableName: string }[],
-    registry: [{ revision: '0' }] as { revision: unknown }[] }
+    tableDdls:{} as Record<string,string>, registry: [{ revision: '0' }] as { revision: unknown }[] }
   const connection = {
     query: vi.fn(async (sql: string) => {
       if (sql.startsWith('SELECT DATABASE')) return [[{ db: 'dev_vue', timezone: state.timezone }]]
       if (sql.startsWith('SELECT id,')) return [state.history]
-      if (sql.startsWith('SHOW CREATE')) return [[{ 'Create Table': state.ddl }]]
+      if (sql.startsWith('SHOW CREATE')) return [[{ 'Create Table': state.tableDdls[sql] ?? state.ddl }]]
       if (sql.includes('information_schema.TRIGGERS')) return [state.triggers]
       if (sql.includes('FROM observer_management_registry')) return [state.registry]
       throw Error('unexpected_sql')
@@ -96,7 +116,7 @@ it('delegates users to the owner under the same upgrade lock, retaining other ta
   const f = fixture()
   const owner = vi.fn(async (connection: unknown) => {
     expect(connection).toBe(f.connection)
-    expect(f.connection.execute).toHaveBeenLastCalledWith('SELECT GET_LOCK(?,0) acquired', ['aurum:inplace:dev_vue'])
+    expect(f.connection.execute).toHaveBeenLastCalledWith('SELECT GET_LOCK(?,2) acquired', ['aurum:inplace:dev_vue'])
   })
   await assertMysqlTradingSchemaReady(f.pool as unknown as Pool, owner)
   expect(owner).toHaveBeenCalledOnce()
@@ -110,4 +130,25 @@ it('does not fall back to full-table acceptance after an owner check fails', asy
   await expect(assertMysqlTradingSchemaReady(f.pool as unknown as Pool, owner)).rejects.toThrow(/^trading_schema_not_ready$/)
   expect(f.connection.release).toHaveBeenCalledOnce()
   expect(f.connection.execute).toHaveBeenLastCalledWith('SELECT RELEASE_LOCK(?) released', ['aurum:inplace:dev_vue'])
+})
+
+
+it('accepts only the journal-selected quote source schema version and keeps old startup compatibility',async()=>{
+  const f=fixture();await f.run()
+  await expect(assertMysqlQuoteProvenanceSchemaReady(f.pool as unknown as Pool)).rejects.toThrow('trading_schema_not_ready')
+  f.state.tableDdls['SHOW CREATE TABLE `accounts`']=sample.ddl.replace('bigint','int')
+  await expect(f.run()).rejects.toThrow('trading_schema_not_ready')
+  f.state.history.push({id:'quote',checksum:'quote-checksum',status:'completed'})
+  await f.run();await assertMysqlQuoteProvenanceSchemaReady(f.pool as unknown as Pool)
+  delete f.state.tableDdls['SHOW CREATE TABLE `accounts`']
+  await expect(f.run()).rejects.toThrow('trading_schema_not_ready')
+})
+it('rejects changed quote migration checksum even if the old table would pass baseline checks',async()=>{
+  const f=fixture();f.state.history.push({id:'quote',checksum:'changed',status:'completed'})
+  await expect(f.run()).rejects.toThrow('trading_schema_not_ready')
+})
+it('continues to guard upgraded consumed tables against triggers',async()=>{
+  const f=fixture();f.state.history.push({id:'quote',checksum:'quote-checksum',status:'completed'})
+  f.state.tableDdls['SHOW CREATE TABLE `accounts`']=sample.ddl.replace('bigint','int');f.state.triggers.push({tableName:'accounts'})
+  await expect(f.run()).rejects.toThrow('trading_schema_not_ready')
 })

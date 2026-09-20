@@ -1,0 +1,21 @@
+{
+  "passed": true,
+  "scope": "real_mysql_connection_temporary_tables_not_full_schema_or_concurrency",
+  "persistentWrites": 0,
+  "checks": [
+    "successful_candidate_and_distribution_lineage_from_real_sql",
+    "binary_route_future_epoch_and_queued_excluded",
+    "uncertain_retained_and_wrong_child_operation_rejected",
+    "missing_payload_rejected_instead_of_join_filtered"
+  ],
+  "sources": {
+    "modules/execution/infrastructure/mysql-pending-dispatch-candidates.js": "7c03efb179f7ab3dadb3b94fa11a1a19653640740d0e832f642b35248df5fb43",
+    "modules/execution/infrastructure/mysql-pending-dispatch-origin.js": "14eb3447dab02eff1f7d4cc935a298230b348595a5925cb8243e4dadefec1baa"
+  },
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "tz": "+00:00"
+  },
+  "finishedAt": "2026-09-09T04:49:05.773Z"
+}

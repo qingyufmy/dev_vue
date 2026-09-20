@@ -19,6 +19,7 @@ export class ExecutionPreparationWorker {
     if (existing) return { kind: 'existing' as const, command: existing }
     const first = await this.source.loadPrepared(intentId, this.now().toISOString())
     if (!first) return { kind: 'no_work' as const }
+    if ('blocked' in first) return { kind: 'busy' as const, accountId: first.accountId }
     const owner = `execution-prepare:${randomUUID()}`
     if (!await this.leases.acquire(first.accountId, owner, 15)) {
       return { kind: 'busy' as const, accountId: first.accountId }
@@ -26,6 +27,7 @@ export class ExecutionPreparationWorker {
     try {
       const candidate = await this.source.loadPrepared(intentId, this.now().toISOString())
       if (!candidate || candidate.accountId !== first.accountId) return { kind: 'no_work' as const }
+      if ('blocked' in candidate) return { kind: 'busy' as const, accountId: candidate.accountId }
       const command = await this.commands.create(candidate.command, this.now())
       return { kind: command.status === 'queued' ? 'queued' as const : 'existing' as const, command }
     } finally {

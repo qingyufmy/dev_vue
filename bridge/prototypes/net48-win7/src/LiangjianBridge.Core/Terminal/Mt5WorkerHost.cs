@@ -41,11 +41,13 @@ namespace Liangjian.BridgeV4.Terminal
             string login,
             long connectionEpoch,
             string role,
-            string diagnosticPath)
+            string diagnosticPath, bool portable = false, string expectedDataPath = null)
         {
             PythonExecutablePath = RequirePath(pythonExecutablePath, "pythonExecutablePath");
             WorkerScriptPath = RequirePath(workerScriptPath, "workerScriptPath");
             TerminalPath = RequirePath(terminalPath, "terminalPath");
+            Portable = portable;
+            ExpectedDataPath = string.IsNullOrWhiteSpace(expectedDataPath) ? string.Empty : RequirePath(expectedDataPath, "expectedDataPath");
             TerminalInstanceId = RequireText(terminalInstanceId, 191, "terminalInstanceId");
             BrokerServer = RequireText(brokerServer, 128, "brokerServer");
             Login = RequireText(login, 64, "login");
@@ -69,6 +71,8 @@ namespace Liangjian.BridgeV4.Terminal
         public string PythonExecutablePath { get; private set; }
         public string WorkerScriptPath { get; private set; }
         public string TerminalPath { get; private set; }
+        public bool Portable { get; private set; }
+        public string ExpectedDataPath { get; private set; }
         public string TerminalInstanceId { get; private set; }
         public string BrokerServer { get; private set; }
         public string Login { get; private set; }
@@ -636,6 +640,8 @@ namespace Liangjian.BridgeV4.Terminal
             startInfo.EnvironmentVariables["AURUM_BRIDGE_WORKER_LOGIN"] = configuration.Login;
             startInfo.EnvironmentVariables["AURUM_BRIDGE_WORKER_CONNECTION_EPOCH"] = configuration.ConnectionEpoch.ToString();
             startInfo.EnvironmentVariables["AURUM_BRIDGE_WORKER_TERMINAL_PATH"] = configuration.TerminalPath;
+            startInfo.EnvironmentVariables["AURUM_BRIDGE_WORKER_PORTABLE"] = configuration.Portable ? "1" : "0";
+            startInfo.EnvironmentVariables["AURUM_BRIDGE_WORKER_DATA_PATH"] = configuration.ExpectedDataPath;
             startInfo.EnvironmentVariables["AURUM_BRIDGE_WORKER_PIPE"] = pipeName;
             startInfo.EnvironmentVariables["AURUM_BRIDGE_WORKER_NONCE"] = sessionNonce;
             if (!string.IsNullOrEmpty(configuration.DiagnosticPath))

@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "syntheticPorts": [
+    "subscription-candidates",
+    "account-inventory"
+  ],
+  "foreignKeysVerified": false,
+  "checks": [
+    "analysis-result-and-trader-task-commit-with-UTC-and-outbox",
+    "duplicate-completion-rejected",
+    "revoked-account-rolls-back-analysis-completion"
+  ],
+  "referenceDatabaseRemoved": true
+}

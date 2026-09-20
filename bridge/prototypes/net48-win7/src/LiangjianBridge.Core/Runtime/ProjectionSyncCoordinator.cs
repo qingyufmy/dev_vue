@@ -25,6 +25,7 @@ namespace Liangjian.BridgeV4.Runtime
         public long RangeEndUtcMsc { get; set; }
         public string Cursor { get; set; }
         public int Limit { get; set; }
+        public bool AllowOpenCandles { get; set; }
     }
 
     public sealed class ProjectionSyncBatch

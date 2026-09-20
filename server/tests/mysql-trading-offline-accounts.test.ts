@@ -409,3 +409,25 @@ describe('MysqlTradingRepository P3 offline account read model', () => {
     expect(source).toContain('AND s.connection_epoch=?')
   })
 })
+
+
+describe('explicit quote source capability in the parent projection transaction',()=>{
+  it.each([false,true])('commits or rolls back quote and source together on source failure=%s',async failure=>{
+    const pool=new FakePool()
+    const write=vi.fn(async input=>{
+      expect(pool.calls.some(call=>call.sql.includes('INSERT INTO market_quotes'))).toBe(true)
+      expect(input.ownership).toEqual({intervalId:'interval-a',ownershipRevision:'3'})
+      pool.transactionCalls.push('quote-source')
+      if(failure)throw Error('source-write-failed')
+    })
+    const repository=new MysqlTradingRepository(pool.asPool(),null,undefined,undefined,connection=>{expect(connection).toBe(pool);return {write}})
+    const projection={accountId:'42',resource:'market.quote' as const,resourceId:'XAUUSD',revision:4,data:{accountId:'42',symbol:'XAUUSD',bid:'2500',ask:'2500.1',last:null,spread:'0.1',tradeMode:'full' as const,observedAt:'2026-09-10T10:00:00.123Z',revision:4}}
+    const result=repository.applyTrustedProjection({route:route(),projection})
+    if(failure)await expect(result).rejects.toThrow('source-write-failed')
+    else await expect(result).resolves.toEqual({applied:true,absorbedReservationIds:[]})
+    expect(pool.transactionCalls).toEqual(['begin','quote-source',failure?'rollback':'commit','release'])
+    pool.transactionCalls=[];pool.trustedRevisionRows=[{revision:4}]
+    await expect(repository.applyTrustedProjection({route:route(),projection})).resolves.toEqual({applied:false,absorbedReservationIds:[]})
+    expect(write).toHaveBeenCalledTimes(1)
+  })
+})

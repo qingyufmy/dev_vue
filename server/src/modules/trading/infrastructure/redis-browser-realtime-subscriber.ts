@@ -6,6 +6,8 @@ import { BROWSER_REALTIME_EVENT_CHANNEL } from '../application/browser-realtime-
 
 const MAX_EVENT_BYTES = 64 * 1024
 const EVENT_RESOURCES = new Map<BrowserRealtimeEventType, BrowserRealtimeResource>([
+  ['market.public.updated', 'public_market'],
+  ['market.public.history.updated', 'public_market'],
   ['runtime.bridge.changed', 'runtime.bridge'],
   ['account.metrics.changed', 'account.metrics'],
   ['market.quote.updated', 'market.quote'],
@@ -34,6 +36,8 @@ const USER_SCOPED_TYPES = new Set<BrowserRealtimeEventType>([
   'analysis.job.changed', 'market_analysis.created', 'review.case.changed', 'strategy.memory.changed', 'audit.changed',
 ])
 const PLATFORM_SCOPED_TYPES = new Set<BrowserRealtimeEventType>([
+  'market.public.updated',
+  'market.public.history.updated',
   'market.macro.changed', 'market.calendar.changed', 'market.source_health.changed',
 ])
 
@@ -122,6 +126,24 @@ export function parseBrowserRealtimeEvent(raw: string): BrowserRealtimeEvent | n
 
 function platformDataValid(type: BrowserRealtimeEventType, data: unknown) {
   if (!record(data)) return false
+  if (type === 'market.public.history.updated') return exactKeys(data, ['symbol', 'timeframe'])
+    && typeof data.symbol === 'string' && /^[A-Z0-9]{1,32}$/.test(data.symbol)
+    && ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'].includes(String(data.timeframe))
+  if (type === 'market.public.updated') {
+    if (!exactKeys(data, ['symbol', 'timeframe', 'source_key', 'source_generation', 'quote', 'candle'])
+      || typeof data.symbol !== 'string' || !/^[A-Z0-9]{1,32}$/.test(data.symbol)
+      || typeof data.source_key !== 'string' || !/^[a-f0-9]{64}$/.test(data.source_key)
+      || !revision(data.source_generation)) return false
+    if (data.timeframe === null) {
+      const q = data.quote
+      return data.candle === null && record(q) && exactKeys(q, ['bid', 'ask', 'last', 'spread', 'observed_at', 'revision'])
+        && [q.bid, q.ask, q.spread].every(decimal) && (q.last === null || decimal(q.last)) && isoUtc(q.observed_at) && revision(q.revision)
+    }
+    const c = data.candle
+    return ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'].includes(String(data.timeframe)) && data.quote === null && record(c)
+      && exactKeys(c, ['open_time', 'open', 'high', 'low', 'close', 'tick_volume', 'closed', 'revision'])
+      && [c.open, c.high, c.low, c.close, c.tick_volume].every(decimal) && isoUtc(c.open_time) && typeof c.closed === 'boolean' && revision(c.revision)
+  }
   if (type === 'market.macro.changed') {
     return exactKeys(data, ['change', 'published_at', 'status'])
       && ['created', 'updated', 'superseded', 'invalidated'].includes(String(data.change))
@@ -149,6 +171,8 @@ function exactKeys(value: Record<string, unknown>, keys: string[]) {
   const expected = [...keys].sort()
   return actual.length === expected.length && actual.every((key, index) => key === expected[index])
 }
+function decimal(value: unknown) { return typeof value === 'string' && value.length <= 64 && /^-?\d+(\.\d+)?$/.test(value) }
+function revision(value: unknown) { return typeof value === 'string' && /^\d{1,20}$/.test(value) }
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)

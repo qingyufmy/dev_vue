@@ -1,0 +1,194 @@
+{
+  "version": 1,
+  "scope": "Manual classification of all 22 unresolved candidates in sql-write-inventory-20260911.json; not a runtime approval list. Source hash changes invalidate this review.",
+  "entries": [
+    {
+      "file": "server/src/modules/auth/application/active-principal-access.ts",
+      "line": 3,
+      "operation": "UPDATE",
+      "classification": "non-sql-token",
+      "targets": [],
+      "sourceSha256": "ac6e7f28bd6c0bc4afe668205de50ea559d6cf7ecb5b091e0d9bc2bd87230008"
+    },
+    {
+      "file": "server/src/modules/auth/infrastructure/mysql-active-principal-access.ts",
+      "line": 8,
+      "operation": "UPDATE",
+      "classification": "non-sql-token",
+      "targets": [],
+      "sourceSha256": "038ee6792b166d56e35007275d9ed7ca8b5d824692d1479e1251b50676262bf3"
+    },
+    {
+      "file": "server/src/modules/auth/infrastructure/mysql-active-principal-access.ts",
+      "line": 9,
+      "operation": "UPDATE",
+      "classification": "non-sql-token",
+      "targets": [],
+      "sourceSha256": "038ee6792b166d56e35007275d9ed7ca8b5d824692d1479e1251b50676262bf3"
+    },
+    {
+      "file": "server/src/modules/execution/application/position-protection-receiver-context.ts",
+      "line": 12,
+      "operation": "CREATE",
+      "classification": "non-sql-token",
+      "targets": [],
+      "sourceSha256": "72eb9f81df228dbcc721a72fdd1ad8079a8ea26f18331c52da1699159b8dca97"
+    },
+    {
+      "file": "server/src/modules/execution/application/position-protection-receivers.ts",
+      "line": 11,
+      "operation": "CREATE",
+      "classification": "non-sql-token",
+      "targets": [],
+      "sourceSha256": "7d52c5a7936de348c86026c63158c70fcf7b902b49af8faffb0ed581ffe5c344"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-repository.ts",
+      "line": 159,
+      "operation": "UPDATE",
+      "classification": "joined-update",
+      "targets": [
+        "risk_reservations_v4"
+      ],
+      "sourceSha256": "25eaf4b7a66a5ceac1213580bb64913f8a0ac12f0babcdb0eca4c9eb67897a77"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-workflow-schema-readiness.ts",
+      "line": 31,
+      "operation": "CREATE",
+      "classification": "non-sql-token",
+      "targets": [],
+      "sourceSha256": "035816c9947b25014c0a2f78082b273269ef059f71942539abbfd18ab707da30"
+    },
+    {
+      "file": "server/src/modules/execution/infrastructure/mysql-execution-workflow-schema-readiness.ts",
+      "line": 31,
+      "operation": "CREATE",
+      "classification": "non-sql-token",
+      "targets": [],
+      "sourceSha256": "035816c9947b25014c0a2f78082b273269ef059f71942539abbfd18ab707da30"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-model-task-recovery-repository.ts",
+      "line": 51,
+      "operation": "UPDATE",
+      "classification": "closed-dynamic-write",
+      "targets": [
+        "ai_analysis_runs",
+        "ai_trader_runs"
+      ],
+      "sourceSha256": "64383da6e79edce967c937784714b8771b2f97f56bf1dd9190c8b6476974f40b"
+    },
+    {
+      "file": "server/src/modules/inference/infrastructure/mysql-model-usage-ledger.ts",
+      "line": 65,
+      "operation": "UPDATE",
+      "classification": "non-sql-token",
+      "targets": [],
+      "sourceSha256": "7192ab1f89eea7009b0acf154106b9507d0f1005e82c455a25f87731a300eba2"
+    },
+    {
+      "file": "server/src/modules/market/infrastructure/mysql-macro-series-reader.ts",
+      "line": 17,
+      "operation": "WITH",
+      "classification": "read-only-cte",
+      "targets": [],
+      "sourceSha256": "7872876c297dc84263077c12aedb3515b51f7770b689d3da85dfb1d6254eace0"
+    },
+    {
+      "file": "server/src/modules/trade-history/infrastructure/mysql-history-task-schema-readiness.ts",
+      "line": 35,
+      "operation": "CREATE",
+      "classification": "non-sql-token",
+      "targets": [],
+      "sourceSha256": "00d50ff37dc9ee6e1ba66c4ff43e40681520eb5541190ab9565e07a026e1f89b"
+    },
+    {
+      "file": "server/src/modules/trade-history/infrastructure/mysql-history-task-schema-readiness.ts",
+      "line": 35,
+      "operation": "CREATE",
+      "classification": "non-sql-token",
+      "targets": [],
+      "sourceSha256": "00d50ff37dc9ee6e1ba66c4ff43e40681520eb5541190ab9565e07a026e1f89b"
+    },
+    {
+      "file": "server/src/modules/trade-history/infrastructure/mysql-schema-readiness.ts",
+      "line": 41,
+      "operation": "CREATE",
+      "classification": "non-sql-token",
+      "targets": [],
+      "sourceSha256": "1cb9fb305330bb019469d523b7fe7f9a6104521b5e8708fb20e050b7391d66c6"
+    },
+    {
+      "file": "server/src/modules/trade-history/infrastructure/mysql-schema-readiness.ts",
+      "line": 41,
+      "operation": "CREATE",
+      "classification": "non-sql-token",
+      "targets": [],
+      "sourceSha256": "1cb9fb305330bb019469d523b7fe7f9a6104521b5e8708fb20e050b7391d66c6"
+    },
+    {
+      "file": "server/src/modules/trade-history/infrastructure/mysql-trade-history-repository.ts",
+      "line": 48,
+      "operation": "WITH",
+      "classification": "read-only-cte",
+      "targets": [],
+      "sourceSha256": "1d5d30e99d14dd4671472139473433d9c7b3ef975668796517f80c4560cbcfca"
+    },
+    {
+      "file": "server/src/modules/trading/infrastructure/mysql-account-registration.ts",
+      "line": 37,
+      "operation": "UPDATE",
+      "classification": "non-sql-token",
+      "targets": [],
+      "sourceSha256": "1726f38a605d26e083234a70fc67199e9bf32a873bf0d116136af8035b85951c"
+    },
+    {
+      "file": "server/src/modules/trading/infrastructure/mysql-context-commands.ts",
+      "line": 40,
+      "operation": "UPDATE",
+      "classification": "non-sql-token",
+      "targets": [],
+      "sourceSha256": "241af47eaaa800a0949ebf2bd784902f07404ff2c458a8c9301d54f4233f5eaf"
+    },
+    {
+      "file": "server/src/modules/trading/infrastructure/mysql-schema-readiness.ts",
+      "line": 49,
+      "operation": "CREATE",
+      "classification": "non-sql-token",
+      "targets": [],
+      "sourceSha256": "d8b7d99f199552d6f819c37f4eb8d56a9bc5e8c5522891b459d3d4b64efc5ff3"
+    },
+    {
+      "file": "server/src/modules/trading/infrastructure/mysql-schema-readiness.ts",
+      "line": 49,
+      "operation": "CREATE",
+      "classification": "non-sql-token",
+      "targets": [],
+      "sourceSha256": "d8b7d99f199552d6f819c37f4eb8d56a9bc5e8c5522891b459d3d4b64efc5ff3"
+    },
+    {
+      "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+      "line": 607,
+      "operation": "DELETE",
+      "classification": "closed-dynamic-write",
+      "targets": [
+        "open_position_snapshots",
+        "pending_order_snapshots"
+      ],
+      "sourceSha256": "f2575a0d3987438b83840810f0c8c1aa95e144c4936c2eaabffdbbd3121f30b1"
+    },
+    {
+      "file": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+      "line": 608,
+      "operation": "INSERT",
+      "classification": "closed-dynamic-write",
+      "targets": [
+        "open_position_snapshots",
+        "pending_order_snapshots"
+      ],
+      "sourceSha256": "f2575a0d3987438b83840810f0c8c1aa95e144c4936c2eaabffdbbd3121f30b1"
+    }
+  ],
+  "remaining": "121 indirect execute/query call sites need current source tracing. No database objects, legacy code or runtime triggers checked."
+}

@@ -1,0 +1,275 @@
+{
+  "kind": "review-transition-inventory/v1",
+  "passed": true,
+  "writes": 0,
+  "cases": [
+    {
+      "table": "trade_review_cases",
+      "groups": [
+        {
+          "user_id": 1,
+          "status": "ready",
+          "evidence_status": "complete",
+          "n": 51,
+          "with_version": "0",
+          "with_approval": "0"
+        },
+        {
+          "user_id": 29,
+          "status": "ready",
+          "evidence_status": "complete",
+          "n": 104,
+          "with_version": "0",
+          "with_approval": "0"
+        }
+      ]
+    },
+    {
+      "table": "manual_trade_review_cases",
+      "groups": [
+        {
+          "user_id": 1,
+          "status": "draft",
+          "evidence_status": "complete",
+          "n": 1,
+          "with_version": "1",
+          "with_approval": "0"
+        },
+        {
+          "user_id": 1,
+          "status": "failed",
+          "evidence_status": "complete",
+          "n": 1,
+          "with_version": "0",
+          "with_approval": "0"
+        },
+        {
+          "user_id": 1,
+          "status": "failed",
+          "evidence_status": "partial",
+          "n": 1,
+          "with_version": "0",
+          "with_approval": "0"
+        }
+      ]
+    },
+    {
+      "table": "period_review_cases",
+      "groups": [
+        {
+          "user_id": 1,
+          "status": "approved",
+          "evidence_status": "complete",
+          "n": 6,
+          "with_version": "6",
+          "with_approval": "6"
+        },
+        {
+          "user_id": 1,
+          "status": "draft",
+          "evidence_status": "complete",
+          "n": 5,
+          "with_version": "5",
+          "with_approval": "0"
+        },
+        {
+          "user_id": 1,
+          "status": "failed",
+          "evidence_status": "complete",
+          "n": 1,
+          "with_version": "0",
+          "with_approval": "0"
+        },
+        {
+          "user_id": 1,
+          "status": "generating",
+          "evidence_status": "complete",
+          "n": 1,
+          "with_version": "0",
+          "with_approval": "0"
+        },
+        {
+          "user_id": 29,
+          "status": "approved",
+          "evidence_status": "complete",
+          "n": 5,
+          "with_version": "5",
+          "with_approval": "5"
+        },
+        {
+          "user_id": 29,
+          "status": "draft",
+          "evidence_status": "complete",
+          "n": 6,
+          "with_version": "6",
+          "with_approval": "0"
+        },
+        {
+          "user_id": 29,
+          "status": "generating",
+          "evidence_status": "complete",
+          "n": 1,
+          "with_version": "0",
+          "with_approval": "0"
+        }
+      ]
+    }
+  ],
+  "tables": [
+    {
+      "table": "trade_review_versions",
+      "rows": 0
+    },
+    {
+      "table": "manual_trade_review_versions",
+      "rows": 1
+    },
+    {
+      "table": "manual_trade_review_sources",
+      "rows": 3
+    },
+    {
+      "table": "manual_trade_review_jobs",
+      "rows": 3
+    },
+    {
+      "table": "manual_trade_review_stage_runs",
+      "rows": 18
+    },
+    {
+      "table": "manual_trade_review_counterfactual_points",
+      "rows": 27
+    },
+    {
+      "table": "period_review_versions",
+      "rows": 33
+    },
+    {
+      "table": "period_review_sources",
+      "rows": 176
+    },
+    {
+      "table": "period_review_jobs",
+      "rows": 25
+    },
+    {
+      "table": "period_review_job_events",
+      "rows": 7208
+    },
+    {
+      "table": "period_review_derivation_jobs",
+      "rows": 12
+    },
+    {
+      "table": "period_review_monthly_checkpoints",
+      "rows": 8
+    },
+    {
+      "table": "period_review_user_states",
+      "rows": 33
+    },
+    {
+      "table": "review_cases_v4",
+      "rows": 0
+    },
+    {
+      "table": "review_versions_v4",
+      "rows": 0
+    }
+  ],
+  "periodStrategyLineage": [
+    {
+      "strategy_id": 1,
+      "strategy_version": 8,
+      "cases": 2,
+      "mapped_trader_versions": "0"
+    },
+    {
+      "strategy_id": 1,
+      "strategy_version": 15,
+      "cases": 1,
+      "mapped_trader_versions": "0"
+    },
+    {
+      "strategy_id": 1,
+      "strategy_version": 18,
+      "cases": 3,
+      "mapped_trader_versions": "0"
+    },
+    {
+      "strategy_id": 1,
+      "strategy_version": 21,
+      "cases": 2,
+      "mapped_trader_versions": "0"
+    },
+    {
+      "strategy_id": 1,
+      "strategy_version": 25,
+      "cases": 2,
+      "mapped_trader_versions": "0"
+    },
+    {
+      "strategy_id": 1,
+      "strategy_version": 42,
+      "cases": 3,
+      "mapped_trader_versions": "0"
+    },
+    {
+      "strategy_id": 3,
+      "strategy_version": 10,
+      "cases": 12,
+      "mapped_trader_versions": "0"
+    }
+  ],
+  "periodCasesWithoutCurrentOwnership": 12,
+  "targetKind": "enum('daily','monthly','manual')",
+  "periodContentShapes": [
+    {
+      "keys": [
+        "chan_diagnoses",
+        "confidence",
+        "daily_lessons",
+        "decision_quality",
+        "period_chan_assessment",
+        "period_summary",
+        "repeated_issues",
+        "risk_observations",
+        "strengths",
+        "trade_assessments"
+      ],
+      "count": 11
+    },
+    {
+      "keys": [
+        "confidence",
+        "daily_lessons",
+        "decision_quality",
+        "memory_updates",
+        "period_summary",
+        "repeated_issues",
+        "risk_observations",
+        "strategy_conflicts",
+        "strengths",
+        "trade_assessments"
+      ],
+      "count": 5
+    },
+    {
+      "keys": [
+        "confidence",
+        "decision_quality",
+        "experience_rules",
+        "next_day_actions",
+        "output_contract_version",
+        "period_summary",
+        "repeated_issues",
+        "risk_observations",
+        "strategy_conflicts",
+        "strengths",
+        "trade_assessments"
+      ],
+      "count": 17
+    }
+  ],
+  "observedAt": "2026-09-11T02:50:00.019Z"
+}

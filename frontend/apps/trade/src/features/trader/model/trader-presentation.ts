@@ -202,7 +202,7 @@ export function expectedStateRecords(action: TraderDecisionDetail['actions'][num
 }
 
 export function strategyName(strategies: { id: string; name: string }[], id: string) {
-  return strategies.find((item) => item.id === id)?.name ?? `策略 ${id}`
+  return strategies.find((item) => item.id === id)?.name ?? '未命名策略'
 }
 
 export function decisionHasAnalysis(decision: TraderDecisionSummary | null | undefined) {
@@ -211,7 +211,7 @@ export function decisionHasAnalysis(decision: TraderDecisionSummary | null | und
 
 function mappedLabel(value: NullableValue, labels: Record<string, string>) {
   if (value === null || value === undefined || value === '') return '--'
-  return labels[String(value)] ?? `未识别（${String(value)}）`
+  return labels[String(value)] ?? '暂未识别'
 }
 
 function decimalPlaces(value: NullableValue) {

@@ -1,0 +1,9 @@
+{
+  "kind": "chan-model-projection-parity/v1",
+  "passed": true,
+  "cases": 519,
+  "referenceSha256": "df415c4c7ee9b8bd86f531fb9e3d4a21979fa6b58f8e8530034c7d06b04f938a",
+  "targetSha256": "2dab871a79b7c894ea25b0f66b616916d37b79e8e8fc0f7c4367546e06e8359a",
+  "scope": "synthetic model-projection parity only; no Chan algorithm or live runtime wiring validated",
+  "observedAt": "2026-09-11T10:01:12.889Z"
+}

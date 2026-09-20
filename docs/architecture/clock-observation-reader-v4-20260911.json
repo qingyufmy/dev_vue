@@ -1,0 +1,74 @@
+{
+  "kind": "clock-observation-writer-reference/v1",
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "referenceDatabaseRemoved": true,
+  "debugRows": [
+    {
+      "trading_account_id": 5,
+      "projection_revision": 12,
+      "user_id": 7,
+      "ownership_interval_id": "interval",
+      "ownership_revision": 3,
+      "terminal_profile_id": "profile",
+      "terminal_instance_id": "terminal",
+      "connection_epoch": 9,
+      "connection_id": "connection",
+      "reported_status": "unavailable",
+      "reported_offset_minutes": null,
+      "effective_status": "stale",
+      "effective_offset_minutes": 180,
+      "observed_at_utc": "2026-09-11 00:00:00.000",
+      "received_at_utc": "2026-09-11 08:02:28.831",
+      "evidence_sha256": "1e7b76503f355e2f282647b39c973627e2d0944ef6835e0b7409f9f2fd491d3e"
+    },
+    {
+      "trading_account_id": 5,
+      "projection_revision": 13,
+      "user_id": 7,
+      "ownership_interval_id": "interval",
+      "ownership_revision": 3,
+      "terminal_profile_id": "profile",
+      "terminal_instance_id": "terminal",
+      "connection_epoch": 9,
+      "connection_id": "connection",
+      "reported_status": "calibrated",
+      "reported_offset_minutes": 180,
+      "effective_status": "calibrated",
+      "effective_offset_minutes": 180,
+      "observed_at_utc": "2026-09-11 00:00:59.000",
+      "received_at_utc": "2026-09-11 08:02:28.838",
+      "evidence_sha256": "6065049843802cfd4e9685b48a55e5356db2853429cabe2e60475ed6c06752f1"
+    },
+    {
+      "trading_account_id": 5,
+      "projection_revision": 14,
+      "user_id": 7,
+      "ownership_interval_id": "interval",
+      "ownership_revision": 3,
+      "terminal_profile_id": "profile",
+      "terminal_instance_id": "terminal",
+      "connection_epoch": 9,
+      "connection_id": "connection",
+      "reported_status": "calibrated",
+      "reported_offset_minutes": 180,
+      "effective_status": "calibrated",
+      "effective_offset_minutes": 180,
+      "observed_at_utc": "2026-09-11 00:01:01.000",
+      "received_at_utc": "2026-09-11 08:02:28.839",
+      "evidence_sha256": "90bf247a95b4ed5d44ff75cc93bc3bf4ff6775f7d555f77d032882f7f032bea3"
+    }
+  ],
+  "debugScope": {
+    "userId": 7,
+    "accountId": "5",
+    "ownershipIntervalId": "interval",
+    "utcMsc": 1789084860000,
+    "asOfUtcMsc": 1789113804558
+  },
+  "errorCode": "TypeError",
+  "errorLocations": [
+    "    at file:///D:/dev_codex/dev_vue/scripts/verify-clock-observation-writer-reference-local.mjs:58:23",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)"
+  ]
+}

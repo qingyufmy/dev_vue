@@ -1,0 +1,36 @@
+{
+  "kind": "v4-local-configuration/v1",
+  "observedAt": "2026-09-11T04:19:24.164Z",
+  "source": "server/.env",
+  "localOverlayValidated": true,
+  "processOverridesVerified": false,
+  "servicesStarted": false,
+  "checks": {
+    "runtime": {
+      "valid": true
+    },
+    "api": {
+      "valid": true
+    },
+    "realtime": {
+      "valid": true
+    },
+    "modelKeyring": {
+      "valid": true
+    },
+    "identityKey": {
+      "valid": true
+    }
+  },
+  "missingKeys": [],
+  "ready": true,
+  "runtimeEnabled": true,
+  "targets": {
+    "mysqlHost": "192.168.1.254",
+    "mysqlDatabase": "dev_vue",
+    "cacheHost": "192.168.1.254",
+    "queueHost": "192.168.1.254",
+    "queueDb": 1,
+    "queuePrefix": "aurum-v4-dev-vue"
+  }
+}

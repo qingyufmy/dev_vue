@@ -1,12 +1,13 @@
+import { applyPublicMarketEvent } from './public-market-state'
 import { applyRealtimeState } from '~/features/trading-context'
 import { applyAccountSnapshot } from '~/features/trading-context'
 import type { TradeSessionSnapshot } from '~/features/auth'
 import { applyAccountMetrics } from '~/lib/apply-account-metrics'
 import { createApiClient } from '@aurum/api-client'
-import { browserRealtimeEventSchema, marketCandleSchema, marketQuoteSchema, openPositionSchema, pendingOrderSchema } from '@aurum/contracts'
+import { browserRealtimeEventSchema, openPositionSchema, pendingOrderSchema } from '@aurum/contracts'
 import type { Timeframe } from '@aurum/contracts'
 import { connectRealtime } from '@aurum/realtime'
-import { accountSnapshot, marketCandles, marketQuote, openPositions, pendingOrders, resourceRevisions } from './home-runtime'
+import { accountSnapshot, openPositions, pendingOrders, resourceRevisions } from './home-runtime'
 
 const client = createApiClient()
 let connection: ReturnType<typeof connectRealtime> | null = null
@@ -36,7 +37,7 @@ async function connect(session: TradeSessionSnapshot, accountId: string, symbol:
   let connectionAlive = true
   let resyncInFlight = false
   let resyncQueued = false
-  const requestObserverResync = async () => {
+  const requestSnapshotResync = async () => {
     if (currentGeneration !== generation || !connectionAlive) return
     if (resyncInFlight) { resyncQueued = true; return }
     resyncInFlight = true
@@ -62,24 +63,22 @@ async function connect(session: TradeSessionSnapshot, accountId: string, symbol:
     url: `${scheme}//${location.host}/realtime/v4`, protocol: 'aurum.realtime.v4',
     onOpen(ws) {
       if (currentGeneration !== generation || !connectionAlive) return ws.close()
-      const accountTargets = observerChannelId === null ? [
+      const accountTargets = !accountId ? [] : observerChannelId === null ? [
         { kind: 'runtime', trading_account_id: accountId, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'bridge', after_revision: null },
-        { kind: 'account', trading_account_id: accountId, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'metrics', after_revision: String(resourceRevisions.value.account) },
-        { kind: 'account', trading_account_id: accountId, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'positions', after_revision: String(resourceRevisions.value.positions) },
-        { kind: 'account', trading_account_id: accountId, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'pending_orders', after_revision: String(resourceRevisions.value.pendingOrders) },
-        { kind: 'market', trading_account_id: accountId, observer_channel_id: null, symbol, timeframe: null, resource_id: 'quote', after_revision: String(resourceRevisions.value.quote) },
-        { kind: 'market', trading_account_id: accountId, observer_channel_id: null, symbol, timeframe, resource_id: 'candle', after_revision: String(resourceRevisions.value.candle) },
+        { kind: 'account', trading_account_id: accountId, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'metrics', after_revision: null },
+        { kind: 'account', trading_account_id: accountId, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'positions', after_revision: null },
+        { kind: 'account', trading_account_id: accountId, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'pending_orders', after_revision: null },
       ] : [
         { kind: 'account', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol: null, timeframe: null, resource_id: 'metrics', after_revision: null },
         { kind: 'account', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol: null, timeframe: null, resource_id: 'positions', after_revision: null },
         { kind: 'account', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol: null, timeframe: null, resource_id: 'pending_orders', after_revision: null },
-        { kind: 'market', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol, timeframe: null, resource_id: 'quote', after_revision: null },
-        { kind: 'market', trading_account_id: accountId, observer_channel_id: observerChannelId, symbol, timeframe, resource_id: 'candle', after_revision: null },
       ]
       ws.send(JSON.stringify({
       v: 4, type: 'subscription.subscribe', request_id: crypto.randomUUID(),
       targets: [
         ...accountTargets,
+        { kind: 'market', trading_account_id: null, observer_channel_id: null, symbol, timeframe: null, resource_id: 'public_quote', after_revision: null },
+        { kind: 'market', trading_account_id: null, observer_channel_id: null, symbol, timeframe, resource_id: 'public_candle', after_revision: null },
         { kind: 'signals', trading_account_id: null, observer_channel_id: null, symbol: null, timeframe: null, resource_id: 'market_analyses', after_revision: null },
       ],
       }))
@@ -87,7 +86,7 @@ async function connect(session: TradeSessionSnapshot, accountId: string, symbol:
     async onMessage(raw) {
     if (currentGeneration !== generation || !connectionAlive) return
     const messageType = typeof raw === 'object' && raw !== null && 'type' in raw ? String(raw.type) : ''
-    if (messageType === 'subscription.ready') { reconnectAttempt = 0; applyRealtimeState('live'); return }
+    if (messageType === 'subscription.ready') { reconnectAttempt = 0; await requestSnapshotResync(); return }
     if (messageType === 'subscription.resync_required') { applyRealtimeState('recovering'); connection?.close(4000, 'revision_resync_required'); return }
     const parsed = browserRealtimeEventSchema.safeParse(raw)
     if (!parsed.success || parsed.data.scope.user_id !== session.user.id) return
@@ -98,12 +97,20 @@ async function connect(session: TradeSessionSnapshot, accountId: string, symbol:
       onAnalysisChanged?.()
       return
     }
+    if (event.type === 'market.public.history.updated') {
+      if (event.data.symbol === symbol && event.data.timeframe === timeframe) void requestSnapshotResync()
+      return
+    }
+    if (event.type === 'market.public.updated') {
+      if (applyPublicMarketEvent(event, symbol, timeframe) === 'resync') void requestSnapshotResync()
+      return
+    }
     if (event.type === 'observer.publication.changed') {
       if (observerChannelId === null || event.scope.trading_account_id !== accountId
         || event.scope.terminal_instance_id !== null || event.scope.observer_channel_id !== observerChannelId
         || event.resource.kind !== 'observer_publication' || event.resource.id !== observerChannelId
         || event.data.channel_id !== observerChannelId) return
-      void requestObserverResync()
+      void requestSnapshotResync()
       return
     }
     if (observerChannelId !== null) return
@@ -112,19 +119,16 @@ async function connect(session: TradeSessionSnapshot, accountId: string, symbol:
       if (accountSnapshot.value && isBridgeRuntime(event.data)) applyAccountSnapshot({
         ...accountSnapshot.value, bridgeState: event.data.state, lastSeenAt: event.data.last_seen_at,
       })
-    } else if (event.type === 'market.quote.updated') {
-      const data = marketQuoteSchema.safeParse({ ...objectData(event.data), account_id: accountId, trade_mode: marketQuote.value?.tradeMode ?? 'unknown', revision: event.revision }); if (data.success && data.data.symbol === symbol) { marketQuote.value = data.data; resourceRevisions.value.quote = data.data.revision }
-    } else if (event.type === 'market.candle.updated' || event.type === 'market.candle.closed') {
-      const data = marketCandleSchema.safeParse({ ...objectData(event.data), account_id: accountId, revision: event.revision })
-      if (data.success && data.data.symbol === symbol && data.data.timeframe === timeframe) { upsertCandle(data.data); resourceRevisions.value.candle = data.data.revision }
     } else if (event.type === 'positions.changed') {
-      const data = openPositionSchema.array().safeParse(collectionItems(event.data)); if (data.success) { openPositions.value = data.data; resourceRevisions.value.positions = Number(event.revision) }
+      const data = openPositionSchema.array().safeParse(collectionItems(event.data)); if (data.success && Number(event.revision) > resourceRevisions.value.positions && data.data.every(item => item.accountId === accountId)) { openPositions.value = data.data; resourceRevisions.value.positions = Number(event.revision) }
     } else if (event.type === 'pending_orders.changed') {
-      const data = pendingOrderSchema.array().safeParse(collectionItems(event.data)); if (data.success) { pendingOrders.value = data.data; resourceRevisions.value.pendingOrders = Number(event.revision) }
+      const data = pendingOrderSchema.array().safeParse(collectionItems(event.data)); if (data.success && Number(event.revision) > resourceRevisions.value.pendingOrders && data.data.every(item => item.accountId === accountId)) { pendingOrders.value = data.data; resourceRevisions.value.pendingOrders = Number(event.revision) }
     } else if (event.type === 'account.metrics.changed') {
       if (accountSnapshot.value && accountSnapshot.value.id === accountId) {
         applyAccountSnapshot(applyAccountMetrics(accountSnapshot.value, event.data, Number(event.revision)))
         resourceRevisions.value.account = accountSnapshot.value.revision
+      } else if (!accountSnapshot.value) {
+        void requestSnapshotResync()
       }
     }
     },
@@ -159,17 +163,9 @@ function scheduleReconnect(session: TradeSessionSnapshot, accountId: string, sym
 function collectionItems(value: unknown) {
   return typeof value === 'object' && value !== null && 'items' in value ? value.items : null
 }
-function objectData(value: unknown) { return typeof value === 'object' && value !== null ? value : {} }
 
 function isBridgeRuntime(value: unknown): value is { state: 'online' | 'offline' | 'paused' | 'replaced' | 'unauthorized'; last_seen_at: string } {
   if (typeof value !== 'object' || value === null) return false
   const data = value as Record<string, unknown>
   return ['online', 'offline', 'paused', 'replaced', 'unauthorized'].includes(String(data.state)) && typeof data.last_seen_at === 'string'
-}
-
-function upsertCandle(candle: typeof marketCandles.value[number]) {
-  const items = marketCandles.value
-  const last = items.at(-1)
-  if (last?.openTime === candle.openTime) marketCandles.value = [...items.slice(0, -1), candle]
-  else if (!last || last.openTime < candle.openTime) marketCandles.value = [...items, candle].slice(-500)
 }

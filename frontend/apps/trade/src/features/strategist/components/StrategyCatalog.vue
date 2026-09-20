@@ -7,7 +7,6 @@ import { Button } from '@aurum/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@aurum/ui/card'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@aurum/ui/empty'
 import { Input } from '@aurum/ui/input'
-import { ScrollArea } from '@aurum/ui/scroll-area'
 import { Tabs, TabsList, TabsTrigger } from '@aurum/ui/tabs'
 import { strategyKindLabel, strategyStatusLabel } from '../model/strategy-presentation'
 
@@ -36,16 +35,16 @@ function changeKind(value: string | number) {
 </script>
 
 <template>
-  <Card class="min-w-0 shadow-none">
+  <Card class="min-w-0 self-start shadow-none">
     <CardHeader class="gap-4 border-b">
       <div class="flex items-start justify-between gap-3">
         <div>
           <CardTitle>策略库</CardTitle>
-          <CardDescription class="mt-1">平台策略可直接使用，个人策略可持续迭代。</CardDescription>
+          <CardDescription class="mt-1">选择现有策略，或创建自己的策略。</CardDescription>
         </div>
-        <Button size="icon-lg" aria-label="新增策略" @click="emit('create', kind)"><Plus data-icon="inline-start" /></Button>
+        <Button size="sm" class="min-h-11 shrink-0" aria-label="新增策略" @click="emit('create', kind)"><Plus data-icon="inline-start" />新建</Button>
       </div>
-      <Tabs :model-value="kind" @update:model-value="changeKind">
+      <Tabs class="flex flex-col" :model-value="kind" @update:model-value="changeKind">
         <TabsList class="grid h-auto w-full grid-cols-2">
           <TabsTrigger value="analysis" class="min-h-11">行情分析</TabsTrigger>
           <TabsTrigger value="trader" class="min-h-11">交易执行</TabsTrigger>
@@ -64,17 +63,18 @@ function changeKind(value: string | number) {
       <Empty v-else-if="!filtered.length" class="min-h-72">
         <EmptyHeader>
           <EmptyMedia variant="icon"><BrainCircuit /></EmptyMedia>
-          <EmptyTitle>暂无{{ strategyKindLabel[kind] }}策略</EmptyTitle>
-          <EmptyDescription>可以新建个人策略，发布后再分配给交易账户。</EmptyDescription>
+          <EmptyTitle>{{ keyword ? '没有找到匹配的策略' : `暂无${strategyKindLabel[kind]}策略` }}</EmptyTitle>
+          <EmptyDescription>{{ keyword ? '试试其他关键词。' : '创建个人策略，发布后即可使用。' }}</EmptyDescription>
         </EmptyHeader>
       </Empty>
-      <ScrollArea v-else class="h-[34rem]">
+      <div v-else class="max-h-[34rem] overflow-y-auto">
         <div class="grid gap-2 p-3">
           <Button
             v-for="item in filtered"
             :key="item.id"
             variant="ghost"
-            class="grid h-auto min-h-24 w-full justify-stretch gap-2 rounded-xl border p-3 text-left font-normal hover:bg-muted/50"
+            class="grid h-auto whitespace-normal min-h-24 w-full justify-stretch gap-2 rounded-xl border p-3 text-left font-normal hover:bg-muted/50"
+            :aria-pressed="item.id === selectedId"
             :class="item.id === selectedId ? 'border-primary bg-primary/5' : ''"
             @click="emit('select', item.id)"
           >
@@ -88,7 +88,7 @@ function changeKind(value: string | number) {
             <span class="text-xs text-muted-foreground">{{ item.scope === 'platform' ? '平台共享' : '我的策略' }}</span>
           </Button>
         </div>
-      </ScrollArea>
+      </div>
     </CardContent>
   </Card>
 </template>

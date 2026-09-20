@@ -1,0 +1,50 @@
+{
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "syntheticPorts": [
+    "model-result"
+  ],
+  "omittedTraderContextPorts": [],
+  "remainingEvidenceLimits": [
+    "synthetic-market-data-and-model-responses",
+    "synthetic-terminal-route-and-result",
+    "synthetic-bridge-command-transport",
+    "stub-http-authentication",
+    "empty-reference-inventory",
+    "review-case-job-and-evidence-seeded-before-worker",
+    "analysis-memory-bootstrap",
+    "resolver-wrapper-uses-injected-fetch"
+  ],
+  "foreignKeysVerified": false,
+  "checks": [
+    "actual-instrument-reader-requires-current-owner-binding-and-connection-epoch",
+    "actual-review-worker-generates-one-version-before-confirmation",
+    "review-confirmation-replay-creates-one-pending-memory",
+    "unaccepted-memory-does-not-change-runtime-input",
+    "accepted-memory-new-revision-reaches-runtime-reader",
+    "actual-model-catalog-decrypts-synthetic-credential-and-rejects-capability-or-owner-mismatch",
+    "scheduler-replay-keeps-one-run-one-outbox-and-exact-UTC-milliseconds",
+    "actual-analysis-outbox-queue-worker-and-context-complete-once",
+    "analysis-result-and-trader-task-commit-with-UTC-and-outbox",
+    "duplicate-completion-rejected"
+  ],
+  "memorySchemaClonedFromCurrentDatabase": true,
+  "scheduleFailures": [],
+  "chanWorkerInputVerified": true,
+  "analysisResult": {
+    "status": "succeeded"
+  },
+  "errorCode": "ER_NO_SUCH_TABLE",
+  "locations": [
+    "    at Object.read (file:///D:/dev_codex/dev_vue/server/dist-v4/modules/inference/infrastructure/mysql-entry-event-usage-reader.js:7:37)",
+    "    at freezeEntryEventUsage (file:///D:/dev_codex/dev_vue/server/dist-v4/modules/inference/application/entry-event-usage.js:20:47)",
+    "    at TraderContextBuilder.build (file:///D:/dev_codex/dev_vue/server/dist-v4/modules/inference/application/trader-context-builder.js:94:39)"
+  ],
+  "referenceAnalysisQueueRemoved": true,
+  "referenceQueueRemoved": true,
+  "referenceRiskQueueRemoved": true,
+  "referenceExecutionQueueRemoved": true,
+  "referenceGatewayRouteRemoved": true,
+  "referenceLeaseRemoved": true,
+  "referenceDatabaseRemoved": true
+}

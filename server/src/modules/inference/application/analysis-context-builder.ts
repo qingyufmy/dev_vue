@@ -1,9 +1,16 @@
-import type { StrategyVersion } from '../../strategies/domain/strategy.js'
+import { assertStrategySymbol } from '../../strategies/index.js'
+import { parsePriceActionEvidencePlan, type PriceActionEvidencePlan } from '../../strategies/index.js'
+import { parseChanEvidencePlan, type ChanEvidencePlan } from '../../strategies/index.js'
+import type { StrategyVersion } from '../../strategies/index.js'
 import { parseStrategyMarketDataPlan, parseEma34Plan, type Ema34Plan } from '../../strategies/index.js'
 import type { AnalysisInputSnapshot, AnalysisRun, JsonObject } from '../domain/inference.js'
+import type { RuntimeStrategyMemoryReader } from '../../reviews/index.js'
+import { freezeStrategyMemory } from './freeze-strategy-memory.js'
 
 export interface AnalysisMarketPlan {
   timeframes: Array<'M1' | 'M5' | 'M15' | 'M30' | 'H1' | 'H4' | 'D1'>
+  priceAction?: PriceActionEvidencePlan
+  chan?: ChanEvidencePlan
   ema34?: Ema34Plan
   candleLimit: number
   candleLimits?: Record<string, number>
@@ -11,7 +18,7 @@ export interface AnalysisMarketPlan {
 }
 
 export interface AnalysisMarketSource {
-  read(input: { userId: number; preferredAccountId: string | null; symbol: string; referenceTime?: string; plan: AnalysisMarketPlan }): Promise<JsonObject>
+  read(input: { userId: number; preferredAccountId: string | null; symbol: string; strategyId?: string; strategyVersionId?: string; referenceTime?: string; plan: AnalysisMarketPlan }): Promise<JsonObject>
 }
 
 export interface MacroSnapshotReader {
@@ -25,7 +32,8 @@ export type MacroEvidencePlan =
 const allowedTimeframes = new Set<AnalysisMarketPlan['timeframes'][number]>(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'])
 
 export function marketPlan(config: Record<string, unknown>): AnalysisMarketPlan {
-  const indicators = config.ema34_evidence === undefined ? {} : { ema34: parseEma34Plan(config.ema34_evidence) }
+  const indicators = { ...(config.price_action_evidence === undefined ? {} : { priceAction: parsePriceActionEvidencePlan(config.price_action_evidence) }), ...(config.ema34_evidence === undefined ? {} : { ema34: parseEma34Plan(config.ema34_evidence) }),
+    ...(config.chan_evidence === undefined ? {} : { chan: parseChanEvidencePlan(config.chan_evidence) }) }
   if (config.market_data_plan !== undefined) {
     if (config.timeframes !== undefined || config.candle_limit !== undefined) throw new Error('market_data_plan_conflict')
     const plan = parseStrategyMarketDataPlan(config.market_data_plan)
@@ -56,15 +64,19 @@ export function macroEvidencePlan(config: Record<string, unknown>): MacroEvidenc
 }
 
 export class AnalysisContextBuilder {
-  constructor(private readonly market: AnalysisMarketSource, private readonly macro: MacroSnapshotReader) {}
+  constructor(private readonly market: AnalysisMarketSource, private readonly macro: MacroSnapshotReader,
+    private readonly memory?: RuntimeStrategyMemoryReader) {}
 
   async build(run: AnalysisRun, strategy: StrategyVersion, now = new Date()): Promise<AnalysisInputSnapshot> {
+    assertStrategySymbol(strategy.config, run.symbol)
     const capturedAt = now.toISOString()
     const macroPlan = macroEvidencePlan(strategy.config)
+    const strategyMemory = await freezeStrategyMemory({ userId: run.userId, strategyId: strategy.strategyId, strategyKind: 'analysis' }, this.memory)
     return {
       kind: 'analysis',
+      ...(strategyMemory === undefined ? {} : { strategyMemory }),
       strategy: { id: strategy.strategyId, versionId: strategy.id, promptHash: strategy.promptHash, promptText: strategy.promptText },
-      market: await this.market.read({ userId: run.userId, preferredAccountId: run.marketSourceAccountId, symbol: run.symbol, referenceTime: capturedAt, plan: marketPlan(strategy.config) }),
+      market: await this.market.read({ userId: run.userId, preferredAccountId: run.marketSourceAccountId, symbol: run.symbol, strategyId: strategy.strategyId, strategyVersionId: strategy.id, referenceTime: capturedAt, plan: marketPlan(strategy.config) }),
       macro: macroPlan.mode === 'off'
         ? { status: 'disabled' }
         : await this.macro.latest({ now: capturedAt, acceptedSchemaVersions: macroPlan.acceptedSchemaVersions, maxAgeSeconds: macroPlan.maxAgeSeconds })

@@ -1,5 +1,7 @@
 # 全表写入所有权矩阵与接续
 
+> 历史基线，不能用本页表数量判断当前进度。当前源码差异见 [2026-09-11 写入归属复核](data-write-ownership-review-20260911.md)：新增写入表已补列，风险预留及其事件当前归 execution 管理；全数据库目录和间接 SQL 的当前对账仍待关闭。
+
 本批将当前开发库表名与现有V4结构计划、旧表迁移矩阵和源码写入清单对齐。它是所有权设计底稿，尚未完成所有权验收。
 
 证据：[当前222表只读目录](database-table-catalog-20260908.json)、[291表逐项矩阵](table-write-ownership-matrix-20260908.json)、[结构延期目录v10](../migration/dev-vue-structure-remaining-work-20260908-v10.json)、[旧表业务迁移矩阵](../database-table-migration-matrix.md)。本次只读访问env指定的dev_vue并核对数据库身份，没有读取业务行、运行迁移或改动配置；表名存在不证明字段兼容。

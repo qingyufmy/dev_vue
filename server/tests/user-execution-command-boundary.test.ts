@@ -19,7 +19,7 @@ const revisions = { account: 2, positions: 3, pendingOrders: 4, quote: 5, contra
 function policy(): EffectiveRiskPolicy {
   return resolveRiskPolicy({
     accountId: '42', userId: 7, platformPolicyVersionId: '1', accountPolicyVersionId: null, policySetRevision: 0,
-    platform: { values: { ...DEFAULT_RISK_POLICY }, globalKillSwitch: false, revision: 1 }, account: null, updatedAt: now.toISOString(),
+    platform: { values: { ...DEFAULT_RISK_POLICY, maxOrderVolume: 0.1 }, globalKillSwitch: false, revision: 1 }, account: null, updatedAt: now.toISOString(),
   })
 }
 
@@ -31,13 +31,19 @@ function closeCommand(userId = 7, accountId = '42', idempotencyKey = `close-${us
   }, `cmd-${userId}-9001`)
 }
 
-function marketCommand() {
+function marketCommand(symbol = 'XAUUSD') {
   return normalizeUserExecutionCommand({
     userId: 7, accountId: '42', commandType: 'market_order', idempotencyKey: 'market-7-0001',
     expected: { accountRevision: revisions.account, positionsRevision: revisions.positions, pendingOrdersRevision: revisions.pendingOrders, quoteRevision: revisions.quote, contractRevision: revisions.contract, riskRevision: revisions.risk, resourceRevision: null },
-    parameters: { symbol: 'XAUUSD', side: 'buy', volume: '0.1', stopLoss: '2490', takeProfit: null, referencePrice: '2500', comment: null },
+    parameters: { symbol, side: 'buy', volume: '0.1', stopLoss: '2490', takeProfit: null, referencePrice: '2500', comment: null },
   }, 'cmd-7-market')
 }
+
+it('preserves broker symbol case through command normalization and action conversion', () => {
+  const command = marketCommand('XAUUSD.a')
+  expect(userCommandAction(command).parameters.symbol).toBe('XAUUSD.a')
+  expect(command.requestHash).not.toBe(marketCommand('XAUUSD.A').requestHash)
+})
 
 function evaluation(command: NormalizedUserExecutionCommand, status: RiskEvaluationResult['status'], action = userCommandAction(command)): RiskEvaluationResult {
   return {
@@ -79,7 +85,7 @@ function fakePool(options: FakeOptions = {}) {
       }], []]
     }
     if (normalized.includes('from risk_policy_sets_v4')) {
-      if (normalized.includes("p.scope='platform'")) return [[{ scope: 'platform', set_revision: 0, version_id: '1', policy_json: '{}', updated_at_utc: now }], []]
+      if (normalized.includes("p.scope='platform'")) return [[{ scope: 'platform', set_revision: 0, version_id: '1', policy_json: '{"maxOrderVolume":0.1}', updated_at_utc: now }], []]
       return [[], []]
     }
     if (normalized.includes('from global_risk_controls')) return [[{ kill_switch: 0, revision: 1 }], []]
@@ -106,6 +112,18 @@ function prepared(command: NormalizedUserExecutionCommand): UserExecutionCommand
 }
 
 describe('user execution command MySQL boundary', () => {
+  it('rejects oversized orders before persisting operation or reservation even with an approved evaluation', async () => {
+    const command = marketCommand()
+    if (!('volume' in command.parameters)) throw new Error('fixture requires volume')
+    command.parameters.volume = '0.2'
+    const result = prepared(command)
+    const fake = fakePool()
+    const repository = new MysqlUserExecutionCommandRepository(fake.pool, createTransactionAccountClock)
+    await expect(repository.persistCommand({ command, action: userCommandAction(command), riskEvaluation: result.riskEvaluation, result, expected: command.expected }))
+      .rejects.toMatchObject({ code: 'user_command_order_volume_exceeded' })
+    expect(fake.calls.some(call => /INSERT INTO operations|INSERT INTO risk_reservations/i.test(call.sql))).toBe(false)
+  })
+
   it('locks the account first and persists an approved command, intent, payload, events and outbox atomically', async () => {
     const command = closeCommand()
     const result = prepared(command)

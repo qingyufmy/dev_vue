@@ -342,6 +342,15 @@
           },
           "403": {
             "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       },
@@ -393,6 +402,12 @@
             "$ref": "#/components/responses/Problem"
           },
           "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -451,6 +466,12 @@
           },
           "409": {
             "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -485,6 +506,15 @@
             "$ref": "#/components/responses/Problem"
           },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -537,6 +567,12 @@
             "$ref": "#/components/responses/Problem"
           },
           "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -595,6 +631,12 @@
           },
           "409": {
             "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -635,6 +677,12 @@
             "$ref": "#/components/responses/Problem"
           },
           "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -697,6 +745,12 @@
           },
           "409": {
             "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -751,6 +805,12 @@
           },
           "409": {
             "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -786,6 +846,15 @@
             "$ref": "#/components/responses/Problem"
           },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -1371,6 +1440,210 @@
           }
         }
       }
+    },
+    "/market/symbols": {
+      "get": {
+        "operationId": "listTerminalMarketSymbols",
+        "summary": "Read current owned terminal market data",
+        "tags": [
+          "Market"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AccountIdQuery"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{1,5}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Historical candle window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalMarketSymbolsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/market/terminal-window": {
+      "get": {
+        "operationId": "getTerminalMarketWindow",
+        "summary": "Read current owned terminal market data",
+        "tags": [
+          "Market"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AccountIdQuery"
+          },
+          {
+            "$ref": "#/components/parameters/SymbolQuery"
+          },
+          {
+            "$ref": "#/components/parameters/Timeframe"
+          },
+          {
+            "$ref": "#/components/parameters/CandlePageSize"
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,15}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Historical candle window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalMarketWindowResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/market/public-snapshot": {
+      "get": {
+        "operationId": "getPublicMarketSnapshot",
+        "summary": "Read the shared administrator market cache without exposing provider accounts",
+        "tags": [
+          "Market"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SymbolQuery"
+          },
+          {
+            "$ref": "#/components/parameters/Timeframe"
+          },
+          {
+            "$ref": "#/components/parameters/CandlePageSize"
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "description": "Read candles strictly before this UTC timestamp.",
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "Z$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Historical candle window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicMarketSnapshotResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/market/public-symbols": {
+      "get": {
+        "operationId": "listPublicMarketSymbols",
+        "summary": "List the administrator-managed base-symbol catalog",
+        "tags": [
+          "Market"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Shared base symbols",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicMarketSymbolsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1788,7 +2061,7 @@
             "properties": {
               "included": {
                 "type": "integer",
-                "minimum": 1
+                "minimum": 0
               },
               "purchased": {
                 "type": "integer",
@@ -1796,7 +2069,7 @@
               },
               "total": {
                 "type": "integer",
-                "minimum": 1
+                "minimum": 0
               },
               "active": {
                 "type": "integer",
@@ -3926,6 +4199,428 @@
                 "type": "null"
               }
             ]
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "TerminalMarketSymbol": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "symbol",
+          "description",
+          "selected",
+          "visible",
+          "trade_mode",
+          "currency_base",
+          "currency_profit"
+        ],
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "selected": {
+            "type": "boolean"
+          },
+          "visible": {
+            "type": "boolean"
+          },
+          "trade_mode": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 4
+          },
+          "currency_base": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 16
+          },
+          "currency_profit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 16
+          }
+        }
+      },
+      "TerminalMarketSymbolsResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "items",
+              "next_cursor",
+              "observed_at"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "maxItems": 5000,
+                "items": {
+                  "$ref": "#/components/schemas/TerminalMarketSymbol"
+                }
+              },
+              "next_cursor": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 2048
+              },
+              "observed_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "TerminalMarketWindowResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "items",
+              "before"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Candle"
+                }
+              },
+              "before": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,15}$"
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "PublicMarketQuote": {
+        "type": "object",
+        "required": [
+          "bid",
+          "ask",
+          "spread",
+          "observed_at",
+          "revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "bid": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "ask": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "last": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "spread": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "observed_at": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        }
+      },
+      "PublicMarketCandle": {
+        "type": "object",
+        "required": [
+          "open_time",
+          "open",
+          "high",
+          "low",
+          "close",
+          "tick_volume",
+          "closed",
+          "revision"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "open_time": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "open": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "high": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "low": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "close": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "tick_volume": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "closed": {
+            "type": "boolean"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/Revision"
+          }
+        }
+      },
+      "PublicMarketStructureLine": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "from", "to", "start", "end"],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": ["bi", "segment", "forming_segment", "center", "fractal_top", "fractal_bottom"]
+          },
+          "from": { "$ref": "#/components/schemas/UtcDateTime" },
+          "to": { "$ref": "#/components/schemas/UtcDateTime" },
+          "start": { "type": "number" },
+          "end": { "type": "number" }
+        }
+      },
+      "PublicMarketStructure": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["algorithm", "status", "reliability", "based_on_closed_bars", "lines"],
+        "properties": {
+          "algorithm": { "type": "string", "enum": ["chan_structure_v8"] },
+          "status": { "type": "string", "minLength": 1, "maxLength": 64 },
+          "reliability": { "type": "string", "enum": ["high", "medium", "low"] },
+          "based_on_closed_bars": { "type": "integer", "minimum": 0, "maximum": 2000 },
+          "lines": {
+            "type": "array",
+            "maxItems": 32,
+            "items": { "$ref": "#/components/schemas/PublicMarketStructureLine" }
+          }
+        }
+      },
+      "PublicMarketSnapshotResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "symbol",
+              "timeframe",
+              "source_key",
+              "source_generation",
+              "status",
+              "quote",
+              "candles",
+              "structure"
+            ],
+            "properties": {
+              "symbol": {
+                "$ref": "#/components/schemas/Symbol"
+              },
+              "timeframe": {
+                "$ref": "#/components/schemas/Timeframe"
+              },
+              "source_key": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "source_generation": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/Revision"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "cached",
+                  "unavailable"
+                ]
+              },
+              "quote": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/PublicMarketQuote"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "candles": {
+                "type": "array",
+                "maxItems": 500,
+                "items": {
+                  "$ref": "#/components/schemas/PublicMarketCandle"
+                }
+              },
+              "structure": {
+                "oneOf": [
+                  { "$ref": "#/components/schemas/PublicMarketStructure" },
+                  { "type": "null" }
+                ]
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "PublicMarketSymbolsResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "items"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "maxItems": 32,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Z0-9]{1,32}$"
+                }
+              },
+              "timezone": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": false,
+                "required": [
+                  "offset_minutes",
+                  "checked_at",
+                  "status"
+                ],
+                "properties": {
+                  "offset_minutes": {
+                    "type": "integer",
+                    "minimum": -720,
+                    "maximum": 840
+                  },
+                  "checked_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "calibrated",
+                      "stale"
+                    ]
+                  }
+                }
+              },
+              "market_states": {
+                "type": "array",
+                "maxItems": 32,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "symbol",
+                    "state",
+                    "reason",
+                    "checked_at"
+                  ],
+                  "properties": {
+                    "symbol": {
+                      "type": "string",
+                      "pattern": "^[A-Z0-9]{1,32}$"
+                    },
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "open",
+                        "closed",
+                        "restricted",
+                        "stale",
+                        "unknown"
+                      ]
+                    },
+                    "reason": {
+                      "type": "string",
+                      "pattern": "^[a-z_]{3,64}$"
+                    },
+                    "checked_at": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "date-time"
+                    }
+                  }
+                }
+              }
+            }
           },
           "meta": {
             "$ref": "#/components/schemas/Meta"

@@ -1,5 +1,6 @@
 import Fastify from 'fastify'
 import { describe, expect, it, vi } from 'vitest'
+import { AuthError } from '../src/modules/auth/index.js'
 import { executionDistributionRoutes } from '../src/modules/execution/transport/http/execution-distribution-routes.js'
 import { userExecutionCommandRoutes } from '../src/modules/execution/transport/http/user-execution-command-routes.js'
 import type { ExecutionDistributionService } from '../src/modules/execution/application/execution-distribution-service.js'
@@ -8,6 +9,59 @@ import type { UserExecutionCommandService } from '../src/modules/execution/appli
 const now = '2026-09-04T08:00:00.000Z'
 
 describe('Stage 12O execution read models', () => {
+  it('authenticates distribution reads before strict query checks and never echoes failures', async () => {
+    const previewManualOrderDistribution = vi.fn()
+    const getDistribution = vi.fn()
+    const authenticate = vi.fn().mockResolvedValue({ userId: 7, role: 'admin' })
+    const app = Fastify()
+    await app.register(executionDistributionRoutes, { prefix: '/api/v4',
+      service: { previewManualOrderDistribution, getDistribution } as unknown as ExecutionDistributionService,
+      auth: { authenticate, async assertWrite() { return { userId: 7, role: 'admin' } } } })
+    try {
+      authenticate.mockRejectedValueOnce(new AuthError('auth_session_invalid', 401))
+      expect((await app.inject('/api/v4/execution-distributions/preview')).statusCode).toBe(401)
+      for (const path of ['/preview', '/preview?strategy_id=s1&symbol=XAUUSD&symbol=EURUSD', '/d1?actor=2']) {
+        const r = await app.inject('/api/v4/execution-distributions' + path)
+        expect(r.statusCode).toBe(400)
+        expect(r.headers['cache-control']).toBe('no-store')
+        expect(r.headers['content-type']).toContain('application/problem+json')
+      }
+      expect(previewManualOrderDistribution).not.toHaveBeenCalled(); expect(getDistribution).not.toHaveBeenCalled()
+      getDistribution.mockRejectedValueOnce(Error('private-database-error'))
+      const r = await app.inject('/api/v4/execution-distributions/d1')
+      expect(r.statusCode).toBe(503); expect(r.body).not.toContain('private-database-error')
+      expect(getDistribution).toHaveBeenCalledWith(7, 'admin', 'd1')
+      previewManualOrderDistribution.mockResolvedValueOnce({ strategyId: 's1', strategyVersionId: 'v1', strategyRevision: 1,
+        symbol: 'XAUUSD', targetCount: 'private-invalid-count', targets: [] })
+      const invalid = await app.inject('/api/v4/execution-distributions/preview?strategy_id=s1&symbol=XAUUSD')
+      expect(invalid.statusCode).toBe(503); expect(invalid.json().code).toBe('api_response_invalid')
+      expect(invalid.body).not.toContain('private-invalid-count')
+    } finally { await app.close() }
+  })
+  it('authenticates before invalid context queries and returns safe errors without caching', async () => {
+    const commandContext = vi.fn()
+    const authenticate = vi.fn().mockResolvedValue({ userId: 7 })
+    const app = Fastify()
+    await app.register(userExecutionCommandRoutes, { prefix: '/api/v4',
+      service: { commandContext } as unknown as UserExecutionCommandService,
+      auth: { authenticate, async assertWrite() { return { userId: 7 } } } })
+    try {
+      authenticate.mockRejectedValueOnce(new AuthError('auth_session_invalid', 401))
+      expect((await app.inject('/api/v4/trading-accounts/42/execution-context?actor=2')).statusCode).toBe(401)
+      for (const query of ['actor=2', 'symbol=XAUUSD&symbol=EURUSD', 'ticket=']) {
+        const r = await app.inject('/api/v4/trading-accounts/42/execution-context?' + query)
+        expect(r.statusCode).toBe(400)
+        expect(r.headers['cache-control']).toBe('no-store')
+        expect(r.headers['content-type']).toContain('application/problem+json')
+      }
+      expect(commandContext).not.toHaveBeenCalled()
+      commandContext.mockRejectedValueOnce(Error('SELECT private_context'))
+      const r = await app.inject('/api/v4/trading-accounts/42/execution-context?symbol=XAUUSD')
+      expect(r.statusCode).toBe(503)
+      expect(r.body).not.toContain('private_context')
+      expect(commandContext).toHaveBeenCalledWith({ userId: 7, accountId: '42', symbol: 'XAUUSD', ticket: null })
+    } finally { await app.close() }
+  })
   it('returns the complete optimistic revision vector and broker limits without exposing the risk policy', async () => {
     const commandContext = vi.fn(async () => ({
       symbol: 'XAUUSD',
@@ -37,6 +91,14 @@ describe('Stage 12O execution read models', () => {
       instrument: { point: '0.01', tick_size: '0.01', tick_value: '1', volume_min: '0.01', volume_max: '100', volume_step: '0.01', trade_enabled: true },
     })
     expect(JSON.stringify(result.json())).not.toContain('not-on-wire')
+    expect(result.headers['cache-control']).toBe('no-store')
+    commandContext.mockResolvedValueOnce({ ...(await commandContext()), context: {
+      ...(await commandContext()).context, tradePermission: 'private-invalid' as unknown as boolean,
+    } })
+    const invalid = await app.inject('/api/v4/trading-accounts/42/execution-context?symbol=XAUUSD')
+    expect(invalid.statusCode).toBe(503)
+    expect(invalid.json().code).toBe('api_response_invalid')
+    expect(invalid.body).not.toContain('private-invalid')
     await app.close()
   })
 

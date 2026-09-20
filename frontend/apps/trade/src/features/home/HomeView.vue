@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { AlertCircle, ArrowRight, Cable, RefreshCw } from '@lucide/vue'
-import { onBeforeUnmount, onMounted } from 'vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { RouterLink } from 'vue-router'
 import { Alert, AlertDescription, AlertTitle } from '@aurum/ui/alert'
 import { Button } from '@aurum/ui/button'
 import { Card, CardContent } from '@aurum/ui/card'
 import { Skeleton } from '@aurum/ui/skeleton'
+import { positionProfitTotal } from './account-money'
 import AccountSummaryCard from './AccountSummaryCard.vue'
 import LatestSignalCard from './LatestSignalCard.vue'
 import MarketWorkspaceCard from './MarketWorkspaceCard.vue'
@@ -13,15 +14,18 @@ import TradingResourcesCard from './TradingResourcesCard.vue'
 import { realtimeState } from './home-runtime'
 import { useHomeWorkspace } from './use-home-workspace'
 
+import { activeTerminalDisplayTimezone } from '~/lib/laboratory-display-time'
+const displayTimezone = computed(activeTerminalDisplayTimezone)
 const workspace = useHomeWorkspace()
+const positionProfit = computed(() => positionProfitTotal(workspace.positions.value.map(item => item.floatingProfit), workspace.positionsConfirmed.value))
 onMounted(() => void workspace.load())
 onBeforeUnmount(workspace.stop)
 </script>
 
 <template>
   <div class="mx-auto grid w-full max-w-[1680px] gap-4 p-3 sm:p-5 lg:p-6">
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-      <div><p class="text-xs font-medium text-primary">交易工作区</p><h1 class="mt-1 text-2xl font-semibold tracking-tight">账户概览</h1><p class="mt-1 text-sm text-muted-foreground">查看当前账户、行情和交易记录。</p></div>
+    <div class="flex flex-row items-center justify-between gap-3">
+      <h1 class="text-lg font-semibold tracking-tight">账户概览</h1>
       <Button variant="outline" class="min-h-11" :disabled="workspace.loading.value" @click="workspace.load"><RefreshCw :class="workspace.loading.value ? 'animate-spin motion-reduce:animate-none' : ''" />刷新快照</Button>
     </div>
 
@@ -32,7 +36,7 @@ onBeforeUnmount(workspace.stop)
     </template>
 
     <template v-else>
-      <AccountSummaryCard v-if="workspace.hasAccount.value || workspace.accounts.value.length || workspace.observers.value.some(item => item.active)" :accounts="workspace.accounts.value" :observers="workspace.observers.value" :account-id="workspace.context.value?.accountId ?? null" :observer-channel-id="workspace.context.value?.observerChannelId ?? null" :snapshot="workspace.snapshot.value" :loading="workspace.loading.value" @select="workspace.selectAccount" @observer="workspace.selectObserver" @leave-observer="workspace.leaveObserver" />
+      <AccountSummaryCard v-if="workspace.hasAccount.value || workspace.accounts.value.length || workspace.observers.value.some(item => item.active)" :accounts="workspace.accounts.value" :observers="workspace.observers.value" :account-id="workspace.context.value?.accountId ?? null" :observer-channel-id="workspace.context.value?.observerChannelId ?? null" :snapshot="workspace.snapshot.value" :position-profit="positionProfit" :loading="workspace.loading.value" @select="workspace.selectAccount" @observer="workspace.selectObserver" @leave-observer="workspace.leaveObserver" />
 
       <Card v-if="!workspace.hasAccount.value && !workspace.error.value" class="shadow-none">
         <CardContent class="flex min-h-[28rem] flex-col items-center justify-center gap-4 text-center">
@@ -42,12 +46,12 @@ onBeforeUnmount(workspace.stop)
         </CardContent>
       </Card>
 
-      <template v-if="workspace.hasAccount.value">
+      <template v-if="workspace.symbols.value.length || workspace.loading.value || workspace.marketLoading.value">
         <div class="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.9fr)_minmax(21rem,0.7fr)]">
-          <MarketWorkspaceCard :timezone-offset-minutes="workspace.snapshot.value?.timezoneOffsetMinutes" :symbols="workspace.symbols.value" :symbol="workspace.symbol.value" :timeframe="workspace.timeframe.value" :quote="workspace.quote.value" :candles="workspace.candles.value" :realtime="realtimeState" :history-version="workspace.marketHistoryVersion.value" :loading="workspace.marketLoading.value" :error="workspace.marketError.value" @retry="workspace.refreshMarket" @symbol="workspace.selectSymbol" @timeframe="workspace.selectTimeframe" />
+          <MarketWorkspaceCard :key="`${workspace.symbol.value}:${workspace.timeframe.value}:${workspace.marketSourceKey.value}`" :history-loading="workspace.historyLoading.value" :history-message="workspace.historyMessage.value" @older="workspace.loadOlderHistory" :timezone-offset-minutes="displayTimezone.offsetMinutes" :symbols="workspace.symbols.value" :symbol="workspace.symbol.value" :timeframe="workspace.timeframe.value" :quote="workspace.quote.value" :candles="workspace.candles.value" :structure="workspace.structure.value" :realtime="realtimeState" :history-version="workspace.marketHistoryVersion.value" :loading="workspace.marketLoading.value" :error="workspace.marketError.value" @retry="workspace.refreshMarket" @symbol="workspace.selectSymbol" @timeframe="workspace.selectTimeframe" />
           <LatestSignalCard :analysis="workspace.latestAnalysis.value" :strategies="workspace.analysisStrategies.value" :loading="workspace.analysisLoading.value" :error="workspace.analysisError.value" />
         </div>
-        <TradingResourcesCard :positions="workspace.positions.value" :orders="workspace.pendingOrders.value" />
+        <TradingResourcesCard v-if="workspace.hasAccount.value" :positions="workspace.positions.value" :orders="workspace.pendingOrders.value" :positions-confirmed="workspace.positionsConfirmed.value" :orders-confirmed="workspace.ordersConfirmed.value" />
       </template>
     </template>
   </div>

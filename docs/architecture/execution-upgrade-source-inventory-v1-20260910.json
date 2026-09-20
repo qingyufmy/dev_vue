@@ -1,0 +1,1600 @@
+{
+  "kind": "execution-upgrade-source-inventory/v1",
+  "passed": true,
+  "writes": 0,
+  "sources": [
+    {
+      "file": "20260903_009_execution_intents_and_reservations.sql",
+      "sha256": "441e93adbe9e7a61976adfaeb6477336a7d2fb76c6acab927503501fde960a5e",
+      "tables": [
+        "execution_intent_events",
+        "execution_intent_payloads",
+        "execution_intents",
+        "operation_events",
+        "operations",
+        "risk_decisions_v4",
+        "risk_reservation_events_v4",
+        "risk_reservations_v4",
+        "trade_decisions",
+        "trading_accounts",
+        "users"
+      ]
+    },
+    {
+      "file": "20260903_010_bridge_v4_command_ledger.sql",
+      "sha256": "6de803b91617807c57cf545a326c3877b2a2c1e4242652c1f11dc24deceb07d1",
+      "tables": [
+        "bridge_command_events_v4",
+        "bridge_command_payloads_v4",
+        "bridge_command_results_v4",
+        "bridge_commands_v4",
+        "bridge_connection_sessions",
+        "bridge_trade_state_snapshots_v4",
+        "execution_intents",
+        "risk_reservations_v4",
+        "terminal_profiles",
+        "trading_accounts",
+        "users"
+      ]
+    },
+    {
+      "file": "20260904_011_user_execution_commands_and_distributions.sql",
+      "sha256": "59f39b04871bee1a470785f03d3a7de1719c39a4abe22e87c16a2a8d3dc0ca3f",
+      "tables": [
+        "execution_distribution_targets",
+        "execution_distributions",
+        "execution_intents",
+        "execution_outcomes",
+        "operations",
+        "risk_decisions_v4",
+        "risk_manual_releases",
+        "risk_policy_versions_v4",
+        "strategies",
+        "strategy_subscriptions",
+        "strategy_versions",
+        "trade_decisions",
+        "trading_accounts",
+        "user_execution_commands",
+        "users"
+      ]
+    },
+    {
+      "file": "corrections/011-execution-intent-foreign-keys.sql",
+      "sha256": "747c209d9dfe75ad969cf04e4b037d7b1e1dc6838565bf63c2db20de4dea419b",
+      "tables": [
+        "execution_intents",
+        "risk_decisions_v4",
+        "trade_decisions",
+        "user_execution_commands"
+      ]
+    }
+  ],
+  "tables": {
+    "ai_analysis_runs": {
+      "exists": false
+    },
+    "ai_analysis_runs_v4_build": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `ai_analysis_runs_v4_build` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `user_id` int NOT NULL,\n  `strategy_id` bigint unsigned NOT NULL,\n  `strategy_version_id` bigint unsigned NOT NULL,\n  `standard_symbol` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `market_source_account_id` bigint unsigned DEFAULT NULL,\n  `trigger_type` enum('manual','scheduled','event') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `schedule_slot_utc` datetime(3) DEFAULT NULL,\n  `idempotency_key` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `input_snapshot_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `model_task_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `status` enum('queued','running','succeeded','failed','cancelled','expired') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `error_code` varchar(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  `completed_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_ai_analysis_idempotency` (`user_id`,`idempotency_key`),\n  UNIQUE KEY `uk_ai_analysis_schedule` (`user_id`,`strategy_version_id`,`standard_symbol`,`schedule_slot_utc`),\n  KEY `idx_ai_analysis_history` (`user_id`,`created_at_utc`,`id`),\n  KEY `idx_ai_analysis_worker` (`status`,`created_at_utc`,`id`),\n  KEY `fk_ai_analysis_strategy` (`strategy_id`),\n  KEY `fk_ai_analysis_strategy_version` (`strategy_version_id`,`strategy_id`),\n  KEY `fk_ai_analysis_snapshot` (`input_snapshot_id`),\n  KEY `fk_ai_analysis_model_task` (`model_task_id`),\n  KEY `idx_ai_analysis_source` (`market_source_account_id`,`created_at_utc`,`id`),\n  CONSTRAINT `build_inf_27ea9c331efc2766f4c88db0` FOREIGN KEY (`input_snapshot_id`) REFERENCES `inference_snapshots_v4_build` (`id`),\n  CONSTRAINT `build_inf_82e6985200834ada8b0db123` FOREIGN KEY (`strategy_id`) REFERENCES `strategies` (`id`),\n  CONSTRAINT `build_inf_900edb42e6f532cea5f6c579` FOREIGN KEY (`strategy_version_id`, `strategy_id`) REFERENCES `strategy_versions` (`id`, `strategy_id`),\n  CONSTRAINT `build_inf_ad95042daa038008f502f6d4` FOREIGN KEY (`market_source_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `build_inf_c169a89664bbda0042a99e6d` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `build_inf_dd529a8d821bc06ade687abb` FOREIGN KEY (`model_task_id`) REFERENCES `ai_model_tasks_v4_build` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "sha256": "5fd8d422449bd8449e275975a56de6f8547514cfda02e084b5ca4aa133392b4a"
+    },
+    "ai_model_attempts": {
+      "exists": false
+    },
+    "ai_model_attempts_v4_build": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `ai_model_attempts_v4_build` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `task_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `attempt_number` int unsigned NOT NULL,\n  `provider` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `model` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `status` enum('running','succeeded','failed','timed_out','contract_invalid') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `started_at_utc` datetime(3) NOT NULL,\n  `completed_at_utc` datetime(3) DEFAULT NULL,\n  `usage_json` json DEFAULT NULL,\n  `error_code` varchar(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_ai_model_attempt_number` (`task_id`,`attempt_number`),\n  KEY `idx_ai_model_attempts_status` (`status`,`started_at_utc`,`id`),\n  CONSTRAINT `build_inf_0ca28edb78f1f938223793b5` FOREIGN KEY (`task_id`) REFERENCES `ai_model_tasks_v4_build` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "sha256": "9248335b7645ca9f60ccb0bfd6afb2a49dd04031055efa2d497dfff14f810fb0"
+    },
+    "ai_model_tasks": {
+      "exists": true,
+      "rows": "9317",
+      "ddl": "CREATE TABLE `ai_model_tasks` (\n  `task_id` char(36) NOT NULL,\n  `task_kind` varchar(48) NOT NULL,\n  `queue_class` varchar(24) NOT NULL DEFAULT 'background',\n  `owner_user_id` int NOT NULL DEFAULT '0',\n  `strategy_id` int DEFAULT NULL,\n  `domain_type` varchar(48) DEFAULT NULL,\n  `domain_id` varchar(191) DEFAULT NULL,\n  `idempotency_key` varchar(191) DEFAULT NULL,\n  `snapshot_hash` char(64) DEFAULT NULL,\n  `input_hash` char(64) DEFAULT NULL,\n  `prompt_hash` char(64) DEFAULT NULL,\n  `output_contract_hash` char(64) DEFAULT NULL,\n  `frozen_provider` varchar(64) DEFAULT NULL,\n  `frozen_model` varchar(191) DEFAULT NULL,\n  `frozen_model_profile_id` int DEFAULT NULL,\n  `frozen_protocol` varchar(32) DEFAULT NULL,\n  `frozen_credential_source` varchar(32) DEFAULT NULL,\n  `frozen_context_json` longtext,\n  `status` varchar(32) NOT NULL DEFAULT 'queued',\n  `priority` int NOT NULL DEFAULT '0',\n  `attempt_count` int NOT NULL DEFAULT '0',\n  `max_attempts` int NOT NULL DEFAULT '1',\n  `scheduled_at_utc_msc` bigint NOT NULL,\n  `task_deadline_at_utc_msc` bigint DEFAULT NULL,\n  `result_valid_until_utc_msc` bigint DEFAULT NULL,\n  `lease_token` char(36) DEFAULT NULL,\n  `fencing_token` bigint NOT NULL DEFAULT '0',\n  `lease_owner` varchar(191) DEFAULT NULL,\n  `lease_expires_at_utc_msc` bigint DEFAULT NULL,\n  `last_activity_at_utc_msc` bigint DEFAULT NULL,\n  `estimated_input_tokens` int NOT NULL DEFAULT '0',\n  `selected_output_budget` int NOT NULL DEFAULT '0',\n  `schema_need_tokens` int NOT NULL DEFAULT '0',\n  `context_window_tokens` int DEFAULT NULL,\n  `provider_max_input_tokens` int DEFAULT NULL,\n  `context_limit_semantics` varchar(24) DEFAULT NULL,\n  `token_limits_source` varchar(32) DEFAULT NULL,\n  `token_limits_status` varchar(32) DEFAULT NULL,\n  `token_limits_updated_at_utc_msc` bigint DEFAULT NULL,\n  `provider_output_cap` int DEFAULT NULL,\n  `result_ref` varchar(255) DEFAULT NULL,\n  `result_hash` char(64) DEFAULT NULL,\n  `finish_reason` varchar(64) DEFAULT NULL,\n  `incomplete_details_json` text,\n  `error_code` varchar(128) DEFAULT NULL,\n  `error_message` varchar(512) DEFAULT NULL,\n  `completed_at_utc_msc` bigint DEFAULT NULL,\n  `created_at_utc_msc` bigint NOT NULL,\n  `updated_at_utc_msc` bigint NOT NULL,\n  PRIMARY KEY (`task_id`),\n  UNIQUE KEY `uk_model_task_idempotency` (`task_kind`,`idempotency_key`),\n  KEY `idx_model_task_claim` (`queue_class`,`status`,`priority`,`scheduled_at_utc_msc`),\n  KEY `idx_model_task_lease` (`status`,`lease_expires_at_utc_msc`),\n  KEY `idx_model_task_owner` (`owner_user_id`,`created_at_utc_msc`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+      "sha256": "34d4831dae971bc72129a7879eb19421f98747c3099124b616abf664bcd615eb"
+    },
+    "ai_model_tasks_v4_build": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `ai_model_tasks_v4_build` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `purpose` enum('analysis','trader') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `user_id` int NOT NULL,\n  `trading_account_id` bigint unsigned DEFAULT NULL,\n  `input_snapshot_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `model_profile_id` bigint unsigned DEFAULT NULL,\n  `status` enum('queued','running','succeeded','failed','cancelled','expired') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `deadline_at_utc` datetime(3) NOT NULL,\n  `fencing_token` bigint unsigned NOT NULL,\n  `lease_owner` varchar(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `lease_expires_at_utc` datetime(3) DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  `completed_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_ai_model_tasks_worker` (`purpose`,`status`,`created_at_utc`,`id`),\n  KEY `idx_ai_model_tasks_user` (`user_id`,`created_at_utc`,`id`),\n  KEY `fk_ai_model_tasks_snapshot` (`input_snapshot_id`),\n  KEY `idx_ai_model_tasks_lease` (`status`,`lease_expires_at_utc`,`id`),\n  KEY `idx_ai_model_tasks_account_lease` (`trading_account_id`,`purpose`,`status`,`lease_expires_at_utc`,`id`),\n  CONSTRAINT `build_inf_b57695181409e75e254b094d` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `build_inf_c5bd3bc0267d7b28ad294bfc` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `build_inf_ea6a85c5635a874974888a5d` FOREIGN KEY (`input_snapshot_id`) REFERENCES `inference_snapshots_v4_build` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "sha256": "e6526ddf6225481fc0f8dd5106a8d476feab870d247222ae4ee2a3ac164ca4ff"
+    },
+    "ai_trader_runs": {
+      "exists": false
+    },
+    "ai_trader_runs_v4_build": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `ai_trader_runs_v4_build` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `user_id` int NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `subscription_id` bigint unsigned NOT NULL,\n  `subscription_revision` bigint unsigned NOT NULL,\n  `market_analysis_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `strategy_id` bigint unsigned NOT NULL,\n  `strategy_version_id` bigint unsigned NOT NULL,\n  `task_mode` enum('entry','manage','both') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `analysis_revision` bigint unsigned NOT NULL DEFAULT '1',\n  `account_revision` bigint unsigned DEFAULT NULL,\n  `quote_revision` bigint unsigned DEFAULT NULL,\n  `contract_revision` bigint unsigned DEFAULT NULL,\n  `risk_revision` bigint unsigned DEFAULT NULL,\n  `positions_revision` bigint unsigned NOT NULL DEFAULT '0',\n  `pending_orders_revision` bigint unsigned NOT NULL DEFAULT '0',\n  `idempotency_key` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `input_snapshot_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `model_task_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `status` enum('queued','running','succeeded','failed','cancelled','expired') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `error_code` varchar(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  `completed_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_ai_trader_target` (`market_analysis_id`,`subscription_id`,`trading_account_id`,`subscription_revision`,`strategy_version_id`),\n  UNIQUE KEY `uk_ai_trader_idempotency` (`user_id`,`idempotency_key`),\n  KEY `idx_ai_trader_account` (`trading_account_id`,`created_at_utc`,`id`),\n  KEY `idx_ai_trader_worker` (`status`,`created_at_utc`,`id`),\n  KEY `fk_ai_trader_subscription` (`subscription_id`),\n  KEY `fk_ai_trader_strategy` (`strategy_id`),\n  KEY `fk_ai_trader_strategy_version` (`strategy_version_id`,`strategy_id`),\n  KEY `fk_ai_trader_snapshot` (`input_snapshot_id`),\n  KEY `fk_ai_trader_model_task` (`model_task_id`),\n  CONSTRAINT `build_inf_23e635cc46a94d900a2abf58` FOREIGN KEY (`strategy_version_id`, `strategy_id`) REFERENCES `strategy_versions` (`id`, `strategy_id`),\n  CONSTRAINT `build_inf_2e2bc6c7f719003f523e5169` FOREIGN KEY (`strategy_id`) REFERENCES `strategies` (`id`),\n  CONSTRAINT `build_inf_34bcfbca16c0eeea5d67abd9` FOREIGN KEY (`model_task_id`) REFERENCES `ai_model_tasks_v4_build` (`id`),\n  CONSTRAINT `build_inf_4f5a6112fdd30750fca34809` FOREIGN KEY (`market_analysis_id`) REFERENCES `market_analyses_v4_build` (`id`),\n  CONSTRAINT `build_inf_74c1dfba66ec6aabea9a24ef` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `build_inf_855d8ea12f63231125056a9e` FOREIGN KEY (`input_snapshot_id`) REFERENCES `inference_snapshots_v4_build` (`id`),\n  CONSTRAINT `build_inf_b8a7d27c436c902fe45c961a` FOREIGN KEY (`subscription_id`) REFERENCES `strategy_subscriptions_v4_build` (`id`),\n  CONSTRAINT `build_inf_f77611e8b8ceee5174cf6f1f` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "sha256": "9eb10f16195ed5e47a96d5eaf2520285bc640a90ab07d2642f15ddfcbd2f2ca5"
+    },
+    "bridge_command_events_v4": {
+      "exists": false
+    },
+    "bridge_command_payloads_v4": {
+      "exists": false
+    },
+    "bridge_command_results_v4": {
+      "exists": false
+    },
+    "bridge_commands_v4": {
+      "exists": false
+    },
+    "bridge_connection_sessions": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `bridge_connection_sessions` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `terminal_profile_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `terminal_instance_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `connection_epoch` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `connection_epoch_v4` bigint unsigned DEFAULT NULL,\n  `connected_at_utc` datetime(3) NOT NULL,\n  `last_seen_at_utc` datetime(3) NOT NULL,\n  `disconnected_at_utc` datetime(3) DEFAULT NULL,\n  `disconnect_reason` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_bridge_connection_route_epoch` (`terminal_instance_id`,`connection_epoch`),\n  KEY `idx_bridge_connection_profile_epoch_v4` (`user_id`,`terminal_profile_id`,`connection_epoch_v4`),\n  KEY `idx_bridge_sessions_user_online` (`user_id`,`disconnected_at_utc`,`last_seen_at_utc`),\n  KEY `idx_bridge_sessions_route` (`trading_account_id`,`disconnected_at_utc`,`connected_at_utc`),\n  KEY `fk_bridge_sessions_profile` (`terminal_profile_id`),\n  CONSTRAINT `fk_bridge_sessions_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_bridge_sessions_profile` FOREIGN KEY (`terminal_profile_id`) REFERENCES `terminal_profiles` (`id`),\n  CONSTRAINT `fk_bridge_sessions_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_bridge_connection_epoch_v4_safe` CHECK (((`connection_epoch_v4` is null) or (`connection_epoch_v4` between 1 and 9007199254740991)))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "sha256": "e1aaf82ed9334287fcda0e5c7bb01924decfab7faea60b6ccb9b89aa90917eed"
+    },
+    "bridge_trade_state_snapshots_v4": {
+      "exists": false
+    },
+    "execution_distribution_targets": {
+      "exists": false
+    },
+    "execution_distributions": {
+      "exists": false
+    },
+    "execution_intent_events": {
+      "exists": false
+    },
+    "execution_intent_payloads": {
+      "exists": false
+    },
+    "execution_intents": {
+      "exists": false
+    },
+    "execution_outcomes": {
+      "exists": false
+    },
+    "inference_snapshot_payloads": {
+      "exists": false
+    },
+    "inference_snapshot_payloads_v4_build": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `inference_snapshot_payloads_v4_build` (\n  `snapshot_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `encoding` enum('json') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'json',\n  `payload_json` json NOT NULL,\n  PRIMARY KEY (`snapshot_id`),\n  CONSTRAINT `build_inf_f9afae7e9c71fae06bc7df0e` FOREIGN KEY (`snapshot_id`) REFERENCES `inference_snapshots_v4_build` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "sha256": "86d20fa4ca747c727da9f3a32ff58ecbc0ad24403b214300599653e60ebd4b46"
+    },
+    "inference_snapshots": {
+      "exists": true,
+      "rows": "789",
+      "ddl": "CREATE TABLE `inference_snapshots` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `signal_id` bigint DEFAULT NULL,\n  `strategy_id` int DEFAULT NULL,\n  `strategy_version` int NOT NULL DEFAULT '1',\n  `strategy_scope` varchar(20) NOT NULL,\n  `owner_user_id` int NOT NULL DEFAULT '0',\n  `standard_symbol` varchar(64) NOT NULL,\n  `market_source` varchar(64) NOT NULL,\n  `system_prompt` longtext NOT NULL,\n  `user_prompt` longtext NOT NULL,\n  `prompt_hash` char(64) NOT NULL,\n  `model_profile_id` int DEFAULT NULL,\n  `provider` varchar(50) DEFAULT NULL,\n  `model_name` varchar(150) DEFAULT NULL,\n  `credential_source` varchar(32) NOT NULL,\n  `output_schema_version` char(64) NOT NULL,\n  `klines_json` longtext,\n  `market_snapshot_json` longtext NOT NULL,\n  `strategy_runtime_json` longtext,\n  `memory_mode` varchar(20) NOT NULL DEFAULT 'off',\n  `evidence_status` varchar(24) NOT NULL DEFAULT 'complete',\n  `omitted_fields_json` text,\n  `content_hash` char(64) NOT NULL,\n  `byte_size` int NOT NULL,\n  `created_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_inference_snapshot_signal` (`signal_id`),\n  KEY `idx_inference_snapshot_strategy` (`strategy_id`,`created_at`),\n  KEY `idx_inference_snapshot_owner` (`owner_user_id`,`created_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=10272 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+      "sha256": "549474c7c20dcb37d990eeb91bd65e71d7d69cc5bbfd509cce1aeb8243cff28e"
+    },
+    "inference_snapshots_v4_build": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `inference_snapshots_v4_build` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `purpose` enum('analysis','trader') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `user_id` int NOT NULL,\n  `trading_account_id` bigint unsigned DEFAULT NULL,\n  `strategy_id` bigint unsigned NOT NULL,\n  `strategy_version_id` bigint unsigned NOT NULL,\n  `standard_symbol` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `payload_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `payload_bytes` bigint unsigned NOT NULL,\n  `captured_at_utc` datetime(3) NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_inference_snapshot_payload_hash` (`purpose`,`user_id`,`payload_sha256`),\n  KEY `idx_inference_snapshots_user` (`user_id`,`purpose`,`created_at_utc`,`id`),\n  KEY `idx_inference_snapshots_account` (`trading_account_id`,`purpose`,`created_at_utc`,`id`),\n  KEY `fk_inference_snapshots_strategy` (`strategy_id`),\n  KEY `fk_inference_snapshots_strategy_version` (`strategy_version_id`,`strategy_id`),\n  CONSTRAINT `build_inf_15a94f5bb0f6d57e59233511` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `build_inf_37a482f0f6a622d4cbf7ba51` FOREIGN KEY (`strategy_id`) REFERENCES `strategies` (`id`),\n  CONSTRAINT `build_inf_c86d439b34a23c6959ec8bfc` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `build_inf_d744497b3fe127ab6f7ca36e` FOREIGN KEY (`strategy_version_id`, `strategy_id`) REFERENCES `strategy_versions` (`id`, `strategy_id`),\n  CONSTRAINT `build_inf_544ff768772ee2003b16e92b` CHECK ((((`purpose` = _utf8mb4'analysis') and (`trading_account_id` is null)) or ((`purpose` = _utf8mb4'trader') and (`trading_account_id` is not null))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "sha256": "035c3b1c588ea641a8ebae89ac26f9ab161f215e83e4b3d9f43d0db25e44209d"
+    },
+    "market_analyses": {
+      "exists": false
+    },
+    "market_analyses_v4_build": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `market_analyses_v4_build` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `analysis_run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `owner_scope` enum('platform','user') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'user',\n  `owner_user_id` int DEFAULT NULL,\n  `strategy_id` bigint unsigned NOT NULL,\n  `strategy_version_id` bigint unsigned NOT NULL,\n  `standard_symbol` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `market_bias` enum('bullish','bearish','neutral','uncertain') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `opportunity` enum('none','long_setup','short_setup') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `confidence` decimal(5,2) NOT NULL,\n  `summary` varchar(2000) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `input_snapshot_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `content_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `analyzed_at_utc` datetime(3) NOT NULL,\n  `valid_until_utc` datetime(3) NOT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_market_analyses_run` (`analysis_run_id`),\n  UNIQUE KEY `uk_market_analyses_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `idx_market_analyses_user` (`owner_user_id`,`created_at_utc`,`id`),\n  KEY `idx_market_analyses_strategy_symbol` (`strategy_id`,`standard_symbol`,`created_at_utc`,`id`),\n  KEY `fk_market_analyses_strategy_version` (`strategy_version_id`,`strategy_id`),\n  KEY `fk_market_analyses_snapshot` (`input_snapshot_id`),\n  CONSTRAINT `build_inf_5af34c29eac6ba73de991fb1` FOREIGN KEY (`analysis_run_id`) REFERENCES `ai_analysis_runs_v4_build` (`id`),\n  CONSTRAINT `build_inf_97fce77d611ca2d4bf21af1f` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `build_inf_b8d2f00897dd8adb7d311814` FOREIGN KEY (`input_snapshot_id`) REFERENCES `inference_snapshots_v4_build` (`id`),\n  CONSTRAINT `build_inf_d2611a93717bf755bfec2a40` FOREIGN KEY (`strategy_version_id`, `strategy_id`) REFERENCES `strategy_versions` (`id`, `strategy_id`),\n  CONSTRAINT `build_inf_e2e9573b5c5851425eb7900b` FOREIGN KEY (`strategy_id`) REFERENCES `strategies` (`id`),\n  CONSTRAINT `build_inf_45030330436e37974a7cc67b` CHECK (((`confidence` >= 0) and (`confidence` <= 100))),\n  CONSTRAINT `build_inf_4ca8c4d56cafcd921f61d1cb` CHECK ((((`owner_scope` = _utf8mb4'platform') and (`owner_user_id` is null)) or ((`owner_scope` = _utf8mb4'user') and (`owner_user_id` is not null)))),\n  CONSTRAINT `build_inf_5adbd1951ed9b5e4e44f7e31` CHECK ((`valid_until_utc` > `analyzed_at_utc`))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "sha256": "d807d361496a08c96470aed453a4416bc1f75631693d507ad9fc7bd3fa40eb23"
+    },
+    "market_analysis_payloads": {
+      "exists": false
+    },
+    "market_analysis_payloads_v4_build": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `market_analysis_payloads_v4_build` (\n  `market_analysis_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `payload_json` json NOT NULL,\n  `payload_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `payload_bytes` bigint unsigned NOT NULL,\n  PRIMARY KEY (`market_analysis_id`),\n  CONSTRAINT `build_inf_286c1f3a5abf4696e9a145d9` FOREIGN KEY (`market_analysis_id`) REFERENCES `market_analyses_v4_build` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "sha256": "390dc20baa54ccd79dd4ffc6e9ebd2462b79c2d519a48b46a543568166287cab"
+    },
+    "operation_events": {
+      "exists": false
+    },
+    "operations": {
+      "exists": false
+    },
+    "risk_decision_payloads_v4": {
+      "exists": false
+    },
+    "risk_decision_payloads_v4_build": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `risk_decision_payloads_v4_build` (\n  `risk_decision_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `evaluation_json` json NOT NULL,\n  `payload_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `payload_bytes` bigint unsigned NOT NULL,\n  PRIMARY KEY (`risk_decision_id`),\n  CONSTRAINT `build_inf_8bb1b90ce107458b02ada1f1` FOREIGN KEY (`risk_decision_id`) REFERENCES `risk_decisions_v4_build` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "sha256": "41f623f094f71f44965b0bc4c2c91c2d1e3f6ddd5638630282da023a5b642c1d"
+    },
+    "risk_decisions_v4": {
+      "exists": false
+    },
+    "risk_decisions_v4_build": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `risk_decisions_v4_build` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `trade_decision_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `user_id` int NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `platform_policy_version_id` bigint unsigned NOT NULL,\n  `account_policy_version_id` bigint unsigned DEFAULT NULL,\n  `policy_set_revision` bigint unsigned NOT NULL,\n  `account_risk_revision` bigint unsigned NOT NULL,\n  `decision_status` enum('approved','rejected') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `reject_code` varchar(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `policy_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_risk_decision_trade_decision` (`trade_decision_id`),\n  UNIQUE KEY `uk_risk_decision_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `idx_risk_decision_account` (`user_id`,`trading_account_id`,`created_at_utc`,`id`),\n  KEY `idx_risk_decision_status` (`decision_status`,`created_at_utc`,`id`),\n  KEY `fk_risk_decision_account` (`trading_account_id`),\n  KEY `fk_risk_decision_platform_policy` (`platform_policy_version_id`),\n  KEY `fk_risk_decision_account_policy` (`account_policy_version_id`),\n  CONSTRAINT `build_inf_1408092cb77dd9ba1ccd31f2` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `build_inf_ca6c6bc2591479ec688ff5c8` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `build_inf_dddef97403c671d093ba0f98` FOREIGN KEY (`platform_policy_version_id`) REFERENCES `risk_policy_versions_v4` (`id`),\n  CONSTRAINT `build_inf_e43675f95ef8db37e5d34c99` FOREIGN KEY (`account_policy_version_id`) REFERENCES `risk_policy_versions_v4` (`id`),\n  CONSTRAINT `build_inf_fcad85ec3743434f847c77ff` FOREIGN KEY (`trade_decision_id`) REFERENCES `trade_decisions_v4_build` (`id`),\n  CONSTRAINT `build_inf_135944e44cc984c2a84008e4` CHECK ((((`decision_status` = _utf8mb4'approved') and (`reject_code` is null)) or ((`decision_status` = _utf8mb4'rejected') and (`reject_code` is not null))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "sha256": "7142b0c486b60c76048feef2ff6429e0f011b0399ea77b644d6d20b51d410b04"
+    },
+    "risk_manual_releases": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `risk_manual_releases` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `user_id` int NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `platform_policy_version_id` bigint unsigned NOT NULL,\n  `account_policy_version_id` bigint unsigned DEFAULT NULL,\n  `policy_set_revision` bigint unsigned NOT NULL,\n  `risk_state_revision` bigint unsigned NOT NULL,\n  `released_rules_json` json NOT NULL,\n  `baseline_json` json NOT NULL,\n  `breach_fingerprint` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `reason` varchar(500) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `idempotency_key` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `request_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `status` enum('active','superseded','expired','revoked') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',\n  `expires_at_utc` datetime(3) NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `invalidated_at_utc` datetime(3) DEFAULT NULL,\n  `invalidation_reason` varchar(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_risk_manual_release_request` (`user_id`,`trading_account_id`,`idempotency_key`),\n  UNIQUE KEY `uk_risk_manual_release_episode` (`trading_account_id`,`breach_fingerprint`),\n  UNIQUE KEY `uk_risk_manual_release_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `idx_risk_manual_release_active` (`trading_account_id`,`status`,`expires_at_utc`,`created_at_utc`),\n  KEY `fk_risk_manual_release_platform_policy` (`platform_policy_version_id`),\n  KEY `fk_risk_manual_release_account_policy` (`account_policy_version_id`),\n  CONSTRAINT `fk_risk_manual_release_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_risk_manual_release_account_policy` FOREIGN KEY (`account_policy_version_id`) REFERENCES `risk_policy_versions_v4` (`id`),\n  CONSTRAINT `fk_risk_manual_release_platform_policy` FOREIGN KEY (`platform_policy_version_id`) REFERENCES `risk_policy_versions_v4` (`id`),\n  CONSTRAINT `fk_risk_manual_release_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "sha256": "d079f1d3ec62adf64e27a72097437d122b871812e33d4595a5eed89f555d0fc4"
+    },
+    "risk_policy_versions_v4": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `risk_policy_versions_v4` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `policy_set_id` bigint unsigned NOT NULL,\n  `version_number` int unsigned NOT NULL,\n  `policy_json` json NOT NULL,\n  `policy_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `created_by_user_id` int DEFAULT NULL,\n  `change_reason` varchar(500) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_risk_policy_version_identity` (`id`,`policy_set_id`),\n  UNIQUE KEY `uk_risk_policy_version_number` (`policy_set_id`,`version_number`),\n  UNIQUE KEY `uk_risk_policy_version_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `fk_risk_policy_version_actor` (`created_by_user_id`),\n  CONSTRAINT `fk_risk_policy_version_actor` FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_risk_policy_version_set` FOREIGN KEY (`policy_set_id`) REFERENCES `risk_policy_sets_v4` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "sha256": "dfa7a7777c56b293e5a13842c071c401f1034962255bf373daed3aeba8cb880d"
+    },
+    "risk_reservation_events_v4": {
+      "exists": false
+    },
+    "risk_reservations_v4": {
+      "exists": false
+    },
+    "strategies": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `strategies` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `kind` enum('analysis','trader') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `scope` enum('platform','user') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `owner_user_id` int DEFAULT NULL,\n  `name` varchar(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `description` varchar(2000) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',\n  `status` enum('draft','active','retired') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',\n  `active_version_id` bigint unsigned DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  `deleted_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_strategies_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `idx_strategies_catalog` (`kind`,`status`,`scope`,`owner_user_id`,`deleted_at_utc`,`id`),\n  KEY `fk_strategies_owner` (`owner_user_id`),\n  KEY `fk_strategies_active_version` (`active_version_id`,`id`),\n  CONSTRAINT `fk_strategies_active_version` FOREIGN KEY (`active_version_id`, `id`) REFERENCES `strategy_versions` (`id`, `strategy_id`),\n  CONSTRAINT `fk_strategies_owner` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_strategies_owner` CHECK ((((`scope` = _utf8mb4'platform') and (`owner_user_id` is null)) or ((`scope` = _utf8mb4'user') and (`owner_user_id` is not null))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "sha256": "8435f65723f4c195d0b8767fa7cf1d9eefa4eae7ca20177d141946fcd8768bab"
+    },
+    "strategy_subscriptions": {
+      "exists": true,
+      "rows": "5",
+      "ddl": "CREATE TABLE `strategy_subscriptions` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `trading_account_id` int NOT NULL,\n  `strategy_id` int NOT NULL,\n  `risk_profile_id` int DEFAULT NULL,\n  `symbols_json` text,\n  `execution_enabled` tinyint NOT NULL DEFAULT '0',\n  `memory_mode` varchar(20) NOT NULL DEFAULT 'shared',\n  `conflicting_strategy_id` int DEFAULT NULL,\n  `is_deleted` tinyint NOT NULL DEFAULT '0',\n  `created_at` datetime NOT NULL DEFAULT (now()),\n  `updated_at` datetime NOT NULL DEFAULT (now()),\n  `schedule_enabled` tinyint NOT NULL DEFAULT '0',\n  `schedule_timezone` varchar(64) NOT NULL DEFAULT 'terminal_server',\n  `schedule_weekdays_json` varchar(64) NOT NULL DEFAULT '[1,2,3,4,5]',\n  `schedule_windows_json` text,\n  `outside_window_behavior` varchar(24) NOT NULL DEFAULT 'pause_all',\n  `take_profit_mode` varchar(24) NOT NULL DEFAULT 'ai_recommended',\n  `active_execution_user_key` int GENERATED ALWAYS AS ((case when ((`execution_enabled` = 1) and (`is_deleted` = 0)) then `user_id` else NULL end)) STORED /*!80023 INVISIBLE */,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_subscription_active_execution_user` (`active_execution_user_key`),\n  KEY `idx_ss_user_strategy` (`user_id`,`strategy_id`,`is_deleted`),\n  KEY `idx_ss_account_strategy` (`trading_account_id`,`strategy_id`,`is_deleted`),\n  KEY `idx_ss_account_exec` (`trading_account_id`,`execution_enabled`,`is_deleted`),\n  CONSTRAINT `fk_strategy_subscriptions_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts_legacy_v3` (`id`),\n  CONSTRAINT `fk_strategy_subscriptions_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB AUTO_INCREMENT=6 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+      "sha256": "97337960964a12db5f7f34964e9bd4601535b3f9fd2311521cdb0fdeab6a8732"
+    },
+    "strategy_subscriptions_v4_build": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `strategy_subscriptions_v4_build` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `standard_symbol` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `analysis_strategy_id` bigint unsigned NOT NULL,\n  `analysis_strategy_version_id` bigint unsigned NOT NULL,\n  `trader_strategy_id` bigint unsigned DEFAULT NULL,\n  `trader_strategy_version_id` bigint unsigned DEFAULT NULL,\n  `analysis_enabled` tinyint(1) NOT NULL DEFAULT '1',\n  `trader_enabled` tinyint(1) NOT NULL DEFAULT '0',\n  `trade_send_enabled` tinyint(1) NOT NULL DEFAULT '0',\n  `status` enum('active','paused','ended') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `active_execution_key` varchar(255) CHARACTER SET ascii COLLATE ascii_bin GENERATED ALWAYS AS ((case when ((`status` = _utf8mb4'active') and (`trader_enabled` = 1)) then concat(cast(`trading_account_id` as char charset utf8mb4),_utf8mb4':',convert(`standard_symbol` using utf8mb4)) else NULL end)) STORED,\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_strategy_subscription_identity` (`user_id`,`trading_account_id`,`analysis_strategy_id`,`standard_symbol`),\n  UNIQUE KEY `uk_strategy_subscription_execution_slot` (`active_execution_key`),\n  UNIQUE KEY `uk_strategy_subscription_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `idx_strategy_subscriptions_analysis` (`user_id`,`analysis_strategy_version_id`,`standard_symbol`,`status`,`id`),\n  KEY `idx_strategy_subscriptions_account` (`trading_account_id`,`status`,`id`),\n  KEY `fk_strategy_subscriptions_analysis` (`analysis_strategy_id`),\n  KEY `fk_strategy_subscriptions_analysis_version` (`analysis_strategy_version_id`,`analysis_strategy_id`),\n  KEY `fk_strategy_subscriptions_trader` (`trader_strategy_id`),\n  KEY `fk_strategy_subscriptions_trader_version` (`trader_strategy_version_id`,`trader_strategy_id`),\n  CONSTRAINT `build_sub_0c51ad8469fff6ff093c86f9` FOREIGN KEY (`analysis_strategy_version_id`, `analysis_strategy_id`) REFERENCES `strategy_versions` (`id`, `strategy_id`),\n  CONSTRAINT `build_sub_4fc8ff10102c070027098b11` FOREIGN KEY (`trader_strategy_id`) REFERENCES `strategies` (`id`),\n  CONSTRAINT `build_sub_725f39a146e86dec96dbd0aa` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `build_sub_7a251248c43ab0574975e1a3` FOREIGN KEY (`analysis_strategy_id`) REFERENCES `strategies` (`id`),\n  CONSTRAINT `build_sub_9294d57ac7727ef83f7993ac` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `build_sub_b279ce344487dfeef755f66f` FOREIGN KEY (`trader_strategy_version_id`, `trader_strategy_id`) REFERENCES `strategy_versions` (`id`, `strategy_id`),\n  CONSTRAINT `build_sub_2be294fb98c34a07474f83ee` CHECK (((`trade_send_enabled` = 0) or (`trader_enabled` = 1))),\n  CONSTRAINT `build_sub_cb36259f8d93625320fd92a1` CHECK ((((`trader_enabled` = 0) and (`trade_send_enabled` = 0)) or ((`trader_enabled` = 1) and (`trader_strategy_id` is not null) and (`trader_strategy_version_id` is not null))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "sha256": "0e45196066f757dbb8a38bdfd615dc8b4c65c8b297da995f06da12f14521d2d4"
+    },
+    "strategy_versions": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `strategy_versions` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `strategy_id` bigint unsigned NOT NULL,\n  `version_number` int unsigned NOT NULL,\n  `prompt_text` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `prompt_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `input_contract_version` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `output_contract_version` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `config_json` json NOT NULL,\n  `created_by_user_id` int NOT NULL,\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_strategy_versions_identity` (`id`,`strategy_id`),\n  UNIQUE KEY `uk_strategy_versions_number` (`strategy_id`,`version_number`),\n  UNIQUE KEY `uk_strategy_versions_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `idx_strategy_versions_created` (`strategy_id`,`created_at_utc`,`id`),\n  KEY `fk_strategy_versions_creator` (`created_by_user_id`),\n  CONSTRAINT `fk_strategy_versions_creator` FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_strategy_versions_strategy` FOREIGN KEY (`strategy_id`) REFERENCES `strategies` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "sha256": "768295142175363f8f381a4bc6b68d56ec1171e5e9211bf7ffa5a2ec90db31ee"
+    },
+    "terminal_profiles": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `terminal_profiles` (\n  `id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `user_id` int NOT NULL,\n  `display_name` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `platform` enum('mt4','mt5') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `installation_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  `deleted_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_terminal_profile_install` (`user_id`,`installation_id`,`id`),\n  KEY `idx_terminal_profiles_user` (`user_id`,`deleted_at_utc`,`updated_at_utc`),\n  CONSTRAINT `fk_terminal_profiles_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "sha256": "e796241d28dd63d6ee3b60b846184bc9f2b73c574dd33dd31240c873d604a13c"
+    },
+    "trade_decision_payloads": {
+      "exists": false
+    },
+    "trade_decision_payloads_v4_build": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `trade_decision_payloads_v4_build` (\n  `trade_decision_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `payload_json` json NOT NULL,\n  `payload_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `payload_bytes` bigint unsigned NOT NULL,\n  PRIMARY KEY (`trade_decision_id`),\n  CONSTRAINT `build_inf_d81a2845681bc54c76ab2681` FOREIGN KEY (`trade_decision_id`) REFERENCES `trade_decisions_v4_build` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "sha256": "82892f95f4b06fff1c47b2fef61f250d5fc2e6331ecaf338dcae6f14babd2f16"
+    },
+    "trade_decisions": {
+      "exists": false
+    },
+    "trade_decisions_v4_build": {
+      "exists": true,
+      "rows": "0",
+      "ddl": "CREATE TABLE `trade_decisions_v4_build` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `trader_run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `user_id` int NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `market_analysis_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `strategy_id` bigint unsigned NOT NULL,\n  `strategy_version_id` bigint unsigned NOT NULL,\n  `action_kind` enum('hold','market_order','pending_order','modify_position','close_position','modify_order','cancel_order') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `side` enum('buy','sell') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `confidence` decimal(5,2) NOT NULL,\n  `summary` varchar(2000) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `input_snapshot_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `content_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `status` enum('proposed','stale','risk_rejected','accepted') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'proposed',\n  `stale_reason` varchar(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `risk_decision_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_trade_decisions_run` (`trader_run_id`),\n  UNIQUE KEY `uk_trade_decision_risk` (`risk_decision_id`),\n  KEY `idx_trade_decisions_account` (`trading_account_id`,`created_at_utc`,`id`),\n  KEY `idx_trade_decisions_analysis` (`market_analysis_id`,`trading_account_id`,`id`),\n  KEY `fk_trade_decisions_user` (`user_id`),\n  KEY `fk_trade_decisions_strategy` (`strategy_id`),\n  KEY `fk_trade_decisions_strategy_version` (`strategy_version_id`,`strategy_id`),\n  KEY `fk_trade_decisions_snapshot` (`input_snapshot_id`),\n  CONSTRAINT `build_inf_0740be2c90774cd9e3b8f32c` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `build_inf_12a3ff95db57c0e8ddc81a23` FOREIGN KEY (`input_snapshot_id`) REFERENCES `inference_snapshots_v4_build` (`id`),\n  CONSTRAINT `build_inf_1c4afc38a8809f954434c06c` FOREIGN KEY (`strategy_id`) REFERENCES `strategies` (`id`),\n  CONSTRAINT `build_inf_237346b062143ea85b1c19bd` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `build_inf_3b9c04485778d1c93b5a5ad9` FOREIGN KEY (`market_analysis_id`) REFERENCES `market_analyses_v4_build` (`id`),\n  CONSTRAINT `build_inf_7a01f47f1db675d867c684d4` FOREIGN KEY (`strategy_version_id`, `strategy_id`) REFERENCES `strategy_versions` (`id`, `strategy_id`),\n  CONSTRAINT `build_inf_83956b0400318cd49a2b3277` FOREIGN KEY (`risk_decision_id`) REFERENCES `risk_decisions_v4_build` (`id`),\n  CONSTRAINT `build_inf_8ae2b167ba9b0743ddaefb7f` FOREIGN KEY (`trader_run_id`) REFERENCES `ai_trader_runs_v4_build` (`id`),\n  CONSTRAINT `build_inf_b90dc065f01848988e931db5` CHECK (((`confidence` >= 0) and (`confidence` <= 100)))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "sha256": "252c58ac5532c9b1b099a12c3dcea928a28931bcaae175e327af9bf9fe69a3c7"
+    },
+    "trading_accounts": {
+      "exists": true,
+      "rows": "6",
+      "ddl": "CREATE TABLE `trading_accounts` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `platform` enum('mt4','mt5') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `broker_server` varchar(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `account_login` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `currency` varchar(12) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  `deleted_at_utc` datetime(3) DEFAULT NULL,\n  `margin_mode` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,\n  `ownership_revision` bigint unsigned NOT NULL DEFAULT '1',\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_trading_account_identity` (`platform`,`broker_server`,`account_login`),\n  KEY `idx_trading_accounts_active` (`deleted_at_utc`,`id`)\n) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+      "sha256": "310c81125e03d9712a669a383bfd2914a6b9dde5758153b5baf802f441dce01c"
+    },
+    "user_execution_commands": {
+      "exists": false
+    },
+    "users": {
+      "exists": true,
+      "rows": "27",
+      "ddl": "CREATE TABLE `users` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `uid` varchar(32) DEFAULT NULL,\n  `email` varchar(255) DEFAULT NULL,\n  `email_verified` tinyint DEFAULT NULL,\n  `auth_method` varchar(20) DEFAULT NULL,\n  `password` varchar(255) NOT NULL,\n  `nickname` varchar(100) NOT NULL DEFAULT '',\n  `avatar` varchar(500) NOT NULL DEFAULT '',\n  `role` varchar(20) NOT NULL DEFAULT 'user',\n  `plan` varchar(20) NOT NULL DEFAULT 'free',\n  `plan_period` varchar(20) DEFAULT NULL,\n  `plan_expires_at` datetime(3) DEFAULT NULL,\n  `telegram_id` varchar(100) DEFAULT NULL,\n  `telegram_username` varchar(100) DEFAULT NULL,\n  `telegram_name` varchar(100) DEFAULT NULL,\n  `telegram_chat_id` varchar(100) DEFAULT NULL,\n  `telegram_group_status` varchar(50) DEFAULT '',\n  `telegram_bot_started_at` datetime DEFAULT NULL,\n  `telegram_joined_at` datetime DEFAULT NULL,\n  `telegram_last_invite_sent_at` datetime DEFAULT NULL,\n  `referral_code` varchar(50) DEFAULT NULL,\n  `referral_credit` decimal(20,8) NOT NULL DEFAULT '0.00000000',\n  `referred_by` varchar(50) DEFAULT NULL,\n  `last_seen_at` datetime DEFAULT NULL,\n  `bridge_heartbeat` datetime DEFAULT NULL,\n  `created_at` datetime(3) NOT NULL DEFAULT (now(3)),\n  `updated_at` datetime(3) NOT NULL DEFAULT (now(3)),\n  `phone` varchar(20) DEFAULT NULL,\n  `phone_verified` tinyint DEFAULT NULL,\n  `changelog_seen_version` int DEFAULT NULL,\n  `token_version` int NOT NULL DEFAULT '0',\n  `plan_source` varchar(20) DEFAULT NULL,\n  `deleted_at` datetime(3) DEFAULT NULL,\n  `deletion_status` varchar(24) NOT NULL DEFAULT 'active',\n  `last_seen_at_utc` datetime(3) DEFAULT NULL,\n  `profile_revision` bigint unsigned NOT NULL DEFAULT '1',\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `email` (`email`),\n  UNIQUE KEY `uid` (`uid`),\n  UNIQUE KEY `referral_code` (`referral_code`),\n  UNIQUE KEY `idx_users_phone` (`phone`),\n  KEY `idx_users_last_seen` (`last_seen_at`),\n  KEY `idx_users_deletion_status` (`deletion_status`,`deleted_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=33 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+      "sha256": "cac027f809fae6396dd31254f9e3ec1e632158b6f64784540def3635985f4ffc"
+    }
+  },
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "completedSteps": 205,
+  "foreignKeys": [
+    {
+      "tableName": "account_risk_states",
+      "constraintName": "fk_account_risk_state_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "account_risk_states",
+      "constraintName": "fk_account_risk_state_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "account_risk_summaries",
+      "constraintName": "fk_account_risk_summary_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "account_runtime_snapshots",
+      "constraintName": "fk_account_snapshot_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "account_trade_daily_summaries_v4",
+      "constraintName": "fk_account_trade_daily_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "account_trade_daily_summaries_v4",
+      "constraintName": "fk_account_trade_daily_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "account_trade_records_v4",
+      "constraintName": "fk_account_trade_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "account_trade_records_v4",
+      "constraintName": "fk_account_trade_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_analysis_runs_v4_build",
+      "constraintName": "build_inf_27ea9c331efc2766f4c88db0",
+      "columnName": "input_snapshot_id",
+      "parent": "inference_snapshots_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_analysis_runs_v4_build",
+      "constraintName": "build_inf_82e6985200834ada8b0db123",
+      "columnName": "strategy_id",
+      "parent": "strategies",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_analysis_runs_v4_build",
+      "constraintName": "build_inf_900edb42e6f532cea5f6c579",
+      "columnName": "strategy_version_id",
+      "parent": "strategy_versions",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_analysis_runs_v4_build",
+      "constraintName": "build_inf_900edb42e6f532cea5f6c579",
+      "columnName": "strategy_id",
+      "parent": "strategy_versions",
+      "parentColumn": "strategy_id",
+      "ordinal": 2
+    },
+    {
+      "tableName": "ai_analysis_runs_v4_build",
+      "constraintName": "build_inf_ad95042daa038008f502f6d4",
+      "columnName": "market_source_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_analysis_runs_v4_build",
+      "constraintName": "build_inf_c169a89664bbda0042a99e6d",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_analysis_runs_v4_build",
+      "constraintName": "build_inf_dd529a8d821bc06ade687abb",
+      "columnName": "model_task_id",
+      "parent": "ai_model_tasks_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_manual_analysis_cooldowns",
+      "constraintName": "fk_ai_manual_cooldowns_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_manual_analysis_jobs",
+      "constraintName": "fk_manual_analysis_model_task",
+      "columnName": "model_task_id",
+      "parent": "ai_model_tasks",
+      "parentColumn": "task_id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_model_attempts_v4_build",
+      "constraintName": "build_inf_0ca28edb78f1f938223793b5",
+      "columnName": "task_id",
+      "parent": "ai_model_tasks_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_model_provider_capabilities",
+      "constraintName": "fk_v4_capabilities_verifier",
+      "columnName": "verified_by_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_model_task_attempts",
+      "constraintName": "fk_model_attempt_task",
+      "columnName": "task_id",
+      "parent": "ai_model_tasks",
+      "parentColumn": "task_id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_model_task_events",
+      "constraintName": "fk_model_event_task",
+      "columnName": "task_id",
+      "parent": "ai_model_tasks",
+      "parentColumn": "task_id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_model_tasks_v4_build",
+      "constraintName": "build_inf_b57695181409e75e254b094d",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_model_tasks_v4_build",
+      "constraintName": "build_inf_c5bd3bc0267d7b28ad294bfc",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_model_tasks_v4_build",
+      "constraintName": "build_inf_ea6a85c5635a874974888a5d",
+      "columnName": "input_snapshot_id",
+      "parent": "inference_snapshots_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_trader_runs_v4_build",
+      "constraintName": "build_inf_23e635cc46a94d900a2abf58",
+      "columnName": "strategy_version_id",
+      "parent": "strategy_versions",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_trader_runs_v4_build",
+      "constraintName": "build_inf_23e635cc46a94d900a2abf58",
+      "columnName": "strategy_id",
+      "parent": "strategy_versions",
+      "parentColumn": "strategy_id",
+      "ordinal": 2
+    },
+    {
+      "tableName": "ai_trader_runs_v4_build",
+      "constraintName": "build_inf_2e2bc6c7f719003f523e5169",
+      "columnName": "strategy_id",
+      "parent": "strategies",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_trader_runs_v4_build",
+      "constraintName": "build_inf_34bcfbca16c0eeea5d67abd9",
+      "columnName": "model_task_id",
+      "parent": "ai_model_tasks_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_trader_runs_v4_build",
+      "constraintName": "build_inf_4f5a6112fdd30750fca34809",
+      "columnName": "market_analysis_id",
+      "parent": "market_analyses_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_trader_runs_v4_build",
+      "constraintName": "build_inf_74c1dfba66ec6aabea9a24ef",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_trader_runs_v4_build",
+      "constraintName": "build_inf_855d8ea12f63231125056a9e",
+      "columnName": "input_snapshot_id",
+      "parent": "inference_snapshots_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_trader_runs_v4_build",
+      "constraintName": "build_inf_b8a7d27c436c902fe45c961a",
+      "columnName": "subscription_id",
+      "parent": "strategy_subscriptions_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "ai_trader_runs_v4_build",
+      "constraintName": "build_inf_f77611e8b8ceee5174cf6f1f",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "auth_authorization_codes",
+      "constraintName": "fk_auth_codes_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "auth_sessions",
+      "constraintName": "fk_auth_sessions_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "bridge_connection_capacity_grants",
+      "constraintName": "fk_bridge_capacity_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "bridge_connection_sessions",
+      "constraintName": "fk_bridge_sessions_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "bridge_connection_sessions",
+      "constraintName": "fk_bridge_sessions_profile",
+      "columnName": "terminal_profile_id",
+      "parent": "terminal_profiles",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "bridge_connection_sessions",
+      "constraintName": "fk_bridge_sessions_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "bridge_refresh_sessions",
+      "constraintName": "fk_v4_bridge_refresh_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "bridge_v4_pairing_requests",
+      "constraintName": "fk_bridge_v4_pair_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "global_risk_controls",
+      "constraintName": "fk_global_risk_actor",
+      "columnName": "changed_by_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "history_collection_tasks_v4",
+      "constraintName": "fk_history_task_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "inference_snapshot_payloads_v4_build",
+      "constraintName": "build_inf_f9afae7e9c71fae06bc7df0e",
+      "columnName": "snapshot_id",
+      "parent": "inference_snapshots_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "inference_snapshots_v4_build",
+      "constraintName": "build_inf_15a94f5bb0f6d57e59233511",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "inference_snapshots_v4_build",
+      "constraintName": "build_inf_37a482f0f6a622d4cbf7ba51",
+      "columnName": "strategy_id",
+      "parent": "strategies",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "inference_snapshots_v4_build",
+      "constraintName": "build_inf_c86d439b34a23c6959ec8bfc",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "inference_snapshots_v4_build",
+      "constraintName": "build_inf_d744497b3fe127ab6f7ca36e",
+      "columnName": "strategy_version_id",
+      "parent": "strategy_versions",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "inference_snapshots_v4_build",
+      "constraintName": "build_inf_d744497b3fe127ab6f7ca36e",
+      "columnName": "strategy_id",
+      "parent": "strategy_versions",
+      "parentColumn": "strategy_id",
+      "ordinal": 2
+    },
+    {
+      "tableName": "instrument_collection_requests_v4",
+      "constraintName": "fk_instrument_request_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "instrument_collection_requests_v4",
+      "constraintName": "fk_instrument_request_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "learning_progress",
+      "constraintName": "fk_learning_progress_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "learning_progress_changes",
+      "constraintName": "fk_learning_change_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "macro_data_sources",
+      "constraintName": "fk_macro_data_sources_creator",
+      "columnName": "created_by_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "macro_feature_sets",
+      "constraintName": "fk_macro_feature_set_creator",
+      "columnName": "created_by_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "macro_model_versions",
+      "constraintName": "fk_macro_model_creator",
+      "columnName": "created_by_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "macro_pipeline_jobs",
+      "constraintName": "fk_macro_pipeline_requester",
+      "columnName": "requested_by_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "macro_research_snapshots",
+      "constraintName": "fk_macro_snapshot_owner",
+      "columnName": "owner_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "market_analyses_v4_build",
+      "constraintName": "build_inf_5af34c29eac6ba73de991fb1",
+      "columnName": "analysis_run_id",
+      "parent": "ai_analysis_runs_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "market_analyses_v4_build",
+      "constraintName": "build_inf_97fce77d611ca2d4bf21af1f",
+      "columnName": "owner_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "market_analyses_v4_build",
+      "constraintName": "build_inf_b8d2f00897dd8adb7d311814",
+      "columnName": "input_snapshot_id",
+      "parent": "inference_snapshots_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "market_analyses_v4_build",
+      "constraintName": "build_inf_d2611a93717bf755bfec2a40",
+      "columnName": "strategy_version_id",
+      "parent": "strategy_versions",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "market_analyses_v4_build",
+      "constraintName": "build_inf_d2611a93717bf755bfec2a40",
+      "columnName": "strategy_id",
+      "parent": "strategy_versions",
+      "parentColumn": "strategy_id",
+      "ordinal": 2
+    },
+    {
+      "tableName": "market_analyses_v4_build",
+      "constraintName": "build_inf_e2e9573b5c5851425eb7900b",
+      "columnName": "strategy_id",
+      "parent": "strategies",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "market_analysis_payloads_v4_build",
+      "constraintName": "build_inf_286c1f3a5abf4696e9a145d9",
+      "columnName": "market_analysis_id",
+      "parent": "market_analyses_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "market_candles",
+      "constraintName": "fk_market_candles_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "market_quotes",
+      "constraintName": "fk_market_quotes_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "memberships",
+      "constraintName": "fk_membership_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "observer_channel_accesses",
+      "constraintName": "fk_observer_access_granter",
+      "columnName": "granted_by_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "observer_channel_accesses",
+      "constraintName": "fk_observer_access_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "observer_channels",
+      "constraintName": "fk_observer_channel_account",
+      "columnName": "source_trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "observer_channels",
+      "constraintName": "fk_observer_channel_creator",
+      "columnName": "created_by_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "observer_management_operations",
+      "constraintName": "fk_observer_management_operations_actor",
+      "columnName": "actor_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "observer_sources",
+      "constraintName": "fk_observer_source_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "observer_sources",
+      "constraintName": "fk_observer_source_creator",
+      "columnName": "created_by_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "observer_sources",
+      "constraintName": "fk_observer_source_operator",
+      "columnName": "operator_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "observer_sources",
+      "constraintName": "fk_observer_source_strategy",
+      "columnName": "analysis_strategy_id",
+      "parent": "strategies",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "open_position_snapshots",
+      "constraintName": "fk_open_positions_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "payment_orders",
+      "constraintName": "fk_payment_order_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "pending_order_snapshots",
+      "constraintName": "fk_pending_orders_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "referral_rule_changes",
+      "constraintName": "fk_referral_rule_change_actor",
+      "columnName": "actor_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_decision_payloads_v4_build",
+      "constraintName": "build_inf_8bb1b90ce107458b02ada1f1",
+      "columnName": "risk_decision_id",
+      "parent": "risk_decisions_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_decisions_v4_build",
+      "constraintName": "build_inf_1408092cb77dd9ba1ccd31f2",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_decisions_v4_build",
+      "constraintName": "build_inf_ca6c6bc2591479ec688ff5c8",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_decisions_v4_build",
+      "constraintName": "build_inf_dddef97403c671d093ba0f98",
+      "columnName": "platform_policy_version_id",
+      "parent": "risk_policy_versions_v4",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_decisions_v4_build",
+      "constraintName": "build_inf_e43675f95ef8db37e5d34c99",
+      "columnName": "account_policy_version_id",
+      "parent": "risk_policy_versions_v4",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_decisions_v4_build",
+      "constraintName": "build_inf_fcad85ec3743434f847c77ff",
+      "columnName": "trade_decision_id",
+      "parent": "trade_decisions_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "constraintName": "fk_risk_manual_release_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "constraintName": "fk_risk_manual_release_account_policy",
+      "columnName": "account_policy_version_id",
+      "parent": "risk_policy_versions_v4",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "constraintName": "fk_risk_manual_release_platform_policy",
+      "columnName": "platform_policy_version_id",
+      "parent": "risk_policy_versions_v4",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "constraintName": "fk_risk_manual_release_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_policy_change_items_v4",
+      "constraintName": "fk_risk_policy_change_actor",
+      "columnName": "requested_by_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_policy_change_items_v4",
+      "constraintName": "fk_risk_policy_change_version",
+      "columnName": "policy_version_id",
+      "parent": "risk_policy_versions_v4",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "constraintName": "fk_risk_policy_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "constraintName": "fk_risk_policy_active_version",
+      "columnName": "active_version_id",
+      "parent": "risk_policy_versions_v4",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "constraintName": "fk_risk_policy_active_version",
+      "columnName": "id",
+      "parent": "risk_policy_versions_v4",
+      "parentColumn": "policy_set_id",
+      "ordinal": 2
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "constraintName": "fk_risk_policy_owner",
+      "columnName": "owner_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "constraintName": "fk_risk_policy_version_actor",
+      "columnName": "created_by_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "constraintName": "fk_risk_policy_version_set",
+      "columnName": "policy_set_id",
+      "parent": "risk_policy_sets_v4",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_policy_write_receipts",
+      "constraintName": "fk_risk_policy_receipt_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_policy_write_receipts",
+      "constraintName": "fk_risk_policy_receipt_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_state_events",
+      "constraintName": "fk_risk_state_event_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "risk_state_events",
+      "constraintName": "fk_risk_state_event_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "strategies",
+      "constraintName": "fk_strategies_active_version",
+      "columnName": "active_version_id",
+      "parent": "strategy_versions",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "strategies",
+      "constraintName": "fk_strategies_active_version",
+      "columnName": "id",
+      "parent": "strategy_versions",
+      "parentColumn": "strategy_id",
+      "ordinal": 2
+    },
+    {
+      "tableName": "strategies",
+      "constraintName": "fk_strategies_owner",
+      "columnName": "owner_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "strategy_memory_injection_logs_v4",
+      "constraintName": "fk_strategy_memory_injection_strategy",
+      "columnName": "strategy_id",
+      "parent": "strategies",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "strategy_memory_injection_logs_v4",
+      "constraintName": "fk_strategy_memory_injection_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "strategy_memory_libraries_v4",
+      "constraintName": "fk_strategy_memory_owner",
+      "columnName": "owner_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "strategy_memory_libraries_v4",
+      "constraintName": "fk_strategy_memory_strategy",
+      "columnName": "strategy_id",
+      "parent": "strategies",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "strategy_memory_library_revisions_v4",
+      "constraintName": "fk_strategy_memory_revision_actor",
+      "columnName": "created_by_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "constraintName": "fk_strategy_subscriptions_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts_legacy_v3",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "constraintName": "fk_strategy_subscriptions_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "strategy_subscriptions_v4_build",
+      "constraintName": "build_sub_0c51ad8469fff6ff093c86f9",
+      "columnName": "analysis_strategy_version_id",
+      "parent": "strategy_versions",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "strategy_subscriptions_v4_build",
+      "constraintName": "build_sub_0c51ad8469fff6ff093c86f9",
+      "columnName": "analysis_strategy_id",
+      "parent": "strategy_versions",
+      "parentColumn": "strategy_id",
+      "ordinal": 2
+    },
+    {
+      "tableName": "strategy_subscriptions_v4_build",
+      "constraintName": "build_sub_4fc8ff10102c070027098b11",
+      "columnName": "trader_strategy_id",
+      "parent": "strategies",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "strategy_subscriptions_v4_build",
+      "constraintName": "build_sub_725f39a146e86dec96dbd0aa",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "strategy_subscriptions_v4_build",
+      "constraintName": "build_sub_7a251248c43ab0574975e1a3",
+      "columnName": "analysis_strategy_id",
+      "parent": "strategies",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "strategy_subscriptions_v4_build",
+      "constraintName": "build_sub_9294d57ac7727ef83f7993ac",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "strategy_subscriptions_v4_build",
+      "constraintName": "build_sub_b279ce344487dfeef755f66f",
+      "columnName": "trader_strategy_version_id",
+      "parent": "strategy_versions",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "strategy_subscriptions_v4_build",
+      "constraintName": "build_sub_b279ce344487dfeef755f66f",
+      "columnName": "trader_strategy_id",
+      "parent": "strategy_versions",
+      "parentColumn": "strategy_id",
+      "ordinal": 2
+    },
+    {
+      "tableName": "strategy_versions",
+      "constraintName": "fk_strategy_versions_creator",
+      "columnName": "created_by_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "strategy_versions",
+      "constraintName": "fk_strategy_versions_strategy",
+      "columnName": "strategy_id",
+      "parent": "strategies",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "subscription_execution_preferences_v4_build",
+      "constraintName": "build_sub_da412482d076c3afdd229ef8",
+      "columnName": "subscription_id",
+      "parent": "strategy_subscriptions_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "subscription_schedules_v4_build",
+      "constraintName": "build_sub_2b06c113d0f260d265749d3a",
+      "columnName": "subscription_id",
+      "parent": "strategy_subscriptions_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "system_setting_changes",
+      "constraintName": "fk_system_setting_change_actor",
+      "columnName": "actor_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "system_setting_requests",
+      "constraintName": "fk_system_setting_receipt_actor",
+      "columnName": "actor_user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "terminal_account_bindings",
+      "constraintName": "fk_terminal_bindings_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "terminal_account_bindings",
+      "constraintName": "fk_terminal_bindings_profile",
+      "columnName": "terminal_profile_id",
+      "parent": "terminal_profiles",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "terminal_history_collection_receipts_v4",
+      "constraintName": "fk_history_collection_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "terminal_history_collection_receipts_v4",
+      "constraintName": "fk_history_collection_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "terminal_history_deal_provenance_v4",
+      "constraintName": "fk_history_deal_provenance_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "terminal_history_deal_provenance_v4",
+      "constraintName": "fk_history_deal_provenance_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "terminal_history_deals_v4",
+      "constraintName": "fk_terminal_history_deal_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "terminal_history_order_provenance_v4",
+      "constraintName": "fk_history_order_provenance_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "terminal_history_order_provenance_v4",
+      "constraintName": "fk_history_order_provenance_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "terminal_history_orders_v4",
+      "constraintName": "fk_terminal_history_order_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "terminal_profiles",
+      "constraintName": "fk_terminal_profiles_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "trade_decision_payloads_v4_build",
+      "constraintName": "build_inf_d81a2845681bc54c76ab2681",
+      "columnName": "trade_decision_id",
+      "parent": "trade_decisions_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "trade_decisions_v4_build",
+      "constraintName": "build_inf_0740be2c90774cd9e3b8f32c",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "trade_decisions_v4_build",
+      "constraintName": "build_inf_12a3ff95db57c0e8ddc81a23",
+      "columnName": "input_snapshot_id",
+      "parent": "inference_snapshots_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "trade_decisions_v4_build",
+      "constraintName": "build_inf_1c4afc38a8809f954434c06c",
+      "columnName": "strategy_id",
+      "parent": "strategies",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "trade_decisions_v4_build",
+      "constraintName": "build_inf_237346b062143ea85b1c19bd",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "trade_decisions_v4_build",
+      "constraintName": "build_inf_3b9c04485778d1c93b5a5ad9",
+      "columnName": "market_analysis_id",
+      "parent": "market_analyses_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "trade_decisions_v4_build",
+      "constraintName": "build_inf_7a01f47f1db675d867c684d4",
+      "columnName": "strategy_version_id",
+      "parent": "strategy_versions",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "trade_decisions_v4_build",
+      "constraintName": "build_inf_7a01f47f1db675d867c684d4",
+      "columnName": "strategy_id",
+      "parent": "strategy_versions",
+      "parentColumn": "strategy_id",
+      "ordinal": 2
+    },
+    {
+      "tableName": "trade_decisions_v4_build",
+      "constraintName": "build_inf_83956b0400318cd49a2b3277",
+      "columnName": "risk_decision_id",
+      "parent": "risk_decisions_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "trade_decisions_v4_build",
+      "constraintName": "build_inf_8ae2b167ba9b0743ddaefb7f",
+      "columnName": "trader_run_id",
+      "parent": "ai_trader_runs_v4_build",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "trade_history_sync_states_v4",
+      "constraintName": "fk_trade_history_sync_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "trading_account_ownership_intervals",
+      "constraintName": "fk_ownership_intervals_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "trading_account_ownership_intervals",
+      "constraintName": "fk_ownership_intervals_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "constraintName": "fk_account_owners_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "constraintName": "fk_account_owners_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "trading_context_changes_v4",
+      "constraintName": "fk_context_changes_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "trading_contexts",
+      "constraintName": "fk_trading_context_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "trading_contexts",
+      "constraintName": "fk_trading_context_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "trading_projection_provenance_v4",
+      "constraintName": "fk_projection_provenance_profile",
+      "columnName": "terminal_profile_id",
+      "parent": "terminal_profiles",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "trading_projection_provenance_v4",
+      "constraintName": "fk_projection_provenance_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "trading_projection_revisions",
+      "constraintName": "fk_projection_revisions_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "user_referral_accounts",
+      "constraintName": "fk_user_referral_accounts_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "user_trading_account_settings",
+      "constraintName": "fk_user_trading_account_settings_account",
+      "columnName": "trading_account_id",
+      "parent": "trading_accounts",
+      "parentColumn": "id",
+      "ordinal": 1
+    },
+    {
+      "tableName": "user_trading_account_settings",
+      "constraintName": "fk_user_trading_account_settings_user",
+      "columnName": "user_id",
+      "parent": "users",
+      "parentColumn": "id",
+      "ordinal": 1
+    }
+  ],
+  "observedAt": "2026-09-10T14:36:27.992Z"
+}

@@ -1,0 +1,62 @@
+{
+  "kind": "instrument-schema-prerequisites/v1",
+  "passed": true,
+  "databaseWrites": 0,
+  "registrySteps": 176,
+  "step": {
+    "id": "inplace_045_01_instrument_collection_requests_v4",
+    "checksum": "3793f61700344be5b925be6323d8077f5b2f9614041c96d3709e95209f5c6fdb",
+    "sourceSha256": "f1821bf57bbffac9f10dce3039cb016b8de073badb135251a49e144fe3342e90"
+  },
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "tz": "+00:00"
+  },
+  "evidence": {
+    "tables": [
+      {
+        "name": "trading_accounts",
+        "engine": "InnoDB"
+      },
+      {
+        "name": "users",
+        "engine": "InnoDB"
+      }
+    ],
+    "columns": [
+      {
+        "tableName": "trading_accounts",
+        "name": "id",
+        "type": "bigint unsigned",
+        "nullable": "NO"
+      },
+      {
+        "tableName": "users",
+        "name": "id",
+        "type": "int",
+        "nullable": "NO"
+      }
+    ],
+    "keys": [
+      {
+        "tableName": "trading_accounts",
+        "indexName": "PRIMARY",
+        "columnName": "id",
+        "nonUnique": "0"
+      },
+      {
+        "tableName": "users",
+        "indexName": "PRIMARY",
+        "columnName": "id",
+        "nonUnique": "0"
+      }
+    ]
+  },
+  "result": {
+    "ready": true,
+    "problems": [],
+    "targetExists": false
+  },
+  "observedAt": "2026-09-09T03:32:53.149Z"
+}

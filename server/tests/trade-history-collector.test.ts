@@ -9,6 +9,7 @@ import {
 } from '../src/modules/trade-history/index.js'
 import { BullMqOutboxTaskPublisher } from '../src/outbox/index.js'
 import type { RuntimeTaskQueues } from '../src/queue/task-queues.js'
+import { HistoryCommitUnknown } from '../src/modules/trade-history/application/history-commit-unknown.js'
 
 const NOW = new Date('2026-09-04T08:00:00.000Z')
 const route: BridgeGatewayRoute = {
@@ -18,6 +19,68 @@ const route: BridgeGatewayRoute = {
 }
 
 describe('Stage 12T Bridge history collection', () => {
+  it('waits for cache refresh using the same read window without persisting a failed task', async () => {
+    const repository = new MemoryCollectorRepository()
+    const query = vi.fn(async (input: { resource: 'history.orders' | 'history.deals' | 'history.trades' }) => responseFor(input.resource, false, null))
+      .mockRejectedValueOnce(Error('bridge_projection_refreshing'))
+      .mockRejectedValueOnce(Error('bridge_query_inflight'))
+    const wait = vi.fn(async (_milliseconds: number) => {})
+    await expect(new TradeHistoryCollector(repository, { query }, () => NOW, wait).collect(route)).resolves.toMatchObject({ status: 'ready' })
+    expect(query.mock.calls[0]).toEqual(query.mock.calls[1])
+    expect(query.mock.calls[1]).toEqual(query.mock.calls[2])
+    expect(wait.mock.calls).toEqual([[1000], [2000]])
+    expect(repository.trace).not.toContain('fail')
+  })
+  it('bounds cache refresh retries and records failure when refresh never completes', async () => {
+    const repository = new MemoryCollectorRepository(), query = vi.fn().mockRejectedValue(Error('bridge_projection_refreshing'))
+    const wait = vi.fn(async (_milliseconds: number) => {})
+    await expect(new TradeHistoryCollector(repository, { query }, () => NOW, wait).collect(route)).rejects.toThrow('bridge_projection_refreshing')
+    expect(query).toHaveBeenCalledTimes(6)
+    expect(wait.mock.calls).toEqual([[1000], [2000], [4000], [8000], [16000]])
+    expect(repository.trace).toContain('fail')
+  })
+  it.each([false, true])('confirms completion once without refetching pages or writing failure (confirmation fails=%s)', async confirmationFails => {
+    const repository = new MemoryCollectorRepository()
+    const complete = vi.spyOn(repository, 'complete').mockRejectedValueOnce(new HistoryCommitUnknown())
+    if (confirmationFails) complete.mockRejectedValueOnce(Error('connection_unavailable'))
+    const query = vi.fn(async (input: { resource: 'history.orders' | 'history.deals' | 'history.trades' }) => responseFor(input.resource, false, null))
+    const collector = new TradeHistoryCollector(repository, { query }, () => NOW)
+    if (confirmationFails) await expect(collector.collect(route)).rejects.toBeInstanceOf(HistoryCommitUnknown)
+    else await expect(collector.collect(route)).resolves.toMatchObject({ status: 'ready' })
+    expect(complete).toHaveBeenCalledTimes(2)
+    expect(complete.mock.calls[0]).toEqual(complete.mock.calls[1])
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(repository.trace).not.toContain('fail')
+  })
+
+  it('does not write failure after a page commit becomes uncertain', async () => {
+    const repository = new MemoryCollectorRepository()
+    vi.spyOn(repository, 'persistPage').mockRejectedValueOnce(new HistoryCommitUnknown())
+    const query = vi.fn(async (input: { resource: 'history.orders' | 'history.deals' | 'history.trades' }) => responseFor(input.resource, false, null))
+    await expect(new TradeHistoryCollector(repository, { query }, () => NOW).collect(route)).rejects.toBeInstanceOf(HistoryCommitUnknown)
+    expect(repository.trace).not.toContain('fail')
+    expect(repository.trace).not.toContain('complete')
+  })
+  it('queries one instrument through the same authorized correlated read-only transport', async () => {
+    const leases = new MemoryLeases(route); const directory = new InProcessBridgeGatewayDirectory(); const sink = new MemorySink()
+    directory.attach(route, sink)
+    const transport = new BridgeGatewayQueryTransport(leases, directory, { async isAuthorized() { return true } }, () => NOW)
+    const pending = transport.queryInstrument({ route, symbol: 'XAUUSD.a' })
+    await vi.waitFor(() => expect(sink.messages).toHaveLength(1))
+    const request = sink.messages[0] as Parameters<typeof response>[0]
+    expect(request).toMatchObject({ type: 'query.request', payload: { resource: 'market.instrument', params: { symbol: 'XAUUSD.a' } } })
+    transport.receive(route, response(request, [{ symbol: 'XAUUSD.a', tick_size: '0.01' }]))
+    await expect(pending).resolves.toMatchObject({ payload: { resource: 'market.instrument', items: [{ symbol: 'XAUUSD.a' }] } })
+    expect(transport.inflight()).toBe(0)
+  })
+
+  it('does not send instrument queries after authorization is revoked', async () => {
+    const directory = new InProcessBridgeGatewayDirectory(); const sink = new MemorySink()
+    directory.attach(route, sink)
+    const transport = new BridgeGatewayQueryTransport(new MemoryLeases(route), directory, { async isAuthorized() { return false } }, () => NOW)
+    await expect(transport.queryInstrument({ route, symbol: 'XAUUSD' })).rejects.toThrow('bridge_route_authorization_revoked')
+    expect(sink.messages).toHaveLength(0)
+  })
   it('correlates a read-only query response to the exact live route', async () => {
     const leases = new MemoryLeases(route); const directory = new InProcessBridgeGatewayDirectory(); const sink = new MemorySink()
     directory.attach(route, sink)
@@ -53,7 +116,8 @@ describe('Stage 12T Bridge history collection', () => {
       const firstDeals = input.resource === 'history.deals' && input.cursor === null
       return responseFor(input.resource, firstDeals, firstDeals ? 'cursor-2' : null)
     } }, () => NOW)
-    await expect(collector.collect(route)).resolves.toEqual({ status: 'ready', freshThroughUtcMsc: NOW.getTime() })
+    await expect(collector.collect(route)).resolves.toMatchObject({ status: 'ready', freshThroughUtcMsc: NOW.getTime(),
+      pageChains: [{ resource: 'history.orders', pageCount: 1 }, { resource: 'history.deals', pageCount: 2 }] })
     expect(calls).toEqual([
       { resource: 'history.orders', cursor: null },
       { resource: 'history.deals', cursor: null },
@@ -93,22 +157,14 @@ describe('Stage 12T Bridge history collection', () => {
     expect(() => scheduler.schedule(0, NOW)).toThrowError('trade_history_schedule_limit_invalid')
   })
 
-  it('accepts the numeric trading-account primary key when publishing the ID-only history job', async () => {
+  it('rejects retired account-only events without creating a task queue job', async () => {
     const add = vi.fn(async () => undefined)
-    const publisher = new BullMqOutboxTaskPublisher({ bridgeHistory: { add } } as unknown as RuntimeTaskQueues)
-    await publisher.publish({
+    const publisher = new BullMqOutboxTaskPublisher({ bridgeHistoryTask: { add } } as unknown as RuntimeTaskQueues)
+    await expect(publisher.publish({
       id: '1', eventId: 'event-12345678', eventType: 'trade.history.requested', occurredAt: NOW.toISOString(),
       payload: { account_id: '42' }, attempts: 1,
-    })
-    expect(add).toHaveBeenCalledWith('trade.history.collect', { accountId: '42' }, { jobId: 'event-12345678' })
-    await expect(publisher.publish({
-      id: '2', eventId: 'event-87654321', eventType: 'trade.history.requested', occurredAt: NOW.toISOString(),
-      payload: { account_id: 'account-42' }, attempts: 1,
-    })).rejects.toThrowError('outbox_account_id_invalid')
-    await expect(publisher.publish({
-      id: '3', eventId: 'event-87654322', eventType: 'trade.history.requested', occurredAt: NOW.toISOString(),
-      payload: { account_id: '18446744073709551616' }, attempts: 1,
-    })).rejects.toThrowError('outbox_account_id_invalid')
+    })).rejects.toThrow('outbox_history_legacy_event_retired')
+    expect(add).not.toHaveBeenCalled()
   })
 
 })

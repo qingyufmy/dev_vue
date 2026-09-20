@@ -1,0 +1,16 @@
+{
+  "kind": "strategy-subscription-data-transition/v1",
+  "mode": "--prepare",
+  "target": "dev_vue",
+  "passed": false,
+  "currentDevVueWrites": 0,
+  "runtimeEnabled": false,
+  "errorCode": "Error",
+  "reason": "execution_workflow_schema_not_ready",
+  "errorLocations": [
+    "    at assertMysqlExecutionWorkflowSchemaReady (file:///D:/dev_codex/dev_vue/server/dist-v4/modules/execution/infrastructure/mysql-execution-workflow-schema-readiness.js:39:15)",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)",
+    "    at async file:///D:/dev_codex/dev_vue/scripts/strategy-subscription-transition-local.mjs:42:3"
+  ],
+  "observedAt": "2026-09-11T01:34:21.230Z"
+}

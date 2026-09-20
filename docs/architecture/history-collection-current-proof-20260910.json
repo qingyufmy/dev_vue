@@ -1,0 +1,21 @@
+{
+  "kind": "history-collection-current-upgrade-proof/v1",
+  "passed": true,
+  "target": "dev_vue",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "priorSteps": 188,
+  "completedSteps": 189,
+  "originalTables": 255,
+  "finalTables": 256,
+  "originalRows": 338745,
+  "protectedTableCount": 254,
+  "protectedSnapshotHash": "e28300177a29f17e627d02419c97f29383c03269310353d12e482d3c9ceb5355",
+  "oldJournalUnchanged": true,
+  "ddlCount": 1,
+  "replayDdlCount": 0,
+  "newTableRows": 0,
+  "businessWritesPerformed": false,
+  "evidenceHash": "569cc70b89180073f2ae4e30f78c46454d885bb963902a5e6295bbada5e36801",
+  "planHash": "008893e1f6ed3b626449f30e79c5707b54324c8ea9d11b853bdf6db6727fe7a9",
+  "observedAt": "2026-09-10T04:35:09.238Z"
+}

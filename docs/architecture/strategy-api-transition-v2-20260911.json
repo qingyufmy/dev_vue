@@ -1,0 +1,20 @@
+{
+  "kind": "strategy-api-migrated-data/v1",
+  "passed": false,
+  "target": "dev_vue_m1_source_20260910_02",
+  "currentDevVueWrites": 0,
+  "realAuthenticationVerified": false,
+  "realCommitVerified": false,
+  "transactionMode": "outer-rollback-with-per-request-savepoints",
+  "checks": [
+    "migrated-role-details-and-original-version-hashes",
+    "deleted-roles-hidden",
+    "platform-strategies-read-only"
+  ],
+  "errorCode": "TypeError",
+  "errorLocations": [
+    "    at file:///D:/dev_codex/dev_vue/scripts/verify-strategy-api-transition-local.mjs:85:22",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)"
+  ],
+  "observedAt": "2026-09-11T01:48:36.766Z"
+}

@@ -27,12 +27,42 @@ function fakePool(results: Array<unknown | Error>) {
     commit: vi.fn(async () => undefined),
     rollback: vi.fn(async () => undefined),
     release: vi.fn(),
+    destroy: vi.fn(),
   }
   const pool = { getConnection: vi.fn(async () => connection) } as unknown as Pool
   return { pool, connection, execute }
 }
 
 describe('MysqlBridgeCredentialRepository', () => {
+  it.each(['rotate', 'use', 'revoke'] as const)('reports commit uncertainty without rollback or connection reuse: %s', async operation => {
+    const legacy = { session_id: 11, user_id: 7, role: 'user', plan: 'pro', plan_expires_at: null }
+    const device = { ...legacy, installation_id: 'installation-1', profile_id: 'default', generation: 1, revoked_at: null }
+    const fixture = fakePool(operation === 'rotate'
+      ? [[[legacy], []], [[], []], [{ insertId: 22, affectedRows: 1 }, []]]
+      : [[[device], []], [{ affectedRows: 1 }, []]])
+    fixture.connection.commit.mockRejectedValueOnce(new Error('commit_ack_lost'))
+    const repository = createBridgeCredentialRepository(fixture.pool)
+    const credential = { tokenHash: input.replacementTokenHash, installationId: input.installationId, profileId: input.profileId,
+      userAgent: input.userAgent, ipAddress: input.ipAddress }
+    const call = operation === 'rotate' ? repository.rotateFromLegacy(input)
+      : operation === 'use' ? repository.useDeviceRefresh(credential) : repository.revokeDeviceRefresh(credential)
+    await expect(call).rejects.toMatchObject({ code: 'bridge_credential_commit_unknown', status: 503, retryable: false })
+    expect(fixture.connection.commit).toHaveBeenCalledOnce()
+    expect(fixture.connection.rollback).not.toHaveBeenCalled()
+    expect(fixture.connection.release).not.toHaveBeenCalled()
+    expect(fixture.connection.destroy).toHaveBeenCalledOnce()
+  })
+
+  it('does not replace an authorization error with a failed rollback error', async () => {
+    const fixture = fakePool([[[], []]])
+    fixture.connection.rollback.mockRejectedValueOnce(new Error('rollback_failed'))
+    await expect(createBridgeCredentialRepository(fixture.pool).rotateFromLegacy(input))
+      .rejects.toMatchObject({ code: 'bridge_legacy_credential_invalid', status: 401 })
+    expect(fixture.connection.destroy).toHaveBeenCalledOnce()
+    expect(fixture.connection.release).not.toHaveBeenCalled()
+    expect(fixture.connection.commit).not.toHaveBeenCalled()
+  })
+
   it('creates a V4 session transactionally without updating the source V3 session', async () => {
     const fixture = fakePool([
       [[{ session_id: 11, user_id: 7, role: 'user', plan: 'pro', plan_expires_at: null }], []],
@@ -111,7 +141,7 @@ describe('MysqlBridgeCredentialRepository', () => {
     expect(fixture.execute).toHaveBeenCalledTimes(2)
   })
 
-  it('keeps device refresh durable until explicit revocation', async () => {
+  it.each(['pro', 'plus', 'free'])('keeps %s device refresh durable; capacity controls connection admission', async plan => {
     const fixture = fakePool([
       [[{
         session_id: 22,
@@ -121,7 +151,7 @@ describe('MysqlBridgeCredentialRepository', () => {
         generation: 2,
         revoked_at: null,
         role: 'user',
-        plan: 'pro',
+        plan,
         plan_expires_at: null,
       }], []],
       [{ affectedRows: 1 }, []],

@@ -1,0 +1,1291 @@
+{
+  "kind": "review-history-full-schema-reference/v1",
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "dataCopied": false,
+  "referenceDatabaseRemoved": true,
+  "sources": [
+    {
+      "path": "server/db/migrations/inplace/069_review_trade_kind.sql",
+      "sha256": "174a1f5501b48ee0cf11595e7faf8b20291e9f445bf7d4bf20b7f5a0430b78c0"
+    },
+    {
+      "path": "server/db/migrations/inplace/070_review_legacy_conclusion.sql",
+      "sha256": "1d0e97bc8dea29ad0dd01659c03b68707d57a11114ec720274f26fe019f518a3"
+    }
+  ],
+  "initialSchemaState": {
+    "definitions": [
+      {
+        "name": "account_risk_states",
+        "sha256": "4db6d16d799e757edba4be707dd9ded038e3e8c8020d0b60bcda635df05a478d"
+      },
+      {
+        "name": "account_risk_summaries",
+        "sha256": "6ef593a712583d2ad55ab2af25fc5ba3f1bafd47c9f3306b68a872b65523901f"
+      },
+      {
+        "name": "account_runtime_snapshots",
+        "sha256": "6df92a77561d6592901e84bbe41055ce90fe61c018069c0e2cad67e5b1af35b8"
+      },
+      {
+        "name": "account_trade_attributions_v4",
+        "sha256": "021590d670e6a4144d60fe86bb697da950779d6c2da24046b98633e327185f7b"
+      },
+      {
+        "name": "account_trade_daily_summaries_v4",
+        "sha256": "36c6f642e167bdb41fb2d28e7924096c4c8ca930cce0f96b965d3ddace8a4ebc"
+      },
+      {
+        "name": "account_trade_record_deals_v4",
+        "sha256": "9eaade8b8c534ca8802f8a024b01c486910b44fefba25270b64e616f9a985532"
+      },
+      {
+        "name": "account_trade_records_v4",
+        "sha256": "bf95fd479f9763c1800c8a7d12d0c8e28dce98e149b84d44fd2ed3a0e5716b4b"
+      },
+      {
+        "name": "admin_position_close_jobs",
+        "sha256": "453ce6a269d1f84b09b73f194edab161b056b0f2095b15eb9800de44dec1ad8f"
+      },
+      {
+        "name": "admin_position_close_targets",
+        "sha256": "af6ef4e38b8bac38e54ed5875f40b2977a8a9f3c581c0670d107492e8d6a8dec"
+      },
+      {
+        "name": "admin_position_protection_jobs",
+        "sha256": "3b6af11a6f2865437a3735ba2e05bc1a78c17cf5d393b78526d1a9ba2816c627"
+      },
+      {
+        "name": "admin_position_protection_targets",
+        "sha256": "b29656c1061700df39ec242353ceec9bd5317a8e9fa450dad4801a8c418e3ac7"
+      },
+      {
+        "name": "admin_strategy_pending_cancel_jobs",
+        "sha256": "f12cbafe16d342b04dd31c856959fc0881e72e6c16c56633e3b181b66e31b963"
+      },
+      {
+        "name": "admin_strategy_pending_cancel_targets",
+        "sha256": "646d20e356903db07c25d133b8ebb9e1afd808ed89b2717e48b350a12844885c"
+      },
+      {
+        "name": "admin_strategy_trade_dispatches",
+        "sha256": "65503b4e943e8b2b608d1992d7b6218f8dcd576d06e9ebe9faff0196d06e8ccb"
+      },
+      {
+        "name": "admin_strategy_trade_targets",
+        "sha256": "7a41b00d59a360caa98eb01d9dbdc682d382a72877d34022b6673b1cd21c7d7b"
+      },
+      {
+        "name": "ai_analysis_runs",
+        "sha256": "99ae8cd0dba778b18a31bb6d59efbaa4ad27d09078a485b334eec6aec91b190f"
+      },
+      {
+        "name": "ai_configs",
+        "sha256": "218cc8a7853a15d789d33ef63c53b3ae6ee725101d08d20cd65ef373d6a2853c"
+      },
+      {
+        "name": "ai_feature_flags",
+        "sha256": "c619b23a3001885138644b41ccc2714f9520571fa98500081f07310cd12d01f3"
+      },
+      {
+        "name": "ai_inference_preferences",
+        "sha256": "cf9129d693cab8ddcfa56740a9f2241f47a5044168bfe600a0e0d4b6d7394105"
+      },
+      {
+        "name": "ai_manual_analysis_cooldowns",
+        "sha256": "c616b1b559e14fa9ad032ad9c2c4400b57340a5196463c896b7eb7694a03258b"
+      },
+      {
+        "name": "ai_manual_analysis_jobs",
+        "sha256": "d447d058b41522e997f9edaab017c74401436a03c38c7aeabd2d9a639f903322"
+      },
+      {
+        "name": "ai_market_benchmark_cases",
+        "sha256": "62d05368971547ff4c16cbfb1d96cc59c6be32c75e23b6dba029764d2cec2854"
+      },
+      {
+        "name": "ai_market_benchmark_sets",
+        "sha256": "26cde4cfcd400c4e4e488c6906f6c84a543244d8048360095627e902edbfbbf0"
+      },
+      {
+        "name": "ai_model_attempts",
+        "sha256": "ea4fc56ee373ffa3a43652424ae4516b644af4d319e05f09ab98711cc503e331"
+      },
+      {
+        "name": "ai_model_capacity_leases",
+        "sha256": "d2e6e4798188608b61ba16ad44366bd55c7d08d5481e2013420b005dc1f2f416"
+      },
+      {
+        "name": "ai_model_capacity_policies",
+        "sha256": "056d8c88fdd7de23cbc69baf69743055727daa15338b478dd7562c6eb8596072"
+      },
+      {
+        "name": "ai_model_capacity_waiters",
+        "sha256": "ec0408072eef4ecc8df0cb4e5df0edcf64348dd7c2ade1931a73ca4753846ba0"
+      },
+      {
+        "name": "ai_model_compare_checkpoints",
+        "sha256": "9f5483a3d29286cbaefba3c334ab19e9dbcc0fbc94430a4a984f694551ca6226"
+      },
+      {
+        "name": "ai_model_compare_jobs",
+        "sha256": "31d9938125b950cab064d5d725c4ed84736b29575f5f4accb4e93503a323e9f4"
+      },
+      {
+        "name": "ai_model_profiles",
+        "sha256": "df9835e57f67df0e4c19fc278553b916bdad97d3038bc2a55fc9f003a760e4e9"
+      },
+      {
+        "name": "ai_model_provider_capabilities",
+        "sha256": "dfd2118f0583487d794778ffd7d43898be88b92ffcce2b53b3f54f1ceba68009"
+      },
+      {
+        "name": "ai_model_provider_incidents",
+        "sha256": "b1e91f7c205a909fe15de1a77b805783f1e0eb93d8339d908c1390d97b5f0892"
+      },
+      {
+        "name": "ai_model_purpose_defaults",
+        "sha256": "fb5904731fe339733d4ff0540dab76988e4bbda8f034627fe6c92584e7c7e061"
+      },
+      {
+        "name": "ai_model_task_attempts",
+        "sha256": "cbed764772a4ce99743a6bb9ff5dfcb1b4df7abd4db32c3e8f31a9a97f6ddc5e"
+      },
+      {
+        "name": "ai_model_task_events",
+        "sha256": "ad82ab38fd9b95514edc28aa84c66eece004203660010bcae9c233345632d384"
+      },
+      {
+        "name": "ai_model_tasks",
+        "sha256": "933f89658bbabee273375e2a74879ddacb105e27f167717e4eb16d069703e1a8"
+      },
+      {
+        "name": "ai_model_tasks_legacy_v3",
+        "sha256": "8632ff97acd001df6a91d1f5b42208f08f5d7d687bcd157b17628b1aaaf7ad88"
+      },
+      {
+        "name": "ai_model_usage_logs",
+        "sha256": "bc8aa7ff7a0a33f0c658af4bb59d743d08a856efd52c9225f8f83951534468a0"
+      },
+      {
+        "name": "ai_observer_channel_assignments",
+        "sha256": "55e160536cba06a322d6ebdff692848def4cf11649954340a7cbfa9f8b3bc555"
+      },
+      {
+        "name": "ai_observer_channels",
+        "sha256": "37c6b1b6f98205350eeeb825eb8cb9f183ea7ffb06210773c59ea3153840c34c"
+      },
+      {
+        "name": "ai_observer_sources",
+        "sha256": "aa102196071ddb9744e7fd3ce1f6cae0f0935945167ce637992771589a146559"
+      },
+      {
+        "name": "ai_position_management_commands",
+        "sha256": "f4f0bda8f2d318707bf5144fa1b2cc974cf43880e3b957207935e2e2bde3cacf"
+      },
+      {
+        "name": "ai_position_management_evaluations",
+        "sha256": "f2f942966a0c94dda62d2715f669cea8fbdab7205c6913da2fc06c63ec6c8768"
+      },
+      {
+        "name": "ai_position_management_events",
+        "sha256": "fcee096b7fcff341b2549f4a55402604acfe7f8f9f8a105c247b96a9181b933c"
+      },
+      {
+        "name": "ai_position_management_tasks",
+        "sha256": "2e46991879d2df1547cb9aeac324c9ed056fadf707f4f784288388bf8a93a55b"
+      },
+      {
+        "name": "ai_signals",
+        "sha256": "702255e76b5bf51deb53fe1a30119b599004fc8e6687e5704524af6c5387bedd"
+      },
+      {
+        "name": "ai_trade_theses",
+        "sha256": "e667726dd02027d3b308a87e9a809ce600e4370fe991801b4578b0eb3cb88a3c"
+      },
+      {
+        "name": "ai_trader_runs",
+        "sha256": "1925ce985a97da142982de85d57b555f5e247dcbc0fa428d8aca2db234601247"
+      },
+      {
+        "name": "audit_logs",
+        "sha256": "705ac66b5f0d5aa0c137d5716362f545b6e14d05d701e56ef9100b6158306b81"
+      },
+      {
+        "name": "auth_authorization_codes",
+        "sha256": "d4d3a5bf3923c2caa7a078701cdbc37a8271a5b872646367a5af79b41b35b695"
+      },
+      {
+        "name": "auth_sessions",
+        "sha256": "93fdf62a0b4a7eedc3f1381e4415c848a13b09cf2c5301cd6338422776871b41"
+      },
+      {
+        "name": "auto_prompt_types",
+        "sha256": "a99bd269c0fdeba3efa41fbda0df29eea699d591a7ee7cc9357aa43c30cad224"
+      },
+      {
+        "name": "auto_scheduler",
+        "sha256": "2ff785736136248a02f1d3dfb43e24717de9b1a547ecfe01e23e7d486f14e80b"
+      },
+      {
+        "name": "auto_signal_deliveries",
+        "sha256": "07910dcb057076646e7c9f5b40fa29eb52b34d544e4f5eff5e071e93470b77e1"
+      },
+      {
+        "name": "bridge_command_events_v4",
+        "sha256": "3709fe89be1cc6e928e2fee2adc844267feac96cd6363888e95b598af16b1fe0"
+      },
+      {
+        "name": "bridge_command_payloads_v4",
+        "sha256": "ad78a41ddeed4971e3f56058a049c6c1cc50519d8f3c204d343d4856e8c14d9f"
+      },
+      {
+        "name": "bridge_command_results_v4",
+        "sha256": "3222d01e633605e65d6e7f07636824f56a41b35aab608732d3dfdb7a73feaccc"
+      },
+      {
+        "name": "bridge_commands_v4",
+        "sha256": "ea516a73bd3a1078a91eec0ba425fb2036dac48ea91ea0742bca12475a027fd1"
+      },
+      {
+        "name": "bridge_connection_capacity_grants",
+        "sha256": "0097e963de0cecdef7e7e99feacd71d88264c309ffee2ebc98c1454647dc2f78"
+      },
+      {
+        "name": "bridge_connection_sessions",
+        "sha256": "e1aaf82ed9334287fcda0e5c7bb01924decfab7faea60b6ccb9b89aa90917eed"
+      },
+      {
+        "name": "bridge_device_pairings",
+        "sha256": "784c0ff78b07b3101a8e529266cdabe8deac2eb3bf47b733d346a354dde9c624"
+      },
+      {
+        "name": "bridge_refresh_sessions",
+        "sha256": "c0d6b4826973638fc8c34eb5ffe31c766694ae03743ad7e1e5b33c7a7a85d68b"
+      },
+      {
+        "name": "bridge_trade_state_snapshots_v4",
+        "sha256": "5f241b3a6bc90f2ad9ab8172ee67ac7e921fe3f0910f690c21afa48c0d167ab8"
+      },
+      {
+        "name": "bridge_update_events",
+        "sha256": "f4718664f813a7d45eb8a5b2e5f995927f9aae6120f5577bcf2e9dcf6e8043b4"
+      },
+      {
+        "name": "bridge_v3_account_latest",
+        "sha256": "439bd19580a4f741e4aa069894a1c0ec669fedcc0ebb6207292a2fd9d8ee91bf"
+      },
+      {
+        "name": "bridge_v3_command_events",
+        "sha256": "a752912522ac03f55eec572b0bee11f6a3994c7fcbeb5da748410e0bc198a267"
+      },
+      {
+        "name": "bridge_v3_command_ledger",
+        "sha256": "ee0c8d373395fc4264d7d32cc86ee20d99367bf08ba769040b0bc83d868cb4e2"
+      },
+      {
+        "name": "bridge_v3_deals",
+        "sha256": "cce6bfdad8d0de62ea3eb7f54626f91459cade9c34c096b962883e89820b367a"
+      },
+      {
+        "name": "bridge_v3_orders_latest",
+        "sha256": "a4d6fbea41283a3cc44527a280b2ee14b24691d9803ff95bdb1640a120f14149"
+      },
+      {
+        "name": "bridge_v3_positions_latest",
+        "sha256": "7849805b182fcba9c4eedbf0789b99b2aa777d10b3a99e278874ea55f0a83d79"
+      },
+      {
+        "name": "bridge_v3_stream_revisions",
+        "sha256": "5da903239a734a84e445a12aee968fe51437218f782b7fbc343e6e9dfa4d9d85"
+      },
+      {
+        "name": "bridge_v3_terminal_sessions",
+        "sha256": "6085aaf2158f7ce42f6bcf3e6598932a6def1d250efdf1f69607d260cb5be9a9"
+      },
+      {
+        "name": "bridge_v4_pairing_requests",
+        "sha256": "39d6a91a1428601142d6a5a7859456a7c3f4f4ef0dd6647e1bb61b9ed1cb3862"
+      },
+      {
+        "name": "broadcast_messages",
+        "sha256": "28e2b7e11ab1b8dbd8bcd168c12b973684b623b6294957f3ab74c7c34036b353"
+      },
+      {
+        "name": "chan_structure_anchors",
+        "sha256": "1a32e5e14e2ea22ae7312f1e76acd90084038c1c9cfd19b3e406102589b8fb09"
+      },
+      {
+        "name": "close_config",
+        "sha256": "c33a90e1852d80cb5da6b01ca9e096d71ea84eb5be9ccc5d9da505a672e1e0d5"
+      },
+      {
+        "name": "close_signal_tickets",
+        "sha256": "b6f5dcf2a3bedf641db61200301d362e8cd2563123ba73e2aa1d31ef08b7dd2d"
+      },
+      {
+        "name": "comment_likes",
+        "sha256": "4a3fd5eef77e7c993a015b70a80d3f6b2da1b906175e6a0df40b8b07bf86ddbc"
+      },
+      {
+        "name": "comments",
+        "sha256": "51e9190521a8518f3cb3e08d67e3acfa6f07434018837d1ece0b7596a020933d"
+      },
+      {
+        "name": "course_resources",
+        "sha256": "11edf1f7a80d737a14323c7914bc3e1bbe958316c10a30dc4d8b0130bee03946"
+      },
+      {
+        "name": "courses",
+        "sha256": "d785289cec72755573a940783d8f306cbef743b879a764dda057b97355e77139"
+      },
+      {
+        "name": "credential_migration_runs",
+        "sha256": "dd106320d5691fe31bf82577047038ea3c67ac888f7c3712173b214ed724da34"
+      },
+      {
+        "name": "crypto_watch_list",
+        "sha256": "c3b058001a008319e43b49c1eed835659738b3988a7c33a0e2d5dfda630afd94"
+      },
+      {
+        "name": "data_migration_batches",
+        "sha256": "6d7c073609f8bd04f5b7b34938c62c8eb9dff877364c7c4915a72ac9bc699b8b"
+      },
+      {
+        "name": "data_migration_checkpoints",
+        "sha256": "63b25e568b62520e5b4da354f5dc2d6ac7914568a9e6cb8925a88bef74023ffb"
+      },
+      {
+        "name": "data_migration_id_maps",
+        "sha256": "e28d01c271e64f9acd262de3bb6ea12401f3700826c171bc83b17da8344beed0"
+      },
+      {
+        "name": "data_migration_row_receipts",
+        "sha256": "c82b221448572f6957a444576a1c33989e0a82dc62805268bf3ff10308977e0b"
+      },
+      {
+        "name": "data_migration_runs",
+        "sha256": "7aa4ec51dfbb2b317ee2facf4a6de7401e1d3a82379f15317aa6d396157ac7cb"
+      },
+      {
+        "name": "data_migration_source_rows",
+        "sha256": "64ce7085714f890ec74d261703c857851341f57ca7459ca0a4a7574570160ccb"
+      },
+      {
+        "name": "database_upgrade_steps_v4",
+        "sha256": "9aab6eab06a398ebd3604b531072f6a833b6e31beb1add446533ce57893873a1"
+      },
+      {
+        "name": "economic_calendar_event_revisions",
+        "sha256": "d817cdf681687772de1a2e366b8532b2b877488b1e0a8c57a9b8efadb15ceeaa"
+      },
+      {
+        "name": "economic_calendar_events",
+        "sha256": "1d15592445c70ee2cda77a66c24f6bd6ded6f991458f5478be1cbdba67cba67f"
+      },
+      {
+        "name": "execution_distribution_targets",
+        "sha256": "4bc4089091c7515c22042c2297b44ed665ad136a1f3cf1bf81457ef51ed2ff6a"
+      },
+      {
+        "name": "execution_distributions",
+        "sha256": "2e9df186d3342eec7ddba605eca4db3742c2bdc9ea5a83d00750a9139366fdaa"
+      },
+      {
+        "name": "execution_intent_events",
+        "sha256": "14968fd862f69892c961bf2ec7b3f9857180d86eb3db44e2c25a3af8f6a8ebe7"
+      },
+      {
+        "name": "execution_intent_payloads",
+        "sha256": "34e077334ceac64debadcf051441d15d025b83774dc41369e67416e6cb3a206a"
+      },
+      {
+        "name": "execution_intents",
+        "sha256": "168dc7796ba11005402af8b04925f5e701a578eb897dfbdab01b0aaaa1ab1bb6"
+      },
+      {
+        "name": "execution_outcomes",
+        "sha256": "8ef89d9bbc8eb90a1892225f891045b0267359487dc612a3c3e6d510869df1f3"
+      },
+      {
+        "name": "experience_long_term_memories",
+        "sha256": "300b9f4ff10a34e3d71c7d8768d4b78ec46880c22078a8873b3ac8adc3e42f70"
+      },
+      {
+        "name": "experience_memory_items",
+        "sha256": "c9158a67ee625ea1159b8e1f2248b2c64ba3ba8a1c59a8c92a803b8007204a8c"
+      },
+      {
+        "name": "experience_memory_summaries",
+        "sha256": "bc304feb615996b148b5a49d8873f2163262caeb2e6d408310bfdea56ff23702"
+      },
+      {
+        "name": "feedback",
+        "sha256": "5e9d364099f8dff4738bfdcd1541e6e7133920ad20a107a3b11821025ec07d3e"
+      },
+      {
+        "name": "global_auto_config",
+        "sha256": "9b0685dcc18288dc1b03a12f078e86a1dfa8c1afde1df514b95c6aa040836485"
+      },
+      {
+        "name": "global_position_guard_control",
+        "sha256": "3a470de750174d694188b1ee79fc48e5ed1f0f4490183b27643803f9ae3f8f10"
+      },
+      {
+        "name": "global_position_management_control",
+        "sha256": "571b217e7b54b7dc1dd5104f4cbbae4212e980b41b779c205c3d3f288beb9f32"
+      },
+      {
+        "name": "global_risk_control",
+        "sha256": "3af6a8b2f347efcd1fac964cb28abd3a3bf3edd13b29b3d2a75e499dd2131696"
+      },
+      {
+        "name": "global_risk_controls",
+        "sha256": "b0bd42f2c8c9d2a629176da3240d1f1b6edfa32f1920fcecfcc286ae67951484"
+      },
+      {
+        "name": "history_collection_tasks_v4",
+        "sha256": "fb93925874e5c72a55ef3763248ccad98287fc9c2e24e556bcb8c95b1d639986"
+      },
+      {
+        "name": "history_range_preferences",
+        "sha256": "98d7e15059af88281c403321f080d45258a83619966b1dc4c54d334699081324"
+      },
+      {
+        "name": "inference_snapshot_payloads",
+        "sha256": "d0d7fb9e84d5437fc166beef543743d58f119793d036fccbba8c14f13e7e9bde"
+      },
+      {
+        "name": "inference_snapshots",
+        "sha256": "57a6c1852cdd8b6ec7a7bbb067338c04580a0c24b7666f0c8b621ae6b7bc5d45"
+      },
+      {
+        "name": "inference_snapshots_legacy_v3",
+        "sha256": "e0981107b504147d5311ff243f5e665f168055931f04c6b955460f54aae30cd3"
+      },
+      {
+        "name": "instrument_collection_requests_v4",
+        "sha256": "cb4bff96b530f771a59c7ade7c29654cfbe05579552ec23a9b09f1c2b89e103a"
+      },
+      {
+        "name": "learning_courses",
+        "sha256": "1704d07700664b378990229b044bf187ad4609538b02cde9292ebd9cc1e16029"
+      },
+      {
+        "name": "learning_lessons",
+        "sha256": "4ea1993c948440fd6213ba08c8b32b83731ff6d3b6226d32644211260302af08"
+      },
+      {
+        "name": "learning_media_references",
+        "sha256": "c5d2e88202fe4b4b144573f1c03879ad506465f660af2f257972258098feb1cb"
+      },
+      {
+        "name": "learning_progress",
+        "sha256": "55086c9277398c240acb90c19ae8d6c84d5b653d238679204076dcc397f7d50b"
+      },
+      {
+        "name": "learning_progress_changes",
+        "sha256": "f90e0babe9f95e93e42eb9edf265cedf083f783e3f7c0d9f3f4462dd9ccfee75"
+      },
+      {
+        "name": "legacy_candle_backfill_v4",
+        "sha256": "8c0dcc0337fc9006c4ed54061c69b5e9f795aec1177c013d94e25f5f2f5811c5"
+      },
+      {
+        "name": "legacy_candle_mappings_v4",
+        "sha256": "bdfe52191ba46388b93ac4e1c2e34b9a4710e0b80785e6b0cd5438545722e88e"
+      },
+      {
+        "name": "macro_data_sources",
+        "sha256": "5d05c45a305b622a615e653dfb56c47b41526fa6f7ed98198f0a4f044610d38f"
+      },
+      {
+        "name": "macro_feature_sets",
+        "sha256": "c93ecfeb3f0e7f4726ebabc46f3449e3bbff8b04c5dd27ab3352ec2a02eb3dfb"
+      },
+      {
+        "name": "macro_ingestion_runs",
+        "sha256": "dd64d5149dacac702eb87ea27530b5630f1e45238034724ef88a01fc5b3da3f7"
+      },
+      {
+        "name": "macro_model_versions",
+        "sha256": "fc705bf274a2a483c644eb37b66d914ee1976db7dadc785c40b50a00a335eb2a"
+      },
+      {
+        "name": "macro_observations",
+        "sha256": "8c7a2d1bd1b4d513a5f949ee3a38d44490741dae394d83b8b09d41ad9958cedb"
+      },
+      {
+        "name": "macro_pipeline_jobs",
+        "sha256": "d88b82740c39091915df0b8f6cb9b01246fb7bc355c565a55fcb8741690164ff"
+      },
+      {
+        "name": "macro_research_snapshots",
+        "sha256": "58a565eeaf7770522d5c11e3af95ad1514f0e105dbbede3957666ad53cdb903e"
+      },
+      {
+        "name": "macro_series",
+        "sha256": "5cd2165a5f8c9bd782f79f86110f4ec21ae7b849b14f645d5fbf23636893ea2c"
+      },
+      {
+        "name": "macro_snapshot_observations",
+        "sha256": "4c7bf7addbd6aaa8edb84eb5a500a5cc1f6c707562ef4a0352aa6c833bff6936"
+      },
+      {
+        "name": "manual_review_candidates_v4",
+        "sha256": "eaa470328160a246c08ccbc05847cd1ca3610e77fc012a60f8785bfdf2750df6"
+      },
+      {
+        "name": "manual_trade_review_aggregate_cases",
+        "sha256": "07f6a56da1b378f8b3b8fe4d64a12dedd6ad67c4a00b757d667a58775d839959"
+      },
+      {
+        "name": "manual_trade_review_aggregate_sources",
+        "sha256": "d9ecd8f241f73a89955d4e8eef001e9fe87777e091563c1ffd987cdd16ef41a2"
+      },
+      {
+        "name": "manual_trade_review_aggregate_versions",
+        "sha256": "e36e6dd4347d5119b5d6a2db75dde67048a75268d3e5c165d462f45784e3c9e4"
+      },
+      {
+        "name": "manual_trade_review_cases",
+        "sha256": "d44bf5eabe086e17d181fc5d4cbf98622cc43f1c6d52b167e78b969a4e7d043a"
+      },
+      {
+        "name": "manual_trade_review_counterfactual_points",
+        "sha256": "7ec00bbd66e8132c537b9953bd154f77ad91f4d4abdaf756888ab95dd87ce922"
+      },
+      {
+        "name": "manual_trade_review_jobs",
+        "sha256": "0af51971d94061960ef2e59e07b122ebc43c76a7277eec638dc3285412525c8a"
+      },
+      {
+        "name": "manual_trade_review_sources",
+        "sha256": "2b4ad1c57c5078cc47d708b59dde4b2fee8b38a53b3127339401fd71a2a384df"
+      },
+      {
+        "name": "manual_trade_review_stage_runs",
+        "sha256": "135c43f9bc2f5b3d213d30123217835eb59c7d052168d098932f7d7fa3dd339a"
+      },
+      {
+        "name": "manual_trade_review_versions",
+        "sha256": "5d760bfcb3f64ed3a4fb2b6de1ecfbd5222e3d06b94adb1e18a8987530e82a6d"
+      },
+      {
+        "name": "market_analyses",
+        "sha256": "b2b53e9536154b4fdfe1921474c21b412a730048053a97789e4396b3d0a9cc90"
+      },
+      {
+        "name": "market_analysis_payloads",
+        "sha256": "da05e1b3f7c67aca33ec1ae97847c30e24eda093e27d8e3fe04e70388b4ee816"
+      },
+      {
+        "name": "market_candles",
+        "sha256": "b636fc5b2a48c8529d881f6db7ebf128337b377cd4c0e1fc3dda8641ec71258c"
+      },
+      {
+        "name": "market_candles_legacy_v3",
+        "sha256": "e8f4ae8d0246ceefb7f142b3d67a3296be7a742ff39ac420fb007963a9c6890a"
+      },
+      {
+        "name": "market_clock_samples",
+        "sha256": "99435a4b05129032977397d8ba9386515a40cf3e4bb4e2b308cdea262a0fb915"
+      },
+      {
+        "name": "market_data_sources",
+        "sha256": "c40356bfbe65ef0a19c49c87e3fd423a907081688c5ec00ce06faa72a01bb4f3"
+      },
+      {
+        "name": "market_quotes",
+        "sha256": "fff559ffb1a66e81abd132e2e5373a1c9e2aca84efac8b6f034cf98d78bfa9d6"
+      },
+      {
+        "name": "membership_expiry_notifications",
+        "sha256": "1389b651dce132a44684ab3d44fd380beb905bb7a5026277d8681c072028e963"
+      },
+      {
+        "name": "memberships",
+        "sha256": "16eca62da8b97d10adddf00314990da9e77adf257970c887f51592933ea6a41b"
+      },
+      {
+        "name": "memory_compression_jobs",
+        "sha256": "5f4dca1d2db5942ba6cc311f6dec1ee529743ad2168086e16ccc7835f704d0ef"
+      },
+      {
+        "name": "memory_injection_logs",
+        "sha256": "2d515d2ec8c2942ab63f79a5b6dd629a1d053eb8c61ad6123c3a40acaacc1351"
+      },
+      {
+        "name": "mt5_account_bindings",
+        "sha256": "62f833d8b69962e9de6d7d00e23644b97ec5205490be77df969e93fefa791562"
+      },
+      {
+        "name": "mt5_account_ownership_history",
+        "sha256": "b53453b40d2854a477d0683e6357d2d8b3d0d6020253182ae2e76e7622137447"
+      },
+      {
+        "name": "mt5_account_performance_daily",
+        "sha256": "0fb006ed7e161529a2e97d18923b77c573ad45a668986b9068a025e9e17216b0"
+      },
+      {
+        "name": "mt5_account_performance_sync_state",
+        "sha256": "c4b2b5146ed5044c9ff00918af1f02629c2a01c40e17de3f54ebcb8ec13e0ef5"
+      },
+      {
+        "name": "mt5_account_performance_totals",
+        "sha256": "427c22ad4678b65be67772c68c0599d03a228f0df1014df3bfb045de1328ecc6"
+      },
+      {
+        "name": "notification_campaigns",
+        "sha256": "3c4990c87ab83bd0a90514a32debc5602f88087652faa5c5912f590001aeb5d6"
+      },
+      {
+        "name": "notification_deliveries",
+        "sha256": "f288f06c173d032ed853839dd3610f8fba9ffe226082beeb3d13f30829f3be68"
+      },
+      {
+        "name": "notification_idempotency_keys",
+        "sha256": "3b537750052aa9c878b72483beda73907088a5273295313b460a17ab948d9ba8"
+      },
+      {
+        "name": "notifications",
+        "sha256": "3315b7fc924c165dd4457671c89331595a1aca2b4d2f3d7267825bbec82bf805"
+      },
+      {
+        "name": "observer_channel_accesses",
+        "sha256": "66fa22bcbc88e84aaaaa2eb3f6099cc54be9220a5dd4ee175671eb5eb0ba0122"
+      },
+      {
+        "name": "observer_channels",
+        "sha256": "a504beeb48f5fe10ad99b276e918ba3060b827ffad1e059db5210c07e32bf985"
+      },
+      {
+        "name": "observer_management_operations",
+        "sha256": "0ac941a7b8cc5a2bd93dad3050284f76df57486eb2ed17267f2f11d48a445582"
+      },
+      {
+        "name": "observer_management_registry",
+        "sha256": "46762539482251ac70bb99d8614c4614c3946b0d42933ec1e4c1dd0299154882"
+      },
+      {
+        "name": "observer_sources",
+        "sha256": "cd5f67cfbec4eed3fdc9fe2d1526ecfa9f8cfa96aaaca5b37a27ccba871713b5"
+      },
+      {
+        "name": "open_position_snapshots",
+        "sha256": "6f66c9ced2edff02042c80498c2639f33b3f77ed095632ae7c999d034f4288c9"
+      },
+      {
+        "name": "operation_events",
+        "sha256": "625c106c9fa011e1f598573dd9d7a7593f30038059e6456e085352963af6781d"
+      },
+      {
+        "name": "operations",
+        "sha256": "04a0d98abdb3bc6b097a66c89851447761854f1abd3e8db819a73824e25298df"
+      },
+      {
+        "name": "order_intents",
+        "sha256": "e24e7eb977630e52ac8ac86c9f7d08e21fc9d5edfee440c060868b112ffee3a5"
+      },
+      {
+        "name": "orders",
+        "sha256": "6000ad56fbe3255c65acf77cde46485274ff88ee30f05626a59679cfe522e306"
+      },
+      {
+        "name": "outbox_events",
+        "sha256": "3ed765b718156c32b8be2aa2e085fcb044ce4db284a3b9e09970f1f43441187c"
+      },
+      {
+        "name": "partial_close_parent_dispatches_v4",
+        "sha256": "ec1cd32ff68f35de69f091c6a6de10c89bb6e4123aa83fad9c91a450189aa4e6"
+      },
+      {
+        "name": "partial_close_workflow_events_v4",
+        "sha256": "a5d98021391a050eafa7158ecc436a9e62c1f6534fc4823824278973d2e43445"
+      },
+      {
+        "name": "partial_close_workflows_v4",
+        "sha256": "e91b31a3c1105758624bb0af12e49f910d653dcabbf77a9e19eb4d06f428d50d"
+      },
+      {
+        "name": "payment_matches",
+        "sha256": "5f1bc311b22160ca5c0ce0c223473381110a03e1a2790371cb98aed10b320ca0"
+      },
+      {
+        "name": "payment_orders",
+        "sha256": "09e8522d39a2879c57068b91dfa91d179e58efd932d37a223eb42ce4e413b75e"
+      },
+      {
+        "name": "payment_side_effects",
+        "sha256": "1d292d003eb1979b66bb952442bde8985b18c8cdec2853df82d63387c300c54e"
+      },
+      {
+        "name": "payment_transactions",
+        "sha256": "c0b1c7d2dd120824fdd224085491e5ba07dc3b691d16efd6281636d0d186f961"
+      },
+      {
+        "name": "payment_wallet_addresses",
+        "sha256": "4678bb8e3bf7a20231e9f8cd51234f1ab713d8f37aa4d6aea8f88bc88db4252c"
+      },
+      {
+        "name": "pending_order_snapshots",
+        "sha256": "1415e329515c6e3a5fa45e9f64bcb37e3509990f851583717d13244813b170b9"
+      },
+      {
+        "name": "pending_orders",
+        "sha256": "188078e1a4059d35667585ac259fe5dbd1b59e55da29984ad4d9b0aca424ee50"
+      },
+      {
+        "name": "period_review_cases",
+        "sha256": "14f5c847b4807f698313e33b9074300d7f230ed1a052e52b778d1cfed0262b2f"
+      },
+      {
+        "name": "period_review_derivation_jobs",
+        "sha256": "05a7926a41c2c8ea71bb0a202eec9428034ef38c0d026df90aeac2c7dd67b91c"
+      },
+      {
+        "name": "period_review_job_events",
+        "sha256": "dc3fff5f45b83e1f75980bdf20fcf8d827a2e93c893b2911d347cc4725d96b6d"
+      },
+      {
+        "name": "period_review_jobs",
+        "sha256": "cb8133f609bb9dd819b37860c1b9dc0e1ed2c3bc9efe95cebd0cc268affa8306"
+      },
+      {
+        "name": "period_review_monthly_checkpoints",
+        "sha256": "878f5b161744f9d8d18c7b5daf538c017cb4e11f64f9290e3d5cd3dd38faee30"
+      },
+      {
+        "name": "period_review_sources",
+        "sha256": "1b3dc4937713d42ca83deeaa97256c2c33829c3171381c199e9c216968ee1cae"
+      },
+      {
+        "name": "period_review_user_states",
+        "sha256": "7887036554312c39df4bcbf67f78ec768f1a3f8cab03848b02c53650ed56961c"
+      },
+      {
+        "name": "period_review_versions",
+        "sha256": "84f30b6333adc85e755bfe33f0d323cf96620a2accd68e082508f9fea763ecbc"
+      },
+      {
+        "name": "platform_model_usage_policy",
+        "sha256": "47ccba3b043733c23b7f6c72325bc1198cdc48d35ad4201dc0f79f17750a02d5"
+      },
+      {
+        "name": "platform_strategy_experience_items",
+        "sha256": "bfbcd9516146bf402b5dd9e07bd3fc4e9aa784b843fb901214dc9c91e114313b"
+      },
+      {
+        "name": "platform_strategy_experience_logs",
+        "sha256": "d1759972616d99a7f2167ff313fb84dbfcf22444adf88ba9d2d4798a4d98c883"
+      },
+      {
+        "name": "platform_strategy_experience_policies",
+        "sha256": "ff97bd7400c2d753201f1a735b4769b0146bfc45cd1a5b6c5f815e7977de4cbc"
+      },
+      {
+        "name": "position_guard_position_states",
+        "sha256": "b08467f7e84b1d12b881ce193a2e5468ee6686784c35c76617aba0b1b759ec14"
+      },
+      {
+        "name": "position_guard_profile_versions",
+        "sha256": "15b8cb22b1ba8b1cab0b04c4bed002589d7b7b341757c6b4099e485286ab9c65"
+      },
+      {
+        "name": "position_guard_profiles",
+        "sha256": "372f0ceb4930dc6e1fdc21a968952b2a6d75a7ddea4fa012ad3b7d90683022ec"
+      },
+      {
+        "name": "position_management_account_rollouts",
+        "sha256": "f35d87ec3674b779a2caa66e620e404193c6e43fd3e7b0f7db2973fc88be61ed"
+      },
+      {
+        "name": "position_protection_commands_v4",
+        "sha256": "de787b65feb9a6777c96ba4901ff04c9e36fdb3b0fe1cc7af472393d296f8fdd"
+      },
+      {
+        "name": "position_protection_dispatches_v4",
+        "sha256": "45e2da9dcba9ece2033d37eb0d147b5ca8cfb811841e443259a873fc545a9cd6"
+      },
+      {
+        "name": "position_protection_outcomes_v4",
+        "sha256": "0a9bd355e75dd013705e13b83e48e101643fe6461293a0e7dbd2bace73fb80ef"
+      },
+      {
+        "name": "position_protection_reviews_v4",
+        "sha256": "6fd0b47583e11df0d2b5e4a362c0737a94d989e6224b0da04a62ec810e4ce4ca"
+      },
+      {
+        "name": "position_protection_unissued_expiries_v4",
+        "sha256": "a93b6a028fec9ddfdbb4884e8947842243c746f468ffd39903eed89f922c35d7"
+      },
+      {
+        "name": "post_assets",
+        "sha256": "69948eea7756a9d3a809c53e734b052e844074d8728f317c58d512a5df2323e0"
+      },
+      {
+        "name": "post_replies",
+        "sha256": "7a2b3002c0b5ebb19dbe351eb336afe26cabeaa137ca3145f709ae7b54704aaa"
+      },
+      {
+        "name": "post_reports",
+        "sha256": "2fad0caca8036501e90cf901da6254d47303e2e836345d56ebda2d9df4814553"
+      },
+      {
+        "name": "post_tags",
+        "sha256": "f88b221c8408a979ce54028f0bd1615e9fd5f6e0d63d6bc920924551d62ecf1c"
+      },
+      {
+        "name": "posts",
+        "sha256": "9a6b7e008a1d71bc44bca52869b64c449a210ec8a98aa090932b875d5062360a"
+      },
+      {
+        "name": "progress",
+        "sha256": "f90e85dc1d5be10c2ac00e6dce3bf0fc3109ee288e77c670f239d9e6c678e371"
+      },
+      {
+        "name": "quiz_questions",
+        "sha256": "02a07bcff8b5cc08f90b9058063e1d24a40326c9e95ed807508154994d51830d"
+      },
+      {
+        "name": "referral_credit_ledger",
+        "sha256": "f14d6cbaa0e010169981ba8d1437b2acdd04cffac1271cb0f407071f2a5b4e18"
+      },
+      {
+        "name": "referral_rule_changes",
+        "sha256": "c52bb29e262af50cbb629c7612aef6abd678ba8753d64407d1d7736abac4d05f"
+      },
+      {
+        "name": "referral_rules",
+        "sha256": "f7d507c21d4b7af726a90a5e6c981ce7d4c2e3b0b47367817ee2b22e4c8f0fca"
+      },
+      {
+        "name": "referrals",
+        "sha256": "8ed16ed0a8fa108cb5eb9c4b3ead9636aeb360ffc9899776169876d0fee6020b"
+      },
+      {
+        "name": "review_case_sources_v4",
+        "sha256": "da2af96137367837bddc70c22307587155b73b32ae01f144cd306de99987ab96"
+      },
+      {
+        "name": "review_cases_v4",
+        "sha256": "60641650b20608c9ebc650f89cb43863c07220cae805e7e78f894092c95af447"
+      },
+      {
+        "name": "review_evidence_payloads_v4",
+        "sha256": "f8efbce2034139afcac175c9cbe0db4efa2664746f4b5ce00457062aa7edd2f6"
+      },
+      {
+        "name": "review_job_events_v4",
+        "sha256": "97a69fddc7fa0e6b2419b42da87967574542ed5822f3646366d391356dbe0cba"
+      },
+      {
+        "name": "review_jobs_v4",
+        "sha256": "56d96fe23f81b262b04a1db72f55d699994a7ff3d1af5c099289f19c7569f9a6"
+      },
+      {
+        "name": "review_model_attempts_v4",
+        "sha256": "519785a5d0dd90b906428633b26a727250ae0a0b270f73eca886dbb71d6d6c95"
+      },
+      {
+        "name": "review_user_states_v4",
+        "sha256": "3246541397522add077362fa1c1b6e2ce3047ee7736e03095929b0ddd6d93553"
+      },
+      {
+        "name": "review_version_payloads_v4",
+        "sha256": "c9f0d0e7b6b69766ab2dfb606433279489a6710d5258ba69e4b5353eb91fc2f1"
+      },
+      {
+        "name": "review_versions_v4",
+        "sha256": "c2b9e920aedd0295d7be03a2de8d7bfe022cf2b348d57fcd706f4652b7a7315f"
+      },
+      {
+        "name": "review_write_receipts_v4",
+        "sha256": "21b440b19fdf9706c97ba9f7c5bf3c42b4c401a6d6c8863c07a56ba6bc44b45c"
+      },
+      {
+        "name": "risk_account_state",
+        "sha256": "034f34d607d3c4e2c8328d7d7d4017d3b170eb47224220187220cd4b6f402ea8"
+      },
+      {
+        "name": "risk_decision_payloads_v4",
+        "sha256": "937a157775aead544e239b83695c02b74bceac949ea9433a3c48ac6edaf18729"
+      },
+      {
+        "name": "risk_decisions",
+        "sha256": "7ce5bc1cba440d4673db77d1490784bb7ba1e9a24bb3fb9654013cfabecff7de"
+      },
+      {
+        "name": "risk_decisions_v4",
+        "sha256": "de08351f8f404cdd1c9398bbcb7ef90bdd864831d6fca63b36f268385a409bf4"
+      },
+      {
+        "name": "risk_manual_releases",
+        "sha256": "d079f1d3ec62adf64e27a72097437d122b871812e33d4595a5eed89f555d0fc4"
+      },
+      {
+        "name": "risk_policy_change_items",
+        "sha256": "aaed67b973d4a5b22fb9b2da935f0a844d66e10660f08a2269f3f5b2c30cf9ba"
+      },
+      {
+        "name": "risk_policy_change_items_v4",
+        "sha256": "2e642fde712714d55782fbdd4bf551bae920dd832c4c3c4c389f4e6ef408f243"
+      },
+      {
+        "name": "risk_policy_sets",
+        "sha256": "81eb3ae70286355656df62ee56e7339e8b9238b2d2618f18011f9b00937938f8"
+      },
+      {
+        "name": "risk_policy_sets_v4",
+        "sha256": "7a931972f59546b3b5b4ff7070672d9611507d76fdd3c0c12384bc18ae443718"
+      },
+      {
+        "name": "risk_policy_versions",
+        "sha256": "625f371001a9d065e2f79ecaea5fc37fed01705245f6782514f36f9d439831ed"
+      },
+      {
+        "name": "risk_policy_versions_v4",
+        "sha256": "dfa7a7777c56b293e5a13842c071c401f1034962255bf373daed3aeba8cb880d"
+      },
+      {
+        "name": "risk_policy_write_receipts",
+        "sha256": "d250fb22d9f0f1314548fbac2380f95717b9cef7c319851fd43ef1a4ed33aca5"
+      },
+      {
+        "name": "risk_profiles",
+        "sha256": "a2dc40591ec22c91f23e6050f79c2dcd4b086ab2fefac1cd82bbb96c86811c95"
+      },
+      {
+        "name": "risk_reservation_events_v4",
+        "sha256": "1f6f0f55faea7da672be72336479deefdcfefd5889283b4901adc74fd66f9745"
+      },
+      {
+        "name": "risk_reservations",
+        "sha256": "3604159eaf4256bf7e07ea30026618b6e6df196e71c2555790b799a548ea935d"
+      },
+      {
+        "name": "risk_reservations_v4",
+        "sha256": "717b4dcd2492425ef023163e8f3ed9e6eb3f4f7a25223d935994d8591b73c837"
+      },
+      {
+        "name": "risk_rule_rollouts",
+        "sha256": "1a71299ca06c6d84e0f9c684b1358928a8d73dca0f171901796460a55fcd6857"
+      },
+      {
+        "name": "risk_state_events",
+        "sha256": "0c28e4e3a42fc3f02b7a3f28095329a82465c44875b6b48cf915adbeee783230"
+      },
+      {
+        "name": "schema_migrations",
+        "sha256": "712a1661c13d646786d02a88c68af92d54cbf62895b9a881072cc80bf0efd90e"
+      },
+      {
+        "name": "signal_outcome_deals",
+        "sha256": "4c2465e1f93a25dfa93da8bf05e89153e54ea168a5e326de067930033524a000"
+      },
+      {
+        "name": "signal_outcomes",
+        "sha256": "5c6b1395c452cb0cd058cf8a98bbb2d487468c0138dafbc78781356248a9afd6"
+      },
+      {
+        "name": "storage_upload_sessions",
+        "sha256": "58bb2118cc247eb4f986f713e2355f74ddf86d827aebd335fd1211e4632fa60c"
+      },
+      {
+        "name": "stored_files",
+        "sha256": "4a6136aacbda48c22a6f76d7860aa3a8758714064f0175e7e542cfe90c83bdf1"
+      },
+      {
+        "name": "strategies",
+        "sha256": "8435f65723f4c195d0b8767fa7cf1d9eefa4eae7ca20177d141946fcd8768bab"
+      },
+      {
+        "name": "strategy_memory_compression_jobs",
+        "sha256": "5ea1308adc8ff7a44f57950eccb2f2fa869a085b41c527d2d9bfa2539d150f67"
+      },
+      {
+        "name": "strategy_memory_conflict_bindings",
+        "sha256": "3ccd4d9bfd40258c5ad72a4ebfea3f113edbd85a178eb283666aef879a9ec845"
+      },
+      {
+        "name": "strategy_memory_conflict_occurrences",
+        "sha256": "4e4acc0d4b2104bf1847c69173bc423616f9a527983c22cccaadc1a6b483d0d5"
+      },
+      {
+        "name": "strategy_memory_conflicts",
+        "sha256": "9324b14152e205bfa3d602981af4d091802238eb7f0ad55a9c5e1eb6ee5da8cd"
+      },
+      {
+        "name": "strategy_memory_consistency_jobs",
+        "sha256": "abcec393ccd13dcbd52ad2b59aa132c302de5fb32765f6cdeaef2f734e8327d1"
+      },
+      {
+        "name": "strategy_memory_injection_logs",
+        "sha256": "0dd70c0ca705f74b803615b11da7684374da8822a5ca2b468b082aaf37f2a897"
+      },
+      {
+        "name": "strategy_memory_injection_logs_v4",
+        "sha256": "183e2689d0cc176f4fe69d2bac550f59bc5f597a99119686870a10adbd43775b"
+      },
+      {
+        "name": "strategy_memory_libraries",
+        "sha256": "4272cb1f8fcb0e88775880a2fff8e95e3c76beb5535637990703581bc2c50aa0"
+      },
+      {
+        "name": "strategy_memory_libraries_v4",
+        "sha256": "0d735d68cdaf5675252cd37fcc7b54f25e344b85f37f84f3ba3d82ee887c4935"
+      },
+      {
+        "name": "strategy_memory_library_revisions",
+        "sha256": "9f124c879fa84300ee99edc337c8837767d4888ed557f590435b84023c91515a"
+      },
+      {
+        "name": "strategy_memory_library_revisions_v4",
+        "sha256": "d99ece45edc693c8033fa0379007f0d18628a98bd8e2d46f816c3539235675d5"
+      },
+      {
+        "name": "strategy_memory_pending_updates",
+        "sha256": "c8cb1f53858322280a275a7674f66964b3e10ed232b9ecedae7d5ce48ce4c2aa"
+      },
+      {
+        "name": "strategy_memory_pending_updates_v4",
+        "sha256": "779f7a2a0761f9602dc4f52e89224ba3211b023a42c4defd4da78a56415dcca9"
+      },
+      {
+        "name": "strategy_subscriptions",
+        "sha256": "981f91847533c8647a7c885c453ad2396e46ce9e8bbb6fd79bfff87465271d64"
+      },
+      {
+        "name": "strategy_subscriptions_legacy_v3",
+        "sha256": "0097c319d21142d65160d8a5b6f2e32eef12cc636c7412cf7eaf395c491b01d5"
+      },
+      {
+        "name": "strategy_versions",
+        "sha256": "768295142175363f8f381a4bc6b68d56ec1171e5e9211bf7ffa5a2ec90db31ee"
+      },
+      {
+        "name": "strategy_write_receipts_v4",
+        "sha256": "49b7af369e8786cb87e125f069531ba62be4979d8c5da757be8cd9d832d63e5e"
+      },
+      {
+        "name": "subscription_execution_preferences",
+        "sha256": "fc36dc644c8d1b1bc14c9581999e7bb704a13b6f69d729ec5b1d0f747d11459a"
+      },
+      {
+        "name": "subscription_schedules",
+        "sha256": "1a350a9d1a8e575a765752a952fa693c649a19d6d2d504e8c87379faec517913"
+      },
+      {
+        "name": "system_config",
+        "sha256": "9f0dc0cb2c2ce34346529325716d5f8f41308caf454ddc9006dfd7a8407c3ed7"
+      },
+      {
+        "name": "system_prompts",
+        "sha256": "b76490d7726264ad79686e37bbe3bdaafce3b4386f72fac343a9add85c694181"
+      },
+      {
+        "name": "system_setting_changes",
+        "sha256": "7e363097edb72042b98a4bfbb27f56e4da474aed15f7ff8899c0b36de3ffa879"
+      },
+      {
+        "name": "system_setting_requests",
+        "sha256": "1d818a42df5b83ca0fc830457ba528bb5707627f053fd4ba66bd1ac00b7a2de9"
+      },
+      {
+        "name": "system_settings",
+        "sha256": "51c94d710f7424d2a673ebe99523586bb889436df170b96db98ad383313de2b6"
+      },
+      {
+        "name": "terminal_account_bindings",
+        "sha256": "d6cbfddedf81c880a0e615a52362c8f683ae9b32bf5be75e633283ae9c56875f"
+      },
+      {
+        "name": "terminal_history_collection_receipts_v4",
+        "sha256": "40127aca381788dc62367d114e11f142e90dac9d9283b77a0079500d4670fe86"
+      },
+      {
+        "name": "terminal_history_deal_provenance_v4",
+        "sha256": "f083f991959950c75a250645dd39fe49df0c02408c2e19abd29dd9cf88f38fb2"
+      },
+      {
+        "name": "terminal_history_deals_v4",
+        "sha256": "4e183512090e9f26e4f9bc2f9c6ae5ae7a62ee69ce7407f6dfdbfa268b281a0b"
+      },
+      {
+        "name": "terminal_history_order_provenance_v4",
+        "sha256": "84f9ae4ae8bb9f7527bfc11c4234dd7fd1c871ae6212507af5ef90ec82053e82"
+      },
+      {
+        "name": "terminal_history_orders_v4",
+        "sha256": "f143b39c29bb2c3ec4de61f3e573c1079560fa78159550bb35c77c39c5402d73"
+      },
+      {
+        "name": "terminal_profiles",
+        "sha256": "e796241d28dd63d6ee3b60b846184bc9f2b73c574dd33dd31240c873d604a13c"
+      },
+      {
+        "name": "trade_audit_logs",
+        "sha256": "a35211d6f8850b78d7c65ca4f209a74620185d66af36ced207e64dc18c3ab74a"
+      },
+      {
+        "name": "trade_decision_payloads",
+        "sha256": "55a9a3c4b01cba431ffdaa05be0826c6491461f64c2e8994f6451cc2b894d980"
+      },
+      {
+        "name": "trade_decisions",
+        "sha256": "30af91d08c09edaed47e1d9d6976c496acee5c43b1d4f56cfabb850c14621632"
+      },
+      {
+        "name": "trade_history_migration_checkpoints_v4",
+        "sha256": "bb4b1d757e26b4144891111aaecd922457f98c7e4eab89758e075bf6829e822e"
+      },
+      {
+        "name": "trade_history_sync_states_v4",
+        "sha256": "4c08b0a050a28609deddd2da34a25e62942b5c1dea5c74f97c523f1c07352d64"
+      },
+      {
+        "name": "trade_review_cases",
+        "sha256": "d75e4fe85a428becc934aeed3a76d8a53c8333e008b945f8517357a7b6d3c89c"
+      },
+      {
+        "name": "trade_review_jobs",
+        "sha256": "71f202708cd819bbd9893e1548830342ef917fe41b569c02b9ce964b44bd1a0f"
+      },
+      {
+        "name": "trade_review_versions",
+        "sha256": "1eeab10a4783d9192e208566027c60531716f2d457920abd5de775ebb71e48da"
+      },
+      {
+        "name": "trades",
+        "sha256": "15ba495c5a17077d57cc6549f9890137f2695b26a308228b87f166a322558882"
+      },
+      {
+        "name": "trading_account_ownership_intervals",
+        "sha256": "f9c72a58a6c16ac46b55e87e0ba3bcc21a7d53e2673adc3e357d0d28cdc29e76"
+      },
+      {
+        "name": "trading_account_ownerships",
+        "sha256": "d0ddb2be8628098d163ac58e8637203635427c408b076c45976153ed322f8253"
+      },
+      {
+        "name": "trading_accounts",
+        "sha256": "310c81125e03d9712a669a383bfd2914a6b9dde5758153b5baf802f441dce01c"
+      },
+      {
+        "name": "trading_accounts_legacy_v3",
+        "sha256": "0c1fea89a03edd4da551a6b7d7332a18dae84babb7c5c1da0bd0ac2ec809f6b4"
+      },
+      {
+        "name": "trading_context_changes_v4",
+        "sha256": "8c3408f70eb0e5ad5aa400dab29399e794b7c25219e0c2dd1d0fc3daed5a2ce7"
+      },
+      {
+        "name": "trading_contexts",
+        "sha256": "5d37635fa64a607331206ce05fe8cdfaa42af3692acccb8c684fd7ac42c3c7b7"
+      },
+      {
+        "name": "trading_projection_provenance_v4",
+        "sha256": "5b2fe36ade9eb9573273158aedabe586802b0089851857d48f81bccd5e355db8"
+      },
+      {
+        "name": "trading_projection_revisions",
+        "sha256": "7fc29a4c9ce460152e4ce2896e199b6f881e0c0b4addd90e552d8f9835fa1e3e"
+      },
+      {
+        "name": "user_bridge_settings",
+        "sha256": "c7975111147fdd74f327f83da3a0c5523f1145842aab3e0790e99a2275984733"
+      },
+      {
+        "name": "user_execution_commands",
+        "sha256": "d2d86a2bdb4684bea8617309f26ccbffe503ae13d268d200b4eefed50ffb4346"
+      },
+      {
+        "name": "user_memory_settings",
+        "sha256": "d6978a325a6a999c2f7220c430d3014377016db43d53802bc813e346e39e8b7f"
+      },
+      {
+        "name": "user_model_defaults",
+        "sha256": "bfad75b8611c0346820ac56b6ecfbbb717e1fa7ea6a70b46f4c845461c53a0c8"
+      },
+      {
+        "name": "user_notices",
+        "sha256": "1517a0152e544bd8da2bf0791497a579ec2c72b01fa565c44b3aa685398a3e69"
+      },
+      {
+        "name": "user_position_guard_settings",
+        "sha256": "e9767c061d2a879c506efea19b78c8196b16dc1764876e4ee215af3cf39d7621"
+      },
+      {
+        "name": "user_position_management_settings",
+        "sha256": "b3b8fb560b093a1ab10dd2bbc119427ca0281d2997b4569ab5dc1f9c944c408c"
+      },
+      {
+        "name": "user_referral_accounts",
+        "sha256": "b245b1a3b765f01aad7dead8efcd1f5a0bbde85f841a8e4dd7b0ac0a8235f759"
+      },
+      {
+        "name": "user_trading_account_settings",
+        "sha256": "c267e461ea9e0bafc6c9114768e54ea31f0ad848760208494a08306e8727454f"
+      },
+      {
+        "name": "users",
+        "sha256": "cac027f809fae6396dd31254f9e3ec1e632158b6f64784540def3635985f4ffc"
+      },
+      {
+        "name": "verification_codes",
+        "sha256": "9a3d355d2bff0da9a73ec868229fac217ce788cd3f2144967cf158657c1be84f"
+      },
+      {
+        "name": "video_streams",
+        "sha256": "cd60e49039c09db740e7567c9130075f9eeb6f62829fa9132f7ac2140a4a4335"
+      },
+      {
+        "name": "wallet_keys",
+        "sha256": "b160f975d75ff18f17188dc2266507e217e890fb45debc46b763cddd0b0a18c8"
+      }
+    ],
+    "sha256": "9b21dd82a67dafd69a3d83c57aaa9bb5890ca4aad44fa3f12c48cf5116d30fab"
+  },
+  "transitions": [
+    {
+      "ordinal": 1,
+      "sql": "ALTER TABLE review_cases_v4\n  MODIFY COLUMN kind ENUM('daily','monthly','manual','trade') NOT NULL",
+      "beforeHash": "9b21dd82a67dafd69a3d83c57aaa9bb5890ca4aad44fa3f12c48cf5116d30fab",
+      "afterHash": "357f0cba273fa2de78e62d4d47836735d48f2ce6897105dd14f410557888b3fc",
+      "changed": [
+        {
+          "name": "review_cases_v4",
+          "sha256": "c1b265a1a8fc36ce85d89b0fbf62066f289dbc569cad4715037742c0b2858ae2"
+        }
+      ],
+      "removed": []
+    },
+    {
+      "ordinal": 2,
+      "sql": "ALTER TABLE review_versions_v4\n  MODIFY COLUMN conclusion_code ENUM('effective','mixed','ineffective','insufficient_evidence','manual_trade_reviewed') NULL",
+      "beforeHash": "357f0cba273fa2de78e62d4d47836735d48f2ce6897105dd14f410557888b3fc",
+      "afterHash": "bdc88fce3a25ef7a501c1b0d3f59338391d6a4ce244c73493e49dd47bcb98581",
+      "changed": [
+        {
+          "name": "review_versions_v4",
+          "sha256": "dc8aef19253b6f5b0b2ddfaede580d575ab5aa2cc92e28fdf7b6b16a828a73ef"
+        }
+      ],
+      "removed": []
+    }
+  ],
+  "sourceSteps": 254,
+  "tableCount": 307,
+  "definitions": {
+    "review_cases_v4": "CREATE TABLE `review_cases_v4` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `user_id` int NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `kind` enum('daily','monthly','manual','trade') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `scope_key` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `standard_symbol` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `subscription_id` bigint unsigned DEFAULT NULL,\n  `subscription_revision` bigint unsigned DEFAULT NULL,\n  `analysis_strategy_id` bigint unsigned DEFAULT NULL,\n  `analysis_strategy_version_id` bigint unsigned DEFAULT NULL,\n  `trader_strategy_id` bigint unsigned DEFAULT NULL,\n  `trader_strategy_version_id` bigint unsigned DEFAULT NULL,\n  `terminal_period_start_utc` datetime(3) NOT NULL,\n  `terminal_period_end_utc` datetime(3) NOT NULL,\n  `terminal_timezone_offset_minutes` smallint NOT NULL,\n  `status` enum('awaiting_evidence','queued','running','awaiting_confirmation','needs_changes','confirmed','failed') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `evidence_status` enum('pending','incomplete','complete','stale') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `evidence_revision` bigint unsigned NOT NULL DEFAULT '0',\n  `evidence_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `current_version_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `confirmed_version_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `review_eligible_at_utc` datetime(3) DEFAULT NULL,\n  `confirmed_by_user_id` int DEFAULT NULL,\n  `confirmed_at_utc` datetime(3) DEFAULT NULL,\n  `return_reason` varchar(1000) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_review_case_scope` (`user_id`,`kind`,`scope_key`),\n  UNIQUE KEY `uk_review_case_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `idx_review_case_list` (`user_id`,`kind`,`updated_at_utc` DESC,`id`),\n  KEY `idx_review_case_account` (`user_id`,`trading_account_id`,`terminal_period_end_utc` DESC,`id`),\n  KEY `idx_review_case_generation` (`status`,`review_eligible_at_utc`,`updated_at_utc`,`id`),\n  KEY `fk_review_case_account` (`trading_account_id`),\n  KEY `fk_review_case_subscription` (`subscription_id`),\n  KEY `fk_review_case_analysis_strategy` (`analysis_strategy_id`),\n  KEY `fk_review_case_analysis_version` (`analysis_strategy_version_id`,`analysis_strategy_id`),\n  KEY `fk_review_case_trader_strategy` (`trader_strategy_id`),\n  KEY `fk_review_case_trader_version` (`trader_strategy_version_id`,`trader_strategy_id`),\n  KEY `fk_review_case_confirmer` (`confirmed_by_user_id`),\n  KEY `fk_review_case_current_version` (`current_version_id`,`id`),\n  KEY `fk_review_case_confirmed_version` (`confirmed_version_id`,`id`),\n  CONSTRAINT `fk_review_case_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_review_case_analysis_strategy` FOREIGN KEY (`analysis_strategy_id`) REFERENCES `strategies` (`id`),\n  CONSTRAINT `fk_review_case_analysis_version` FOREIGN KEY (`analysis_strategy_version_id`, `analysis_strategy_id`) REFERENCES `strategy_versions` (`id`, `strategy_id`),\n  CONSTRAINT `fk_review_case_confirmed_version` FOREIGN KEY (`confirmed_version_id`, `id`) REFERENCES `review_versions_v4` (`id`, `review_case_id`),\n  CONSTRAINT `fk_review_case_confirmer` FOREIGN KEY (`confirmed_by_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_review_case_current_version` FOREIGN KEY (`current_version_id`, `id`) REFERENCES `review_versions_v4` (`id`, `review_case_id`),\n  CONSTRAINT `fk_review_case_subscription` FOREIGN KEY (`subscription_id`) REFERENCES `strategy_subscriptions` (`id`),\n  CONSTRAINT `fk_review_case_trader_strategy` FOREIGN KEY (`trader_strategy_id`) REFERENCES `strategies` (`id`),\n  CONSTRAINT `fk_review_case_trader_version` FOREIGN KEY (`trader_strategy_version_id`, `trader_strategy_id`) REFERENCES `strategy_versions` (`id`, `strategy_id`),\n  CONSTRAINT `fk_review_case_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_review_case_period` CHECK ((`terminal_period_end_utc` > `terminal_period_start_utc`)),\n  CONSTRAINT `chk_review_case_strategy_pairs` CHECK ((((`analysis_strategy_id` is null) and (`analysis_strategy_version_id` is null)) or ((`analysis_strategy_id` is not null) and (`analysis_strategy_version_id` is not null)))),\n  CONSTRAINT `chk_review_case_trader_pairs` CHECK ((((`trader_strategy_id` is null) and (`trader_strategy_version_id` is null)) or ((`trader_strategy_id` is not null) and (`trader_strategy_version_id` is not null))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "review_versions_v4": "CREATE TABLE `review_versions_v4` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `review_case_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `version_number` int unsigned NOT NULL,\n  `source_job_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `author_kind` enum('ai','user') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `created_by_user_id` int DEFAULT NULL,\n  `conclusion_code` enum('effective','mixed','ineffective','insufficient_evidence','manual_trade_reviewed') COLLATE utf8mb4_unicode_ci DEFAULT NULL,\n  `net_profit` decimal(24,8) DEFAULT NULL,\n  `trade_count` int unsigned NOT NULL DEFAULT '0',\n  `win_rate_percent` decimal(7,4) DEFAULT NULL,\n  `profit_factor` decimal(18,8) DEFAULT NULL,\n  `content_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_review_version_identity` (`id`,`review_case_id`),\n  UNIQUE KEY `uk_review_version_number` (`review_case_id`,`version_number`),\n  KEY `idx_review_version_job` (`source_job_id`),\n  KEY `fk_review_version_actor` (`created_by_user_id`),\n  CONSTRAINT `fk_review_version_actor` FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_review_version_case` FOREIGN KEY (`review_case_id`) REFERENCES `review_cases_v4` (`id`),\n  CONSTRAINT `fk_review_version_job` FOREIGN KEY (`source_job_id`) REFERENCES `review_jobs_v4` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+  },
+  "checks": [
+    "all-307-DDLs-cloned",
+    "2-append-only-transitions",
+    "legacy-conclusion-nullable",
+    "system-trade-kind-preserved"
+  ],
+  "observedAt": "2026-09-11T03:06:44.980Z"
+}

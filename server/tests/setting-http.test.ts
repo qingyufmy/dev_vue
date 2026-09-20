@@ -11,7 +11,7 @@ async function fixture() {
  const app=Fastify();app.addHook('onRequest',exactAdminHostHook('https://admin.example.test'))
  await app.register(createSettingsHttp({read:new AdminSettingReader({read:async()=>({status:'missing'})}),write:new SettingManagementService({execute})},auth))
  const send=(payload:unknown=body,headers={},suffix='')=>app.inject({method:'PUT',url:'/api/v4/admin/settings/value'+suffix,
-  headers:{host:'admin.example.test','idempotency-key':'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',...headers},payload:payload as object})
+  headers:{host:'admin.example.test','x-csrf-token':'csrf-token-1234567890','idempotency-key':'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',...headers},payload:payload as object})
  return {app,send,execute,auth}
 }
 it('uses the verified actor and exact revisions without returning config values',async()=>{
@@ -42,5 +42,26 @@ it('reports conflicts and uncertain results without exposing SQL or config text'
   for(const [code,status] of [['setting_revision_conflict',409],['setting_idempotency_conflict',409],['setting_commit_unknown',503],['SELECT secret FROM settings',503]] as const) {
    f.execute.mockRejectedValueOnce(Error(code));const r=await f.send();expect(r.statusCode).toBe(status);expect(r.body).not.toContain('SELECT secret')
   }
+ }finally{await f.app.close()}
+})
+it('validates transport headers before persistence while preserving authentication priority',async()=>{
+ const f=await fixture();try {
+  const bad={'x-csrf-token':'short'}
+  f.auth.assertWrite.mockRejectedValueOnce(new AuthError('auth_session_invalid',401))
+  expect((await f.send(body,bad)).statusCode).toBe(401)
+  const r=await f.send(body,bad)
+  expect(r.statusCode).toBe(400);expect(r.json().code).toBe('setting_command_invalid')
+  expect(r.headers['content-type']).toContain('application/problem+json')
+  expect(f.execute).not.toHaveBeenCalled()
+ }finally{await f.app.close()}
+})
+it('keeps malformed post-commit output uncertain and never exposes its contents',async()=>{
+ const f=await fixture();try {
+  f.execute.mockResolvedValueOnce({id:'1',revision:{secret:'private-setting'},replayed:false})
+  const r=await f.send()
+  expect(f.execute).toHaveBeenCalledTimes(1)
+  expect(r.statusCode).toBe(503);expect(r.json().code).toBe('setting_commit_unknown')
+  expect(r.headers['content-type']).toContain('application/problem+json')
+  expect(r.body).not.toContain('private-setting')
  }finally{await f.app.close()}
 })

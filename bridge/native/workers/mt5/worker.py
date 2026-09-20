@@ -12,7 +12,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, BinaryIO
 
+# The private embeddable runtime intentionally disables global/site paths.
+# Resolve only the companion modules shipped beside this explicitly selected script.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from trade import Mt5TradeExecutor
+from order_completion import history_order_completion_evidence
 
 IPC_VERSION = 2
 WORKER_VERSION = "3.0.4"
@@ -66,6 +70,9 @@ def _probe_error_code(code: str) -> str:
         "mt5_initialize_failed": "initialize_failed",
         "mt5_account_unavailable": "account_unavailable",
         "mt5_terminal_disconnected": "disconnected",
+        "mt5_terminal_path_mismatch": "terminal_path_mismatch",
+        "mt5_terminal_data_path_mismatch": "data_path_mismatch",
+        "mt5_terminal_location_unavailable": "terminal_location_unavailable",
     }.get(code, "probe_failed")
 
 
@@ -476,9 +483,12 @@ class ReadOnlyMt5Adapter:
                  login_wait_seconds: float = TERMINAL_LOGIN_WAIT_SECONDS,
                  login_poll_seconds: float = TERMINAL_LOGIN_POLL_SECONDS,
                  clock_probe_seconds: float = CLOCK_INITIAL_PROBE_SECONDS,
-                 clock_poll_seconds: float = CLOCK_INITIAL_POLL_SECONDS):
+                 clock_poll_seconds: float = CLOCK_INITIAL_POLL_SECONDS,
+                 portable: bool = False, expected_data_path: str | None = None):
         self.mt5 = mt5
         self.terminal_path = str(Path(terminal_path).resolve())
+        self.portable = portable
+        self.expected_data_path = expected_data_path
         self.route = route
         self.clock = BrokerClock(clock_state_path, clock_msc)
         self._resolved_symbols: dict[str, str] = {}
@@ -504,7 +514,7 @@ class ReadOnlyMt5Adapter:
         if not Path(self.terminal_path).is_file():
             raise WorkerError("mt5_terminal_not_found")
         _require_terminal_running(self.terminal_path)
-        if not self.mt5.initialize(path=self.terminal_path, timeout=10_000, portable=False):
+        if not self.mt5.initialize(path=self.terminal_path, timeout=10_000, portable=self.portable):
             raise WorkerError("mt5_initialize_failed")
         self._wait_for_identity()
 
@@ -533,6 +543,7 @@ class ReadOnlyMt5Adapter:
         terminal = self.mt5.terminal_info()
         if terminal is None or not bool(getattr(terminal, "connected", False)):
             raise WorkerError("mt5_terminal_disconnected")
+        _verify_terminal_location(terminal, self.terminal_path, self.expected_data_path)
         return account, terminal
 
     def collect_snapshot(self, streams: list[str]) -> dict[str, Any]:
@@ -542,13 +553,62 @@ class ReadOnlyMt5Adapter:
             payload = _plain(account)
             if not isinstance(payload, dict):
                 raise WorkerError("mt5_account_invalid")
-            payload["terminal_trade_allowed"] = bool(getattr(terminal, "trade_allowed", False))
+            terminal_trade_allowed = getattr(terminal, "trade_allowed", None)
+            if isinstance(terminal_trade_allowed, bool):
+                payload["terminal_trade_allowed"] = terminal_trade_allowed
+            # Read-only display evidence; missing values must remain unknown.
+            tradeapi_disabled = getattr(terminal, "tradeapi_disabled", None)
+            if isinstance(tradeapi_disabled, bool):
+                payload["terminal_tradeapi_disabled"] = tradeapi_disabled
             payload["terminal_connected"] = bool(getattr(terminal, "connected", False))
+            evidence = None
+            check_now = time.monotonic()
+            if check_now >= getattr(self, "_next_display_clock_check", 0):
+                evidence = sample_clock_evidence(self.mt5, self.clock.now_utc_msc)
+            if evidence and evidence["sample_status"] == "captured":
+                payload["clock_sample"] = {
+                    "symbol": evidence["symbol"],
+                    "raw_time_msc": evidence["raw_tick_time_msc"],
+                    "started_at_msc": evidence["sampling_started_at_utc_msc"],
+                    "sampled_at_msc": evidence["sampled_at_utc_msc"],
+                    "monotonic_msc": int(time.monotonic() * 1000),
+                }
+                previous = getattr(self, "_previous_display_clock_sample", None)
+                current = payload["clock_sample"]
+                # Scheduling only: the server remains responsible for accepting calibration.
+                if previous and current["symbol"] == previous["symbol"]:
+                    elapsed = current["sampled_at_msc"] - previous["sampled_at_msc"]
+                    progress = current["raw_time_msc"] - previous["raw_time_msc"]
+                    candidate = round((current["raw_time_msc"] - current["sampled_at_msc"]) / 900000) * 15
+                    if (500 <= elapsed <= 60000 and progress > 0 and abs(progress - elapsed) <= 5000
+                            and abs(elapsed - (current["monotonic_msc"] - previous["monotonic_msc"])) <= 250
+                            and -720 <= candidate <= 840
+                            and all(abs(v["raw_time_msc"] - candidate * 60000 - v["sampled_at_msc"]) <= 5000 for v in (previous, current))):
+                        self._next_display_clock_check = check_now + 86400
+                        self._confirmed_display_clock_sample = dict(current, previous=dict(previous))
+                self._previous_display_clock_sample = current
+            confirmed = getattr(self, "_confirmed_display_clock_sample", None)
+            if confirmed and 0 <= self.clock.now_utc_msc() - confirmed["sampled_at_msc"] <= 60000:
+                payload["clock_sample"] = confirmed
             result["account"] = payload
         if "positions" in streams:
             result["positions"] = self._items(self.mt5.positions_get(), "mt5_positions_unavailable")
         if "orders" in streams:
             result["orders"] = self._items(self.mt5.orders_get(), "mt5_orders_unavailable")
+        # Preserve raw fields for existing query consumers. UTC fields require the
+        # adapter's clock conversion; never label broker-wall timestamps as UTC.
+        for stream in ("positions", "orders"):
+            for row in result.get(stream, []):
+                self._calibrate_terminal_clock(str(row["symbol"]))
+                if stream == "positions":
+                    raw = int(row.get("time_msc") or int(row.get("time") or 0) * 1000)
+                    row["open_time_utc_msc"] = self.clock.normalize(raw) if raw > 0 else None
+                else:
+                    raw = int(row.get("time_setup_msc") or int(row.get("time_setup") or 0) * 1000)
+                    row["create_time_utc_msc"] = self.clock.normalize(raw) if raw > 0 else None
+                    expiry = int(row.get("time_expiration") or 0)
+                    row["expiration_time_utc_msc"] = self.clock.normalize(expiry * 1000) if expiry else None
+        self._ensure_identity()
         return {"source_time_msc": int(time.time() * 1000), "streams": result}
 
     def _items(self, values: Any, unavailable_code: str) -> list[dict[str, Any]]:
@@ -913,6 +973,11 @@ class ReadOnlyMt5Adapter:
             # window rather than marked complete.
             if len(batch[key]) > page_limit:
                 raise WorkerError("mt5_history_range_too_dense")
+        try:
+            batch["order_completion_evidence"] = history_order_completion_evidence(
+                raw_orders, batch["history_orders"], self.clock, now_msc)
+        except ValueError as error:
+            raise WorkerError(str(error)) from error
         if has_more:
             self._history_range_rows = remaining
             self._history_range_cache_key = (
@@ -930,7 +995,10 @@ class ReadOnlyMt5Adapter:
         if action == "terminal_clock":
             if params:
                 raise WorkerError("worker_data_params_invalid")
-            evidence = sample_clock_evidence(self.mt5, self.clock.now_utc_msc)
+            evidence = None
+            check_now = time.monotonic()
+            if check_now >= getattr(self, "_next_display_clock_check", 0):
+                evidence = sample_clock_evidence(self.mt5, self.clock.now_utc_msc)
             self._ensure_identity()
             return evidence
         if action == "rates":
@@ -1537,6 +1605,10 @@ class ReadOnlyMt5Adapter:
             rows.append({
                 "name": name,
                 "description": str(getattr(value, "description", "") or ""),
+                "selected": bool(getattr(value, "select", False)),
+                "visible": bool(getattr(value, "visible", False)),
+                "currency_base": str(getattr(value, "currency_base", "") or ""),
+                "currency_profit": str(getattr(value, "currency_profit", "") or ""),
                 "digits": int(getattr(value, "digits", 0) or 0),
                 "trade_mode": int(getattr(value, "trade_mode", 0) or 0),
                 "point": float(getattr(value, "point", 0.0) or 0.0),
@@ -1805,8 +1877,10 @@ class ReadOnlyMt5Adapter:
 
     @staticmethod
     def _valid_broker_symbol_suffix(suffix: str) -> bool:
-        if not suffix or len(suffix) > 16:
+        if not suffix:
             return False
+        # No suffix-name whitelist or independent suffix-length cap. The full
+        # symbol still follows the existing transport's 64-character boundary.
         return all(character.isalnum() or character in "._-" for character in suffix)
 
 
@@ -2024,7 +2098,11 @@ def run(mt5: Any) -> None:
     route = route_from_environment()
     role = role_from_environment()
     terminal_path = _required_env("AURUM_BRIDGE_WORKER_TERMINAL_PATH")
-    adapter = ReadOnlyMt5Adapter(mt5, terminal_path, route, clock_state_path=_clock_state_path(route))
+    portable = os.environ.get("AURUM_BRIDGE_WORKER_PORTABLE", "0")
+    if portable not in ("0", "1"):
+        raise WorkerError("worker_environment_invalid")
+    adapter = ReadOnlyMt5Adapter(mt5, terminal_path, route, clock_state_path=_clock_state_path(route),
+                                portable=portable == "1", expected_data_path=os.environ.get("AURUM_BRIDGE_WORKER_DATA_PATH"))
     adapter.connect()
     pipe_name = _required_env("AURUM_BRIDGE_WORKER_PIPE")
     nonce = _required_env("AURUM_BRIDGE_WORKER_NONCE")
@@ -2052,13 +2130,27 @@ def run(mt5: Any) -> None:
         adapter.shutdown()
 
 
-def probe_terminal(mt5: Any, terminal_path: str) -> dict[str, Any]:
+def _verify_terminal_location(terminal: Any, requested_path: str, expected_data_path: str | None) -> tuple[str, str]:
+    actual_directory = str(getattr(terminal, "path", "") or "")
+    actual_data = str(getattr(terminal, "data_path", "") or "")
+    if not actual_directory or not actual_data or not Path(actual_directory).is_absolute() or not Path(actual_data).is_absolute():
+        raise WorkerError("mt5_terminal_location_unavailable")
+    actual_executable = str(Path(actual_directory) / "terminal64.exe")
+    if _normalized_terminal_path(actual_executable) != _normalized_terminal_path(requested_path):
+        raise WorkerError("mt5_terminal_path_mismatch")
+    if expected_data_path and _normalized_terminal_path(actual_data) != _normalized_terminal_path(expected_data_path):
+        raise WorkerError("mt5_terminal_data_path_mismatch")
+    return str(Path(actual_executable).resolve()), str(Path(actual_data).resolve())
+
+
+def probe_terminal(mt5: Any, terminal_path: str, portable: bool = False,
+                   expected_data_path: str | None = None) -> dict[str, Any]:
     resolved_path = str(Path(terminal_path).resolve())
     if not Path(resolved_path).is_file():
         raise WorkerError("mt5_terminal_not_found")
     _require_terminal_running(resolved_path)
     try:
-        initialized = mt5.initialize(path=resolved_path, timeout=10_000, portable=False)
+        initialized = mt5.initialize(path=resolved_path, timeout=10_000, portable=portable)
     except Exception as error:
         raise WorkerError("mt5_initialize_failed") from error
     if not initialized:
@@ -2078,9 +2170,11 @@ def probe_terminal(mt5: Any, terminal_path: str) -> dict[str, Any]:
             raise WorkerError("mt5_terminal_disconnected") from error
         if terminal is None or not bool(getattr(terminal, "connected", False)):
             raise WorkerError("mt5_terminal_disconnected")
+        actual_path, actual_data = _verify_terminal_location(terminal, resolved_path, expected_data_path)
         return {
             "probe_version": 1,
-            "terminal_path": resolved_path,
+            "terminal_path": actual_path,
+            "data_path": actual_data,
             "account_ref": {"broker_server": broker_server, "login": login},
         }
     finally:
@@ -2093,11 +2187,12 @@ def probe_terminal(mt5: Any, terminal_path: str) -> dict[str, Any]:
 
 def main(mt5: Any, arguments: list[str]) -> None:
     if arguments:
-        if len(arguments) != 3 or arguments[0] != "--probe" or arguments[1] != "--terminal":
+        if len(arguments) not in (3, 4) or arguments[0] != "--probe" or arguments[1] != "--terminal" or (len(arguments) == 4 and arguments[3] != "--portable"):
             raise WorkerError("worker_arguments_invalid")
         terminal_path = str(Path(arguments[2]).resolve())
         try:
-            result = probe_terminal(mt5, arguments[2])
+            result = probe_terminal(mt5, arguments[2], len(arguments) == 4,
+                                    os.environ.get("AURUM_BRIDGE_WORKER_DATA_PATH"))
         except WorkerError as error:
             print(json.dumps({
                 "probe_version": 1,

@@ -14,6 +14,7 @@ namespace Liangjian.BridgeV4.SmokeTests
 
         public static void RunAll()
         {
+            BridgeTradePermissionDisplaySmokeTests.RunAll();
             string root = Path.Combine(Path.GetTempPath(), "bridge-account-facts-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
             try
@@ -23,6 +24,27 @@ namespace Liangjian.BridgeV4.SmokeTests
                     Path.Combine(root, platform + ".db"), "profile-facts", "terminal-facts", platform, "Broker-Demo", "10001", 1)))
                 {
                     Source source = new Source(platform);
+                    int observations = 0;
+                    Action<IDictionary<string, object>, long> observer = delegate(IDictionary<string, object> data, long at)
+                    {
+                        observations++;
+                        Assert(at == Now && data.ContainsKey("trade_allowed"), "permission_raw_snapshot_missing");
+                    };
+                    source.Data["trade_allowed"] = true;
+                    IDictionary<string, object> observedFacts = BridgeAccountFacts.Read(runtime, source, Now, observer);
+                    Assert(observations == 1 && observedFacts.Count == 4 && !observedFacts.ContainsKey("trade_allowed"),
+                        "permission_changed_hello_contract");
+                    source.Data["login"] = "10002";
+                    Reject(delegate { BridgeAccountFacts.Read(runtime, source, Now, observer); });
+                    source.Data["login"] = "10001";
+                    source.Data[platform == "mt5" ? "server" : "broker_server"] = "Other-Demo";
+                    Reject(delegate { BridgeAccountFacts.Read(runtime, source, Now, observer); });
+                    source.Data[platform == "mt5" ? "server" : "broker_server"] = "Broker-Demo";
+                    source.WrongCorrelation = true;
+                    Reject(delegate { BridgeAccountFacts.Read(runtime, source, Now, observer); });
+                    source.WrongCorrelation = false;
+                    Assert(observations == 1, "wrong_route_permission_observed");
+                    source.Calls = 0;
                     BridgeSessionController controller = new BridgeSessionController(runtime,
                         new BridgeProfileSession(runtime, source), new BridgeSessionConfiguration
                         {

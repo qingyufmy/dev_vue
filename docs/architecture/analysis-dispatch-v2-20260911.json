@@ -1,0 +1,18 @@
+{
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "syntheticPorts": [
+    "model-result",
+    "trader-consumer-readback-only"
+  ],
+  "foreignKeysVerified": false,
+  "checks": [
+    "analysis-result-and-trader-task-commit-with-UTC-and-outbox",
+    "duplicate-completion-rejected",
+    "real-outbox-to-BullMQ-consumer-preserves-run-and-analysis-identity",
+    "replayed-publication-does-not-deliver-a-second-job",
+    "real-revoked-ownership-excludes-trader-fanout"
+  ],
+  "referenceQueueRemoved": true,
+  "referenceDatabaseRemoved": true
+}

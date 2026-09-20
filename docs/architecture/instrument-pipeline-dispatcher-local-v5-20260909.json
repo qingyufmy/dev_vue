@@ -1,0 +1,33 @@
+{
+  "passed": true,
+  "scope": "temporary_table_real_transaction_semantics",
+  "persistentWrites": 0,
+  "checks": [
+    "commit_and_identical_replay_without_revision_growth",
+    "collection_lease_checked_even_for_identical_replay",
+    "version_conflict_and_stale_observation_rollback",
+    "revoked_replay_and_account_identity_rejected",
+    "exact_decimal_raw_evidence_and_utc_preserved",
+    "current_read_rejects_epoch_ownership_and_age_but_refresh_keeps_cas_version",
+    "request_dispatcher_failure_retry_real_queue_collector_write_completion_and_duplicate_delivery"
+  ],
+  "sources": {
+    "scripts/lib/verify-instrument-pipeline-fixture.mjs": "93cdf622328aad7bfe0b43c64b6119bbd6f8a056273b7075b3340e0a0f816d66",
+    "server/dist-v4/queue/bridge-instrument-processor.js": "a1896fd08d6aa99b0360275d785399401886abfc41c34e55620b0a885d1b481c",
+    "server/dist-v4/modules/bridge/application/bridge-instrument-worker.js": "045090fa3bfe406c35612d102e88f9ce18e0fa9c67901266b137c347ff9a51b0",
+    "server/dist-v4/modules/bridge/application/bridge-instrument-collector.js": "6bcb2d76bc155fc89ea1f981530bf1ee557944184149b9d82accb07046d562ac",
+    "server/src/modules/trading/infrastructure/mysql-trading-repository.ts": "70f9c7765c6d325f23ae21d4e4da1a2f57b90ee5d2135290d8be793d0677ad4f",
+    "server/src/modules/trading/domain/instrument-projection.ts": "54a60bee2209e5dedbed3a1c438be40afff4fb425b73c984da802783633f5aad",
+    "server/dist-v4/modules/trading/infrastructure/mysql-trading-repository.js": "2088481435a1e279dca7e9a2da2457303d37e53bf84e2821e5c96adf1f039e8c",
+    "server/src/modules/trading/infrastructure/mysql-instrument-snapshot-reader.ts": "3920b2608b7abded428cd3d410156e36e08327bed5d6d1793b5909c3a954ac83",
+    "server/dist-v4/modules/trading/infrastructure/mysql-instrument-snapshot-reader.js": "63c2530c20eabda56a35f1ac88d41bbb199e3c1d788f450cdc58cbc1164bbe0a"
+  },
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "tz": "+00:00",
+    "version": "8.4.8"
+  },
+  "pipelineBoundary": "Real MySQL temporary tables, outbox claim/retry/dispatch, and Redis queue; fixture route and query response; sequential transactions on one MySQL connection; no terminal traffic.",
+  "finishedAt": "2026-09-09T04:00:35.049Z"
+}

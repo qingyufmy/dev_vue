@@ -9,6 +9,10 @@ export { createRequestScope } from './request-scope'
 const context = ref<TradingContext | null>(null)
 const accounts = ref<TradingAccount[]>([])
 const channels = ref<ObserverChannel[]>([])
+const publicMarkets = ref<import('@aurum/contracts').PublicMarketState[]>([])
+export const publicMarketStates = readonly(publicMarkets)
+export const activeMarketSymbol = ref('XAUUSD')
+export function applyPublicMarketStates(value: import('@aurum/contracts').PublicMarketState[]) { publicMarkets.value = value }
 
 export const tradingContext = readonly(context)
 export const tradingAccounts = readonly(accounts)
@@ -35,3 +39,10 @@ export const currentAccount = computed(() => snapshot.value?.id === context.valu
 
 export function applyAccountSnapshot(value: AccountSnapshot | null) { snapshot.value = value ? { ...value } : null }
 export function applyRealtimeState(value: typeof connectionState.value) { connectionState.value = value }
+
+export { preferredOnlineAccount } from './online-account-selection'
+
+// Public laboratory display timezone; independent of the viewer's trading account.
+const publicClock = ref<{ offset_minutes: number; status: 'calibrated' | 'stale'; checked_at: string } | null>(null)
+export const publicDisplayClock = readonly(publicClock)
+export function applyPublicDisplayClock(value: typeof publicClock.value) { publicClock.value = value ? { ...value } : null }

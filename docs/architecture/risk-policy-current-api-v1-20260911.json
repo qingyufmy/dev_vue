@@ -1,0 +1,27 @@
+{
+  "kind": "risk-current-application-readonly/v1",
+  "passed": true,
+  "writes": 0,
+  "applicationCredentialsUsed": true,
+  "realAuthenticationVerified": false,
+  "results": [
+    {
+      "userId": 1,
+      "accountId": "1",
+      "status": 200
+    },
+    {
+      "userId": 28,
+      "accountId": "2",
+      "status": 200
+    },
+    {
+      "userId": 29,
+      "accountId": "2",
+      "status": 404
+    }
+  ],
+  "utcReadVerified": true,
+  "historicalOwnerDenied": true,
+  "observedAt": "2026-09-11T02:28:13.239Z"
+}

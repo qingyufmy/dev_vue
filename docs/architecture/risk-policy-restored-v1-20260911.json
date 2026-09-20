@@ -1,0 +1,13 @@
+{
+  "kind": "risk-policy-data-transition/v1",
+  "passed": false,
+  "target": "dev_vue_m1_source_20260910_02",
+  "currentBusinessRowsInserted": 0,
+  "runtimeEnabled": false,
+  "errorCode": "ER_BAD_FIELD_ERROR",
+  "errorLocations": [
+    "    at file:///D:/dev_codex/dev_vue/scripts/transition-risk-policy-local.mjs:51:36",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)"
+  ],
+  "observedAt": "2026-09-11T02:24:20.450Z"
+}

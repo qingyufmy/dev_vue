@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 
 export const auditSourceKinds = [
-  'analysis_run', 'trader_run', 'risk_decision', 'operation', 'bridge_command',
+  'analysis_run', 'trader_run', 'trade_decision', 'risk_decision', 'operation', 'bridge_command',
   'risk_policy_change', 'risk_manual_release', 'terminal_trade',
 ] as const
 export type AuditSourceKind = typeof auditSourceKinds[number]
@@ -10,7 +10,7 @@ export const auditCategories = ['analysis', 'trading', 'risk', 'execution', 'ter
 export type AuditCategory = typeof auditCategories[number]
 export const auditActors = ['ai', 'user', 'system', 'bridge'] as const
 export type AuditActor = typeof auditActors[number]
-export const auditStatuses = ['queued', 'running', 'succeeded', 'rejected', 'failed', 'uncertain', 'cancelled', 'info'] as const
+export const auditStatuses = ['queued', 'running', 'succeeded', 'partially_succeeded', 'rejected', 'failed', 'uncertain', 'cancelled', 'info'] as const
 export type AuditStatus = typeof auditStatuses[number]
 
 export interface AuditCursor {
@@ -62,6 +62,9 @@ export interface AuditSummary {
 }
 
 export interface AuditTraceNode {
+  parameters?: Record<string, string>
+  intentId?: string | null
+  actionKind?: string | null
   stage: 'analysis' | 'trader' | 'risk' | 'operation' | 'intent' | 'bridge' | 'terminal'
   status: AuditStatus
   sourceKind: string

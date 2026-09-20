@@ -30,6 +30,11 @@ for (const item of Object.values(document.paths)) {
     for (const [status, raw] of Object.entries(operation.responses ?? {})) {
       if (!/^[1-5][0-9]{2}$/.test(status)) throw new Error('unsupported_runtime_response_status')
       const response = resolve(raw)
+      if (status === '204') {
+        if (response.content && Object.keys(response.content).length) throw new Error('runtime_204_content_forbidden')
+        responses[status] = {}
+        continue
+      }
       if (!response.content || !Object.keys(response.content).length) throw new Error('runtime_response_schema_required')
       responses[status] = {}
       for (const [mediaType, content] of Object.entries(response.content)) {
@@ -37,7 +42,7 @@ for (const item of Object.values(document.paths)) {
         responses[status][mediaType] = content.schema
       }
     }
-    if (!responses['200']?.['application/json']) throw new Error('runtime_response_schema_required')
+    if (!Object.entries(responses).some(([status, media]) => status === '204' || /^2[0-9]{2}$/.test(status) && media['application/json'])) throw new Error('runtime_response_schema_required')
     let body
     if (operation.requestBody) {
       const requestBody = resolve(operation.requestBody)

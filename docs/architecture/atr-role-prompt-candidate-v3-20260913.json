@@ -1,0 +1,180 @@
+{
+  "kind": "strategy-role-prompt-review-candidate/v1",
+  "observedAt": "2026-09-13T09:36:49.973Z",
+  "sourceId": "3",
+  "sourceVersion": "11",
+  "sourceHash": "551f24f510d6e45474721481b330ddfb911cb7d60e6ca57fd75b7e85e609a927",
+  "sourcePromptHash": "11b5e0dc40438592a56a39d001712812ad1c1624a1a1282ed5928badb71e8ed7",
+  "planHash": "e689ac85d7df5a9482087daa76d98738005e503f1553506b6bafdebc802305a6",
+  "privateArtifact": "D:\\dev_codex\\.backup-core-20260910-01\\strategy-3-v11-role-candidate-e689ac85d7df.json",
+  "roles": {
+    "analysis": {
+      "promptHash": "8f151a2cf2f155a15aa91d5ecd5980baee8c68406a438c12b99e49c59f535f0b",
+      "bytes": 12586,
+      "sourceSections": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        9,
+        11,
+        12
+      ]
+    },
+    "trader": {
+      "promptHash": "d04b9340e46cdd7191f244c8ea451ec261c93353ca44dad8481fb102a6133071",
+      "bytes": 11206,
+      "sourceSections": [
+        0,
+        1,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12
+      ]
+    }
+  },
+  "sections": [
+    {
+      "index": 0,
+      "heading": "# XAUUSD ATR 策略 v8",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "624b83f38bf50722e883a96f9c158ce76b77cafef2713d9d8b33ecc637a160b6",
+      "bytes": 24
+    },
+    {
+      "index": 1,
+      "heading": "## 一、最高优先级规则",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "4797e9e521da4526b772bf04eba668ecc65bb6c146e31e94e6c01026c47d2b27",
+      "bytes": 1191
+    },
+    {
+      "index": 2,
+      "heading": "## 二、行情数据要求",
+      "roles": [
+        "analysis"
+      ],
+      "sourceHash": "30bde73317ff89b6c5eb1bb5578ac84591a9b7f618af320b168d0e5a81edd9e8",
+      "bytes": 747
+    },
+    {
+      "index": 3,
+      "heading": "## 三、指标计算",
+      "roles": [
+        "analysis"
+      ],
+      "sourceHash": "607b7c5ea1897f863d54fb8340cce5c5825b2bf51aa16a41c5e8be548f963adc",
+      "bytes": 1914
+    },
+    {
+      "index": 4,
+      "heading": "## 四、市场分类",
+      "roles": [
+        "analysis"
+      ],
+      "sourceHash": "4c5b315df14184435d394b90e2b74cf4ca2315bcb939606f85e6cab43bd67eaa",
+      "bytes": 908
+    },
+    {
+      "index": 5,
+      "heading": "## 五、趋势加速",
+      "roles": [
+        "analysis"
+      ],
+      "sourceHash": "7e0d1504221ea284ffbdc604dc86f45f6c11cbfb5d7f4b968b93fda6f175c136",
+      "bytes": 558
+    },
+    {
+      "index": 6,
+      "heading": "## 六、进场场景",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "e48ad0eb73c12a1fc6e025d463955f1475e00396ed53292e33b49477f986602e",
+      "bytes": 1236
+    },
+    {
+      "index": 7,
+      "heading": "## 七、止损",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "73cb1f58bffec7804310583380777c3d8e3e9c1d4383bc6fffe95bb4a8eeabdc",
+      "bytes": 953
+    },
+    {
+      "index": 8,
+      "heading": "## 八、仓位档位",
+      "roles": [
+        "trader"
+      ],
+      "sourceHash": "e6ad59e009ec74819f2293326e1eefb4e0efe4ec164671fde9a197440b1740e1",
+      "bytes": 619
+    },
+    {
+      "index": 9,
+      "heading": "## 九、止盈与持仓管理",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "46836c0126c560e318d9672c3480b3497471ba0815f17fa2b5ce7c97eecf6f70",
+      "bytes": 949
+    },
+    {
+      "index": 10,
+      "heading": "## 十、挂单处理",
+      "roles": [
+        "trader"
+      ],
+      "sourceHash": "45f68af0cf69084d90e4d5d9224f786060d5c97179f55246451d22e52250b03d",
+      "bytes": 590
+    },
+    {
+      "index": 11,
+      "heading": "## 十一、最终判断",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "40a1eb225e44517d76f87a885129046fb4c589785421c007ce5c67f2154d2d6e",
+      "bytes": 661
+    },
+    {
+      "index": 12,
+      "heading": "## 十二、输出前自检",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "56aa1b745d0aca1afa96196e89b52061aa93408c3ad31e3f641bf93ac7ca1056",
+      "bytes": 657
+    }
+  ],
+  "originalTextFullyAssigned": true,
+  "compilePassed": true,
+  "configStatus": "converted",
+  "configProblems": [],
+  "runtimeBlockers": [
+    "entry_acceleration_semantics_review"
+  ],
+  "executable": false,
+  "semanticAcceptance": "pending",
+  "databaseWrites": 0
+}

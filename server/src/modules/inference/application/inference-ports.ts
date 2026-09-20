@@ -116,7 +116,6 @@ export interface InferenceRepository {
   failQueuedTrader(runId: string, errorCode: string): Promise<void>
   getAnalysis(userId: number, analysisId: string): Promise<MarketAnalysisSummary | null>
   getAnalysisDetail(userId: number, analysisId: string): Promise<MarketAnalysisDetail | null>
-  listAnalyses(userId: number, limit: number): Promise<MarketAnalysisSummary[]>
   getTraderDecision(userId: number, decisionId: string): Promise<TraderDecisionDetail | null>
   listTraderDecisions(userId: number, tradingAccountId: string, limit: number): Promise<TraderDecisionSummary[]>
 }

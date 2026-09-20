@@ -28,7 +28,25 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
           "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -48,6 +66,9 @@
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
           }
         ],
         "requestBody": {
@@ -76,6 +97,21 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
           "412": {
             "$ref": "#/components/responses/Problem"
           },
@@ -83,6 +119,9 @@
             "$ref": "#/components/responses/Problem"
           },
           "428": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -111,7 +150,25 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
           "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -140,7 +197,25 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -191,6 +266,18 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
           "409": {
             "$ref": "#/components/responses/Problem"
           },
@@ -201,6 +288,9 @@
             "$ref": "#/components/responses/Problem"
           },
           "428": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -232,7 +322,25 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
           "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -266,7 +374,128 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
           "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/risk-accounts/{account_id}/manual-release-receipt": {
+      "get": {
+        "operationId": "getManualRiskReleaseReceipt",
+        "summary": "Confirm the exact manual release request receipt",
+        "description": "Rechecks current account ownership. An unconfirmed result does not establish transaction failure and must not cause a new idempotency key. Confirmed identifies the stored operation, not current release validity.",
+        "tags": [
+          "Risk"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AccountId"
+          },
+          {
+            "in": "query",
+            "name": "idempotency_key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{8,128}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exact receipt or unconfirmed result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManualRiskReleaseReceiptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/risk-accounts/{account_id}/policy-receipt": {
+      "get": {
+        "operationId": "getRiskPolicyReceipt",
+        "summary": "Read the exact original policy write receipt",
+        "description": "Rechecks current account ownership. An unconfirmed result does not establish transaction failure and must not cause a new idempotency key. Confirmed identifies the stored operation, not current release validity.",
+        "tags": [
+          "Risk"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AccountId"
+          },
+          {
+            "in": "query",
+            "name": "idempotency_key",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9._:-]{16,128}$",
+              "minLength": 16
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exact receipt or unconfirmed result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RiskPolicyReceiptResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -347,6 +576,9 @@
             "type": "string",
             "minLength": 3,
             "maxLength": 500
+          },
+          "max_order_volume": {
+            "$ref": "#/components/schemas/Decimal"
           }
         }
       },
@@ -535,6 +767,48 @@
           },
           "updated_at": {
             "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "max_order_volume": {
+            "$ref": "#/components/schemas/Decimal"
+          },
+          "numeric_controls": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "allowed_min",
+                "allowed_max",
+                "locked_value",
+                "user_editable"
+              ],
+              "properties": {
+                "allowed_min": {
+                  "$ref": "#/components/schemas/Decimal"
+                },
+                "allowed_max": {
+                  "$ref": "#/components/schemas/Decimal"
+                },
+                "locked_value": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Decimal"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "user_editable": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "pending_dedup_atr_multiplier": {
+            "type": "string",
+            "pattern": "^(?:[0-4](?:\\.[0-9]+)?|5(?:\\.0+)?)$",
+            "description": "System-only pending-order price tolerance in ATR units. Optional for older V4 responses; not an account-editable field."
           }
         }
       },
@@ -1201,6 +1475,104 @@
           },
           "meta": {
             "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "ManualRiskReleaseReceiptResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          },
+          "data": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "state",
+                  "release"
+                ],
+                "properties": {
+                  "state": {
+                    "const": "unconfirmed"
+                  },
+                  "release": {
+                    "type": "null"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "state",
+                  "release"
+                ],
+                "properties": {
+                  "state": {
+                    "const": "confirmed"
+                  },
+                  "release": {
+                    "$ref": "#/components/schemas/ManualRiskRelease"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "RiskPolicyReceiptResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          },
+          "data": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "state",
+                  "policy"
+                ],
+                "properties": {
+                  "state": {
+                    "const": "unconfirmed"
+                  },
+                  "policy": {
+                    "type": "null"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "state",
+                  "policy"
+                ],
+                "properties": {
+                  "state": {
+                    "const": "confirmed"
+                  },
+                  "policy": {
+                    "$ref": "#/components/schemas/RiskPolicy"
+                  }
+                }
+              }
+            ]
           }
         }
       }

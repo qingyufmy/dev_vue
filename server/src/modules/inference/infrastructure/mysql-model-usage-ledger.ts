@@ -1,27 +1,25 @@
+import type { AccountPrincipalReader, ActivePrincipalAccess } from '../../auth/index.js'
 import type { ModelUsageLedger, ModelUsageCompletion, RuntimeModelUsageContext } from '../application/model-usage-ledger.js'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { InferenceError, type JsonObject } from '../domain/inference.js'
 
 interface UserPolicyRow extends RowDataPacket {
-  plan: string
   share_for_manual: number
   share_for_auto: number
   allowed_plans: string | string[] | null
-  daily_requests_per_user: number
-  daily_tokens_per_user: number
 }
 
-interface UsageTotalRow extends RowDataPacket { requests: number; tokens: string | number }
 
 export class MysqlModelUsageLedger implements ModelUsageLedger {
-  constructor(private readonly pool: Pool) {}
+  constructor(private readonly pool: Pool, private readonly principals: (connection: PoolConnection) => AccountPrincipalReader,
+    private readonly active: (connection: PoolConnection) => ActivePrincipalAccess) {}
 
   async begin(context: RuntimeModelUsageContext) {
     if (!Number.isSafeInteger(context.userId) || context.userId <= 0) throw new InferenceError('model_usage_user_invalid', 409)
     const connection = await this.pool.getConnection()
     try {
       await connection.beginTransaction()
-      if (context.credentialSource === 'platform_shared') await assertPlatformQuota(connection, context)
+      if (context.credentialSource === 'platform_shared') await assertPlatformAccess(connection, context, this.principals(connection), this.active(connection))
       const [result] = await connection.execute<ResultSetHeader>(`INSERT INTO ai_model_usage_logs
         (user_id,model_profile_id,credential_source,\`usage\`,strategy_id,request_phase,token_count,request_status,error_code,accounting_status,created_at)
         VALUES (?,?,?,?,?,'request',0,'reserved',NULL,'usage_unknown',NOW())`,
@@ -60,23 +58,16 @@ export class MysqlModelUsageLedger implements ModelUsageLedger {
   }
 }
 
-async function assertPlatformQuota(connection: PoolConnection, context: RuntimeModelUsageContext) {
-  const [rows] = await connection.execute<UserPolicyRow[]>(`SELECT u.plan,p.share_for_manual,p.share_for_auto,p.allowed_plans,
-      p.daily_requests_per_user,p.daily_tokens_per_user
-    FROM users u INNER JOIN platform_model_usage_policy p ON p.id=1
-    WHERE u.id=? FOR UPDATE`, [context.userId])
+async function assertPlatformAccess(connection: PoolConnection, context: RuntimeModelUsageContext, principals: AccountPrincipalReader, active: ActivePrincipalAccess) {
+  if (!await active.isActive(context.userId, 'update')) throw new InferenceError('platform_model_sharing_unavailable', 409)
+  const principal = (await principals.readMany([context.userId], 'share')).get(context.userId)
+  if (!principal) throw new InferenceError('platform_model_sharing_unavailable', 409)
+  const [rows] = await connection.execute<UserPolicyRow[]>(`SELECT share_for_manual,share_for_auto,allowed_plans FROM platform_model_usage_policy WHERE id=1 FOR UPDATE`, [])
   const policy = rows[0]
   if (!policy) throw new InferenceError('platform_model_sharing_unavailable', 409)
   const enabled = context.usage === 'manual' ? Boolean(policy.share_for_manual) : Boolean(policy.share_for_auto)
-  if (!enabled || !planAllowed(policy.allowed_plans, policy.plan)) throw new InferenceError('platform_model_sharing_unavailable', 409)
-  const [totals] = await connection.execute<UsageTotalRow[]>(`SELECT COUNT(*) requests,COALESCE(SUM(token_count),0) tokens
-    FROM ai_model_usage_logs
-    WHERE user_id=? AND credential_source='platform_shared'
-      AND (request_phase='request' OR request_phase IS NULL) AND created_at>=CURRENT_DATE()`,
-  [context.userId])
-  const usage = totals[0]
-  if (Number(usage?.requests ?? 0) >= Number(policy.daily_requests_per_user)) throw new InferenceError('daily_request_limit', 429)
-  if (Number(usage?.tokens ?? 0) >= Number(policy.daily_tokens_per_user)) throw new InferenceError('daily_token_limit', 429)
+  if (!enabled || !planAllowed(policy.allowed_plans, principal.plan)) throw new InferenceError('platform_model_sharing_unavailable', 409)
+
 }
 
 function usageTokens(usage: JsonObject | null | undefined) {

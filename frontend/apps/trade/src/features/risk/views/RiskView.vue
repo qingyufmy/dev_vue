@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Button } from '@aurum/ui/button'
 import { AlertCircle, Eye, ShieldCheck, UserRoundX } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -32,6 +33,10 @@ function selectDecision(id: string) {
 }
 
 const workspace = useRiskWorkspace(selectedDecisionId, selectDecision)
+watch(workspace.activeAccountId, () => { policyOpen.value = false; releaseOpen.value = false; decisionOpen.value = false })
+watch(selectedDecisionId, id => { decisionOpen.value = Boolean(id) }, { immediate: true })
+watch(workspace.pendingRelease, value => { if (value) releaseOpen.value = false })
+watch(workspace.pendingPolicy, value => { if (value) policyOpen.value = false })
 const displayTimezone = computed(() => terminalDisplayTimezone(workspace.summary.value?.terminalTimezoneOffsetMinutes, workspace.summary.value?.clockStatus))
 const realtimeLabel = computed(() => ({ live: '实时同步', connecting: '连接中', recovering: '正在恢复', offline: '快照模式', idle: '未连接' })[workspace.realtime.value])
 
@@ -61,13 +66,13 @@ watch(decisionOpen, (open) => { if (!open) selectDecision('') })
       <div>
         <div class="flex items-center gap-2 text-xs font-medium text-primary"><ShieldCheck class="size-4" aria-hidden="true" />AI 交易团队</div>
         <h1 class="mt-1 text-2xl font-semibold tracking-tight">AI 风控师</h1>
-        <p class="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">查看当前账户的实时风险用量，管理用户可编辑的风控边界，并追溯每一次交易动作的服务端风控结论。</p>
+        <p class="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">掌握账户风险、设置交易限制，查看每次交易的风控结果。</p>
       </div>
       <Badge variant="outline"><span class="size-1.5 rounded-full bg-current" aria-hidden="true" />{{ realtimeLabel }}</Badge>
     </header>
 
     <Alert v-if="workspace.error.value" variant="destructive"><AlertCircle /><AlertTitle>风控工作区读取失败</AlertTitle><AlertDescription>{{ workspace.error.value }}</AlertDescription></Alert>
-    <Alert v-else-if="workspace.summaryError.value"><AlertCircle /><AlertTitle>风险快照暂不可用</AlertTitle><AlertDescription>{{ workspace.summaryError.value }}。账户规则仍可查看和编辑，交易动作会继续按服务端缺失数据策略安全拒绝。</AlertDescription></Alert>
+    <Alert v-else-if="workspace.summaryError.value"><AlertCircle /><AlertTitle>风险快照暂不可用</AlertTitle><AlertDescription>{{ workspace.summaryError.value }}。你可以先设置账户规则，风险用量将在数据准备后显示。</AlertDescription></Alert>
     <Alert v-if="workspace.isObserver.value"><Eye /><AlertTitle>观摩模式不开放账户风控</AlertTitle><AlertDescription>风控规则和解除操作只属于交易账户所有者。选择下方本人账户后会退出观摩并进入该账户的风控工作区。</AlertDescription></Alert>
 
     <RiskAccountBar
@@ -87,11 +92,37 @@ watch(decisionOpen, (open) => { if (!open) selectDecision('') })
     </Empty>
 
     <template v-else-if="workspace.activeAccountId.value">
+      <Alert v-if="workspace.pendingPolicy.value || workspace.policyRecoveryMessage.value" role="status" aria-live="polite">
+        <AlertCircle aria-hidden="true" />
+        <AlertTitle>{{ workspace.pendingPolicy.value ? '规则保存待确认' : '规则保存结果' }}</AlertTitle>
+        <AlertDescription class="grid gap-3">
+          <p>{{ workspace.policyRecoveryMessage.value || '已保留原保存请求，请先确认结果。' }}</p>
+          <template v-if="workspace.pendingPolicy.value">
+            <p class="break-words">原修改原因：{{ workspace.pendingPolicy.value.body.reason }}</p>
+            <div class="flex flex-wrap gap-2">
+              <Button variant="outline" class="min-h-11" :aria-disabled="workspace.savingPolicy.value" :aria-busy="workspace.savingPolicy.value" @click="workspace.runPolicyRecovery('query')">查询原保存结果</Button>
+              <Button variant="outline" class="min-h-11" :aria-disabled="workspace.savingPolicy.value || workspace.readOnly.value" @click="workspace.runPolicyRecovery('retry')">重试原保存请求</Button>
+            </div>
+          </template>
+        </AlertDescription>
+      </Alert>
+      <Alert v-if="workspace.pendingRelease.value || workspace.releaseRecoveryMessage.value" role="status" aria-live="polite">
+        <AlertCircle aria-hidden="true" />
+        <AlertTitle>{{ workspace.pendingRelease.value ? '解除操作待确认' : '解除操作结果' }}</AlertTitle>
+        <AlertDescription class="grid gap-3">
+          <p>{{ workspace.releaseRecoveryMessage.value || '已保存原操作，请先查询结果。重复操作将沿用原请求。' }}</p>
+          <p v-if="workspace.pendingRelease.value" class="break-words">原解除原因：{{ workspace.pendingRelease.value.body.reason }}</p>
+          <div v-if="workspace.pendingRelease.value" class="flex flex-wrap gap-2">
+            <Button variant="outline" class="min-h-11" :aria-disabled="workspace.releasing.value || workspace.readOnly.value" :aria-busy="workspace.releasing.value" @click="workspace.runReleaseRecovery('query')">查询结果</Button>
+            <Button variant="outline" class="min-h-11" :aria-disabled="workspace.releasing.value || workspace.readOnly.value" :aria-busy="workspace.releasing.value" @click="workspace.runReleaseRecovery('retry')">重试原请求</Button>
+          </div>
+        </AlertDescription>
+      </Alert>
       <RiskStateCard
         :policy="workspace.policy.value"
         :summary="workspace.summary.value"
         :manual-release="workspace.manualRelease.value"
-        :read-only="workspace.readOnly.value"
+        :read-only="workspace.readOnly.value || Boolean(workspace.pendingRelease.value)"
         :releasing="workspace.releasing.value"
         @release="releaseOpen = true"
       />
@@ -99,13 +130,13 @@ watch(decisionOpen, (open) => { if (!open) selectDecision('') })
       <RiskMetricsGrid :policy="workspace.policy.value" :summary="workspace.summary.value" />
 
       <div class="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(20rem,.85fr)]">
-        <RiskPolicySummary :policy="workspace.policy.value" :read-only="workspace.readOnly.value" @edit="policyOpen = true" />
+        <RiskPolicySummary :policy="workspace.policy.value" :read-only="workspace.readOnly.value || Boolean(workspace.pendingPolicy.value)" @edit="policyOpen = true" />
         <section class="grid content-start gap-3 rounded-xl border bg-card p-5" aria-labelledby="risk-context-title">
-          <div><h2 id="risk-context-title" class="font-semibold">评审上下文</h2><p class="mt-1 text-xs text-muted-foreground">用于判断当前摘要是否可信和可执行</p></div>
+          <div><h2 id="risk-context-title" class="font-semibold">数据与交易日</h2><p class="mt-1 text-xs text-muted-foreground">查看风险数据的日期与更新时间</p></div>
           <dl class="grid gap-3 text-sm sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
             <div class="rounded-lg bg-muted/40 p-3"><dt class="text-xs text-muted-foreground">业务日期</dt><dd class="mt-1 font-mono font-medium">{{ workspace.summary.value?.businessDate ?? '--' }}</dd></div>
             <div class="rounded-lg bg-muted/40 p-3"><dt class="text-xs text-muted-foreground">连续亏损</dt><dd class="mt-1 font-mono font-medium">{{ workspace.summary.value?.consecutiveLosses ?? '--' }} 次</dd></div>
-            <div class="rounded-lg bg-muted/40 p-3"><dt class="text-xs text-muted-foreground">显示时区</dt><dd class="mt-1 font-mono font-medium">{{ displayTimezone.label }}</dd><dd class="mt-1 text-xs text-muted-foreground">{{ displayTimezone.statusLabel }}；业务日期由服务端确定</dd></div>
+            <div class="rounded-lg bg-muted/40 p-3"><dt class="text-xs text-muted-foreground">显示时区</dt><dd class="mt-1 font-mono font-medium">{{ displayTimezone.label }}</dd><dd class="mt-1 text-xs text-muted-foreground">{{ workspace.summary.value ? displayTimezone.statusLabel : '等待账户风险数据确认' }}</dd></div>
             <div class="rounded-lg bg-muted/40 p-3"><dt class="text-xs text-muted-foreground">冷静期截止</dt><dd class="mt-1 font-mono text-xs font-medium">{{ formatDateTime(workspace.summary.value?.cooldownUntil, workspace.summary.value?.terminalTimezoneOffsetMinutes) }}</dd></div>
           </dl>
         </section>
@@ -114,8 +145,8 @@ watch(decisionOpen, (open) => { if (!open) selectDecision('') })
       <RiskDecisionHistory :items="workspace.decisions.value" :loading="workspace.loading.value" :error="workspace.decisionsError.value" :timezone-offset-minutes="workspace.summary.value?.terminalTimezoneOffsetMinutes" @inspect="inspectDecision" />
     </template>
 
-    <RiskPolicyEditorSheet v-model:open="policyOpen" :policy="workspace.policy.value" :submitting="workspace.savingPolicy.value" :error="workspace.policyError.value" @submit="savePolicy" />
-    <ManualReleaseDialog v-model:open="releaseOpen" :availability="workspace.manualRelease.value?.availability ?? null" :submitting="workspace.releasing.value" :error="workspace.releaseError.value" @submit="release" />
+    <RiskPolicyEditorSheet :open="policyOpen && !workspace.pendingPolicy.value" @update:open="policyOpen = $event" :policy="workspace.policy.value" :submitting="workspace.savingPolicy.value" :error="workspace.policyError.value" @submit="savePolicy" />
+    <ManualReleaseDialog :open="releaseOpen && !workspace.pendingRelease.value" @update:open="releaseOpen = $event" :availability="workspace.manualRelease.value?.availability ?? null" :submitting="workspace.releasing.value" :error="workspace.releaseError.value" @submit="release" />
     <RiskDecisionSheet v-model:open="decisionOpen" :detail="workspace.detail.value" :loading="workspace.detailLoading.value" :error="workspace.detailError.value" :timezone-offset-minutes="workspace.summary.value?.terminalTimezoneOffsetMinutes" />
   </div>
 </template>

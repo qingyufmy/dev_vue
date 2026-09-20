@@ -1,9 +1,16 @@
+import { MarketGapConfirmations } from '../bootstrap/market-gap-confirmation-runtime.js'
+import { createMarketHistoryDemand } from '../modules/market/composition.js'
+import { createAccountPrincipalReader as createModelPrincipals, createActivePrincipalAccess as createModelActive } from '../modules/auth/composition.js'
+import { createRuntimeStrategyAccess } from '../modules/strategies/composition.js'
+import { createAccountRiskSummaryReader } from '../modules/risk/composition.js'
+import { createAccountInventorySummaryReader } from '../modules/trading/composition.js'
+import { createSubscriptionExecutionWindowReader, createAnalysisSubscriberReader, createAnalysisWindowReader } from '../modules/strategies/composition.js'
 import { createBridgeGatewayLeases } from '../modules/bridge/composition.js'
 import { createAccountPrincipalReader } from '../modules/auth/composition.js'
 import { createMysqlAnalysisModelResolver, loadCredentialKeyring } from '../modules/inference/composition.js'
 import { createMysqlInferenceRepository } from '../modules/inference/composition.js'
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
-import { createAnalysisMarketSource, createMysqlAnalysisWindowGuard, createMysqlMacroSnapshotReader } from '../modules/inference/composition.js'
+import { createAnalysisMarketSource, createAnalysisWindowGuard, createMysqlMacroSnapshotReader } from '../modules/inference/composition.js'
 import { Worker } from 'bullmq'
 import {
   assertV4RuntimeEnabled, closeHttpServer, connectCacheRedis, createCacheRedis, createMysqlPool, installProcessLifecycle,
@@ -15,7 +22,13 @@ import {
 } from '../modules/inference/index.js'
 import { createSubscriptionPreferencesReader, createMysqlStrategyService } from '../modules/strategies/composition.js'
 import { createTradingReader } from '../modules/trading/composition.js'
+import { createBridgeMarketSourceCandidates } from '../modules/trading/composition.js'
+import { createMysqlMarketProviders } from '../modules/auth/composition.js'
+import { MysqlMarketStrategyAccess } from '../modules/strategies/composition.js'
+import { createMarketSourceSelector, assertMarketSourceSchemaReady } from '../modules/market/composition.js'
+import { StrategyMarketSourceAccess } from '../modules/market/index.js'
 import { ANALYSIS_QUEUE, type AnalysisRunJob } from '../queue/task-queues.js'
+import { createMysqlRuntimeMemoryPreparationWriter, createMysqlRuntimeStrategyMemoryReader } from '../modules/reviews/composition.js'
 
 loadServerEnvironment()
 
@@ -26,26 +39,33 @@ async function main() {
   const pool = createMysqlPool(config.mysql)
   const cache = createCacheRedis(config.cacheRedis)
   await Promise.all([pool.query('SELECT 1'), connectCacheRedis(cache)])
-  const repository = createMysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader)
+  await assertMarketSourceSchemaReady(pool)
+  const repository = createMysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader, createSubscriptionExecutionWindowReader, { subscribers: createAnalysisSubscriberReader, inventory: createAccountInventorySummaryReader, risks: createAccountRiskSummaryReader }, createMysqlRuntimeMemoryPreparationWriter)
   const strategies = createMysqlStrategyService(pool)
   const trading = createTradingReader(pool, createBridgeGatewayLeases(cache), createAccountPrincipalReader)
+  const sources = createMarketSourceSelector(pool, createBridgeMarketSourceCandidates(trading, createMysqlMarketProviders(pool), createBridgeGatewayLeases(cache), cache))
+  const sourceAccess = new StrategyMarketSourceAccess(new MysqlMarketStrategyAccess(pool), sources, createMarketHistoryDemand(cache))
   let usageSettlementFailureRevision = 0
   const processor = new AnalysisWorker(
     repository,
     new InferenceService(repository, strategies),
     strategies,
-    new AnalysisContextBuilder(createAnalysisMarketSource(trading), createMysqlMacroSnapshotReader(pool)),
+    new AnalysisContextBuilder(createAnalysisMarketSource(trading, sourceAccess, async () => {
+      const providers = createMysqlMarketProviders(pool)
+      const clock = await trading.getPublicDisplayClock(await providers.list())
+      return clock && (await providers.list()).includes(clock.ownerUserId) ? clock : null
+    }, (selection, timeframe, items, step) => new MarketGapConfirmations(cache).read(selection, timeframe, items, step)), createMysqlMacroSnapshotReader(pool), createMysqlRuntimeStrategyMemoryReader(pool)),
     createMysqlAnalysisModelResolver(pool, loadCredentialKeyring(), {
       allowPrivateEndpoints: config.allowPrivateModelEndpoints,
       maxAttempts: config.modelMaxAttempts,
       defaultTimeoutMs: config.modelDefaultTimeoutMs,
-    }, () => {
+    }, { strategies: createRuntimeStrategyAccess, principals: createModelPrincipals, active: createModelActive }, () => {
       usageSettlementFailureRevision += 1
       health.workFailed('model_usage_settlement_failed')
       console.error('[worker-analysis] model usage settlement failed')
     }),
     `analysis:${process.pid}`,
-    createMysqlAnalysisWindowGuard(pool, (accountId, userId) => trading.getAccountSnapshot(accountId, userId)),
+    createAnalysisWindowGuard(createAnalysisWindowReader(pool), (accountId, userId) => trading.getAccountSnapshot(accountId, userId)),
   )
   const worker = new Worker<AnalysisRunJob>(ANALYSIS_QUEUE, async job => {
     if (job.name !== 'analysis.run' || !job.data.analysisId) throw new Error('analysis_job_invalid')

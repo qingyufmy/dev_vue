@@ -18,10 +18,10 @@ namespace Liangjian.BridgeV4.SmokeTests
             BridgeTerminalIdentityMonitor monitor = new BridgeTerminalIdentityMonitor(
                 delegate(long request) { return IdentityFacts(observed); }, delegate { return utc; }, delegate { return tick; });
             monitor.Read(utc);
-            tick = 9999;
+            tick = 999;
             Assert(!monitor.ProbeDue() && !monitor.IsExpired(), "identity_probe_not_throttled");
-            tick = 10000;
-            Assert(monitor.ProbeDue(), "identity_probe_not_due_after_ten_seconds");
+            tick = 1000;
+            Assert(monitor.ProbeDue(), "identity_probe_not_due_after_one_second");
             utc += 24000; tick = 24000;
             monitor.Read(utc);
             Assert(!monitor.IsExpired(), "recent_identity_expired_early");

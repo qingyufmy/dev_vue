@@ -1,0 +1,15 @@
+{
+  "kind": "review-history-current-application-readonly/v1",
+  "passed": true,
+  "writes": 0,
+  "applicationCredentialsUsed": true,
+  "realAuthenticationVerified": false,
+  "historicalVersions": 34,
+  "metadataCount": 183,
+  "cases": 183,
+  "currentVersions": 23,
+  "foreignOwnerRejections": 183,
+  "originalTextVerified": true,
+  "utcReadVerified": true,
+  "observedAt": "2026-09-11T03:51:00.829Z"
+}

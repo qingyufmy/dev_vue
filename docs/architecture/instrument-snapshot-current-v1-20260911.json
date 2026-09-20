@@ -1,0 +1,16 @@
+{
+  "kind": "instrument-snapshot-schema-upgrade/v1",
+  "passed": true,
+  "target": "dev_vue",
+  "planHash": "2875552731d75e63a320077110fc563d285af1258ab3e3465265c6dd4b71b0a7",
+  "ddlAttempted": 1,
+  "businessRowWrites": 0,
+  "replayNoDDL": true,
+  "oldDataUnchanged": true,
+  "oldChecksumsUnchanged": true,
+  "steps": 260,
+  "tableCount": 309,
+  "afterSnapshotHash": "9cd0ef234cdb832148c23c9f33db67dd8797a4c2c6b3aad984e5c1f0a2a73055",
+  "backupReceiptSha256": "5c3901ad66471bc14618f285e0ce041091ed84639a9aee1d6b381843fb9aab9d",
+  "observedAt": "2026-09-11T04:36:44.383Z"
+}

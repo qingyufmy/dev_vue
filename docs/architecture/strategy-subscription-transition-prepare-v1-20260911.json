@@ -1,0 +1,10 @@
+{
+  "kind": "strategy-subscription-data-transition/v1",
+  "mode": "--prepare",
+  "target": "dev_vue",
+  "passed": false,
+  "currentDevVueWrites": 0,
+  "runtimeEnabled": false,
+  "errorCode": "Error",
+  "observedAt": "2026-09-11T01:34:07.859Z"
+}

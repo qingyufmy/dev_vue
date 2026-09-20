@@ -1,3 +1,4 @@
+import { parseStandardMarketSymbols } from '../../../shared/standard-market-symbols.js'
 export type SettingValueType = 'string' | 'boolean' | 'integer' | 'enum' | 'json_array' | 'credential'
 interface Rule {
   namespace: string; key: string; type: SettingValueType; exposure: 'restricted' | 'secret'
@@ -36,6 +37,7 @@ add('media_storage', 'video_provider attachment_provider image_provider resource
 add('media_storage', 'local_root qiniu_connection_test_version qiniu_connection_test_status qiniu_connection_test_stage qiniu_connection_tested_at qiniu_connection_test_error', 'string')
 add('media_storage', 'qiniu_connection_test_cleanup_pending', 'boolean')
 add('market_menu', 'items', 'json_array', { maximumCharacters: 500000 })
+add('market_data', 'symbols', 'json_array', { maximumCharacters: 2048 })
 add('toolbox', 'items', 'json_array', { maximumCharacters: 500000 })
 add('changelog', 'version', 'integer', { minimum: '1', maximum: '2147483647' })
 add('changelog', 'content', 'string', { maximumCharacters: 50000 })
@@ -72,6 +74,9 @@ export function inspectSettingUpdate(input: Readonly<SettingValueInput>): Settin
     if (!valid) return reject('setting_policy_json_array')
   }
   const policyChecks: SettingPolicyCheck[] = []
+  if (namespace === 'market_data') {
+    try { parseStandardMarketSymbols(JSON.parse(value)) } catch { return reject('market_symbols_invalid') }
+  }
   if (rule.addressSyntaxRequired) policyChecks.push('chain_address')
   if (namespace==='market_menu') policyChecks.push('menu_items')
   if (namespace==='toolbox') policyChecks.push('toolbox_items')

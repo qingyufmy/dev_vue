@@ -1,0 +1,17 @@
+{
+  "kind": "review-archived-activity/v1",
+  "passed": true,
+  "writes": 0,
+  "cases": 183,
+  "jobs": 28,
+  "events": 7208,
+  "stages": 18,
+  "httpVerified": true,
+  "runtimeCases": 183,
+  "runtimeJobs": 28,
+  "runtimeEvents": 7208,
+  "runtimeStages": 18,
+  "deniedCases": 183,
+  "realAuthenticationVerified": false,
+  "observedAt": "2026-09-11T04:08:23.490Z"
+}

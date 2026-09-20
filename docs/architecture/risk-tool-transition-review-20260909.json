@@ -1,0 +1,43 @@
+{
+  "kind": "risk-tool-transition-review/v1",
+  "fromToolsHash": "48c44b9bdbf1e3ae563e14fb7aa6191479e4da90a9d64e7d4f1d56529e4599cb",
+  "toToolsHash": "2783eb28957cf48407ce69ddcb282256fd76387633d5b93040628c51252f6842",
+  "changes": [
+    {
+      "path": "scripts/lib/mysql-risk-structure-store.mjs",
+      "before": "84a2d289c26c2d411a6a198ab405e333db87592fefc7b5a6527710aff956fb62",
+      "after": "96001c05f370bc8e1c3bca4cdb6fb312f094c11f30560e63f0395cd62333c72c",
+      "reason": "Only extends frozen file inventory with evidence verifier and proof generator. Identity, lock and DDL methods unchanged."
+    },
+    {
+      "path": "scripts/lib/risk-restoration-evidence.mjs",
+      "before": null,
+      "after": "035d8ca96f7d1deb757bc13dfeaba0d5b31331dc4ae6cdc1a4f402cb4e6e7f70",
+      "reason": "New read-only validator for archived backup, baseline and interruption/replay records."
+    },
+    {
+      "path": "scripts/lib/risk-structure-proof.mjs",
+      "before": "57f7d1d32a260cae9591170f3b3027984c08f9b5077fd67447b650b9cee89484",
+      "after": "d087b551c50bb647af1b28960a6e907f20770c6a94fae2ef0380edc326bfc8d7",
+      "reason": "Recomputes strict backup parity, retains both raw hashes and validates reviewed tool transition. No DDL execution."
+    },
+    {
+      "path": "scripts/lib/risk-tool-transition.mjs",
+      "before": null,
+      "after": "c447e9837ca06c9ed67a57c4f2c526f1a9827d26738ef290fb9668bf6197ea59",
+      "reason": "New exact before/after inventory review validation; rejects migration and coordinator changes."
+    },
+    {
+      "path": "scripts/prepare-risk-upgrade-proof-local.mjs",
+      "before": null,
+      "after": "26f19b204e76c63299903081cc59e781ac454b9515d114e466ed81cf6c72c5c7",
+      "reason": "New local proof assembler using independently verified history and current reference. No database connection."
+    },
+    {
+      "path": "scripts/verify-risk-restoration-evidence-local.mjs",
+      "before": null,
+      "after": "5fb8138e58dcc048a123556b4d0e2990cb07080c170f43f17e49ea42692adeed",
+      "reason": "New local archive evidence verifier. No database connection."
+    }
+  ]
+}

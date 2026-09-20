@@ -1,0 +1,25 @@
+{
+  "kind": "strategy-api-migrated-data/v1",
+  "passed": false,
+  "target": "dev_vue_m1_source_20260910_02",
+  "currentDevVueWrites": 0,
+  "realAuthenticationVerified": false,
+  "realCommitVerified": false,
+  "transactionMode": "outer-rollback-with-per-request-savepoints",
+  "checks": [],
+  "failedRequest": {
+    "serial": 5,
+    "method": "GET",
+    "path": "/strategies/3",
+    "expected": 200,
+    "actual": 404,
+    "code": "strategy_not_found"
+  },
+  "errorCode": "Error",
+  "errorLocations": [
+    "    at request (file:///D:/dev_codex/dev_vue/scripts/verify-strategy-api-transition-local.mjs:65:167)",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)",
+    "    at async file:///D:/dev_codex/dev_vue/scripts/verify-strategy-api-transition-local.mjs:69:20"
+  ],
+  "observedAt": "2026-09-11T01:48:14.523Z"
+}

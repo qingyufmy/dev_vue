@@ -1,0 +1,156 @@
+{
+  "kind": "strategy-role-prompt-review-candidate/v1",
+  "observedAt": "2026-09-13T05:44:51.873Z",
+  "sourceId": "1",
+  "sourceVersion": "44",
+  "sourceHash": "f021d377dd4027a7848ff1f6dd397de88b654830d23dc149ded83328c19a2232",
+  "sourcePromptHash": "da031ebc31df27668c37bbf96beb7b907a786117f577ef4c4702a62e2a41d509",
+  "planHash": "5d7de5f8a3632a08a3d9a1e73fdb70feffa06e4ccbf5994acb26e7886eacfd51",
+  "privateArtifact": "D:\\dev_codex\\.backup-core-20260910-01\\strategy-1-v44-role-candidate-5d7de5f8a363.json",
+  "roles": {
+    "analysis": {
+      "promptHash": "c509d269774ba8ce65b3cf87ef4794e66a28f09ebabbec5f86a06f7e4e99347f",
+      "bytes": 16864,
+      "sourceSections": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        8,
+        9
+      ]
+    },
+    "trader": {
+      "promptHash": "26fbe486e506fb86b7de900592da36e14c877493aaab5abd4ebd8a4b0b983f03",
+      "bytes": 21067,
+      "sourceSections": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ]
+    }
+  },
+  "sections": [
+    {
+      "index": 0,
+      "heading": "# 行情分析 Agent — H1 主判 / H4 严格降级 — 正式生产版 v3.3.1（均线客观数据模式）",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "9f7c55e4e4d4632bd33877a021f35d5ebe7f1de8cf00530aafff58658f84817c",
+      "bytes": 502
+    },
+    {
+      "index": 1,
+      "heading": "## 1. 角色与生产边界",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "b8864d2a5d388e7e67fdace9f8534c33b2073bcef03f3e2ea3566e5aeccd5d54",
+      "bytes": 1388
+    },
+    {
+      "index": 2,
+      "heading": "## 2. 系统数据是唯一客观权威",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "18505011a06a4dd83ea8ac5dd9c18b96fbea4a101863ac1d032942e2a7e89c32",
+      "bytes": 2214
+    },
+    {
+      "index": 3,
+      "heading": "## 3. 周期职责与方向语义",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "9f4b0ed385eb81c3e511eef92e98013c0df8ab6b8867dd7abe819ca62c157a7d",
+      "bytes": 4920
+    },
+    {
+      "index": 4,
+      "heading": "## 4. 正式决策流程",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "a4ab8a7968a05f49ae7fed3a39f6a365ddd0e4f2a40562fb35fcf24f3241aaa7",
+      "bytes": 1043
+    },
+    {
+      "index": 5,
+      "heading": "## 5. 结构止损、分层止盈与收益风险",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "85d3b0791f7c763d7fa35e377d1d5e1e4542a9148f39fa9017986c495d0cca09",
+      "bytes": 1995
+    },
+    {
+      "index": 6,
+      "heading": "## 6. 新开仓、同向持仓与挂单生命周期",
+      "roles": [
+        "trader"
+      ],
+      "sourceHash": "384923d9971855360194ef8667b3b1efff69228e90c2dd72ae07517632b05973",
+      "bytes": 1007
+    },
+    {
+      "index": 7,
+      "heading": "## 7. 当前持仓与挂单管理",
+      "roles": [
+        "trader"
+      ],
+      "sourceHash": "88c5d46aa10c0a54d87647faabefcb4cc914297dd2b4054afc1f032105824db4",
+      "bytes": 1878
+    },
+    {
+      "index": 8,
+      "heading": "## 8. 通用输出合同与字段一致性",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "8b57bad6881711000bebf9fb0bb60717caedd4fc135e19e34f3a02a9d54e1b05",
+      "bytes": 816
+    },
+    {
+      "index": 9,
+      "heading": "## 9. 最终自检",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "4acd43c40ba5d712b4bb9d3c62af1ff36b66bce529a5c2a6c27bf1c61b46eeff",
+      "bytes": 1208
+    }
+  ],
+  "originalTextFullyAssigned": true,
+  "compilePassed": true,
+  "configStatus": "converted",
+  "configProblems": [],
+  "runtimeBlockers": [
+    "verified_session_gap_evidence_missing",
+    "trigger_identity_and_event_usage_mapping",
+    "structure_protection_and_target_evidence_mapping",
+    "account_position_entry_evidence_missing",
+    "legacy_percentage_risk_enforcement_not_declared"
+  ],
+  "executable": false,
+  "semanticAcceptance": "pending",
+  "databaseWrites": 0
+}

@@ -1,13 +1,13 @@
 import type { BridgeGatewayDirectory, BridgeGatewayLeaseStore, BridgeGatewayRouteRepository } from './bridge-gateway-ports.js'
 import { BridgeGatewayError, type BridgeGatewayRoute } from '../domain/bridge-gateway.js'
 import {
-  assertQueryResultEnvelope, historyQueryEnvelope, sameQueryRoute,
-  type BridgeHistoryResource, type BridgeQueryResponseEnvelope, type BridgeQueryResultEnvelope,
+  assertQueryResultEnvelope, historyQueryEnvelope, instrumentQueryEnvelope, marketQueryEnvelope, sameQueryRoute,
+  type BridgeHistoryResource, type BridgeReadResource, type BridgeQueryResponseEnvelope, type BridgeQueryResultEnvelope,
 } from '../domain/bridge-query.js'
 
 interface PendingQuery {
   route: BridgeGatewayRoute
-  resource: BridgeHistoryResource
+  resource: BridgeReadResource
   correlationId: string
   timer: NodeJS.Timeout
   resolve: (value: BridgeQueryResponseEnvelope) => void
@@ -27,8 +27,14 @@ export interface BridgeHistoryQueryInput {
 export interface BridgeHistoryQueryClient {
   query(input: BridgeHistoryQueryInput): Promise<BridgeQueryResponseEnvelope>
 }
+export interface BridgeInstrumentQueryInput { route: BridgeGatewayRoute; symbol: string; timeoutMs?: number }
+export interface BridgeInstrumentQueryClient {
+  queryInstrument(input: BridgeInstrumentQueryInput): Promise<BridgeQueryResponseEnvelope>
+}
 
-export class BridgeGatewayQueryTransport implements BridgeHistoryQueryClient {
+export interface BridgeMarketQueryInput { route: BridgeGatewayRoute; resource: 'market.symbols' | 'market.candles'; params: Record<string, unknown>; timeoutMs?: number }
+
+export class BridgeGatewayQueryTransport implements BridgeHistoryQueryClient, BridgeInstrumentQueryClient {
   private readonly pending = new Map<string, PendingQuery>()
 
   constructor(
@@ -39,6 +45,17 @@ export class BridgeGatewayQueryTransport implements BridgeHistoryQueryClient {
   ) {}
 
   async query(input: BridgeHistoryQueryInput) {
+    return this.sendQuery(input)
+  }
+
+  async queryInstrument(input: BridgeInstrumentQueryInput) {
+    return this.sendQuery({ ...input, resource: 'market.instrument' })
+  }
+
+  async queryMarket(input: BridgeMarketQueryInput) { return this.sendQuery(input) }
+
+  private async sendQuery(input: BridgeHistoryQueryInput | BridgeMarketQueryInput | (BridgeInstrumentQueryInput & { resource: 'market.instrument' })) {
+    input = structuredClone(input)
     const current = await this.leases.current(input.route.accountId)
     if (!current || current.connectionId !== input.route.connectionId || !sameRoute(current, input.route)) {
       throw new BridgeGatewayError('bridge_query_route_unavailable', 409)
@@ -54,7 +71,11 @@ export class BridgeGatewayQueryTransport implements BridgeHistoryQueryClient {
     if (!sink) throw new BridgeGatewayError('bridge_query_process_unavailable', 503)
     const timeoutMs = Math.min(Math.max(input.timeoutMs ?? 15_000, 1_000), 30_000)
     const now = this.now().getTime()
-    const request = historyQueryEnvelope({ ...input, limit: input.limit ?? 500, cursor: input.cursor ?? null, deadlineUtcMsc: now + timeoutMs, nowUtcMsc: now })
+    const request = 'params' in input
+      ? marketQueryEnvelope({ ...input, deadlineUtcMsc: now + timeoutMs, nowUtcMsc: now })
+      : input.resource === 'market.instrument'
+      ? instrumentQueryEnvelope({ ...input, deadlineUtcMsc: now + timeoutMs, nowUtcMsc: now })
+      : historyQueryEnvelope({ ...input, limit: input.limit ?? 500, cursor: input.cursor ?? null, deadlineUtcMsc: now + timeoutMs, nowUtcMsc: now })
     const response = new Promise<BridgeQueryResponseEnvelope>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(request.payload.request_id)

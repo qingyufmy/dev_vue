@@ -1,0 +1,39 @@
+{
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "syntheticPorts": [
+    "model-result"
+  ],
+  "omittedTraderContextPorts": [],
+  "remainingEvidenceLimits": [
+    "synthetic-market-data-and-model-responses",
+    "synthetic-terminal-route-and-result",
+    "direct-dispatch-state-update",
+    "stub-http-authentication",
+    "empty-reference-inventory",
+    "memory-revision-seeded-not-confirmed-by-review",
+    "resolver-wrapper-uses-injected-fetch"
+  ],
+  "foreignKeysVerified": false,
+  "checks": [
+    "actual-instrument-reader-requires-current-owner-binding-and-connection-epoch",
+    "actual-model-catalog-decrypts-synthetic-credential-and-rejects-capability-or-owner-mismatch",
+    "scheduler-replay-keeps-one-run-one-outbox-and-exact-UTC-milliseconds"
+  ],
+  "scheduleFailures": [],
+  "analysisSqlMissingField": "record_version",
+  "analysisWorkerError": "ER_BAD_FIELD_ERROR",
+  "errorCode": "Error",
+  "locations": [
+    "    at QueueEvents.onFailed (D:\\dev_codex\\dev_vue\\node_modules\\.pnpm\\bullmq@6.3.4_ioredis@5.11.1_supports-color@10.2.2_\\node_modules\\bullmq\\dist\\cjs\\classes\\job.js:749:24)",
+    "    at QueueEvents.emit (node:events:519:28)",
+    "    at QueueEvents.emit (D:\\dev_codex\\dev_vue\\node_modules\\.pnpm\\bullmq@6.3.4_ioredis@5.11.1_supports-color@10.2.2_\\node_modules\\bullmq\\dist\\cjs\\classes\\queue-base.js:89:26)"
+  ],
+  "referenceAnalysisQueueRemoved": true,
+  "referenceQueueRemoved": true,
+  "referenceRiskQueueRemoved": true,
+  "referenceExecutionQueueRemoved": true,
+  "referenceGatewayRouteRemoved": true,
+  "referenceLeaseRemoved": true,
+  "referenceDatabaseRemoved": true
+}

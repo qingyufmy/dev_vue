@@ -1,0 +1,36 @@
+{
+  "kind": "chan-v8-trend-entry-parity/v1",
+  "passed": true,
+  "checks": 756,
+  "entryTypes": [
+    "first_buy",
+    "first_sell",
+    "second_buy",
+    "second_sell",
+    "third_buy",
+    "third_sell"
+  ],
+  "backgroundStates": [
+    "consolidation",
+    "downward_breakout",
+    "downward_breakout_pending",
+    "downward_exhaustion",
+    "upward_breakout",
+    "upward_breakout_pending",
+    "upward_exhaustion"
+  ],
+  "referenceSha256": "b945ae29ab5df61648d5d8da86af27835ef7874be60bc7f43aa441820780b796",
+  "pureRangeSha256": "1d610fbb88f4b28a9c977c00394029edfe5cc469cde47eb26d57ca94af8a85e7",
+  "targetHashes": [
+    {
+      "path": "server/src/modules/market/domain/chan-v8/trend.ts",
+      "sha256": "8f8c4d72005a3b7f5796b61a28b7566b04a52cdf41d95a44520fbae5860f521a"
+    },
+    {
+      "path": "server/src/modules/market/domain/chan-v8/entry-candidates.ts",
+      "sha256": "322449e2b6fc34c954af7a371a49497bcfdcd892b67b6773be700103fc8f5b56"
+    }
+  ],
+  "scope": "synthetic trend/entry parity only; no full window, execution permission or Worker integration",
+  "observedAt": "2026-09-11T10:16:26.903Z"
+}

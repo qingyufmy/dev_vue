@@ -1,6 +1,10 @@
+import { createAccountPrincipalReader as createModelPrincipals, createActivePrincipalAccess as createModelActive } from '../modules/auth/composition.js'
+import { createAccountRiskSummaryReader } from '../modules/risk/composition.js'
+import { createAccountInventorySummaryReader } from '../modules/trading/composition.js'
+import { createSubscriptionExecutionWindowReader, createAnalysisSubscriberReader } from '../modules/strategies/composition.js'
 import { createAccountPrincipalReader } from '../modules/auth/composition.js'
 import { createMysqlModelUsageLedger } from '../modules/inference/composition.js'
-import { createMysqlInferenceRepository, createMysqlAnalysisScheduler, createMysqlModelTaskRecovery } from '../modules/inference/composition.js'
+import { createMysqlInferenceRepository, createAnalysisScheduler, createMysqlModelTaskRecovery } from '../modules/inference/composition.js'
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import {
   assertV4RuntimeEnabled, AsyncPollLoop, closeHttpServer, createMysqlPool,
@@ -10,7 +14,7 @@ import {
   InferenceService,
 
 } from '../modules/inference/index.js'
-import { createSubscriptionPreferencesReader, createMysqlStrategyService } from '../modules/strategies/composition.js'
+import { createMysqlAnalysisScheduleStore, createSubscriptionPreferencesReader, createMysqlStrategyService } from '../modules/strategies/composition.js'
 import { createTradingReader } from '../modules/trading/composition.js'
 
 loadServerEnvironment()
@@ -23,13 +27,13 @@ async function main() {
   await pool.query('SELECT 1')
   const strategies = createMysqlStrategyService(pool)
   const trading = createTradingReader(pool, undefined, createAccountPrincipalReader)
-  const scheduler = createMysqlAnalysisScheduler(
-    pool,
-    new InferenceService(createMysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader), strategies),
+  const scheduler = createAnalysisScheduler(
+    createMysqlAnalysisScheduleStore(pool),
+    new InferenceService(createMysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader, createSubscriptionExecutionWindowReader, { subscribers: createAnalysisSubscriberReader, inventory: createAccountInventorySummaryReader, risks: createAccountRiskSummaryReader }), strategies),
     (accountId, userId) => trading.getAccountSnapshot(accountId, userId),
   )
-  const recovery = createMysqlModelTaskRecovery(pool)
-  const usage = createMysqlModelUsageLedger(pool)
+  const recovery = createMysqlModelTaskRecovery(pool, createAccountInventorySummaryReader)
+  const usage = createMysqlModelUsageLedger(pool, { principals: createModelPrincipals, active: createModelActive })
   const loop = new AsyncPollLoop(async () => {
     try {
       const now = new Date()

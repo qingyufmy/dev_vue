@@ -1,0 +1,54 @@
+{
+  "kind": "model-default-selection-readonly/v1",
+  "passed": true,
+  "writes": 0,
+  "modelRequests": 0,
+  "checks": [
+    {
+      "kind": "actual_strategy_gate",
+      "result": "draft_rejected"
+    },
+    {
+      "userId": 1,
+      "usage": "manual",
+      "result": "rejected",
+      "code": "model_profile_not_verified"
+    },
+    {
+      "userId": 1,
+      "usage": "auto",
+      "result": "rejected",
+      "code": "model_profile_not_verified"
+    },
+    {
+      "userId": 28,
+      "usage": "manual",
+      "result": "resolved",
+      "profileId": "3",
+      "credentialSource": "platform_shared"
+    },
+    {
+      "userId": 28,
+      "usage": "auto",
+      "result": "resolved",
+      "profileId": "3",
+      "credentialSource": "platform_shared"
+    },
+    {
+      "userId": 29,
+      "usage": "manual",
+      "result": "resolved",
+      "profileId": "3",
+      "credentialSource": "platform_shared"
+    },
+    {
+      "userId": 29,
+      "usage": "auto",
+      "result": "resolved",
+      "profileId": "3",
+      "credentialSource": "platform_shared"
+    }
+  ],
+  "selectionStrategyGateStubbed": true,
+  "observedAt": "2026-09-11T02:46:58.217Z"
+}

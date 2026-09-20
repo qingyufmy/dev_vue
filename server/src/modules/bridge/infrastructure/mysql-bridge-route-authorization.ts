@@ -115,5 +115,7 @@ export function translateStorageError(error: unknown): BridgeGatewayError {
   const code = String((error as { code?: unknown })?.code ?? '')
   if (code === 'ER_DUP_ENTRY') return gatewayError('bridge_route_conflict', 409)
   if (code === 'ER_LOCK_DEADLOCK' || code === 'ER_LOCK_WAIT_TIMEOUT') return gatewayError('bridge_route_storage_unavailable', 503)
-  return gatewayError('bridge_route_storage_unavailable', 503)
+  const translated = gatewayError('bridge_route_storage_unavailable', 503)
+  if (/^ER_[A-Z0-9_]{1,80}$/.test(code)) translated.cause = { code }
+  return translated
 }

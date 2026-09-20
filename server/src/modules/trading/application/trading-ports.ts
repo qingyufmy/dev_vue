@@ -13,16 +13,18 @@ export interface TradingReadRepository {
   listObserverChannels(userId: number): Promise<ObserverChannelSummary[]>
   findAccount(accountId: string): Promise<TradingAccountSummary | null>
   findOwnedAccount(userId: number, accountId: string): Promise<TradingAccountSummary | null>
+  getDisplayClock?(accountId: string, userId: number): Promise<{ offset: number; checkedAt: string } | null>
   getAccountSnapshot(accountId: string, userId: number): Promise<AccountSnapshot | null>
   listSymbols(accountId: string): Promise<string[]>
   getQuote(accountId: string, symbol: string): Promise<MarketQuote | null>
-  listCandles(accountId: string, symbol: string, timeframe: Timeframe, limit: number): Promise<MarketCandle[]>
+  listCandles(accountId: string, symbol: string, timeframe: Timeframe, limit: number, before?: string): Promise<MarketCandle[]>
   listPositions(accountId: string, userId: number): Promise<{ revision: number; items: OpenPosition[] }>
   listPendingOrders(accountId: string, userId: number): Promise<{ revision: number; items: PendingOrder[] }>
   latestRevision(accountId: string, resource: RealtimeResource, resourceId: string): Promise<number>
 }
 
 export interface ConnectionCapacityRepository {
+  getIncludedCapacity(userId: number): Promise<number>
   getPurchasedCapacity(userId: number): Promise<number>
 }
 
@@ -98,6 +100,8 @@ export interface BrowserRealtimePublisher {
 }
 
 export type BrowserRealtimeEventType =
+  | 'market.public.updated'
+  | 'market.public.history.updated'
   | 'runtime.bridge.changed' | 'account.metrics.changed' | 'market.quote.updated' | 'market.candle.updated'
   | 'market.candle.closed' | 'positions.changed' | 'pending_orders.changed'
   | 'analysis.job.changed' | 'market_analysis.created' | 'trader.job.changed' | 'trade_decision.created'
@@ -108,6 +112,7 @@ export type BrowserRealtimeEventType =
   | 'operation.changed' | 'audit.changed'
 
 export type BrowserRealtimeResource = RealtimeResource
+  | 'public_market'
   | 'analysis.job' | 'market_analysis' | 'trader.job' | 'trade_decision'
   | 'risk.policy' | 'risk.summary' | 'risk.decision' | 'risk.manual_release' | 'operation'
   | 'review_case' | 'strategy_memory'
@@ -132,4 +137,10 @@ export type TradingRealtimeEvent = BrowserRealtimeEvent & {
   accountId: string
   userId: number
   resource: RealtimeResource
+}
+
+export interface PublicCachedMarketReader {
+  getPublicDisplayClock(owners: number[]): Promise<{ offset: number; checkedAt: string; ownerUserId: number } | null>
+  getPublicSourceClock(ownerUserId: number, accountId: string): Promise<{ offset: number; checkedAt: string } | null>
+  findPublicCachedSource(owners: number[], symbol: string, timeframe: Timeframe): Promise<{ accountId: string; ownerUserId: number; resolvedSymbol: string; platform: 'mt4' | 'mt5' } | null>
 }

@@ -1,9 +1,9 @@
-export { learningCourseSchema, learningListSchema, learningDetailSchema, learningCompletionSchema, type LearningCourse, type LearningDetail } from './learning'
+export { learningCourseSchema, learningListSchema, learningDetailSchema, learningCompletionSchema, type LearningCourse, type LearningDetail } from './learning.js'
 import { z } from 'zod'
-import type { components } from './generated/http'
-export type { paths as ApiPaths, operations as ApiOperations } from './generated/http'
+import type { components } from './generated/http.js'
+export type { paths as ApiPaths, operations as ApiOperations } from './generated/http.js'
 export type ApiWireSchemas = components['schemas']
-export { bridgePairingRequestSchema, bridgePairingResponseSchema } from './bridge-pairing'
+export { bridgePairingRequestSchema, bridgePairingResponseSchema } from './bridge-pairing.js'
 
 export const appSurfaceSchema = z.enum(['www', 'trade', 'admin'])
 
@@ -75,7 +75,7 @@ export const authorizationRequestSchema = z.object({
 export const authLoginRequestSchema = authorizationRequestSchema.extend({
   login: z.string().trim().min(1).max(255),
   password: z.string().min(1).max(1024),
-  remember: z.boolean(),
+  remember: z.boolean().default(false),
 })
 
 export const authLoginResponseSchema = z.object({
@@ -177,6 +177,37 @@ export const tradingWorkspaceResponseSchema = z.object({
 })
 export const marketQuoteResponseSchema = z.object({ data: marketQuoteSchema.nullable(), meta: responseMetaSchema })
 export const marketCandlesResponseSchema = z.object({ data: z.object({ items: z.array(marketCandleSchema) }), meta: responseMetaSchema })
+
+export const publicMarketStructureLineSchema = z.strictObject({
+  kind: z.enum(['bi', 'segment', 'forming_segment', 'center', 'fractal_top', 'fractal_bottom']),
+  from: z.iso.datetime({ offset: true }), to: z.iso.datetime({ offset: true }), start: z.number(), end: z.number(),
+})
+export const publicMarketStructureSchema = z.strictObject({
+  algorithm: z.literal('chan_structure_v8'), status: z.string().min(1).max(64), reliability: z.enum(['high', 'medium', 'low']),
+  based_on_closed_bars: z.number().int().min(0).max(2000), lines: z.array(publicMarketStructureLineSchema).max(32),
+})
+
+export const publicMarketSnapshotResponseSchema = z.strictObject({
+  data: z.strictObject({
+    symbol: z.string().min(1).max(64), timeframe: z.enum(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1']),
+    source_key: z.string().regex(/^[a-f0-9]{64}$/).nullable(), source_generation: z.string().regex(/^\d+$/).nullable(),
+    status: z.enum(['cached', 'unavailable']),
+    quote: z.strictObject({ bid: decimalSchema, ask: decimalSchema, last: decimalSchema.nullable(), spread: decimalSchema,
+      observed_at: z.iso.datetime({ offset: true }), revision: z.string().regex(/^\d+$/) }).nullable(),
+    candles: z.array(z.strictObject({ open_time: z.iso.datetime({ offset: true }), open: decimalSchema, high: decimalSchema,
+      low: decimalSchema, close: decimalSchema, tick_volume: decimalSchema, closed: z.boolean(), revision: z.string().regex(/^\d+$/) })).max(500),
+    structure: publicMarketStructureSchema.nullable(),
+  }), meta: responseMetaSchema,
+})
+
+export const publicMarketStateSchema = z.strictObject({ symbol: z.string().regex(/^[A-Z0-9]{1,32}$/), state: z.enum(['open', 'closed', 'restricted', 'stale', 'unknown']), reason: z.string().regex(/^[a-z_]{3,64}$/), checked_at: z.iso.datetime({ offset: true }).nullable() })
+export type PublicMarketState = z.infer<typeof publicMarketStateSchema>
+export const publicMarketSymbolsResponseSchema = z.strictObject({
+  data: z.strictObject({ items: z.array(z.string().regex(/^[A-Z0-9]{1,32}$/)).max(32)
+    .refine(items => new Set(items).size === items.length),
+    market_states: z.array(publicMarketStateSchema).max(32).optional(),
+    timezone: z.strictObject({ offset_minutes: z.number().int().min(-720).max(840), checked_at: z.iso.datetime({ offset: true }), status: z.enum(['calibrated', 'stale']) }).nullable().optional() }), meta: responseMetaSchema,
+})
 
 const macroUtcDatetimeSchema = z.iso.datetime({ offset: true }).refine((value) => value.endsWith('Z'), '宏观数据时间必须使用 UTC Z')
 const macroBusinessDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -369,12 +400,12 @@ export const tradeRecordDetailResponseSchema = z.object({ data: z.object({
   deals: value.deals, attributions: value.attributions })), meta: responseMetaSchema })
 
 export const auditSourceKindSchema = z.enum([
-  'analysis_run', 'trader_run', 'risk_decision', 'operation', 'bridge_command',
+  'analysis_run', 'trader_run', 'trade_decision', 'risk_decision', 'operation', 'bridge_command',
   'risk_policy_change', 'risk_manual_release', 'terminal_trade',
 ])
 export const auditCategorySchema = z.enum(['analysis', 'trading', 'risk', 'execution', 'terminal', 'configuration'])
 export const auditActorSchema = z.enum(['ai', 'user', 'system', 'bridge'])
-export const auditStatusSchema = z.enum(['queued', 'running', 'succeeded', 'rejected', 'failed', 'uncertain', 'cancelled', 'info'])
+export const auditStatusSchema = z.enum(['queued', 'running', 'succeeded', 'partially_succeeded', 'rejected', 'failed', 'uncertain', 'cancelled', 'info'])
 export const auditEventSchema = z.object({
   source_kind: auditSourceKindSchema, source_id: z.string().min(1), account_id: z.string().min(1).nullable(),
   category: auditCategorySchema, actor: auditActorSchema, action: z.string().min(1).max(128), status: auditStatusSchema,
@@ -392,10 +423,12 @@ export const auditSummarySchema = z.object({
   failed: z.number().int().nonnegative(), uncertain: z.number().int().nonnegative(), active: z.number().int().nonnegative(),
 }).strict()
 export const auditTraceNodeSchema = z.object({
+  parameters: z.object({ symbol: z.string().max(128).optional(), ticket: z.string().max(128).optional(), side: z.string().max(128).optional(), volume: z.string().max(128).optional(), price: z.string().max(128).optional(), stop_loss: z.string().max(128).optional(), take_profit: z.string().max(128).optional() }).strict().optional(),
+  intent_id: z.string().min(1).nullable().optional(), action_kind: z.string().min(1).nullable().optional(),
   stage: z.enum(['analysis', 'trader', 'risk', 'operation', 'intent', 'bridge', 'terminal']), status: auditStatusSchema,
   source_kind: z.string().min(1).max(64), source_id: z.string().min(1), title: z.string().min(1).max(191),
   detail: z.string().min(1).max(2000), reason_code: z.string().max(128).nullable(), occurred_at: z.iso.datetime({ offset: true }),
-}).strict().transform((value) => ({ stage: value.stage, status: value.status, sourceKind: value.source_kind,
+}).strict().transform((value) => ({ parameters: value.parameters ?? {}, intentId: value.intent_id ?? null, actionKind: value.action_kind ?? null, stage: value.stage, status: value.status, sourceKind: value.source_kind,
   sourceId: value.source_id, title: value.title, detail: value.detail, reasonCode: value.reason_code, occurredAt: value.occurred_at }))
 export const auditEventPageResponseSchema = z.object({ data: z.object({
   captured_end: z.iso.datetime({ offset: true }), items: z.array(auditEventSchema), next_cursor: z.string().min(1).nullable(),
@@ -470,7 +503,7 @@ export const strategyCreateBodySchema = z.object({
   prompt_text: z.string().trim().min(1).max(100_000), config: z.record(z.string(), z.unknown()),
 }).strict()
 export const strategyMetadataPatchBodySchema = z.object({ name: z.string().trim().min(1).max(191), description: z.string().trim().max(2000) }).strict()
-export const strategyVersionCreateBodySchema = z.object({ prompt_text: z.string().trim().min(1).max(100_000), config: z.record(z.string(), z.unknown()) }).strict()
+export const strategyVersionCreateBodySchema = z.object({ name: z.string().trim().min(1).max(191).optional(), description: z.string().trim().max(2000).optional(), status: z.enum(['draft', 'active']).optional(), prompt_text: z.string().trim().min(1).max(100_000), config: z.record(z.string(), z.unknown()) }).strict()
 
 export const strategySubscriptionScheduleSchema = z.object({
   cadence_seconds: z.number().int().min(60), receive_timezone: z.string().regex(/^[A-Za-z0-9_+/:-]{1,64}$/),
@@ -495,12 +528,22 @@ export const strategySubscriptionSchema = z.object({
 }))
 export const strategySubscriptionResponseSchema = z.object({ data: strategySubscriptionSchema, meta: responseMetaSchema })
 export const strategySubscriptionsResponseSchema = z.object({ data: z.object({ items: z.array(strategySubscriptionSchema) }), meta: responseMetaSchema })
+export const subscriptionTimeWindowSchema = z.union([
+  z.object({ enabled: z.literal(false) }).strict(),
+  z.object({ enabled: z.boolean(), version: z.literal(1), timezone: z.literal('terminal_server'),
+    weekdays: z.array(z.number().int().min(0).max(6)).min(1).max(7).refine(days => new Set(days).size === days.length),
+    windows: z.array(z.object({ start: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), end: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/) }).strict()).min(1).max(6),
+    outsideBehavior: z.enum(['pause_all', 'signals_only']),
+  }).strict(),
+])
 export const strategySubscriptionCreateBodySchema = z.object({
+  receive_window: subscriptionTimeWindowSchema.optional(),
   trading_account_id: z.string().min(1).max(191), symbol: z.string().trim().min(1).max(64), analysis_strategy_id: z.string().min(1).max(191),
   trader_strategy_id: z.string().min(1).max(191).nullable().optional(), analysis_enabled: z.boolean().optional(), trader_enabled: z.boolean().optional(),
   trade_send_enabled: z.boolean().optional(), status: z.enum(['active', 'paused']).optional(),
 }).strict()
 export const strategySubscriptionPatchBodySchema = z.object({
+  receive_window: subscriptionTimeWindowSchema.optional(),
   symbol: z.string().trim().min(1).max(64).optional(), analysis_strategy_id: z.string().min(1).max(191).optional(),
   trader_strategy_id: z.string().min(1).max(191).nullable().optional(), analysis_enabled: z.boolean().optional(),
   trader_enabled: z.boolean().optional(), trade_send_enabled: z.boolean().optional(), status: z.enum(['active', 'paused', 'ended']).optional(),
@@ -550,6 +593,9 @@ export const marketAnalysisSummarySchema = z.object({
   validUntil: value.valid_until, revision: value.revision,
 }))
 export const marketAnalysisDetailSchema = z.object({
+  chart: z.array(z.object({ timeframe: z.string(), bars: z.array(z.object({ time: z.string(), open: z.number(), high: z.number(), low: z.number(), close: z.number(), closed: z.boolean() })), lines: z.array(z.object({ kind: z.string(), from: z.string(), to: z.string(), start: z.number(), end: z.number() })) })).optional(),
+  bullish_score: z.number().min(0).max(100).nullable().optional(),
+  bearish_score: z.number().min(0).max(100).nullable().optional(),
   summary: marketAnalysisSummarySchema,
   market_regime: z.string().max(128),
   supporting_evidence: z.array(z.string()),
@@ -560,7 +606,7 @@ export const marketAnalysisDetailSchema = z.object({
   analysis_body: z.string(),
   input_snapshot_hash: z.string().regex(/^[a-f0-9]{64}$/),
 })
-export const marketAnalysisListResponseSchema = z.object({ data: z.object({ items: z.array(marketAnalysisSummarySchema) }), meta: responseMetaSchema })
+export const marketAnalysisListResponseSchema = z.object({ data: z.object({ items: z.array(marketAnalysisSummarySchema), next_cursor: z.string().max(2048).nullable() }).transform(value => ({ items: value.items, nextCursor: value.next_cursor })), meta: responseMetaSchema })
 export const marketAnalysisDetailResponseSchema = z.object({ data: marketAnalysisDetailSchema, meta: responseMetaSchema })
 
 const traderExecutableActionValues = ['market_order', 'pending_order', 'modify_position', 'close_position', 'modify_order', 'cancel_order'] as const
@@ -630,7 +676,16 @@ const riskPolicyEditableInteger = (minimum: number, maximum?: number) => {
  * the wire.  This avoids silently changing broker precision in the browser;
  * only revisions and explicitly integral counters are normalized to numbers.
  */
+const riskNumericControlSchema = z.object({
+  allowed_min: riskPolicyDecimalSchema,
+  allowed_max: riskPolicyDecimalSchema,
+  locked_value: riskPolicyDecimalSchema.nullable(),
+  user_editable: z.boolean(),
+}).strict().refine(value => Number(value.allowed_min) <= Number(value.allowed_max)
+  && (value.locked_value === null || Number(value.locked_value) >= Number(value.allowed_min) && Number(value.locked_value) <= Number(value.allowed_max)))
+
 export const riskPolicySchema = z.object({
+  numeric_controls: z.record(z.string(), riskNumericControlSchema).optional(),
   account_id: z.string().min(1),
   platform_policy_version_id: z.string().min(1),
   account_policy_version_id: z.string().min(1).nullable(),
@@ -652,12 +707,14 @@ export const riskPolicySchema = z.object({
   max_open_positions: riskPolicyEditableInteger(0, 1000),
   max_pending_orders: riskPolicyEditableInteger(0, 1000),
   max_total_volume: riskPolicyDecimalSchema,
+  max_order_volume: riskPolicyDecimalSchema.optional(),
   max_spread_points: riskPolicyDecimalSchema,
   min_open_interval_seconds: riskPolicyEditableInteger(0, 86400),
   max_daily_open_count: riskPolicyEditableInteger(0, 10000),
   consecutive_loss_limit: riskPolicyEditableInteger(0, 1000),
   loss_cooldown_minutes: riskPolicyEditableInteger(0, 10080),
   pending_valid_minutes: riskPolicyEditableInteger(1, 10080),
+  pending_dedup_atr_multiplier: z.string().regex(/^(?:[0-4](?:\.[0-9]+)?|5(?:\.0+)?)$/).optional(),
   weekend_close_minutes: riskPolicyEditableInteger(0, 2880),
   trade_send_enabled: z.boolean(),
   account_kill_switch: z.boolean(),
@@ -666,6 +723,7 @@ export const riskPolicySchema = z.object({
   revision: numericRevisionSchema,
   updated_at: z.iso.datetime({ offset: true }),
 }).strict().transform((value) => ({
+  numericControls: value.numeric_controls ?? {},
   accountId: value.account_id,
   platformPolicyVersionId: value.platform_policy_version_id,
   accountPolicyVersionId: value.account_policy_version_id,
@@ -687,12 +745,14 @@ export const riskPolicySchema = z.object({
   maxOpenPositions: value.max_open_positions,
   maxPendingOrders: value.max_pending_orders,
   maxTotalVolume: value.max_total_volume,
+  maxOrderVolume: value.max_order_volume,
   maxSpreadPoints: value.max_spread_points,
   minOpenIntervalSeconds: value.min_open_interval_seconds,
   maxDailyOpenCount: value.max_daily_open_count,
   consecutiveLossLimit: value.consecutive_loss_limit,
   lossCooldownMinutes: value.loss_cooldown_minutes,
   pendingValidMinutes: value.pending_valid_minutes,
+  pendingDedupAtrMultiplier: value.pending_dedup_atr_multiplier,
   weekendCloseMinutes: value.weekend_close_minutes,
   tradeSendEnabled: value.trade_send_enabled,
   accountKillSwitch: value.account_kill_switch,
@@ -709,6 +769,7 @@ export const riskPolicyPatchBodySchema = z.object({
   max_open_positions: riskPolicyEditableInteger(0, 1000).optional(),
   max_pending_orders: riskPolicyEditableInteger(0, 1000).optional(),
   max_total_volume: riskPolicyDecimalSchema.optional(),
+  max_order_volume: riskPolicyDecimalSchema.optional(),
   max_spread_points: riskPolicyDecimalSchema.optional(),
   min_open_interval_seconds: riskPolicyEditableInteger(0, 86400).optional(),
   max_daily_open_count: riskPolicyEditableInteger(0, 10000).optional(),
@@ -725,6 +786,12 @@ export const riskPolicyPatchBodySchema = z.object({
 export const aiRiskPolicyPatchBodySchema = riskPolicyPatchBodySchema
 
 export const riskPolicyResponseSchema = z.object({ data: riskPolicySchema, meta: responseMetaSchema }).strict()
+export const riskPolicyReceiptResponseSchema = z.object({
+  data: z.discriminatedUnion('state', [
+    z.object({ state: z.literal('unconfirmed'), policy: z.null() }).strict(),
+    z.object({ state: z.literal('confirmed'), policy: riskPolicySchema }).strict(),
+  ]), meta: responseMetaSchema,
+}).strict()
 
 export const riskSummarySchema = z.object({
   account_id: z.string().min(1),
@@ -858,6 +925,13 @@ export const manualReleaseStateSchema = z.object({
 }).strict()
 export const manualRiskReleaseResponseSchema = z.object({ data: manualReleaseStateSchema, meta: responseMetaSchema }).strict()
 export const manualRiskReleaseCreatedResponseSchema = z.object({ data: manualRiskReleaseSchema, meta: responseMetaSchema }).strict()
+export const manualRiskReleaseReceiptResponseSchema = z.object({
+  data: z.discriminatedUnion('state', [
+    z.object({ state: z.literal('unconfirmed'), release: z.null() }).strict(),
+    z.object({ state: z.literal('confirmed'), release: manualRiskReleaseSchema }).strict(),
+  ]),
+  meta: responseMetaSchema,
+}).strict()
 export const riskManualReleaseBodySchema = z.object({ acknowledge_risk: z.literal(true), reason: z.string().trim().min(3).max(500) }).strict()
 export const aiRiskManualReleaseBodySchema = riskManualReleaseBodySchema
 
@@ -921,8 +995,8 @@ export const riskDecisionListResponseSchema = z.object({
 }).strict()
 export const riskDecisionDetailResponseSchema = z.object({ data: riskDecisionDetailSchema, meta: responseMetaSchema }).strict()
 
-export const reviewKindSchema = z.enum(['daily', 'monthly', 'manual'])
-export const reviewCaseStatusSchema = z.enum(['awaiting_evidence', 'queued', 'running', 'awaiting_confirmation', 'needs_changes', 'confirmed', 'failed'])
+export const reviewKindSchema = z.enum(['daily', 'monthly', 'manual', 'trade'])
+export const reviewCaseStatusSchema = z.enum(['awaiting_evidence', 'queued', 'running', 'awaiting_confirmation', 'needs_changes', 'confirmed', 'failed', 'archived'])
 export const reviewEvidenceStatusSchema = z.enum(['pending', 'incomplete', 'complete', 'stale'])
 export const reviewConclusionSchema = z.enum(['effective', 'mixed', 'ineffective', 'insufficient_evidence', 'manual_trade_reviewed'])
 export const reviewAssessmentSchema = z.enum(['effective', 'mixed', 'problem', 'insufficient_evidence', 'not_applicable'])
@@ -965,7 +1039,13 @@ export const reviewContentSchema = reviewContentWireSchema.transform((value) => 
   evidenceRefs: value.evidence_refs, fullAnalysisText: value.full_analysis_text,
 }))
 
-export const reviewVersionSchema = z.object({ id: z.string().min(1), review_case_id: z.string().min(1), version: z.number().int().positive(), author_kind: z.enum(['ai', 'user']), conclusion: reviewConclusionSchema, content: reviewContentSchema, created_at: z.iso.datetime({ offset: true }) }).strict().transform((value) => ({ id: value.id, caseId: value.review_case_id, versionNumber: value.version, authorKind: value.author_kind, conclusion: value.conclusion, content: value.content, createdAt: value.created_at }))
+export const legacyReviewContentSchema = z.object({ schema_version: z.literal('review.legacy.v1'),
+  source_table: z.enum(['period_review_versions', 'manual_trade_review_versions', 'trade_review_versions']),
+  source_id: z.string().regex(/^[1-9][0-9]{0,19}$/), source_sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  original_content_hash: z.string().regex(/^[a-f0-9]{64}$/).nullable(), raw_text: z.string().max(16_777_215),
+}).strict().transform(value => ({ schemaVersion: value.schema_version, sourceTable: value.source_table,
+  sourceId: value.source_id, sourceSha256: value.source_sha256, originalContentHash: value.original_content_hash, rawText: value.raw_text }))
+export const reviewVersionSchema = z.object({ id: z.string().min(1), review_case_id: z.string().min(1), version: z.number().int().positive(), author_kind: z.enum(['ai', 'user']), conclusion: reviewConclusionSchema.nullable(), content: z.union([reviewContentSchema, legacyReviewContentSchema]), created_at: z.iso.datetime({ offset: true }) }).strict().refine(value => value.content.schemaVersion === 'review.legacy.v1' ? value.conclusion === null : value.conclusion === value.content.conclusion, 'review_version_conclusion_mismatch').transform((value) => ({ id: value.id, caseId: value.review_case_id, versionNumber: value.version, authorKind: value.author_kind, conclusion: value.conclusion, content: value.content, createdAt: value.created_at }))
 const reviewSourceSchema = z.object({ kind: z.enum(['market_analysis', 'trade_decision', 'risk_decision', 'execution_outcome', 'terminal_trade', 'period_review']), source_id: z.string().min(1), relation: z.enum(['direct', 'counterexample', 'missed_opportunity', 'false_positive']), evidence_hash: z.string().regex(/^[a-f0-9]{64}$/) }).strict().transform((value) => ({ kind: value.kind, sourceId: value.source_id, relation: value.relation, evidenceHash: value.evidence_hash }))
 const reviewJobSummarySchema = z.object({ id: z.string().min(1), generation: z.number().int().positive(), mode: z.enum(['initial', 'retry', 'refresh_evidence']), status: z.enum(['queued', 'preparing_evidence', 'waiting_model', 'validating', 'succeeded', 'retry_wait', 'failed', 'cancelled', 'completed_stale']), progress_percent: z.number().int().min(0).max(100), current_stage: z.string().min(1), last_error_code: z.string().nullable(), updated_at: z.iso.datetime({ offset: true }) }).strict().transform((value) => ({ id: value.id, generation: value.generation, mode: value.mode, status: value.status, progressPercent: value.progress_percent, currentStage: value.current_stage, lastErrorCode: value.last_error_code, updatedAt: value.updated_at }))
 export const reviewCaseDetailSchema = z.object({ summary: reviewCaseSummarySchema, current_version: reviewVersionSchema.nullable(), sources: z.array(reviewSourceSchema), current_job: reviewJobSummarySchema.nullable(), return_reason: z.string().nullable() }).strict().transform((value) => ({ summary: value.summary, currentVersion: value.current_version, sources: value.sources, currentJob: value.current_job, returnReason: value.return_reason }))
@@ -1280,7 +1360,7 @@ export const operationSchema = z.object({
   operation_id: z.string().min(1),
   kind: z.string().min(1).max(128),
   status: operationStatusSchema,
-  accepted_at: z.iso.datetime({ offset: true }),
+  accepted_at: z.iso.datetime({ offset: true }).nullable().optional(),
   updated_at: z.iso.datetime({ offset: true }),
   completed_at: z.iso.datetime({ offset: true }).nullable().optional(),
   resource_id: z.string().min(1).nullable().optional(),
@@ -1306,6 +1386,8 @@ export const operationSchema = z.object({
 export const operationResponseSchema = z.object({ data: operationSchema, meta: responseMetaSchema })
 
 export const accountMetricsUpdateSchema = z.object({
+  leverage: z.number().int().min(1).max(100000).nullable().optional(),
+  trade_permission: z.boolean().optional(),
   balance: decimalSchema, equity: decimalSchema, margin: decimalSchema,
   free_margin: decimalSchema, floating_profit: decimalSchema,
   currency: z.string().min(3).max(12), observed_at: z.iso.datetime({ offset: true }),
@@ -1449,6 +1531,21 @@ export const marketMacroRealtimeEventSchema = z.union([
   marketCalendarChangedRealtimeEventSchema,
   marketSourceHealthChangedRealtimeEventSchema,
 ])
+export const publicMarketRealtimeEventSchema = platformMacroRealtimeEnvelopeSchema.extend({
+  type: z.literal('market.public.updated'),
+  resource: z.strictObject({ kind: z.literal('public_market'), id: z.string().min(1).max(191) }),
+  data: z.strictObject({ symbol: z.string().regex(/^[A-Z0-9]{1,32}$/),
+    timeframe: z.enum(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1']).nullable(),
+    source_key: z.string().regex(/^[a-f0-9]{64}$/), source_generation: z.string().regex(/^\d{1,20}$/),
+    quote: publicMarketSnapshotResponseSchema.shape.data.shape.quote,
+    candle: publicMarketSnapshotResponseSchema.shape.data.shape.candles.element.nullable(),
+  }).refine(value => value.timeframe === null ? value.quote !== null && value.candle === null : value.quote === null && value.candle !== null),
+}).refine(value => value.resource.id === `${value.data.symbol}:${value.data.timeframe ?? 'quote'}`)
+export const publicMarketHistoryEventSchema = platformMacroRealtimeEnvelopeSchema.extend({
+  type: z.literal('market.public.history.updated'),
+  resource: z.strictObject({ kind: z.literal('public_market'), id: z.string().min(1).max(191) }),
+  data: z.strictObject({ symbol: z.string().regex(/^[A-Z0-9]{1,32}$/), timeframe: z.enum(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1']) }),
+}).refine(value => value.resource.id === `${value.data.symbol}:${value.data.timeframe}`)
 export const macroRealtimeEventSchema = marketMacroRealtimeEventSchema
 export const marketMacroChangedEventSchema = marketMacroChangedRealtimeEventSchema
 export const marketCalendarChangedEventSchema = marketCalendarChangedRealtimeEventSchema
@@ -1456,8 +1553,10 @@ export const marketSourceHealthChangedEventSchema = marketSourceHealthChangedRea
 
 export const browserRealtimeEventSchema = z.union([
   tradingRealtimeEventSchema, observerPublicationChangedRealtimeEventSchema, inferenceRealtimeEventSchema, riskRealtimeEventSchema, operationRealtimeEventSchema, reviewRealtimeEventSchema,
-  auditRealtimeEventSchema, marketMacroRealtimeEventSchema,
+  auditRealtimeEventSchema, marketMacroRealtimeEventSchema, publicMarketRealtimeEventSchema, publicMarketHistoryEventSchema,
 ])
+export type PublicMarketSnapshotData = z.infer<typeof publicMarketSnapshotResponseSchema>['data']
+export type PublicMarketRealtimeEvent = z.infer<typeof publicMarketRealtimeEventSchema>
 
 export type ApiProblem = z.infer<typeof apiProblemSchema>
 export type AppSurface = z.infer<typeof appSurfaceSchema>
@@ -1577,4 +1676,59 @@ export type MarketMacroRealtimeEvent = z.infer<typeof marketMacroRealtimeEventSc
 export type MacroRealtimeEvent = z.infer<typeof macroRealtimeEventSchema>
 export type BrowserRealtimeEvent = z.infer<typeof browserRealtimeEventSchema>
 
-export { settingScopeSchema,settingRequestKeySchema,settingUpdateBodySchema,adminSettingResponseSchema,settingUpdateResponseSchema,type SettingUpdateBody } from './settings'
+export { settingScopeSchema,settingRequestKeySchema,settingUpdateBodySchema,adminSettingResponseSchema,settingUpdateResponseSchema,type SettingUpdateBody } from './settings.js'
+
+export const reviewVersionSummarySchema = z.object({ id: z.string().min(1), review_case_id: z.string().min(1),
+  version: z.number().int().positive(), author_kind: z.enum(['ai', 'user']), conclusion: reviewConclusionSchema.nullable(),
+  created_at: z.iso.datetime({ offset: true }) }).strict().transform(v => ({ id: v.id, caseId: v.review_case_id,
+    versionNumber: v.version, authorKind: v.author_kind, conclusion: v.conclusion, createdAt: v.created_at }))
+export const reviewVersionHistoryResponseSchema = z.object({ data: z.object({ items: z.array(reviewVersionSummarySchema).max(100),
+  next_before_version: z.number().int().min(1).max(4294967295).nullable() }).strict().transform(v => ({ items: v.items, nextBeforeVersion: v.next_before_version })), meta: responseMetaSchema }).strict()
+export const reviewVersionResponseSchema = z.object({ data: reviewVersionSchema, meta: responseMetaSchema }).strict()
+export const reviewHistoricalMetadataSchema = z.object({ review_case_id: z.string().min(1), source_table: z.string().min(1).max(191),
+  source_id: z.string().min(1).max(191), source_status: z.string().min(1).max(191), source_evidence_status: z.string().min(1).max(191),
+  source_strategy_id: z.string().max(191).nullable(), source_strategy_version: z.string().max(191).nullable(),
+  timezone_source: z.enum(['legacy_evidence', 'legacy_case', 'default_utc_plus_3']) }).strict().transform(v => ({ caseId: v.review_case_id,
+    sourceTable: v.source_table, sourceId: v.source_id, sourceStatus: v.source_status, sourceEvidenceStatus: v.source_evidence_status,
+    sourceStrategyId: v.source_strategy_id, sourceStrategyVersion: v.source_strategy_version, timezoneSource: v.timezone_source }))
+export const reviewHistoricalMetadataResponseSchema = z.object({ data: reviewHistoricalMetadataSchema.nullable(), meta: responseMetaSchema }).strict()
+
+const archivedReviewText = z.string().min(1).max(191)
+const archivedReviewTime = z.string().datetime()
+const archivedReviewCount = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
+const archivedReviewHash = z.string().regex(/^[a-f0-9]{64}$/).nullable()
+export const archivedReviewJobSchema = z.object({ id: archivedReviewText, source_table: z.enum(['period_review_jobs', 'manual_trade_review_jobs']),
+  source_id: archivedReviewText, original_status: archivedReviewText, stage: archivedReviewText.nullable(), attempts: archivedReviewCount,
+  error_code: archivedReviewText.nullable(), created_at: archivedReviewTime, updated_at: archivedReviewTime, completed_at: archivedReviewTime.nullable(),
+}).strict().transform(v => ({ id: v.id, sourceTable: v.source_table, sourceId: v.source_id, originalStatus: v.original_status, stage: v.stage,
+  attempts: v.attempts, errorCode: v.error_code, createdAt: v.created_at, updatedAt: v.updated_at, completedAt: v.completed_at }))
+export const archivedReviewEventSchema = z.object({ id: archivedReviewText, job_id: archivedReviewText, stage: archivedReviewText.nullable(),
+  original_status: archivedReviewText, message_code: archivedReviewText.nullable(), occurred_at: archivedReviewTime,
+}).strict().transform(v => ({ id: v.id, jobId: v.job_id, stage: v.stage, originalStatus: v.original_status, messageCode: v.message_code, occurredAt: v.occurred_at }))
+export const archivedReviewStageSchema = z.object({ id: archivedReviewText, job_id: archivedReviewText, generation: archivedReviewCount,
+  stage: archivedReviewText, original_status: archivedReviewText, input_hash: archivedReviewHash, output_hash: archivedReviewHash,
+  has_output: z.boolean(), error_code: archivedReviewText.nullable(), created_at: archivedReviewTime, completed_at: archivedReviewTime.nullable(),
+}).strict().transform(v => ({ id: v.id, jobId: v.job_id, generation: v.generation, stage: v.stage, originalStatus: v.original_status,
+  inputHash: v.input_hash, outputHash: v.output_hash, hasOutput: v.has_output, errorCode: v.error_code, createdAt: v.created_at, completedAt: v.completed_at }))
+const archivedReviewPage = <T extends z.ZodTypeAny>(item: T) => z.object({ data: z.object({ items: z.array(item).max(100),
+  total: z.number().int().min(0).max(10000), next_offset: z.number().int().min(0).max(10000).nullable(),
+}).strict().transform(v => ({ items: v.items, total: v.total, nextOffset: v.next_offset })), meta: responseMetaSchema }).strict()
+export const archivedReviewJobsResponseSchema = archivedReviewPage(archivedReviewJobSchema)
+export const archivedReviewEventsResponseSchema = archivedReviewPage(archivedReviewEventSchema)
+export const archivedReviewStagesResponseSchema = archivedReviewPage(archivedReviewStageSchema)
+
+export { archivedSignalListResponseSchema, archivedSignalDetailResponseSchema, archivedExecutionListResponseSchema, archivedExecutionDetailResponseSchema } from './history-archive.js'
+
+export { archivedExecutionDealsResponseSchema } from './history-archive.js'
+export * from './bridge-installation.js'
+
+export const terminalMarketSymbolSchema = z.object({ symbol: z.string().min(1).max(64), description: z.string(), selected: z.boolean(), visible: z.boolean(), trade_mode: z.number().int().min(0).max(4).nullable(), currency_base: z.string().nullable(), currency_profit: z.string().nullable() })
+export type TerminalMarketSymbol = z.infer<typeof terminalMarketSymbolSchema>
+export const terminalMarketSymbolsResponseSchema = z.object({ data: z.object({ items: z.array(terminalMarketSymbolSchema).max(5000), next_cursor: z.string().nullable(), observed_at: z.string() }), meta: responseMetaSchema })
+export const terminalMarketWindowResponseSchema = z.object({ data: z.object({ items: z.array(marketCandleSchema), before: z.string() }), meta: responseMetaSchema })
+
+export * from './model-selection.js'
+
+export * from './model-configuration.js'
+
+export * from './personal.js'

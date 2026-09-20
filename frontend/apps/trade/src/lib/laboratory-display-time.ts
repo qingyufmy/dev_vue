@@ -1,13 +1,9 @@
-import { tradingContext } from '~/features/trading-context'
+import { publicDisplayClock } from '~/features/trading-context'
 import { formatDisplayTime } from '@aurum/ui/lib/time'
-import { accountSnapshot } from '~/features/trading-context'
 import { terminalDisplayTimezone } from './terminal-display-time'
 
 export function activeTerminalDisplayTimezone() {
-  const snapshot = accountSnapshot.value
-  const offset = snapshot && snapshot.id === tradingContext.value?.accountId
-    ? snapshot.timezoneOffsetMinutes : null
-  return terminalDisplayTimezone(offset, snapshot?.id === tradingContext.value?.accountId ? snapshot?.clockStatus : null)
+  return terminalDisplayTimezone(publicDisplayClock.value?.offset_minutes, publicDisplayClock.value?.status)
 }
 
 export function activeTerminalDisplayOffset() {

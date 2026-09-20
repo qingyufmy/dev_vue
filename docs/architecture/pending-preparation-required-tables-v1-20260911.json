@@ -1,0 +1,8 @@
+{
+  "checked": 39,
+  "missing": [
+    "market_instrument_snapshots"
+  ],
+  "writes": 0,
+  "observedAt": "2026-09-11T04:34:26.036Z"
+}

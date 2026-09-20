@@ -12,6 +12,7 @@ interface EventRow extends RowDataPacket {
 }
 interface SummaryRow extends RowDataPacket { total_count: number; succeeded_count: number; rejected_count: number; failed_count: number; uncertain_count: number; active_count: number }
 interface TraceRow extends RowDataPacket {
+  intent_id?: string | null; action_kind?: string | null
   stage: AuditTraceNode['stage']; status: AuditStatus; source_kind: string; source_id: string; action: string
   detail: string | null; reason_code: string | null; occurred_at_utc: Date
 }
@@ -42,7 +43,7 @@ const FEED = `
   SELECT 'operation',o.id,CAST(o.trading_account_id AS CHAR),'execution',
     IF(o.source_type IN ('user_command','strategy_distribution','distribution_close'),'user','system'),o.kind,
     CASE o.status WHEN 'accepted' THEN 'queued' WHEN 'queued' THEN 'queued' WHEN 'running' THEN 'running'
-      WHEN 'succeeded' THEN 'succeeded' WHEN 'partially_succeeded' THEN 'succeeded' WHEN 'rejected' THEN 'rejected'
+      WHEN 'succeeded' THEN 'succeeded' WHEN 'partially_succeeded' THEN 'partially_succeeded' WHEN 'rejected' THEN 'rejected'
       WHEN 'failed' THEN 'failed' WHEN 'uncertain' THEN 'uncertain' ELSE 'cancelled' END,
     COALESCE(o.resource_id,o.source_id),o.error_code,NULL,o.updated_at_utc,NULL,o.id
   FROM operations o WHERE o.user_id=?
@@ -64,7 +65,7 @@ const FEED = `
   FROM risk_manual_releases r WHERE r.user_id=?
   UNION ALL
   SELECT 'terminal_trade',t.id,CAST(t.trading_account_id AS CHAR),'terminal','bridge','terminal.trade.closed',
-    IF(t.evidence_status='complete','succeeded','uncertain'),CONCAT(t.primary_ticket,' · ',t.net_profit),
+    IF(t.evidence_status='complete','succeeded','uncertain'),CONCAT(CONVERT(t.primary_ticket USING utf8mb4) COLLATE utf8mb4_unicode_ci,' · ',CAST(t.net_profit AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci),
     IF(t.evidence_status='complete',NULL,CONCAT('trade_evidence_',t.evidence_status)),t.symbol,
     COALESCE(t.closed_at_utc,t.updated_at_utc),t.terminal_timezone_offset_minutes,NULL
   FROM account_trade_records_v4 t WHERE t.user_id=? AND t.status='closed'`
@@ -97,12 +98,36 @@ export class MysqlAuditRepository implements AuditRepository {
       [...users(userId), ...summaryScope.params],
     )
     return {
-      items: rows.slice(0, filter.limit).map(event), hasMore: rows.length > filter.limit,
+      items: await this.executionListLabels(userId, rows.slice(0, filter.limit).map(event)), hasMore: rows.length > filter.limit,
       summary: auditSummary(summaryRows[0]),
     }
   }
 
+  private async executionListLabels(userId: number, items: AuditEventSummary[]) {
+    const ids = items.filter(item => item.sourceKind === 'operation').map(item => item.sourceId)
+    if (!ids.length) return items
+    const [rows] = await this.pool.execute<RowDataPacket[]>(`
+      SELECT i.operation_id,COUNT(*) action_count,COUNT(DISTINCT i.action_kind) kind_count,MIN(i.action_kind) action_kind,
+        GROUP_CONCAT(DISTINCT NULLIF(JSON_UNQUOTE(JSON_EXTRACT(p.action_json,'$.parameters.symbol')),'null') ORDER BY i.action_kind SEPARATOR '、') symbols,
+        GROUP_CONCAT(DISTINCT NULLIF(JSON_UNQUOTE(JSON_EXTRACT(p.action_json,'$.parameters.ticket')),'null') ORDER BY i.action_kind SEPARATOR '、') tickets
+      FROM execution_intents i INNER JOIN operations o ON o.id=i.operation_id
+      LEFT JOIN execution_intent_payloads p ON p.execution_intent_id=i.id
+      WHERE o.user_id=? AND o.id IN (${ids.map(() => '?').join(',')})
+      GROUP BY i.operation_id`, [userId, ...ids])
+    const byId = new Map(rows.map(row => [String(row.operation_id), row]))
+    const labels: Record<string, string> = { market_order: '市价下单', pending_order: '挂单', modify_position: '修改持仓', close_position: '平仓', modify_order: '修改挂单', cancel_order: '撤单' }
+    return items.map(item => {
+      const row = item.sourceKind === 'operation' ? byId.get(item.sourceId) : undefined
+      if (!row) return item
+      const count = Number(row.action_count)
+      const title = Number(row.kind_count) === 1 ? labels[String(row.action_kind)] ?? '交易操作' : '多项交易操作'
+      const objects = [row.symbols ? String(row.symbols) : '', row.tickets ? `订单 ${String(row.tickets)}` : ''].filter(Boolean)
+      return { ...item, title: count > 1 ? `${title} · ${count} 项` : title, summary: objects.join(' · ').slice(0, 1800) || '未保存交易对象信息' }
+    })
+  }
+
   async find(userId: number, sourceKind: AuditSourceKind, sourceId: string): Promise<AuditEventDetail | null> {
+    if (sourceKind === 'trade_decision') return this.findTradeDecision(userId, sourceId)
     const [rows] = await this.pool.execute<EventRow[]>(
       `SELECT ${EVENT_COLUMNS} FROM (${FEED}) f WHERE f.source_kind=? AND f.source_id=? LIMIT 1`,
       [...users(userId), sourceKind, sourceId],
@@ -113,6 +138,34 @@ export class MysqlAuditRepository implements AuditRepository {
     const trace = operationId ? await this.operationTrace(userId, operationId) : [traceFromEvent(selected)]
     if (!trace.some(node => node.sourceKind === sourceKind && node.sourceId === sourceId)) trace.unshift(traceFromEvent(selected))
     return { event: selected, trace, evidence: evidence(selected), links: links(trace, selected) }
+  }
+
+  private async findTradeDecision(userId: number, id: string): Promise<AuditEventDetail | null> {
+    const [rows] = await this.pool.execute<EventRow[]>(`
+      SELECT 'trade_decision' source_kind,d.id source_id,CAST(d.trading_account_id AS CHAR) account_id,
+        'trading' category,'ai' actor,d.action_kind action,
+        CASE d.status WHEN 'proposed' THEN 'queued' WHEN 'risk_rejected' THEN 'rejected'
+          WHEN 'stale' THEN 'cancelled' ELSE 'info' END status,
+        d.summary raw_summary,d.stale_reason reason_code,NULL symbol,d.created_at_utc occurred_at_utc,
+        NULL terminal_timezone_offset_minutes,d.id correlation_id
+      FROM trade_decisions d WHERE d.id=? AND d.user_id=? LIMIT 1`, [id, userId])
+    if (!rows[0]) return null
+    const selected = event(rows[0])
+    const [riskRows] = await this.pool.execute<TraceRow[]>(`
+      SELECT 'risk' stage,IF(decision_status='approved','succeeded','rejected') status,
+        'risk_decision' source_kind,id source_id,'risk.review' action,decision_status detail,
+        reject_code reason_code,created_at_utc occurred_at_utc
+      FROM risk_decisions_v4 WHERE trade_decision_id=? AND user_id=? ORDER BY created_at_utc,id`, [id, userId])
+    const [operations] = await this.pool.execute<IdRow[]>(`
+      SELECT DISTINCT operation_id FROM risk_decisions_v4
+      WHERE trade_decision_id=? AND user_id=? AND operation_id IS NOT NULL`, [id, userId])
+    const nodes = [traceFromEvent(selected), ...riskRows.map(trace)]
+    for (const operation of operations) {
+      if (operation.operation_id) nodes.push(...await this.operationTrace(userId, operation.operation_id))
+    }
+    const unique = [...new Map(nodes.map(node => [`${node.stage}:${node.sourceKind}:${node.sourceId}`, node])).values()]
+      .sort((a, b) => a.occurredAt.localeCompare(b.occurredAt))
+    return { event: selected, trace: unique, evidence: evidence(selected), links: links(unique, selected) }
   }
 
   private async operationId(userId: number, kind: AuditSourceKind, id: string) {
@@ -131,39 +184,53 @@ export class MysqlAuditRepository implements AuditRepository {
   private async operationTrace(userId: number, operationId: string): Promise<AuditTraceNode[]> {
     const [rows] = await this.pool.execute<TraceRow[]>(`
       SELECT 'analysis' stage,IF(ar.status='succeeded','succeeded',IF(ar.status='failed','failed','running')) status,
-        'market_analysis' source_kind,ma.id source_id,'analysis.completed' action,ma.summary detail,ar.error_code reason_code,ma.created_at_utc occurred_at_utc
+        'market_analysis' source_kind,ma.id source_id,'analysis.completed' action,ma.summary detail,ar.error_code reason_code,ma.created_at_utc occurred_at_utc,NULL intent_id,NULL action_kind
       FROM operations o INNER JOIN execution_intents i ON i.operation_id=o.id
         INNER JOIN trade_decisions d ON d.id=i.trade_decision_id INNER JOIN market_analyses ma ON ma.id=d.market_analysis_id
         INNER JOIN ai_analysis_runs ar ON ar.id=ma.analysis_run_id WHERE o.id=? AND o.user_id=?
       UNION ALL
       SELECT 'trader',IF(d.status IN ('accepted','proposed'),'succeeded',IF(d.status='risk_rejected','rejected','cancelled')),
-        'trade_decision',d.id,d.action_kind,d.summary,d.stale_reason,d.created_at_utc
+        'trade_decision',d.id,d.action_kind,d.summary,d.stale_reason,d.created_at_utc,NULL,NULL
       FROM operations o INNER JOIN execution_intents i ON i.operation_id=o.id INNER JOIN trade_decisions d ON d.id=i.trade_decision_id WHERE o.id=? AND o.user_id=?
       UNION ALL
-      SELECT 'risk',IF(r.decision_status='approved','succeeded','rejected'),'risk_decision',r.id,'risk.review',r.decision_status,r.reject_code,r.created_at_utc
+      SELECT 'risk',IF(r.decision_status='approved','succeeded','rejected'),'risk_decision',r.id,'risk.review',r.decision_status,r.reject_code,r.created_at_utc,NULL,NULL
       FROM operations o INNER JOIN execution_intents i ON i.operation_id=o.id INNER JOIN risk_decisions_v4 r ON r.id=i.risk_decision_id WHERE o.id=? AND o.user_id=?
       UNION ALL
       SELECT 'operation',CASE o.status WHEN 'accepted' THEN 'queued' WHEN 'queued' THEN 'queued' WHEN 'running' THEN 'running' WHEN 'succeeded' THEN 'succeeded'
-        WHEN 'partially_succeeded' THEN 'succeeded' WHEN 'rejected' THEN 'rejected' WHEN 'failed' THEN 'failed' WHEN 'uncertain' THEN 'uncertain' ELSE 'cancelled' END,
-        'operation',o.id,o.kind,COALESCE(o.resource_id,o.source_id),o.error_code,o.updated_at_utc FROM operations o WHERE o.id=? AND o.user_id=?
+        WHEN 'partially_succeeded' THEN 'partially_succeeded' WHEN 'rejected' THEN 'rejected' WHEN 'failed' THEN 'failed' WHEN 'uncertain' THEN 'uncertain' ELSE 'cancelled' END,
+        'operation',o.id,o.kind,COALESCE(o.resource_id,o.source_id),o.error_code,o.updated_at_utc,NULL,NULL FROM operations o WHERE o.id=? AND o.user_id=?
       UNION ALL
       SELECT 'intent',CASE i.status WHEN 'preparing' THEN 'running' WHEN 'risk_pending' THEN 'running' WHEN 'prepared' THEN 'queued' WHEN 'dispatching' THEN 'running'
         WHEN 'awaiting_result' THEN 'running' WHEN 'reconciling' THEN 'running' WHEN 'succeeded' THEN 'succeeded' WHEN 'rejected' THEN 'rejected'
         WHEN 'failed' THEN 'failed' WHEN 'uncertain' THEN 'uncertain' ELSE 'cancelled' END,
-        'execution_intent',i.id,i.action_kind,i.source_type,i.error_code,i.updated_at_utc
+        'execution_intent',i.id,i.action_kind,i.source_type,i.error_code,i.updated_at_utc,i.id,i.action_kind
       FROM execution_intents i INNER JOIN operations o ON o.id=i.operation_id WHERE o.id=? AND o.user_id=?
       UNION ALL
       SELECT 'bridge',CASE c.status WHEN 'queued' THEN 'queued' WHEN 'dispatched' THEN 'running' WHEN 'accepted' THEN 'running' WHEN 'reconciling' THEN 'running'
         WHEN 'succeeded' THEN 'succeeded' WHEN 'rejected' THEN 'rejected' WHEN 'failed' THEN 'failed' ELSE 'uncertain' END,
-        'bridge_command',c.id,c.action,c.terminal_code,c.error_code,c.updated_at_utc
+        'bridge_command',c.id,c.action,c.terminal_code,c.error_code,c.updated_at_utc,i.id,i.action_kind
       FROM bridge_commands_v4 c INNER JOIN execution_intents i ON i.id=c.execution_intent_id INNER JOIN operations o ON o.id=i.operation_id WHERE o.id=? AND o.user_id=?
       UNION ALL
       SELECT 'terminal',CASE x.status WHEN 'succeeded' THEN 'succeeded' WHEN 'rejected' THEN 'rejected' WHEN 'failed' THEN 'failed' ELSE 'uncertain' END,
-        'execution_outcome',x.id,CONCAT('terminal.',x.resource_kind),x.ticket,NULL,x.updated_at_utc
+        'execution_outcome',x.id,CONCAT('terminal.',x.resource_kind),x.ticket,NULL,x.updated_at_utc,i.id,i.action_kind
       FROM execution_outcomes x INNER JOIN execution_intents i ON i.id=x.execution_intent_id INNER JOIN operations o ON o.id=i.operation_id WHERE o.id=? AND o.user_id=?
       ORDER BY occurred_at_utc,source_kind,source_id`, [operationId, userId, operationId, userId, operationId, userId,
         operationId, userId, operationId, userId, operationId, userId, operationId, userId])
-    return rows.map(trace)
+    const [payloads] = await this.pool.execute<RowDataPacket[]>(`
+      SELECT i.id,JSON_OBJECT(
+        'symbol',JSON_EXTRACT(p.action_json,'$.parameters.symbol'),
+        'ticket',JSON_EXTRACT(p.action_json,'$.parameters.ticket'),
+        'side',JSON_EXTRACT(p.action_json,'$.parameters.side'),
+        'volume',JSON_EXTRACT(p.action_json,'$.parameters.volume'),
+        'price',JSON_EXTRACT(p.action_json,'$.parameters.price'),
+        'stop_loss',JSON_EXTRACT(p.action_json,'$.parameters.stop_loss'),
+        'take_profit',JSON_EXTRACT(p.action_json,'$.parameters.take_profit')
+      ) parameters
+      FROM execution_intents i INNER JOIN operations o ON o.id=i.operation_id
+      INNER JOIN execution_intent_payloads p ON p.execution_intent_id=i.id
+      WHERE o.id=? AND o.user_id=?`, [operationId, userId])
+    const parameters = new Map(payloads.map(row => [String(row.id), publicActionParameters(row.parameters)]))
+    return rows.map(row => ({ ...trace(row), ...(row.stage === 'intent' ? { parameters: parameters.get(row.source_id) ?? {} } : {}) }))
   }
 }
 
@@ -198,7 +265,7 @@ function event(row: EventRow): AuditEventSummary {
 }
 
 function trace(row: TraceRow): AuditTraceNode {
-  return { stage: row.stage, status: row.status, sourceKind: row.source_kind, sourceId: row.source_id,
+  return { intentId: row.intent_id ?? null, actionKind: row.action_kind ?? null, stage: row.stage, status: row.status, sourceKind: row.source_kind, sourceId: row.source_id,
     title: traceTitle(row.stage, row.action), detail: row.detail ?? '暂无补充说明', reasonCode: row.reason_code,
     occurredAt: iso(row.occurred_at_utc) }
 }
@@ -232,6 +299,7 @@ function links(nodes: AuditTraceNode[], selected: AuditEventSummary): AuditLink[
 }
 function title(kind: AuditSourceKind, action: string) {
   if (kind === 'analysis_run') return action === 'analysis.manual' ? '手动行情分析' : '自动行情分析'
+  if (kind === 'trade_decision') return 'AI 交易决策'
   if (kind === 'trader_run') return 'AI 交易员账户评估'
   if (kind === 'risk_decision') return '确定性风控评审'
   if (kind === 'operation') return '交易操作'
@@ -254,3 +322,15 @@ function auditSummary(row?: SummaryRow) {
 }
 function escapeLike(value: string) { return value.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_') }
 function iso(value: Date | string) { return new Date(value).toISOString() }
+
+function publicActionParameters(raw: unknown): Record<string, string> {
+  let value = raw
+  if (typeof value === 'string') { try { value = JSON.parse(value) } catch { return {} } }
+  if (!value || typeof value !== 'object') return {}
+  const result: Record<string, string> = {}
+  for (const key of ['symbol', 'ticket', 'side', 'volume', 'price', 'stop_loss', 'take_profit']) {
+    const item = (value as Record<string, unknown>)[key]
+    if ((typeof item === 'string' && item.length <= 128) || (typeof item === 'number' && Number.isFinite(item))) result[key] = String(item)
+  }
+  return result
+}

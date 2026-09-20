@@ -1,0 +1,186 @@
+{
+  "kind": "strategy-role-prompt-review-candidate/v1",
+  "observedAt": "2026-09-13T11:26:21.616Z",
+  "sourceId": "1",
+  "sourceVersion": "44",
+  "sourceHash": "f021d377dd4027a7848ff1f6dd397de88b654830d23dc149ded83328c19a2232",
+  "sourcePromptHash": "da031ebc31df27668c37bbf96beb7b907a786117f577ef4c4702a62e2a41d509",
+  "planHash": "d214b0e57868ae769d89936cc57645a5c676e3ab598d14213a153f05bf12c927",
+  "privateArtifact": "D:\\dev_codex\\.backup-core-20260910-01\\strategy-1-v44-role-candidate-d214b0e57868.json",
+  "roles": {
+    "analysis": {
+      "promptHash": "52693a3481fa9dc5e6b73d36725d251930134ae823266832eadd189186978e9c",
+      "bytes": 18238,
+      "sourceSections": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        8,
+        9
+      ]
+    },
+    "trader": {
+      "promptHash": "06574e8cb720908c54bf97a27cc79b888a75fdd225716713599366b249fa9faa",
+      "bytes": 23433,
+      "sourceSections": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ]
+    }
+  },
+  "sections": [
+    {
+      "index": 0,
+      "heading": "# 行情分析 Agent — H1 主判 / H4 严格降级 — 正式生产版 v3.3.1（均线客观数据模式）",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "9f7c55e4e4d4632bd33877a021f35d5ebe7f1de8cf00530aafff58658f84817c",
+      "bytes": 502
+    },
+    {
+      "index": 1,
+      "heading": "## 1. 角色与生产边界",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "b8864d2a5d388e7e67fdace9f8534c33b2073bcef03f3e2ea3566e5aeccd5d54",
+      "bytes": 1388
+    },
+    {
+      "index": 2,
+      "heading": "## 2. 系统数据是唯一客观权威",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "18505011a06a4dd83ea8ac5dd9c18b96fbea4a101863ac1d032942e2a7e89c32",
+      "bytes": 2214
+    },
+    {
+      "index": 3,
+      "heading": "## 3. 周期职责与方向语义",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "9f4b0ed385eb81c3e511eef92e98013c0df8ab6b8867dd7abe819ca62c157a7d",
+      "bytes": 4920
+    },
+    {
+      "index": 4,
+      "heading": "## 4. 正式决策流程",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "a4ab8a7968a05f49ae7fed3a39f6a365ddd0e4f2a40562fb35fcf24f3241aaa7",
+      "bytes": 1043
+    },
+    {
+      "index": 5,
+      "heading": "## 5. 结构止损、分层止盈与收益风险",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "85d3b0791f7c763d7fa35e377d1d5e1e4542a9148f39fa9017986c495d0cca09",
+      "bytes": 1995
+    },
+    {
+      "index": 6,
+      "heading": "## 6. 新开仓、同向持仓与挂单生命周期",
+      "roles": [
+        "trader"
+      ],
+      "sourceHash": "384923d9971855360194ef8667b3b1efff69228e90c2dd72ae07517632b05973",
+      "bytes": 1007
+    },
+    {
+      "index": 7,
+      "heading": "## 7. 当前持仓与挂单管理",
+      "roles": [
+        "trader"
+      ],
+      "sourceHash": "88c5d46aa10c0a54d87647faabefcb4cc914297dd2b4054afc1f032105824db4",
+      "bytes": 1878
+    },
+    {
+      "index": 8,
+      "heading": "## 8. 通用输出合同与字段一致性",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "8b57bad6881711000bebf9fb0bb60717caedd4fc135e19e34f3a02a9d54e1b05",
+      "bytes": 816
+    },
+    {
+      "index": 9,
+      "heading": "## 9. 最终自检",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "4acd43c40ba5d712b4bb9d3c62af1ff36b66bce529a5c2a6c27bf1c61b46eeff",
+      "bytes": 1208
+    }
+  ],
+  "originalTextFullyAssigned": true,
+  "compilePassed": true,
+  "configStatus": "converted",
+  "configProblems": [],
+  "reviewedConfig": {
+    "baseConfigHash": "cd5858c23b0f3e16691da883bf375fec4f6675956dd8e5e82a1ea05470ac7439",
+    "additionsHash": "4cb044b45e32cdab01c84bc8e08cf7f92af2b7ec6e3383a26575dbf8553e733b",
+    "values": {
+      "analysis": {
+        "price_action_evidence": {
+          "version": 1,
+          "enabled": true
+        }
+      },
+      "trader": {
+        "entry_event_policy": {
+          "version": 1,
+          "mode": "required",
+          "timeframe": "M5"
+        },
+        "risk_budget": {
+          "version": 2,
+          "max_risk_per_trade_percent": "1",
+          "default_risk_per_trade_percent": "0.5",
+          "market_regime_limits": {
+            "h1_continuation": "1",
+            "h1_reversal_watch": "0.5",
+            "h4_fallback": "0.5"
+          }
+        }
+      }
+    },
+    "resultConfigHash": "8f3f3bd26297d39d849ef8313fcebd009d9e1917127a2e294a38415ecad6cdb5"
+  },
+  "runtimeBlockers": [
+    "verified_session_gap_evidence_missing",
+    "independent_m15_opportunity_and_m5_trigger_mapping",
+    "legacy_trigger_kind_coverage_incomplete",
+    "structure_protection_and_target_evidence_mapping",
+    "analysis_regime_classification_semantic_acceptance"
+  ],
+  "executable": false,
+  "semanticAcceptance": "pending",
+  "databaseWrites": 0
+}

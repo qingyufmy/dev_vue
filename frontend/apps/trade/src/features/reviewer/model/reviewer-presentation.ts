@@ -103,6 +103,7 @@ export interface ReviewVersionSummary {
 export interface ReviewCaseDetail extends ReviewCaseSummary {
   /** The exact structured content returned by the V4 detail endpoint. */
   content: ContractReviewContent | null
+  legacy: boolean
   conclusion: string
   keyFindings: string[]
   metrics: ReviewMetric[]
@@ -295,7 +296,7 @@ function mapVersion(value: NonNullable<ContractReviewCaseDetail['currentVersion'
   return {
     id: value.id,
     version: value.versionNumber,
-    status: value.authorKind === 'ai' ? 'AI 生成' : '人工修订',
+    status: value.content.schemaVersion === 'review.legacy.v1' ? '历史原文' : value.authorKind === 'ai' ? 'AI 生成' : '人工修订',
     createdAt: value.createdAt,
     changeNote: '',
   }
@@ -303,12 +304,15 @@ function mapVersion(value: NonNullable<ContractReviewCaseDetail['currentVersion'
 
 export function mapReviewCaseDetail(value: ContractReviewCaseDetail): ReviewCaseDetail {
   const summary = mapReviewCaseSummary(value.summary)
-  const content = value.currentVersion?.content ?? null
+  const raw = value.currentVersion?.content ?? null
+  const legacy = value.summary.status === 'archived' || raw?.schemaVersion === 'review.legacy.v1'
+  const content = raw?.schemaVersion === 'review.v4.1' ? raw : null
   const counterexamples = content?.counterexamples ?? []
   return {
     ...summary,
     title: content?.headline || summary.title,
     content,
+    legacy,
     conclusion: content?.summary ?? '',
     keyFindings: [],
     metrics: reviewMetrics(value.summary, content),
@@ -319,7 +323,7 @@ export function mapReviewCaseDetail(value: ContractReviewCaseDetail): ReviewCase
     memoryCandidates: content?.memoryCandidates.map(mapMemoryCandidate) ?? [],
     evidence: value.sources.map(mapEvidence),
     versions: value.currentVersion ? [mapVersion(value.currentVersion)] : [],
-    fullText: content?.fullAnalysisText ?? '',
+    fullText: raw?.schemaVersion === 'review.legacy.v1' ? raw.rawText : content?.fullAnalysisText ?? '',
     evidenceRevision: value.summary.evidenceRevision,
     evidenceHash: value.summary.evidenceHash,
   }
@@ -444,14 +448,14 @@ function reviewEligibilityLabel(value: ContractManualReviewCandidate['eligibilit
 
 export function statusLabel(status: ReviewCaseStatus | string): string {
   return ({
-    awaiting_evidence: '等待证据', queued: '待生成', running: '生成中', awaiting_confirmation: '待确认',
+    archived: '历史记录', awaiting_evidence: '等待证据', queued: '待生成', running: '生成中', awaiting_confirmation: '待确认',
     needs_changes: '需要修改', confirmed: '已确认', failed: '生成失败',
     active: '生效中', revalidating: '复核中', retired: '已停用',
   } as Record<string, string>)[status] ?? status
 }
 
 export function caseKindLabel(kind: ReviewCaseKind): string {
-  return ({ daily: '日复盘', monthly: '月复盘', manual: '手动复盘' })[kind]
+  return ({ daily: '日复盘', monthly: '月复盘', manual: '手动复盘', trade: '单笔交易复盘' })[kind]
 }
 
 export function formatReviewTime(value: string | null, offset?: number | null): string {

@@ -1,5 +1,6 @@
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import type { ClaimedOutboxEvent, OutboxRepository } from '../application/outbox-ports.js'
+import { PARTIAL_CLOSE_OUTBOX_TYPES } from '../application/outbox-ports.js'
 
 interface OutboxRow extends RowDataPacket {
   id: string | number
@@ -10,18 +11,24 @@ interface OutboxRow extends RowDataPacket {
   attempts: number
 }
 
-const supported = "'analysis.requested','analysis.running','analysis.failed','market_analysis.created','trader.requested','trader.running','trader.failed','trade_decision.created','risk.policy.changed','risk.summary.changed','risk.decision.created','risk.manual_release.changed','operation.changed','execution.intent.prepared','execution.distribution.target.requested','bridge.command.queued','trade.history.requested','trade.history.changed','observer.authorization.changed'"
+const supported = "'analysis.requested','analysis.running','analysis.failed','market_analysis.created','trader.requested','trader.running','trader.failed','trade_decision.created','risk.policy.changed','risk.summary.changed','risk.decision.created','risk.manual_release.changed','operation.changed','execution.intent.prepared','execution.distribution.target.requested','bridge.command.queued','instrument.collection.requested','trade.history.task.requested','trade.history.task.completed','review.job.requested','review.case.changed','strategy.memory.changed','trade.history.changed','observer.authorization.changed'"
 
 export class MysqlOutboxRepository implements OutboxRepository {
-  constructor(private readonly pool: Pool) {}
+  private readonly supported: string
+  constructor(private readonly pool: Pool, capabilities: { partialCloseWorkflows?: boolean } = {}) {
+    this.supported = supported + (capabilities.partialCloseWorkflows === true
+      ? ",'bridge.command.reconcile.requested',"+PARTIAL_CLOSE_OUTBOX_TYPES.map(type => `'${type}'`).join(',') : '')
+  }
 
   async claim(owner: string, limit: number, leaseSeconds: number, now: Date) {
     return transaction(this.pool, async connection => {
       await connection.execute(`UPDATE outbox_events SET status='pending',lease_owner=NULL,lease_expires_at_utc=NULL
-        WHERE status='dispatching' AND lease_expires_at_utc<=? AND event_type IN (${supported})`, [now])
+        WHERE status='dispatching' AND lease_expires_at_utc<=? AND event_type IN (${this.supported})`, [now])
+      // Immediate events are dated by MySQL. Compare eligibility on that same clock,
+      // otherwise host/DB clock skew becomes a delay at every execution hop.
       const [rows] = await connection.execute<OutboxRow[]>(`SELECT id,event_id,event_type,payload_json,attempts,created_at_utc
-        FROM outbox_events WHERE status='pending' AND available_at_utc<=? AND event_type IN (${supported})
-        ORDER BY id LIMIT ${limit} FOR UPDATE SKIP LOCKED`, [now])
+        FROM outbox_events WHERE status='pending' AND available_at_utc<=UTC_TIMESTAMP(3) AND event_type IN (${this.supported})
+        ORDER BY id LIMIT ${limit} FOR UPDATE SKIP LOCKED`, [])
       if (rows.length === 0) return []
       const ids = rows.map(row => String(row.id))
       const placeholders = ids.map(() => '?').join(',')

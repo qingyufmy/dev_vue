@@ -40,6 +40,10 @@ export class BridgeV4StreamIngestor implements BridgeGatewayStreamIngestor {
 
   async ingest(route: BridgeGatewayRoute, message: unknown) {
     const event = assertStreamEvent(message)
+    if (event.payload.stream === 'account') {
+      const age = this.now().getTime() - event.payload.observed_at_utc_msc
+      if (age > 60_000 || age < -15_000) throw new BridgeGatewayError('bridge_account_snapshot_stale', 400)
+    }
     if ((event.payload.stream === 'positions' || event.payload.stream === 'pending_orders') && !event.payload.full_snapshot) {
       return streamAck(event, 'resync_required', this.now())
     }

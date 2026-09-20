@@ -1,0 +1,42 @@
+{
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "syntheticPorts": [
+    "model-result"
+  ],
+  "omittedTraderContextPorts": [],
+  "remainingEvidenceLimits": [
+    "synthetic-market-data-and-model-responses",
+    "synthetic-terminal-route-and-result",
+    "direct-dispatch-state-update",
+    "stub-http-authentication",
+    "empty-reference-inventory",
+    "absent-memory-library",
+    "external-model-resolver-not-run"
+  ],
+  "foreignKeysVerified": false,
+  "checks": [
+    "actual-instrument-reader-requires-current-owner-binding-and-connection-epoch",
+    "scheduler-replay-keeps-one-run-one-outbox-and-exact-UTC-milliseconds",
+    "actual-analysis-outbox-queue-worker-and-context-complete-once",
+    "analysis-result-and-trader-task-commit-with-UTC-and-outbox",
+    "duplicate-completion-rejected"
+  ],
+  "scheduleFailures": [],
+  "analysisResult": {
+    "status": "succeeded"
+  },
+  "errorCode": "strategy_reference_inventory_unavailable",
+  "locations": [
+    "    at Object.read (file:///D:/dev_codex/dev_vue/server/dist-v4/modules/inference/infrastructure/mysql-strategy-reference-source-reader.js:32:27)",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)",
+    "    at async ReadStrategyReferencePortfolio.read (file:///D:/dev_codex/dev_vue/server/dist-v4/modules/inference/application/read-strategy-reference-portfolio.js:11:70)"
+  ],
+  "referenceAnalysisQueueRemoved": true,
+  "referenceQueueRemoved": true,
+  "referenceRiskQueueRemoved": true,
+  "referenceExecutionQueueRemoved": true,
+  "referenceGatewayRouteRemoved": true,
+  "referenceLeaseRemoved": true,
+  "referenceDatabaseRemoved": true
+}

@@ -1,5 +1,14 @@
-export type ReviewKind = 'daily' | 'monthly' | 'manual'
-export type ReviewCaseStatus = 'awaiting_evidence' | 'queued' | 'running' | 'awaiting_confirmation' | 'needs_changes' | 'confirmed' | 'failed'
+export interface LegacyReviewContent {
+  schemaVersion: 'review.legacy.v1'
+  sourceTable: 'period_review_versions' | 'manual_trade_review_versions' | 'trade_review_versions'
+  sourceId: string
+  sourceSha256: string
+  originalContentHash: string | null
+  rawText: string
+}
+
+export type ReviewKind = 'daily' | 'monthly' | 'manual' | 'trade'
+export type ReviewCaseStatus = 'awaiting_evidence' | 'queued' | 'running' | 'awaiting_confirmation' | 'needs_changes' | 'confirmed' | 'failed' | 'archived'
 export type ReviewEvidenceStatus = 'pending' | 'incomplete' | 'complete' | 'stale'
 export type ReviewConclusion = 'effective' | 'mixed' | 'ineffective' | 'insufficient_evidence' | 'manual_trade_reviewed'
 export type ReviewAssessment = 'effective' | 'mixed' | 'problem' | 'insufficient_evidence' | 'not_applicable'
@@ -94,8 +103,8 @@ export interface ReviewVersion {
   caseId: string
   versionNumber: number
   authorKind: 'ai' | 'user'
-  conclusion: ReviewConclusion
-  content: ReviewContent
+  conclusion: ReviewConclusion | null
+  content: ReviewContent | LegacyReviewContent
   createdAt: string
 }
 

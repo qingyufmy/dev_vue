@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Pool, PoolConnection } from 'mysql2/promise'
+import { StrategyService } from '../src/modules/strategies/application/strategy-service.js'
 import { MysqlStrategyCatalog } from '../src/modules/strategies/infrastructure/mysql-strategy-catalog.js'
 import { initializeSubscriptionExecutionPreferences, readSubscriptionExecutionPreferences } from '../src/modules/strategies/infrastructure/mysql-subscription-execution-preferences.js'
 
@@ -11,15 +12,15 @@ describe('subscription execution preferences storage', () => {
   it('rolls back the subscription and schedule when preferences initialization fails', async () => {
     const failure = new Error('preferences_write_failed')
     const db = { beginTransaction: vi.fn(), commit: vi.fn(), rollback: vi.fn(), release: vi.fn(),
-      execute: vi.fn().mockResolvedValueOnce([[{ id: '5' }]])
+      execute: vi.fn().mockResolvedValueOnce([[{ id: 7 }]]).mockResolvedValueOnce([[{ id: '5' }]]).mockResolvedValueOnce([[]])
         .mockResolvedValueOnce([[{ id: '2', kind: 'analysis', active_version_id: '3' }]])
         .mockResolvedValueOnce([[]]).mockResolvedValueOnce([{ insertId: 9 }]).mockResolvedValueOnce([{}])
         .mockRejectedValueOnce(failure) }
     const catalog = new MysqlStrategyCatalog({ getConnection: async () => db } as unknown as Pool)
-    await expect(catalog.createSubscription({ userId: 7, tradingAccountId: '5', standardSymbol: 'XAUUSD',
+    await expect(new StrategyService(catalog).createSubscription(7, { idempotencyKey: 'subscription-create-001', tradingAccountId: '5', standardSymbol: 'XAUUSD',
       analysisStrategyId: '2', traderStrategyId: null, analysisEnabled: true, traderEnabled: false,
-      tradeSendEnabled: false, status: 'active', nextDueAt: null })).rejects.toBe(failure)
-    expect(db.execute.mock.calls[5]![0]).toContain('INSERT INTO subscription_execution_preferences_v4')
+      tradeSendEnabled: false, status: 'active' })).rejects.toBe(failure)
+    expect(db.execute.mock.calls[7]![0]).toContain('INSERT INTO subscription_execution_preferences')
     expect(db.rollback).toHaveBeenCalledOnce()
     expect(db.commit).not.toHaveBeenCalled()
     expect(db.release).toHaveBeenCalledOnce()

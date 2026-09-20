@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import { AlertTriangle, CheckCircle2, LockKeyhole, ShieldAlert } from '@lucide/vue'
 import type { ManualReleaseState, RiskPolicy, RiskSummary } from '@aurum/contracts'
-import { computed } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { Badge } from '@aurum/ui/badge'
 import { Button } from '@aurum/ui/button'
 import { Card, CardContent } from '@aurum/ui/card'
 import { Separator } from '@aurum/ui/separator'
-import { availabilityLabel, formatDateTime, releaseRuleLabel, riskState } from '../model/risk-presentation'
+import { availabilityLabel, formatDateTime, releaseRuleLabel, riskState, riskDataReason } from '../model/risk-presentation'
 
 const props = defineProps<{
   policy: RiskPolicy | null
@@ -16,12 +16,17 @@ const props = defineProps<{
   releasing: boolean
 }>()
 const emit = defineEmits<{ release: [] }>()
-const state = computed(() => riskState(props.policy, props.summary))
+const now = ref(Date.now())
+let clock: ReturnType<typeof setInterval> | undefined
+onMounted(() => { clock = setInterval(() => { now.value = Date.now() }, 1000) })
+onUnmounted(() => { if (clock) clearInterval(clock) })
+const state = computed(() => riskState(props.policy, props.summary, now.value))
+const dataReasons = computed(() => [...new Set(props.summary?.incompleteReasons.map(riskDataReason) ?? [])])
 const icon = computed(() => state.value.level === 'healthy' ? CheckCircle2 : state.value.level === 'warning' ? AlertTriangle : state.value.level === 'blocked' ? ShieldAlert : LockKeyhole)
 const iconClass = computed(() => state.value.level === 'healthy' ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : state.value.level === 'warning' ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400' : state.value.level === 'blocked' ? 'bg-destructive/10 text-destructive' : 'bg-muted text-muted-foreground')
 const availability = computed(() => props.manualRelease?.availability ?? null)
 const existing = computed(() => props.manualRelease?.release ?? null)
-const activeRelease = computed(() => existing.value?.status === 'active' && availability.value?.code === 'risk_manual_release_already_active')
+const activeRelease = computed(() => existing.value?.status === 'active' && Date.parse(existing.value.expiresAt) > now.value && availability.value?.code === 'risk_manual_release_already_active')
 </script>
 
 <template>
@@ -31,7 +36,7 @@ const activeRelease = computed(() => existing.value?.status === 'active' && avai
         <div class="flex items-start gap-4">
           <span class="flex size-12 shrink-0 items-center justify-center rounded-2xl" :class="iconClass"><component :is="icon" class="size-6" aria-hidden="true" /></span>
           <div class="min-w-0 flex-1">
-            <p class="text-xs font-medium text-muted-foreground">当前交易许可</p>
+            <p class="text-xs font-medium text-muted-foreground">账户风险概况</p>
             <h2 class="mt-1 text-xl font-semibold tracking-tight">{{ state.title }}</h2>
             <p class="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">{{ state.detail }}</p>
           </div>
@@ -42,9 +47,10 @@ const activeRelease = computed(() => existing.value?.status === 'active' && avai
           <Badge v-for="reason in state.reasons" :key="reason" variant="outline">{{ reason }}</Badge>
         </div>
 
+        <p v-if="dataReasons.length" class="text-sm leading-6 text-muted-foreground">{{ dataReasons.join('；') }}</p>
         <div class="grid gap-3 text-sm sm:grid-cols-3">
-          <div class="rounded-xl border bg-muted/25 p-3"><p class="text-xs text-muted-foreground">数据完整性</p><strong class="mt-1 block">{{ summary?.dataComplete ? '完整' : '不完整' }}</strong></div>
-          <div class="rounded-xl border bg-muted/25 p-3"><p class="text-xs text-muted-foreground">终端时钟</p><strong class="mt-1 block">{{ summary?.clockStatus === 'calibrated' ? '已校准' : '待校准' }}</strong></div>
+          <div class="rounded-xl border bg-muted/25 p-3"><p class="text-xs text-muted-foreground">数据完整性</p><strong class="mt-1 block">{{ !summary ? '待准备' : summary.dataComplete ? '完整' : '待补齐' }}</strong></div>
+          <div class="rounded-xl border bg-muted/25 p-3"><p class="text-xs text-muted-foreground">终端时钟</p><strong class="mt-1 block">{{ !summary ? '待确认' : summary.clockStatus === 'calibrated' ? '已确认' : '待确认' }}</strong></div>
           <div class="rounded-xl border bg-muted/25 p-3"><p class="text-xs text-muted-foreground">快照时间</p><strong class="mt-1 block font-mono text-xs tabular-nums">{{ formatDateTime(summary?.observedAt, summary?.terminalTimezoneOffsetMinutes) }}</strong></div>
         </div>
       </section>

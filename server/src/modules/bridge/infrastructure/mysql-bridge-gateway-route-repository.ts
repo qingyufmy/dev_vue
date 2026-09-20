@@ -106,7 +106,7 @@ export class MysqlBridgeGatewayRouteRepository implements BridgeGatewayRouteRepo
          connected_at_utc,last_seen_at_utc,disconnected_at_utc,disconnect_reason)
         VALUES (?,?,?,?,?,?,?,?,?,'bridge_session_pending')`, [
         context.claims.userId, accountId, context.claims.profileId, context.terminal.route.terminal_instance_id,
-        `v4:${context.connectionId}`, connectionEpoch, context.connectedAt, context.connectedAt, context.connectedAt,
+        `v4:${context.connectionId}`, connectionEpoch, new Date(context.connectedAt), new Date(context.connectedAt), new Date(context.connectedAt),
       ])
       if (inserted.affectedRows !== 1) throw gatewayError('bridge_route_storage_unavailable', 503)
 
@@ -146,13 +146,13 @@ export class MysqlBridgeGatewayRouteRepository implements BridgeGatewayRouteRepo
         WHERE user_id=? AND disconnected_at_utc IS NULL
           AND (connection_epoch IS NULL OR connection_epoch<>?)
           AND (trading_account_id=? OR terminal_profile_id=?)`, [
-        activatedAt, route.userId, `v4:${route.connectionId}`, route.accountId, route.terminalProfileId,
+        new Date(activatedAt), route.userId, `v4:${route.connectionId}`, route.accountId, route.terminalProfileId,
       ])
       const [updated] = await connection.execute<ResultSetHeader>(`UPDATE bridge_connection_sessions
         SET disconnected_at_utc=NULL,disconnect_reason=NULL,last_seen_at_utc=?
         WHERE user_id=? AND trading_account_id=? AND terminal_profile_id=? AND terminal_instance_id=?
           AND connection_epoch=? AND connection_epoch_v4=? AND disconnect_reason='bridge_session_pending'`, [
-        activatedAt, route.userId, route.accountId, route.terminalProfileId, route.terminalInstanceId,
+        new Date(activatedAt), route.userId, route.accountId, route.terminalProfileId, route.terminalInstanceId,
         `v4:${route.connectionId}`, route.connectionEpoch,
       ])
       if (updated.affectedRows !== 1) throw gatewayError('bridge_session_open_missing', 409)
@@ -173,7 +173,7 @@ export class MysqlBridgeGatewayRouteRepository implements BridgeGatewayRouteRepo
         SET last_seen_at_utc=? WHERE user_id=? AND trading_account_id=? AND terminal_profile_id=?
           AND terminal_instance_id=? AND connection_epoch=? AND connection_epoch_v4=?
           AND disconnected_at_utc IS NULL AND disconnect_reason IS NULL`, [
-        seenAt, route.userId, route.accountId, route.terminalProfileId, route.terminalInstanceId,
+        new Date(seenAt), route.userId, route.accountId, route.terminalProfileId, route.terminalInstanceId,
         `v4:${route.connectionId}`, route.connectionEpoch,
       ])
       return updated.affectedRows === 1
@@ -203,7 +203,7 @@ export class MysqlBridgeGatewayRouteRepository implements BridgeGatewayRouteRepo
         WHERE user_id=? AND trading_account_id=? AND terminal_profile_id=? AND terminal_instance_id=?
           AND connection_epoch=? AND connection_epoch_v4=?
           AND (disconnected_at_utc IS NULL OR disconnect_reason='bridge_session_pending')`, [
-        disconnectedAt, reason.slice(0, 64), route.userId, route.accountId, route.terminalProfileId,
+        new Date(disconnectedAt), reason.slice(0, 64), route.userId, route.accountId, route.terminalProfileId,
         route.terminalInstanceId, `v4:${route.connectionId}`, route.connectionEpoch,
       ])
     })
@@ -222,8 +222,10 @@ async function assertCurrentCredential(
     INNER JOIN users u ON u.id=s.user_id
     WHERE s.user_id=? AND s.installation_id=? AND s.profile_id=? AND s.generation=?
       AND s.credential_version=4 AND s.revoked_at IS NULL
+      AND (s.installation_authorization_id IS NULL OR EXISTS (SELECT 1 FROM bridge_installation_authorizations i
+        WHERE i.id=s.installation_authorization_id AND i.user_id=s.user_id AND i.installation_id=s.installation_id AND i.revoked_at_utc IS NULL))
       AND u.deletion_status='active' AND u.deleted_at IS NULL
-      AND (u.role='admin' OR (u.plan='pro' AND (u.plan_expires_at IS NULL OR u.plan_expires_at>UTC_TIMESTAMP(3))))
+
     FOR UPDATE`, [userId, installationId, profileId, generation])
   // The SQL predicate is the single entitlement authority. In particular,
   // expires_at is intentionally absent: V4 refresh credentials are rotated
@@ -368,11 +370,11 @@ async function registerOrReplaceBinding(
   }
   if (existing) {
     await connection.execute(`UPDATE terminal_account_bindings
-      SET unbound_at_utc=? WHERE terminal_profile_id=? AND unbound_at_utc IS NULL`, [boundAt, profileId])
+      SET unbound_at_utc=? WHERE terminal_profile_id=? AND unbound_at_utc IS NULL`, [new Date(boundAt), profileId])
   }
   await connection.execute(`INSERT INTO terminal_account_bindings
     (terminal_profile_id,trading_account_id,terminal_instance_id,bound_at_utc,unbound_at_utc)
-    VALUES (?,?,?, ?,NULL)`, [profileId, accountId, terminalInstanceId, boundAt])
+    VALUES (?,?,?, ?,NULL)`, [profileId, accountId, terminalInstanceId, new Date(boundAt)])
   return null
 }
 
@@ -402,8 +404,10 @@ async function selectSessionProof(
       AND oi.started_at_utc<=UTC_TIMESTAMP(3)
     INNER JOIN bridge_refresh_sessions r ON r.user_id=? AND r.installation_id=? AND r.profile_id=?
       AND r.generation=? AND r.credential_version=4 AND r.revoked_at IS NULL
+      AND (r.installation_authorization_id IS NULL OR EXISTS (SELECT 1 FROM bridge_installation_authorizations i
+        WHERE i.id=r.installation_authorization_id AND i.user_id=r.user_id AND i.installation_id=r.installation_id AND i.revoked_at_utc IS NULL))
     INNER JOIN users u ON u.id=r.user_id AND u.deletion_status='active' AND u.deleted_at IS NULL
-      AND (u.role='admin' OR (u.plan='pro' AND (u.plan_expires_at IS NULL OR u.plan_expires_at>UTC_TIMESTAMP(3))))
+
     WHERE s.user_id=? AND s.trading_account_id=? AND s.terminal_profile_id=? AND s.terminal_instance_id=?
       AND s.connection_epoch=? AND s.connection_epoch_v4=? AND a.ownership_revision=? AND ${sessionState}
     ${lock ? 'FOR UPDATE' : ''}`, [

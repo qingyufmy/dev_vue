@@ -44,8 +44,24 @@
           },
           "429": {
             "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "description": "Retain the original idempotency key and complete body after an uncertain submission. A queued task is not a completed analysis or terminal trade."
       }
     },
     "/market-analyses": {
@@ -86,6 +102,15 @@
           },
           "401": {
             "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -114,6 +139,18 @@
             }
           },
           "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -163,8 +200,27 @@
           },
           "422": {
             "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
-        }
+        },
+        "description": "Retain the original idempotency key and complete body after an uncertain submission. A queued task is not a completed analysis or terminal trade."
       }
     },
     "/trade-decisions": {
@@ -198,6 +254,12 @@
           },
           "403": {
             "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -227,6 +289,897 @@
           },
           "404": {
             "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/history/signals": {
+      "get": {
+        "operationId": "listArchivedSignals",
+        "tags": [
+          "Analysis"
+        ],
+        "summary": "List personally owned retained historical signals",
+        "description": "Original legacy IDs and UTC times. Authenticated original user only; system owner 0 is not a browser identity. Does not create or retry runtime work.",
+        "parameters": [
+          {
+            "name": "page_size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Historical data only",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/listArchivedSignalsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/history/signals/{legacy_id}": {
+      "get": {
+        "operationId": "getArchivedSignal",
+        "tags": [
+          "Analysis"
+        ],
+        "summary": "Get personally owned retained historical signals",
+        "description": "Original legacy IDs and UTC times. Authenticated original user only; system owner 0 is not a browser identity. Does not create or retry runtime work.",
+        "parameters": [
+          {
+            "name": "legacy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Historical data only",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/getArchivedSignalResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/model-selection": {
+      "get": {
+        "operationId": "getModelSelection",
+        "summary": "Read or select an available runtime model",
+        "tags": [
+          "Inference"
+        ],
+        "responses": {
+          "200": {
+            "description": "Model selection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSelectionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "put": {
+        "operationId": "setModelSelection",
+        "summary": "Read or select an available runtime model",
+        "tags": [
+          "Inference"
+        ],
+        "responses": {
+          "200": {
+            "description": "Model selection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSelectionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "model_profile_id",
+                  "expected_model_profile_id"
+                ],
+                "properties": {
+                  "model_profile_id": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]{0,18}$"
+                  },
+                  "expected_model_profile_id": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^[1-9][0-9]{0,18}$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/model-configurations": {
+      "get": {
+        "operationId": "listModelConfigurations",
+        "tags": [
+          "Inference"
+        ],
+        "responses": {
+          "200": {
+            "description": "Model configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelConfigurationListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createModelConfiguration",
+        "tags": [
+          "Inference"
+        ],
+        "responses": {
+          "200": {
+            "description": "Model configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelConfigurationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 64
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "base_url",
+                  "protocol",
+                  "provider",
+                  "scope",
+                  "api_key",
+                  "max_output_tokens"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 191
+                  },
+                  "base_url": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "protocol": {
+                    "type": "string",
+                    "enum": [
+                      "chat_completions",
+                      "responses"
+                    ]
+                  },
+                  "api_key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8192
+                  },
+                  "temperature": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "minimum": 0,
+                    "maximum": 2
+                  },
+                  "context_window_tokens": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  },
+                  "max_input_tokens": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  },
+                  "max_output_tokens": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  },
+                  "request_timeout_ms": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1000,
+                    "maximum": 600000
+                  },
+                  "thinking_enabled": {
+                    "type": "boolean"
+                  },
+                  "reasoning_effort": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "enum": [
+                      null,
+                      "low",
+                      "medium",
+                      "high",
+                      "max"
+                    ]
+                  },
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "volcengine_agent_plan",
+                      "deepseek",
+                      "openai_compatible"
+                    ]
+                  },
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "user",
+                      "platform"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/model-configurations/{id}": {
+      "put": {
+        "operationId": "saveModelConfiguration",
+        "tags": [
+          "Inference"
+        ],
+        "responses": {
+          "200": {
+            "description": "Model configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelConfigurationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,9}$"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 64
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "base_url",
+                  "protocol",
+                  "expected_revision"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 191
+                  },
+                  "base_url": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "protocol": {
+                    "type": "string",
+                    "enum": [
+                      "chat_completions",
+                      "responses"
+                    ]
+                  },
+                  "max_tokens": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1,
+                    "maximum": 1000000,
+                    "deprecated": true,
+                    "description": "Legacy compatibility only; requests use max_output_tokens from model capabilities."
+                  },
+                  "api_key": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 8192
+                  },
+                  "expected_revision": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "temperature": {
+                    "type": [
+                      "number",
+                      "null"
+                    ],
+                    "minimum": 0,
+                    "maximum": 2
+                  },
+                  "context_window_tokens": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  },
+                  "max_input_tokens": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  },
+                  "max_output_tokens": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1,
+                    "maximum": 2147483647
+                  },
+                  "request_timeout_ms": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1000,
+                    "maximum": 600000
+                  },
+                  "thinking_enabled": {
+                    "type": "boolean"
+                  },
+                  "reasoning_effort": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "enum": [
+                      null,
+                      "low",
+                      "medium",
+                      "high",
+                      "max"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteModelConfiguration",
+        "tags": [
+          "Inference"
+        ],
+        "responses": {
+          "200": {
+            "description": "Model configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelDeletedResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,9}$"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 64
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "expected_revision"
+                ],
+                "properties": {
+                  "expected_revision": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/model-configurations/{id}/verification": {
+      "post": {
+        "operationId": "verifyModelConfiguration",
+        "tags": [
+          "Inference"
+        ],
+        "responses": {
+          "200": {
+            "description": "Model configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelConfigurationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,9}$"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 64
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "expected_revision"
+                ],
+                "properties": {
+                  "expected_revision": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/model-assignments": {
+      "get": {
+        "operationId": "getModelAssignments",
+        "tags": [
+          "Inference"
+        ],
+        "responses": {
+          "200": {
+            "description": "Model configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelAssignmentsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      },
+      "put": {
+        "operationId": "setModelAssignments",
+        "tags": [
+          "Inference"
+        ],
+        "responses": {
+          "200": {
+            "description": "Model configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelAssignmentsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 16,
+              "maxLength": 64
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "analysis",
+                  "trader",
+                  "review",
+                  "revision"
+                ],
+                "properties": {
+                  "analysis": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^[1-9][0-9]*$"
+                  },
+                  "trader": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^[1-9][0-9]*$"
+                  },
+                  "review": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^[1-9][0-9]*$"
+                  },
+                  "revision": {
+                    "type": "string",
+                    "pattern": "^[0-9]+$"
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -464,6 +1417,105 @@
           "input_snapshot_hash": {
             "type": "string",
             "pattern": "^[a-f0-9]{64}$"
+          },
+          "bullish_score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 100
+          },
+          "bearish_score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 100
+          },
+          "chart": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "timeframe",
+                "bars",
+                "lines"
+              ],
+              "properties": {
+                "timeframe": {
+                  "type": "string"
+                },
+                "bars": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "time",
+                      "open",
+                      "high",
+                      "low",
+                      "close",
+                      "closed"
+                    ],
+                    "properties": {
+                      "time": {
+                        "type": "string"
+                      },
+                      "open": {
+                        "type": "number"
+                      },
+                      "high": {
+                        "type": "number"
+                      },
+                      "low": {
+                        "type": "number"
+                      },
+                      "close": {
+                        "type": "number"
+                      },
+                      "closed": {
+                        "type": "boolean"
+                      }
+                    }
+                  }
+                },
+                "lines": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "from",
+                      "to",
+                      "start",
+                      "end"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "type": "string"
+                      },
+                      "from": {
+                        "type": "string"
+                      },
+                      "to": {
+                        "type": "string"
+                      },
+                      "start": {
+                        "type": "number"
+                      },
+                      "end": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       },
@@ -477,7 +1529,8 @@
           "data": {
             "type": "object",
             "required": [
-              "items"
+              "items",
+              "next_cursor"
             ],
             "properties": {
               "items": {
@@ -485,6 +1538,13 @@
                 "items": {
                   "$ref": "#/components/schemas/MarketAnalysisSummary"
                 }
+              },
+              "next_cursor": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 2048
               }
             }
           },
@@ -799,6 +1859,503 @@
           },
           "meta": {
             "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "ArchivedSignalSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "legacy_id",
+          "symbol",
+          "timeframe",
+          "signal_type",
+          "created_at_utc"
+        ],
+        "properties": {
+          "legacy_id": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "timeframe": {
+            "type": "string"
+          },
+          "signal_type": {
+            "type": "string"
+          },
+          "created_at_utc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ArchivedSignalDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "legacy_id",
+          "symbol",
+          "timeframe",
+          "signal_type",
+          "created_at_utc",
+          "analysis",
+          "reasoning",
+          "inference_task_id",
+          "identity_namespace",
+          "executable"
+        ],
+        "properties": {
+          "legacy_id": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "timeframe": {
+            "type": "string"
+          },
+          "signal_type": {
+            "type": "string"
+          },
+          "created_at_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "analysis": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reasoning": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "inference_task_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "identity_namespace": {
+            "type": "string",
+            "enum": [
+              "retained-legacy"
+            ]
+          },
+          "executable": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          }
+        }
+      },
+      "listArchivedSignalsResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "items",
+              "next_cursor",
+              "identity_namespace",
+              "executable"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "$ref": "#/components/schemas/ArchivedSignalSummary"
+                }
+              },
+              "next_cursor": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "identity_namespace": {
+                "type": "string",
+                "enum": [
+                  "retained-legacy"
+                ]
+              },
+              "executable": {
+                "type": "boolean",
+                "enum": [
+                  false
+                ]
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "getArchivedSignalResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ArchivedSignalDetail"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "ModelSelectionResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "required": [
+              "selected_model_profile_id",
+              "items"
+            ],
+            "properties": {
+              "selected_model_profile_id": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "name",
+                    "scope",
+                    "available",
+                    "reason"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "scope": {
+                      "enum": [
+                        "user",
+                        "platform"
+                      ]
+                    },
+                    "available": {
+                      "type": "boolean"
+                    },
+                    "reason": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "ModelConfiguration": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "name",
+          "provider",
+          "scope",
+          "base_url",
+          "protocol",
+          "max_tokens",
+          "has_key",
+          "verified",
+          "revision"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "user",
+              "platform"
+            ]
+          },
+          "base_url": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "chat_completions",
+              "responses"
+            ]
+          },
+          "max_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "has_key": {
+            "type": "boolean"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "temperature": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 2
+          },
+          "context_window_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "max_input_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "max_output_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "request_timeout_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1000,
+            "maximum": 600000
+          },
+          "thinking_enabled": {
+            "type": "boolean"
+          },
+          "reasoning_effort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              null,
+              "low",
+              "medium",
+              "high",
+              "max"
+            ]
+          }
+        }
+      },
+      "ModelConfigurationResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ModelConfiguration"
+          },
+          "meta": {
+            "type": "object",
+            "required": [
+              "request_id",
+              "generated_at"
+            ],
+            "properties": {
+              "request_id": {
+                "type": "string"
+              },
+              "generated_at": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "ModelConfigurationListResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelConfiguration"
+            }
+          },
+          "meta": {
+            "type": "object",
+            "required": [
+              "request_id",
+              "generated_at"
+            ],
+            "properties": {
+              "request_id": {
+                "type": "string"
+              },
+              "generated_at": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "ModelDeletedResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "deleted"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "deleted": {
+                "type": "boolean"
+              }
+            }
+          },
+          "meta": {
+            "type": "object",
+            "required": [
+              "request_id",
+              "generated_at"
+            ],
+            "properties": {
+              "request_id": {
+                "type": "string"
+              },
+              "generated_at": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "ModelAssignmentsResponse": {
+        "type": "object",
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "analysis",
+              "trader",
+              "review",
+              "revision"
+            ],
+            "properties": {
+              "analysis": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[1-9][0-9]*$"
+              },
+              "trader": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[1-9][0-9]*$"
+              },
+              "review": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[1-9][0-9]*$"
+              },
+              "revision": {
+                "type": "string",
+                "pattern": "^[0-9]+$"
+              }
+            }
+          },
+          "meta": {
+            "type": "object",
+            "required": [
+              "request_id",
+              "generated_at"
+            ],
+            "properties": {
+              "request_id": {
+                "type": "string"
+              },
+              "generated_at": {
+                "type": "string"
+              }
+            }
           }
         }
       }

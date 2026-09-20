@@ -1272,3 +1272,2792 @@ Chrome实际打开localhost:4174/market，现有服务可访问但会话未登�
 跨域SQL核对发现risk原transaction在commit异常后尝试rollback且始终release，可能将结果未知的连接放回池，rollback异常也会掩盖原状态。抽出inRiskTransaction：成功commit或已确认rollback才release；begin未知、commit未知、rollback失败均destroy。业务RiskError保留，驱动错误脱敏为risk_storage_unavailable；commit/rollback未知分别risk_commit_unknown/risk_rollback_unknown，503且不自动重试。
 
 5项连接生命周期行为配合16项确定性风控共21项通过，类型/构建及44条边界检查通过。未实际注入MySQL断网，证据为mock生命周期测试，未修改规则、迁移或重启。风险写操作的幂等回执、未知结果查询和前端恢复仍需补齐，不能将连接回收修复表述为提交未知已闭环。跨域trade_decisions更新及trading/strategies读锁所有权继续待拆。
+
+## 108. Risk 幂等回执作用域与开发库缺表（第一百七十八批）
+
+核对人工解锁恢复前提，发现getManualReleaseByIdempotency仅约束当前ownership的user_id，没有约束回执r.user_id，且历史唯一键是(user_id,trading_account_id,idempotency_key)。账户归属变化后相同key可能返回前一用户回执。查询改为r.user_id绑定请求人，并将ownership绑定回执用户；应用层再次拒绝不同用户或账户的回执。未改变幂等哈希、解锁规则或现有迁移。
+
+增加两个错误作用域回执行为测试，首次断言误用statusCode已改成实际RiskError.status；18项风控与5项事务回归共23项通过，服务端类型/构建及44条边界通过。这是源码与Mock证据，不是SQL正向验收。
+
+新增verify-risk-receipt-scope-mysql.mjs，计划用当前结构LIKE临时表验证归属转移、同key不同用户、撤权、观摩及过期回执；未改SQL标识符。实际连接指定dev_vue/UUID/UTC成功，但当前库缺risk_manual_releases，原查询探针ER_NO_SUCH_TABLE，显式结构预检复核同一缺表。保留risk-receipt-scope-readiness-20260909.json，checks为空；未执行正式写入、临时夹具写入、建正式表、迁移或重启。正向SQL验证未完成，因此本批暂不提交推送。
+
+进一步核对：inplace目录当前到042，原20260903_007/008属于side-by-side迁移，含平台默认政策、global_risk_controls关闭停机seed和自动启用人工解锁，不可直接整体套用现有开发库。下一步先盘点风险域及trade_decisions依赖、旧控制/政策映射，按inplace追加结构与真实控制迁移，再完成回执SQL验证和前端恢复。不能单独创建一张表、导入默认值或用空库测试宣称直接升级完成；前端恢复、并发及risk跨域事务仍未闭环。
+
+## 109. Risk 原地升级盘点与控制缺失保护（第一百七十九批）
+
+inspect-risk-upgrade-readiness.mjs在指定开发库以READ ONLY一致快照读取元数据和计数，归档risk-upgrade-readiness-20260909.json。确认风险目标缺9表、评审链依赖缺5表，global_risk_controls存在但0行。旧政策集3/版本10/变更60/账户状态4/决策395/rollout19/全局控制1仍存在，旧停机值0；未输出配置正文、原因或凭据，未DDL/DML。元数据不受结构锁保护，不能把一次盘点当迁移时前置验证。
+
+发现MysqlRiskRepository将缺全局控制解释为Boolean(undefined)=false、revision=0。新增readRiskControl，缺行、非法开关及无效/失真revision均503 risk_global_control_unavailable；正常0/1保持原值。应用于普通政策读取、事务政策读取及政策修改验证。11项控制测试（含实际repository路径Mock）与之前18项风控/5项事务累计34项通过；类型、构建及44条边界通过。控制迁入前不允许默认开启交易；未增加默认数据。
+
+形成risk-inplace-upgrade-plan-20260909.md并完成职责与数据/恢复两轮复审：先行7表、inference/market依赖后决策2表仍属同一完整风险升级；旧变更无policy_version_id、历史取消字段、旧规则/重置事实无法直接一一复制，须保留映射/拒绝清单。没有执行迁移；前批回执SQL正向验证仍缺表未完成，累计改动继续保留工作区不提交。下一步结构来源/外键依赖校验器和逐字段迁移映射。
+
+## 110. Risk 结构来源与追加登记（第一百八十批）
+
+新增risk-structure-source.mjs，固定006/007/008三个历史源文件hash，只提取7张风险核心表及政策active-version外键，共8条DDL。依赖顺序显式校验，排除global控制seed、政策更新、决策表和其它域DDL；去除IF NOT EXISTS，现有目标表须协调器核实而非静默跳过。元数据校验检查users.id有符号INT、trading_accounts.id无符号BIGINT、非空独立主键及目标不存在；对本轮只读盘点无冲突，但applyReady始终false。
+
+生成inplace/043_risk_core_structures.sql，build-risk-inplace-structure.mjs --check验证来源一致；loadRiskStructureMigration追加8条独立checksum步骤，保留原165条完整对象及checksum，候选链173条，不代表数据库已升级到173。新增5项来源污染、历史保留、主键/已有表冲突和准备/执行区分测试通过；321冻结输入未变，git diff --check通过。
+
+本批未连接数据库或执行DDL。执行store/协调器、结构参考库与恢复证明、历史字段映射仍需完成，已有回执正向SQL探针仍缺表；累计工作区未提交。下一步补迁移执行前的结构验证和映射，不直接运行043 SQL。
+
+## 111. Risk 多步骤结构协调器（第一百八十一批）
+
+新增risk-structure-coordinator.mjs，对8步完整历史及7表全量前置检查，再逐步begin/DDL/complete。按每步beforeHash/afterHash处理政策表CREATE后再ALTER的中间状态；started记录且结构匹配after时只补complete，不重放DDL。begin/DDL/complete异常立即返回unknown，下次调用重新检查，不在同一失败调用自动重试。所有结构完成前目标表必须无业务行，完成后允许业务数据；原表快照与完整165步历史由store验证。
+
+新增10项协调器行为测试，覆盖CREATE/ALTER成功响应丢失、begin/complete响应丢失、后续表冲突先拒绝、错误DDL不记完成、已完成表消失、提前写行、快照不一致、源定义链损坏与旧证明失败；连同来源5项共15项通过。git diff --check通过。证据是内存适配器，尚无MySQL store或规范DDL参考证明，不能执行正式库升级。
+
+下一步按已有mysqlContextChangesStore的身份、冻结文件、历史证明及保护数据协议接入真实store，生成7表和政策外键前后规范结构指纹；随后做参考结构/中断恢复验证与历史映射。无数据库连接、迁移、服务重启或提交，整体目标继续保留。
+
+## 112. Risk MySQL 结构读取与历史隔离（第一百八十二批）
+
+新增mysql-risk-structure-state.mjs，通过限定7表标识符、BASE TABLE/InnoDB、SHOW CREATE TABLE、触发器和精确COUNT读取真实结构；返回规范DDL指纹，沿用既有tableDefinitionHash仅忽略AUTO_INCREMENT当前计数，保留列类型及约束差异。拒绝视图、非InnoDB、触发器、错误表名和超安全整数行数。5项适配器测试通过。
+
+将读取器接入只读盘点，实际指定开发库回执risk-structure-state-20260909.json确认7表全为null，旧风险行数与前次一致。真实证据只覆盖缺表分支；规范DDL/触发器和正向行数仍为Mock验证，未建表或回填。
+
+新增risk-structure-historical-connection.mjs，为旧165步校验提供只读视图：仅两个精确元数据查询过滤7个显式新表，未知对象、历史journal和旧表流式行数据不删减；写SQL、锁变更及新表直接访问拒绝。3项测试通过；须在新结构独立验证后使用，不能替代旧证明。diff检查通过。
+
+完整mysqlRiskStructureStore及参考结构/恢复证明仍未完成，累计工作区未提交。下一步把现有165步proof、独占锁、7表指纹与journal写接口组装，并取得真实参考结构和中断恢复证据。未执行DDL、服务重启或公网动作。
+
+## 113. Risk MySQL 适配器与证明绑定（第一百八十三批）
+
+新增mysql-risk-structure-store.mjs，组装旧mysqlContextChangesStore的165步验证、全量journal、结构读取和受保护快照；每次核对固定开发库/UUID/UTC、root管理连接、同连接独占锁和无其它库连接，避免受限账号PROCESSLIST不足却宣称无客户端。执行DDL前要求started及准确before指纹；完成记录前要求after指纹且空表。复用旧journal定义检查，未改冻结实现。
+
+新增risk-structure-proof.mjs，绑定完整候选registry、前阶段proof、原表名单、8步前后规范DDL指纹、恢复前后快照相等及工具hash；未知/重复原表、恢复失败/步数不符、来源变化均拒绝。4项证明和3项连接保护测试通过，321冻结输入未变。适配器为初版，尚未以真实参考/恢复产物构造并完成整套MySQL集成，测试不能证明已经能够执行。
+
+尚未生成risk-structure-reference/v1和risk-structure-restore/v1实际产物，proofPath不存在时不得创建虚构证明。下一步真实参考结构与恢复演练工具、适配器端到端及字段映射；新工具必须纳入freeze清单后再生成正式证明。未连接数据库、执行DDL、重启或提交；整体重构仍未完成。
+
+## 114. Risk 真实参考结构验证（第一百八十四批）
+
+新增verify-risk-structure-reference-local.mjs，在同UUID MySQL独立随机reference数据库执行8条原始DDL，逐步记录7表及政策ALTER前后规范指纹；父表为匹配类型的最小stub，实际外键保持开启。9项检查通过：DDL/外键、跨政策active_version拒绝、正确版本接受、account scope约束、同用户账户key唯一、不同用户同key允许、账户breach episode唯一、用户外键及UTC毫秒。reference库已删除，现有dev_vue写入0。回执current-risk-structure-reference-20260909.json。
+
+首次凭据读取误用宝塔SQLite原始值导致认证失败，未创建库；改用已有host工具采用的public.M接口后成功，不重置密码。新增run-risk-reference-local.py，本地Node经短期SSH隧道连接，凭据仅内存/stdin、隧道结束回收。失败与过期临时回执已删除，仅保留最终工具hash一致的成功回执。
+
+证明门增加9个精确reference检查名，缺检查拒绝；5项proof测试通过。新CLI/host包装纳入freeze，最终回执tools与当前源码一致，diff检查通过。真实证据是隔离schema约束，不是原库迁移、恢复备份、幂等并发或API验收。下一步生成真实risk-structure-restore/v1及整套适配器演练，历史字段映射继续待办；未对dev_vue执行DDL/回填，累计工作区未提交。
+
+## 115. Risk 当前库加密备份与恢复启动（第一百八十五批，进行中）
+
+新增backup-risk-dev-vue-local.mjs和本地SSH包装，复用既有ACL目录、加密流、SQL范围检查及MySQL客户端校验，不修改已冻结旧备份工具。新批次以当前一致快照为基线；risk-backup-parity在完整列元数据和行hash相等后仅接受已验证的冗余字符集显示差异，3项测试通过。321冻结输入未变，diff检查通过。
+
+实际开始20260909-01备份，源库238表、338717行；加密导出及SQL范围检查已完成，正在独立库dev_vue_m1_source_20260909_01恢复。档案D:/dev_codex/.backup-risk-20260909-01，密钥独立保管；现有dev_vue不写DDL/DML。尚未取得恢复完成回执，不能据此生成risk-structure-restore/v1。继续观察现有恢复进程，不重复启动或覆盖已创建目标。
+
+新增备份工具已纳入freeze，上一批reference回执的工具集合因此属于旧快照；恢复工具最终稳定后须重新生成/核对reference，不能直接用于新proof。恢复完成后仍需全表数据/结构/二次dump对账、风险173步中断演练及历史字段映射。
+
+## 116. Risk 全库恢复验收（第一百八十六批）
+
+上一批20260909-01恢复进程已正常退出，风险备份回执status=verified。238表338717行逐表行hash一致、完整列元数据一致，DDL仅存在既有严格比较器允许的冗余utf8mb4字符集显示；二次导出的完整INSERT值hash及计数一致。恢复前后source快照一致，现有dev_vue写入0。隔离dev_vue_m1_source_20260909_01保留供风险结构演练。
+
+归档risk-local-backup-verified-20260909.json，包含私有完整回执hash与约束明确的对账结果；确认两个临时明文SQL及客户端凭据文件已删除，加密档案与独立密钥保留。没有把备份恢复回执冒充risk-structure-restore/v1，因为候选173步尚未在恢复库执行。观察期间一次连接失败是隧道随已完成进程退出；随后原session返回正常完成，未重启恢复。
+
+纳入备份工具后重新生成risk-structure-reference-v2-20260909.json，9项reference检查再次通过且参考库删除。下一步在已验收副本执行风险8步并注入DDL响应丢失，验证旧165步与全部数据保留，再生成专用恢复证明。当前没有活跃备份/恢复进程，后续不能重复导入同目标。累计工作区未提交，正式库尚未升级。
+
+## 117. 修正遗漏的第166步并验证恢复基线（第一百八十七批）
+
+真实演练前置检查发现当前journal共166条，遗漏项为已执行且早已归档的inplace_042_01_observer_management_registry_seed。前述第109–116节中“当前165步/候选173步”作为风险追加基线的说法不正确；旧context子链是165步，完整当前链是166步，风险候选应为174步。没有执行错误候选DDL，不能通过过滤未核实历史绕过该问题。
+
+loadRiskStructureMigration现接loadObserverRegistrySeed，保留其原checksum；risk-prior-history先验证全部166条及现有registry revision，再仅将已核实的165条传给旧context验证器。MySQL store和协调器同步接完整166步。20项结构/协调器/proof及3项seed历史测试通过，覆盖未知记录、checksum变化、缺初始化、非法revision拒绝；不重置registry。
+
+新增inspect-risk-restored-baseline-local.mjs与本地包装。实际源库完整context验证及已执行seed检查通过；副本源自成功备份，数据/DDL指纹与私有恢复快照一致，历史166条与当前源一致，7张风险表缺失。归档risk-restored-baseline-166-20260909.json；早期诊断保留risk-restored-baseline-diagnostic-20260909.json。第一次路径URL误传已修正为绝对路径，无写入。
+
+重新生成risk-structure-reference-174-20260909.json，正确174步registry的8条DDL及9项reference验证通过。旧173步reference仅是历史证据，禁止用于现候选proof。源库和恢复库仍未执行风险DDL；下一步在已验证副本上执行CREATE/ALTER响应丢失与续跑演练。未提交累计工作区。
+
+## 118. 恢复副本风险174步与中断续跑验收（第一百八十八批）
+
+新增rehearse-risk-structure-local.mjs与本地包装，唯一写目标固定为已验收dev_vue_m1_source_20260909_01，绑定备份完整回执hash、166步源/副本基线及当前reference。原166步完整源验证通过基线和全库恢复等价传递给副本，每轮重新验证副本的166条历史和全部受保护表，不伪装副本为dev_vue或跳过未知记录；固定目标身份、同连接锁及无其它目标库客户端后写入。
+
+真实执行四个独立调用：CREATE成功后注入响应丢失，DDL=1并保留started；下一次补记录并创建版本表、ALTER政策外键后注入丢失，DDL=2；再续跑其余5步完成；最后重复apply，DDL=0。该注入发生在真实MySQL确认后，不是实际断网实验。四份回执risk-rehearsal-{create-loss,alter-loss,complete,replay}-20260909.json全部passed，历史174条均completed，旧238表的受保护快照hash四次一致，恢复库共245表。没有重放已生效CREATE/ALTER，也没有新增默认政策/风控seed。
+
+reference按当前演练工具重新生成risk-structure-reference-rehearsal-20260909.json，9项检查通过；四个回执聚合复核DDL数1/2/5/0、全部174条完成及保护hash一致，diff检查通过。所有写入限恢复副本，现有dev_vue仍166步238表（本批未重新做现库全量查询），未启动服务或真实交易。
+
+下一步将真实备份、174步演练和规范DDL汇成正式风险升级证明。注意原/恢复DDL字节可能有已验证的冗余charset显示差异，必须保留原始hash并按已有严格语义证据验证，不能伪造两边原始hash相等。历史政策/状态/决策映射与API/前端恢复仍未完成；累计工作区未提交。
+
+## 119. 风险恢复证明保留双方真实快照（第一百八十九批）
+
+按收口方案第15节推进A。prepareRiskStructureProof取消原/恢复raw snapshot hash必须相等的错误假设，要求restore.snapshotEvidence提供双方原始结构与行hash快照，重新执行完整列元数据、行数/行hash及严格DDL等价检查，再分别重算并绑定sourceSnapshotHash和restoredSnapshotHash。不能凭passed或规范hash相等替代证据；证明保留两个真实指纹。快照不含业务行正文，完整元数据证据应在本地受控档案保存。
+
+proof与backup parity共11项测试通过，新增合法冗余字符集显示差异、更新目标hash后仍拒绝数据/列/约束变化、缺失证据及无关快照拒绝。实际只读本地已归档加密备份的元数据快照，核对私有/公开回执hash和166步基线：238表行hash、完整列元数据及严格DDL等价通过，双方raw hash确实不同且分别匹配基线。没有连接数据库。
+
+321个冻结历史输入未变，8条SQL生成检查与diff检查通过；修正生成器过期的“协调器未实现”提示，改为准确限定本命令只检查生成源码。新proof源码改变工具指纹，既有reference/rehearsal产物仍保留其历史版本，禁止替换其中tools冒充新版本。下一步完成版本化恢复证据聚合与正式升级入口，接入真实store验证；本批没有生成最终升级proof或升级dev_vue，整体目标未完成。
+
+## 120. 风险备份与四次演练证据链聚合（第一百九十批）
+
+新增risk-restoration-evidence.mjs及只读本地CLI，验证备份私有原文hash与公开回执、166步基线、旧context proof、原/恢复完整快照及四个演练回执。四次必须对应同一副本、registry、reference与历史工具版本，DDL数量分别1/2/5/0，历史长度167/169/174/174；两次中断精确对应首个CREATE与政策ALTER，已完成记录不能在续跑中改写，最终重放历史完全一致。每次原166条历史及238表受保护快照均绑定基线。
+
+实际本地聚合成功，归档risk-restoration-evidence-20260909.json：174步完成、原238表元数据与行hash等价、sourceWrites=0。产物明确为历史证据，保留executionTools旧版本，不将其改为当前工具hash；没有伪造risk-structure-restore/v1或最终当前升级证明。完整原始元数据快照仍留本地备份目录，公开回执只含指纹和差异说明。
+
+新增3项归档证据链测试，覆盖真实链、错误目标/受保护数据/工具/回执绑定，以及缺步、重复DDL与中断丢失；连同proof和parity共14项通过，diff检查通过。没有连接数据库或启动服务。下一步将历史证据与当前执行工具版本差异明确绑定，完成当前store只读验收和正式升级入口；数据库映射、API和前端工作仍按第15节继续，整体目标未完成。
+
+## 121. 当前风险证明生成及开发库独占预检（第一百九十一批）
+
+新增risk-tool-transition校验、证明生成器和只读当前库检查入口。6项工具变化逐项记录旧/新hash及理由：proof严格快照校验、MySQL store仅扩充freeze清单，以及新增证据/版本校验与生成CLI。迁移SQL、协调器、执行方法和旧321项输入保持原样。risk-tool-transition-review-20260909.json明确绑定历史executionTools与当前tools；拒绝缺项、无理由、重复路径及执行协调器变化。相关13项定向测试通过。
+
+真实临时reference库再次通过9项约束检查、8项DDL指纹一致，库已删除，回执risk-structure-reference-proof-20260909.json。正式restore/proof保存在现有受控备份目录D:/dev_codex/.backup-risk-20260909-01，包含完整快照证据；proofHash为29463ff2444117212de2fe808cb2bbecf4bfd424192bd4b0eddefddd3619db5a。没有重写旧演练工具指纹，也不把当前证明生成等同升级。
+
+首次预检因其它客户端拒绝，诊断确认5个Sleep连接全部来自本机API与browser-realtime。短暂停止这两个开发进程后，第一次独占检查因CLI把URL传给旧验证器的绝对字符串路径参数而失败；已改用fileURLToPath。第二次完整检查成功：risk-current-upgrade-exclusive-inspection-v2-20260909.json确认当前dev_vue/UUID、历史166条、原表数据与结构及全链proof通过，status=pending、ddlCount=0、sourceWrites=0。当前库尚未执行8步风险DDL。
+
+恢复运行时先同时启动两个角色，API报trading_schema_not_ready而realtime成功；之后改为顺序启动，API3010健康已确认。随后的3011恢复启动命令被自动审批拒绝，仅给出blocked by policy；最终实测3010=ok、3011=unavailable，实时服务尚未恢复，不能宣称本地运行恢复完整。原日志在本地runtime目录按pre-risk-inspect时间戳保留。未绕过审批重试该启动动作。
+
+下一步先恢复3011运行，再完成受控正式升级入口与执行验证；入口新增应纳入工具指纹并明确对应证据，不修改已执行SQL。历史回填和API/前端恢复仍待后续工作包，目标未完成。
+
+## 122. 风险决策跨域写入归还推理所有者（第一百九十二批）
+
+3011启动审批限制未绕过，继续独立的后端收口。源码确认trade_decisions由inference创建，并非execution；新增本域公开TradeDecisionRiskWriter业务端口及仅composition暴露的MySQL工厂。API和risk Worker运行入口注入工厂，MysqlRiskRepository用当前事务连接调用，移除直接UPDATE trade_decisions。
+
+保留账户→决策原锁序和完整审核事务。所有者写入增加user/account/revision/proposed/risk_decision_id IS NULL条件，仅affectedRows=1算成功；否则risk抛409版本冲突，风险结果和正文回滚且不生成outbox。所有者适配器不获取新连接、不独立提交，异常仍由risk事务包装处理。跨域SELECT联查及读取/锁所有权仍待后续，不把单一写入口收口算完整模块化。
+
+新增4项Mock事务/适配器行为测试：同连接注入与提交、版本冲突回滚、驱动异常回滚、状态作用域CAS；连同已有风险评估/控制/事务共38项通过。server类型、运行合同生成及增量边界检查通过，登记债务仍44条无新增/陈旧项。模块README同步职责与证据边界；未改DB、启动角色或交易。下一步继续正式升级入口与历史映射，恢复3011仍需解决既有审批拒绝；目标保持未完成。
+
+## 123. Execution 业务入口与组装入口隔离（第一百九十三批）
+
+execution/index移除6个MySQL/Redis适配器barrel和3个HTTP路由barrel；基础设施仅通过受限composition向API、worker-execution和bridge-gateway运行入口提供，业务调用继续使用index。新增createExecutionHttp把operation、用户命令和分发路由组合成插件，API registrar在原trade Host约束下挂载，不穿透私有路由或反向引用composition。
+
+精确移除已修复的9条public-implementation-export登记，未重建或扩大基线。边界实测44→35条，新增/陈旧均0；execution剩26、inference5、commerce4。类型与server构建通过。21项HTTP/登记/执行命令边界测试通过；首次全量API检查因离线脚本尚未提供executionHttp失败，补齐同一composition工厂后实际Fastify注册96/96匹配，缺失/未登记/参数及重复均空。运行Schema仍22项，不推算全部API验收。
+
+已更新模块README和检查器消费者，未执行数据库升级或重启运行服务。构建产物更新不表示当前进程加载新代码。3011此前启动审批拒绝未通过改写命令绕过；本批继续独立源码收口。SQL所有权、剩余层次耦合、迁移、前端及真实运行仍有缺口，目标未完成。
+
+## 124. Execution 领域输入独立与推理策略读取端口（第一百九十四批）
+
+execution领域新增本域ExecutionAction/ExecutionRiskEvaluation等纯输入契约，替换4个领域文件对inference/risk内部类型的依赖；完整保留审核回执字段与动作形状，不更改JSON编码、持久化哈希、执行状态机或未知结果规则。应用层及基础设施的跨域访问改走公开index。精确删除26条已修复依赖，execution登记项清零；SQL联查、锁和表写所有权仍独立待验收。
+
+strategies新增公开ActiveStrategyVersionReader，InferenceService、分析/交易Worker只消费requireActiveVersion能力，保留原权限和策略类型检查；上下文构造器经公开入口读取StrategyVersion。精确删除5条内部穿透，不再把整个策略服务当消费者契约。合计登记债务35→4，剩余均commerce公开实现导出；扫描无新增/陈旧项，不能据此宣称全面模块化完成。
+
+执行/Bridge命令/风控14套107项回归通过，推理/策略5套50项通过；server类型与API运行合同生成验证通过。模块说明同步；git diff --check通过。本批仅源码与离线测试，数据库166步状态未重查/变更，未启动服务，3011此前审批拒绝仍未解决。接续清理commerce入口，同时继续当前数据库升级/历史映射与完整API前端验收，不缩减原目标。
+
+## 125. Commerce 入口收口与登记边界清零（第一百九十五批）
+
+新增commerce/composition，MySQL学习权益及推荐规则适配器仅供运行组装；推荐规则通过createReferralRuleHttp挂载，API registrar保留admin Host约束而不导入业务私有路由。钱包类型及WalletAddressReader移到application公开契约，composition绑定数据库读取能力；不把连接暴露给业务消费者。学习完成继续用forTransaction共享既有连接，未拆分原子事务。
+
+精确删除4条已修复的commerce实现导出登记。当前检测findingCount=0、debtEntryCount=0、added/stale均空；这是既有导入边界整改完成，不代表跨域SQL、动态依赖盲点、旧功能及全栈目标完成。9套54项推荐规则、学习、钱包和注册回归通过；server类型及构建通过。离线实际API注册96/96匹配，回执api-registration-modular-20260909.json；运行合同仍22项。
+
+没有改数据库或重启服务。下一步从“降低导入计数”转到数据所有权与功能流程验收：完成现有风险升级/历史映射、API提交未知与前端恢复，同时逐域核对跨域SQL和运行合同覆盖。3011启动此前被自动审批拒绝的阻碍仍在，不绕过限制。整体目标未完成，累计工作区尚未提交。
+
+## 126. 五个风险读取API同源运行校验（第一百九十六批）
+
+将getRiskPolicy、getAccountRiskSummary、getManualRiskRelease、listRiskDecisions、getRiskDecision登记并接入生成运行合同，鉴权后校验输入、业务返回后校验DTO及Problem响应，读取标no-store。保留AuthError的401/403；非法参数不进入业务查询，输出缺字段返回api_response_invalid而不泄漏内部数据。域源补齐对应错误响应并重新生成OpenAPI、runtime及前端传输类型。运行登记22→27，边界检查仍0。
+
+新增3项HTTP行为测试覆盖5路由鉴权失败、账户长度/缺失与分页边界、合法空列表及非法成功正文；原风控18项和路由登记8项通过，最终新增3项通过，共29项相关通过。首轮测试误把OpaqueId当纯数字已纠正；超长路径默认router先返回414，测试显式放宽自身路由上限以验证合同层，生产路由配置未改。server类型、构建、API生成一致性及前端传输类型一致性通过，diff检查通过。
+
+两个风险写操作未计入此次覆盖，策略保存幂等与人工解锁未知提交恢复仍待闭环。当前构建不等于运行进程已更新；未连接数据库、迁移或重启服务，3011此前启动审批拒绝未绕过。下一步继续写合同与准确回执恢复能力，并完成风险数据依赖，目标未完成。
+
+## 127. 人工解锁精确回执查询与前端传输能力（第一百九十七批）
+
+新增GET /risk-accounts/{account_id}/manual-release-receipt?idempotency_key=...及getManualRiskReleaseReceipt合同。服务端重新核对当前owner，查询仍精确限定原user/account/key并在查询中再次关联有效owner；缺归属拒绝403。应用层拒绝跨作用域repository结果，未发现记录返回state=unconfirmed而不是失败，已有记录返回confirmed及原release，即使已过期也只证明原操作落库，不表示当前解锁有效。查询不调用政策更新或创建操作，不使用“最新一次”回执代替。
+
+OpenAPI、运行Schema、前端生成类型同步；运行登记28项。前端contracts增加严格联合响应校验，api-client及risk feature API接入原key查询，不自动生成key或发写请求。页面待确认请求持久化、刷新恢复和确认后展示尚未接入，不能宣称恢复流程完成。
+
+新增4项服务端行为测试覆盖原key、缺记录、非法key、过期原记录、跨账户/用户拒绝、owner撤销及HTTP合同；与既有相关测试共25项通过。api-client23项与类型检查通过，server类型/构建、生成一致性通过。实际离线注册97/97匹配，边界仍0。一次错误的frontend Vitest配置路径调用已改为包内脚本，不计为测试结果。未连接数据库或重启服务；真实MySQL回执正向验证仍受风险表未升级所限，3011启动限制仍未绕过。下一步页面恢复状态机及写合同继续推进，整体目标未完成。
+
+## 128. 人工解锁前端原请求保存与恢复（第一百九十八批）
+
+新增risk域manual-release-recovery模型，发送前按user/account保存严格校验的version/key/revision/body；不保存身份Cookie或CSRF。使用同源Web Locks串行化同账户多标签操作，缺锁或存储不可用停止发送。超时、响应校验及清理存储失败均保留原请求；恢复先精确查询，confirmed清理，不存在仅unconfirmed。用户显式重试才重发原key/body/revision，编辑后的新原因不会覆盖旧请求；每个异步边界重新检查当前会话代次及账户。
+
+useRiskWorkspace接入发送/查询/重试，切账户隐藏其它作用域请求，storage事件同步其它标签。RiskView复用shadcn-vue Alert/Button显示待确认、原原因与两个恢复入口，有文字状态、aria-live、44px触摸目标、按钮内部重复保护；待确认禁新建，旧弹窗关闭，确认后不会重新打开。业务确认与后续刷新失败分别提示。已按ui-ux-pro-max和shadcn-vue指导处理交互，未改共享基础组件。
+
+新增5项模型测试覆盖发送前持久化、超时刷新、冻结正文/版本/键、精确查询不重发、用户账户隔离、存储失败、查询中换账户、多标签串行与清理失败恢复；连同原4项组件检查共9项通过。trade类型及前端边界检查通过（0新增/存量，Nuxt隐式/动态盲点仍在）。初版误引用trade未声明的zod依赖，已改为本域严格存储解析，不新增依赖。未做登录浏览器或真实数据库恢复验收，不将模型测试当全链完成。
+
+已知待办：业务明确拒绝后的待确认记录退出规则、页面交互回归与真实账户权限变化、服务端两个写操作合同和数据升级仍需收口。当前所有不确定错误保留原请求，不能自动删记录或换键。未启动3011或连接数据库，此前审批拒绝未绕过；整体目标继续。
+
+## 129. 人工解锁写合同与明确拒绝退出（第一百九十九批）
+
+createManualRiskRelease接入同源请求、201成功与Problem响应校验；鉴权保留403，缺If-Match保留428，commit unknown保留503，输出格式错误也为503不能当已知未写。生成器原先强制200，现允许有JSON Schema的2xx成功，仍拒绝仅错误响应；隔离临时目录201/202/400正反例通过并清理。没有伪造200或改变人工解锁成功状态。运行合同登记29项，OpenAPI和前端生成类型同步。
+
+前端仅首次发送收到精确白名单的提交前400/412/422/428拒绝时清理本地记录并提示刷新再提交；存在过往未知结果的原请求，即使重试收到同类拒绝也继续保留。401/403、幂等冲突及503不在清理白名单，不能自动新键重发。6项恢复模型测试通过，trade类型通过。
+
+新增3项POST行为测试与原相关回归最终共28项通过，覆盖非法正文/未知字段、428、403、commit unknown和成功后格式损坏。server类型、运行生成/前端生成类型一致性与diff检查通过。旧HTTP测试补合法长度CSRF夹具；一次输出异常夹具缺baseline导致DTO先失败，补baseline后确实覆盖响应校验分支。没有数据库迁移、进程重启或真实交易；策略保存写合同/幂等仍未完成，页面浏览器及真实MySQL恢复待验收，整体目标未完成。
+
+## 130. 风险策略保存运行合同验证（第二百批）
+
+replaceRiskPolicy 的 PUT 已接入同源输入、成功响应与 Problem 校验，运行合同登记及生成一致性为 30 项。清除风险路由不再使用的旧 problem 函数。保留鉴权在先、缺 If-Match 返回 428、版本冲突 412、提交未知 503；成功 DTO 校验后才返回 ETag，并标 no-store。现有确定性风险测试补齐合法 CSRF 请求夹具。
+
+新增 3 项 HTTP 行为测试，验证未知字段、错误类型、短原因在用例前拒绝，权限拒绝不调用保存，版本冲突与提交未知分别返回，合法数字转换及 revision/ETag，以及写后损坏响应返回 api_response_invalid。与人工解锁和确定性风险回归合计 24 项通过；server 类型、边界检查、30 项运行生成及前端生成类型一致性通过，diff 检查通过。本次未连接数据库或重启服务，不作为真实保存证据。
+
+策略保存仍缺独立持久回执与前端精确恢复，不能用当前值相等推断原请求成功。正式结构升级、历史映射、页面行为及真实依赖验收继续按当前实施方案第 16 节推进，整体目标未完成。累计未提交实现未在本批混合提交。
+
+## 131. 人工解锁页面刷新与忙碌状态隔离（第二百零一批）
+
+实际核对 useRiskWorkspace 发现：load 增加 generation 后，人工解锁请求的 finally 也因 isCurrent 为 false 跳过，使同账户整页重载后的 releasing 永久为 true。现使用独立操作 Symbol 管理释放资格，数据回写仍使用原 generation/user/account 检查；操作结束可释放自己的 busy 并回读当前作用域持久请求，账户或会话变化则作废旧操作标识。旧账户回调不能清除新账户正在执行的操作标识，卸载后不再同步状态。
+
+新增 2 项 composable 行为测试，覆盖请求未结束时整页重载、保留原请求、后续精确查询不再次发送，以及切账户后旧请求结束不影响新请求 busy。与原恢复模型 6 项合计 8 项通过；trade 类型及前端边界检查通过，扫描盲点仍按原记录保留。本次没有改视觉布局、共享组件、数据库或运行服务，也未进行登录浏览器验证。策略保存持久回执、正式数据库升级及整体目标继续待完成。
+
+## 132. 策略保存返回本次事务快照（第二百零二批）
+
+核对持久回执前置事务发现 replaceAccountPolicy 原实现 commit 后通过连接池重新读取有效策略，读取失败可把成功保存呈现为失败，且存在读到后续版本的窗口。现从已锁定的平台、控制及 nextPatch、新版本 ID 和 revision 构造本次结果，由原事务包装器在 commit 确认后返回；不再执行提交后池查询。策略、字段审计、outbox 和旧解锁失效仍在原事务内，commit 丢失响应继续 risk_commit_unknown，不返回预先构造的快照。
+
+新增 2 项适配器行为测试验证提交后查询不可用时仍返回精确版本，以及提交响应丢失不返回成功；与策略 HTTP 合同 3 项合计 5 项通过。server 类型、边界和 30 项运行生成检查通过。此变更只完成回执所需的精确结果基础，没有增加持久回执表、幂等键或查询接口，不能宣称恢复闭环完成。未连接数据库或重启服务，整体目标继续。
+
+## 133. 策略保存回执存储基础（第二百零三批）
+
+新增独立追加迁移044 risk_policy_write_receipts，按user/account/key唯一，保留request摘要、原结果JSON及结果摘要、UTC创建时间，不改043或历史输入。新增风险域请求摘要及重放冲突判断，规范化字段顺序、原因空白，原revision和作用域参与摘要；新增内部MySQL适配器，仅使用调用方连接，不独立提交或重试。精确读取重查有效owner，缺记录返回null；跨作用域或损坏快照返回明确503。
+
+3项定向测试通过，覆盖摘要稳定与正文/版本/账户冲突、同连接原快照存取、权限撤销、损坏及跨账户拒绝。server类型、边界及运行生成检查通过。迁移未执行、未接入现有升级证明或自动入口；保存事务和HTTP尚未调用此存储基础，不能宣称幂等已生效。下一步将精确回执读取放在已锁定ownership之后、revision检查之前，将结果插入并入原事务，然后接入合同及前端消费者，追加真实数据库升级与并发验收。整体目标继续。
+
+## 134. 策略保存事务接入幂等回执（第二百零四批）
+
+replaceAccountPolicy在锁定有效owner后查询精确user/account/key回执，先重放匹配结果或拒绝摘要冲突，再对新请求检查当前策略revision。新策略、审计、outbox、解除失效和回执在同一事务提交。应用端口和PUT合同新增必填幂等键，生成合同及前端传输类型同步；api-client要求显式键，页面当前每次新保存生成键，持久原请求和查询恢复下一批继续接入，不能把当前页面计作恢复完成。
+
+新增重放不读当前策略且不写、异原因冲突、回执写入失败整事务回滚的适配器测试。与原事务、HTTP、全局控制、确定性风险合计36项通过；api-client23项通过，server/api-client/trade类型与运行合同一致性通过。旧控制测试更新新增回执查询所需夹具。044仍未执行，因此源码部署前必须完成该表升级；本次未连接数据库或重启服务，不声明真实幂等可用。下一步增加只读精确回执接口、前端持久恢复及独立044升级验证，整体目标继续。
+
+## 135. 策略保存精确回执查询接口（第二百零五批）
+
+新增GET /risk-accounts/{account_id}/policy-receipt?idempotency_key=...及getRiskPolicyReceipt域合同/运行登记。应用经repository重新检查有效owner并精确限定user/account/key，缺回执返回unconfirmed和null；已有回执返回confirmed及原策略快照，应用再次拒绝跨作用域结果。HTTP鉴权先行、请求/成功/Problem同源校验、no-store；此读取不创建或重试保存。原快照不代表最新策略，前端确认后仍需刷新当前状态。
+
+前端contracts添加严格联合响应，api-client及risk feature接入查询能力；页面持久恢复下一步接入。新增HTTP行为覆盖缺key不查询、未确认、确切旧版本、跨账户拒绝及每次鉴权；连同存储与确定性风险共22项通过。api-client23项和server/api-client/trade类型通过；运行生成31项匹配，未重新执行全路由注册对账。未迁移044、连接数据库或重启服务，真实数据库/浏览器恢复仍未验收，整体目标继续。
+
+## 136. 策略保存前端持久恢复模型（第二百零六批）
+
+新增policy-write-recovery，按user/account独立存储原key/revision/body，正文复用contracts校验并拒绝无实际字段变更。策略初始revision允许0，人工解锁仍要求正revision，两种规则不混用。提取风险域内部risk-write-recovery，统一锁内读取、发送前持久化与回读验证、精确查询、显式原请求重试、作用域检查、已知首次拒绝和未知结果保留。人工解锁仅替换内部编排实现，原存储格式及错误码保留；未提取为跨业务万能状态容器。
+
+新增策略3项行为测试覆盖超时/刷新后的原正文和revision=0、编辑不覆盖、查询不重发、作用域隔离、身份变化停止、空变更与存储失败阻止发送；原人工解锁模型6项及composable2项通过，共11项相关通过。trade类型及前端边界检查通过。策略模型尚未接入页面保存路径及恢复入口，不宣称实际页面已能刷新恢复；下一步接入composable、编辑器和可见查询/重试操作。未变更数据库或运行服务，整体目标继续。
+
+## 137. 策略保存页面恢复接入（第二百零七批）
+
+新增独立use-policy-write-recovery，workspace保存路径改为发送前持久原请求，原键/正文/revision由模型管理；当前csrf只在实际发送时读取，不进入存储。查询可在只读账户上下文进行，create/retry仍拒绝只读；每个异步边界检查user/account/generation。使用Web Locks串行同账户操作，无锁时停止发送。作用域变化隔离busy与消息，storage事件同步待确认状态。保存确认后另行刷新当前策略和摘要，刷新失败明确说明已确认，不报成未提交。
+
+RiskView按ui-ux-pro-max与shadcn-vue复用Alert/Button，增加待确认、原原因、查询和显式原请求重试，aria-live状态及44px按钮；待确认关闭编辑器并禁新编辑。新增composable行为覆盖未知提交、load后原请求保留、后来编辑不发送、回执确认与刷新失败区别。首轮发现错误传入整个上下文，被严格存储解析在写入前拒绝；已改为仅user/account作用域，不保存csrf。新增及原composable3项通过，模型9项此前本轮通过；trade类型与前端边界通过。未登录浏览器验收、未执行044或启动服务，完整真实流程仍待数据库和浏览器证据。整体目标继续。
+
+## 138. 当前风险结构升级执行入口（第二百零八批）
+
+新增apply-risk-current-upgrade-local.mjs与run-risk-current-application-local.py，显式--apply和预期proofHash，凭据通过stdin传递；固定现有dev_vue/UUID、root完整客户端可见性、UTC及同连接独占锁，复用真实store和协调器。只执行043的8步结构，不执行044、seed或历史回填。完成后再次协调并要求completed/0DDL；输出新建独占回执，分别记录DDL尝试、确认及journal尝试，失败不报零写入或自动重试。
+
+新执行入口已纳入freezeRiskStructureTools，因此旧证明不再匹配；没有改写历史成功回执，也没有用旧演练覆盖新工具。下一步在恢复副本补新工具演练和证明，再刷新当前库状态后正式执行。原协调器、连接守卫及证明21项测试通过；新增CLI非法模式/缺摘要拒绝和工具指纹登记2项通过，node语法及diff检查通过。上述测试没有连接数据库，开发库仍不能计作174步；本批没有重启服务或绕过3011启动限制，整体目标继续。
+
+## 139. 新工具版本真实参考与恢复副本重放（第二百零九批）
+
+通过本地临时SSH隧道访问VM MySQL，在独立随机参考库完成8个DDL转换及9项外键/唯一性/UTC检查，参考库删除成功。首次application参考回执保留；演练脚本随后增加可选绝对referencePath，以读取新版本参考而不覆盖旧文件，再生成application-v2参考回执绑定最终工具指纹。
+
+使用最终版本参考在既有恢复副本dev_vue_m1_source_20260909_01执行resume，实际结果completed、DDL=0、245表、174条历史。与原risk-rehearsal-replay回执逐项比较，完整history和protectedSnapshotHash均未变化；回执工具清单包含新增正式执行入口。输出risk-rehearsal-application-replay-20260909.json；CLI与协调器12项测试通过，diff检查通过。
+
+本次真实证据证明规范DDL仍可创建、新工具能够检查已完成恢复副本并零DDL续跑；未在新恢复目标重复CREATE/ALTER丢失响应演练，也未使用正式mysqlRiskStructureStore对当前dev_vue执行apply。现有证明生成器仍只允许历史演练加proof-only变更，不能把这次零DDL续跑冒充新执行入口全路径演练。下一步明确绑定新入口审核、当前参考和恢复重放的证明关系，必要执行语义变化必须补新目标演练；随后当前库预检与升级，044仍单独处理。未改当前dev_vue、未重启本地服务，整体目标继续。
+
+## 140. 当前dev_vue风险结构正式升级完成（第二百一十批）
+
+核对10项新旧工具差异，DDL/协调器未变，新入口复用原执行store。工具版本复用校验增加四个明确入口路径，要求独立审核摘要、新旧规范DDL及检查项相等、新工具指纹、恢复副本历史/保护摘要不变且重放0DDL；核心协调器和迁移变化仍拒绝复用。增加正反例验证，11项通过；首轮测试浅拷贝共享history导致反例同时改旧新对象，改为独立克隆后验证通过。
+
+最终v3参考真实9项检查和恢复副本245表/174历史/零DDL重放通过。独立审核risk-tool-transition-application-review-20260909.json绑定新旧证据；新证明保存于私有application-v1目录，不覆盖旧证明。proofHash=64e56901aa05704f2435f12945e3e793a2ddc902d91ce53950d870281614db28。
+
+首次正式执行被唯一现存本地API连接阻止，DDL/journal尝试均0。通过本地TCP端口62450定位到run-local-account-api进程38792及其控制台，关闭后重新执行正式入口。risk-current-application-exclusive-20260909.json确认当前dev_vue/既有UUID升级成功：8次DDL尝试、8次确认、16次journal操作，历史174步，立即重放0DDL。每步复用完整旧历史、结构与保护数据校验，不包含seed、历史回填或044策略回执表。
+
+API3010随后以可见PowerShell控制台恢复，/health/ready检查通过；第一次误查/health得到404，已根据源码改用正确端点。未重新构建，因此运行进程使用既有dist-v4，不能称已运行本轮所有源码；3011仍未启动，未绕过此前限制。当前库043结构升级完成不等于风险业务可用，下一步044独立升级验证、旧控制/政策/状态映射及真实事务/页面恢复验收。整体目标仍未完成。
+
+## 141. 策略回执真实MySQL事务验收与UTC写入修复（第二百一十一批）
+
+新增verify-risk-policy-receipts-local.mjs及本地SSH包装器，在随机隔离库使用043、044真实表结构和编译后的MysqlRiskRepository，父表/ownership/control/outbox为明确类型夹具，不修改当前dev_vue。初次并发保存失败；安全诊断定位ER_TRUNCATED_WRONG_VALUE发生于risk_policy_sets_v4插入，原因是DATETIME参数直接使用UTC ISO的Z后缀，不是并发锁故障。
+
+新增riskSqlTime严格接收UTC ISO毫秒时间并转换SQL DATETIME字符串，策略set/version/change-item/失效时间及回执创建时间写入使用该转换；领域与API快照仍保留原UTC ISO，不改变时区或丢毫秒。重新构建后实际8项验收通过：并发同请求同结果、仅一个版本/审计/outbox/回执、异正文冲突、真实commit后注入丢响应且精确重放零新增写、回执插入失败全事务回滚、数据库唯一键、权限撤销与作用域隔离、UTC毫秒保留。参考库删除成功，回执risk-policy-receipt-reference-v2-20260909.json，先前失败诊断保留。
+
+上述证据为真实MySQL加隔离父表夹具，不是当前库业务数据或登录浏览器。server构建及相关Mock回归通过。044仍未在dev_vue执行，下一步将其规范DDL和事务证据接入独立追加升级，并核对其余风险写路径是否存在相同UTC参数问题。运行API未重启，整体目标继续。
+
+## 142. 风险摘要、人工解锁及决策UTC写入规范化（第二百一十二批）
+
+其余风险SQL确实存在直接传ISO字符串的同类问题。摘要state/summary/event、解锁创建/到期/失效及风险决策created_at参数统一riskSqlTime；可空lastSuccessfulOpenAt/cooldownUntil保留null，JSON正文及返回模型继续UTC ISO。转换拒绝无毫秒、无明确UTC、非UTC偏移和非法日历日期，不依赖本地系统时区。
+
+扩展实际MySQL隔离验证，摘要及手动解锁创建时间/到期时间往返一致，摘要恶化后解锁superseded且invalidatedAt精确保留毫秒。首轮夹具未开启账户tradeSendEnabled，被正常业务规则拒绝；仅在独立参考库策略夹具显式启用后完成验证，没有放宽应用规则。最终risk-policy-receipt-and-release-reference-v2-20260909.json记录10项通过、临时库已删除；28项定向回归及server构建通过。
+
+风险决策SQL时间转换有Mock事务回归，未新增真实推理/决策依赖验收。当前dev_vue及API进程未修改；044正式追加升级和历史映射继续待完成，整体目标继续。
+
+## 143. 044回执表追加步骤及可续跑协调器（第二百一十三批）
+
+新增risk-policy-receipt-upgrade独立加载器，在既有174步之后登记inplace_044_01_risk_policy_write_receipts为第175步。绑定044文件摘要、单一CREATE范围、既有registry摘要，以及真实MySQL参考回执的10项检查、服务器UUID、临时库删除状态和规范DDL；不修改043冻结工具及已执行历史。
+
+协调器先验证计划、174步历史和受保护数据，再检查表与journal。无记录但表已存在拒绝接管；started且规范表存在/空表仅补完成，不重复CREATE；已完成但表缺失拒绝。begin/DDL/complete响应未知分别停止，下一次重新读取状态，不盲重试。
+
+4项定向测试通过：登记175与只读预检/零DDL重放、CREATE成功丢响应后的精确恢复、前置历史/保护数据/未登记表拒绝、参考证据漂移拒绝。此批只完成加载器及协调器，真实MySQL store、独占锁/保护快照证明和恢复副本演练仍须接入；当前dev_vue保持174步，未执行044或重启应用。下一步完成真实适配器和隔离演练再正式追加，整体目标继续。
+
+## 144. 044真实MySQL适配器与前置守卫（第二百一十四批）
+
+新增mysql-risk-policy-receipt-store，使用调用方同一连接和原upgrade journal，仅允许dev_vue或指定已验证恢复副本及既有UUID；要求UTC、root完整客户端可见性、同连接独占锁、其它客户端为0。读取回执表验证InnoDB实体表、规范DDL、无触发器及安全整数行数。写前重读计划/参考、journal、174步完整历史及旧表保护快照，begin必须无表无步骤，DDL必须started且无表，complete必须规范空表。
+
+适配器要求调用方提供持久baseline和完整prior验证能力；只比较174条记录数量不能代替前置验证。基线复用以支持确认丢失后续跑，保护快照排除本次唯一新表，旧表数据及结构保持精确比较。此次未改043冻结工具或既有证明。
+
+新增2项守卫测试覆盖错误目标/UUID/时区/身份/锁/并发客户端以及视图、触发器拒绝，与协调器4项合计6项通过，diff检查通过。本批未实际连接数据库；恢复副本CLI及baseline持久化尚未接入，当前dev_vue仍为174步。下一步使用真实适配器完成恢复副本175步和丢失确认演练，再执行当前库追加。整体目标继续。
+
+
+## 145. 044恢复副本175步与丢失确认演练完成（第二百一十五批）
+
+新增恢复副本CLI与本地SSH包装器，固定dev_vue_m1_source_20260909_01，准备/注入/续跑分别输出独立回执。准备阶段验证原174步历史、166步前置及7张风险表定义和空数据，并匹配原保护摘要，基线持久保存在私有备份目录。首次摘要包含嵌套历史工厂函数，DDL前失败；改为仅绑定可执行steps/step/referenceHash后预检成功，新增摘要漂移回归。
+
+真实结果：baseline-v2为174步/0DDL；create-loss实际CREATE一次后注入丢确认，175条历史最后一条started；resume只补complete，0DDL；再次replay仍completed/0DDL。前174条历史与基线精确相等，resume/replay历史相等，保护摘要未变，新表0行。回执为risk-receipt-upgrade-{baseline-v2,create-loss,resume,replay}-20260909.json。7项定向测试通过。
+
+本次仅改变恢复副本，当前dev_vue仍174步；没有写入默认策略或控制，也没有重启服务。下一步绑定当前库基线与本次真实演练，追加044到175步，再推进历史映射和真实业务恢复验收。整体目标继续。
+
+
+## 146. 当前dev_vue追加044到175步完成（第二百一十六批）
+
+新增当前库入口及本地SSH包装器，固定dev_vue，逐项绑定真实恢复副本基线、CREATE丢确认/resume/replay三份回执、原174条历史、工具指纹和044参考定义。prepare阶段在同一独占连接调用原043完整证明检查，然后将当前174步历史及旧表快照持久化；apply复用该基线，追加唯一044步骤，结束立即重放并要求0DDL。
+
+核对API3010进程39080及控制台5508后暂时关闭连接。当前基线prepare通过，实际apply成功：DDL尝试1、确认1、175条历史全部completed，新回执表0行；升级前174条历史精确不变，受保护快照摘要不变。证据risk-receipt-current-baseline-20260909.json及risk-receipt-current-upgrade-20260909.json。没有策略/control默认写入或历史回填。
+
+API随后以可见PowerShell恢复，/health/ready返回ready/accepting/dependencies_ready均true。本次使用已经构建的最新dist-v4；未启动3011，未做浏览器正向业务验证。离线API注册98/98匹配，运行schema仍31项，两者不能混作完成率；7项升级定向测试及diff检查通过。
+
+当前库结构缺表前置已解除，下一步风险旧控制、策略、版本、状态逐字段映射及幂等回填，并完成当前库业务回执/前端恢复验收。风险业务尚不能因表已存在而宣称就绪，整体模块化目标继续。
+
+## 147. 风险旧全局控制转换及当前库只读预览（第二百一十七批）
+
+新增纯转换 risk-legacy-control-mapping：仅接受唯一 id=1 的完整旧控制记录，严格校验开关、原因长度、操作者及 UTC 日历时间；不做布尔宽松转换或缺失默认。旧系统 actor=0 映射可空外键但在源记录中保留原值，其它操作者必须实际存在。输出完整源对象及 SHA-256，目标初始 revision=1；此转换仅供后续受控插入，不能覆盖现有目标。源对象尚未持久归档，不等同迁移回执。
+
+4 项行为测试通过，覆盖保留开关/原因/操作者、源摘要漂移、系统操作者、缺失关联、非法字段、重复来源、非法日期和 UTC 毫秒。核对旧策略发现单笔手数、去重规则及平台控制上下界不能直接改名映射，未生成可激活的新策略。
+
+新增只读本地预览，在当前 dev_vue / 既有 UUID / UTC 的一致只读事务实际执行；risk-legacy-control-preview-20260909.json 记录旧控制 1 行、新控制 0 行，映射有效、操作者保留、写入 0。输出不包含原因正文和用户 ID。下一步完成源记录持久归档与同事务幂等回填、漂移/目标冲突守卫及恢复演练，再与策略、账户状态映射衔接。本次没有数据库写入、应用重启或浏览器验收；整体目标未完成。
+
+
+## 148. 风险控制同事务归档与幂等回填实现（第二百一十八批）
+
+复用已有 data_migration_runs/batches/row_receipts/checkpoints/source_rows，无新增 DDL。新增 risk-control-backfill 通过既有事务 repository 执行单条控制回填；调用方必须提供目标/结构准入校验，绑定 run 和源摘要。首次写入锁定源与目标，操作者关联重新验证，源漂移或目标非空拒绝；目标、batch、row receipt、原始 JSON 及 checkpoint 在同一事务完成。原始记录包含系统 actor=0，不以可空目标外键丢失历史含义。
+
+已确认的 batch 重放验证原始归档摘要和完整字段，不重新写目标，因此后续 V4 revision/开关变化不会被旧迁移覆盖。事务提交不确定由既有 repository 返回 commit_unknown，本模块不自行重试。新增 4 项事务模型行为测试，覆盖归档失败整体回滚、真实提交结果模拟丢响应后的精确重放、源漂移/目标占用/准入失败零写以及归档损坏；与转换 4 项合计 8 项通过。
+
+本批尚未接入实际 175 步目标准入器或执行 MySQL 回填；模型测试不能替代真实外键、锁和 commit 验证。下一步完成当前结构绑定与隔离真实 MySQL 中断恢复演练，再执行当前库受控回填。当前 dev_vue 数据未修改，整体模块化继续。
+
+
+## 149. 风险控制回填真实 MySQL 恢复演练（第二百一十九批）
+
+新增 verify-risk-control-backfill-local.mjs 及本地 SSH 包装器，在随机隔离参考库执行真实 MysqlBackfillRepository 和回填函数。六张目标/迁移表直接选取现有 003、005、007 规范 SQL，users 与旧控制来源为明确夹具，不读取或更改当前 dev_vue 业务数据。
+
+risk-control-backfill-reference-v2-20260909.json 记录 7 项通过：归档 INSERT 失败后业务/迁移六表全部零行；实际 commit 成功再注入丢响应返回 commit_unknown，重放后各表仅一行；开关/操作者/UTC 往返一致；后续 V4 revision=2 与开关更新在重放后保留；不同 run 不能覆盖目标且新 run 回滚；源变化拒绝且新 run 回滚；旧来源修改后归档仍完整等于初始记录。参考库已删除，当前库写入 0；回执绑定 SQL、转换、事务适配器、回填及探针源码摘要。
+
+本次真实证明覆盖隔离数据和实际 MySQL 事务，不包含当前库 175 步完整结构准入、并发调用或当前库正式回填。下一步绑定当前库结构/源预览及同连接写前守卫，再执行一次控制回填，随后继续策略和账户状态的语义映射。未重启应用，整体重构尚未完成。
+
+
+## 150. 当前 dev_vue 全局风险控制回填完成（第二百二十批）
+
+新增 risk-control-target-guard 与当前库入口/SSH 包装器。固定 dev_vue/既有 UUID/UTC，同连接持有既有升级锁；完整 175 步历史与已完成 044 回执精确一致，前 174 步与原 baseline 一致。相关 8 表先取得事务 metadata lock，再验证规范结构摘要和无触发器；原始数据与目标冲突在回填事务中锁定重查。绑定真实 7 项演练及其全部源码摘要，采用固定 run ID，以支持响应未知后精确重放。
+
+risk-control-current-preflight-20260909.json 只读预检通过；risk-control-current-application-20260909.json 确认实际 committed/replay=false/rows=1，立即重放 committed/replay=true，无 DDL，迁移历史仍 175 步。控制目标及原始数据归档与迁移回执同事务提交，旧表未写入。8 项本地行为回归通过。
+
+独立只读对账首次因旧新 reason 列 collation 不同报错；改用二进制精确比较，没有修改表或文本。risk-control-current-comparison-20260909.json 确认控制、原因、操作者、UTC 与旧记录一致，revision=1，归档 1 条。该差异属于跨旧新字符串比较规范需留意的迁移兼容点，不通过隐式文本比较推断数据丢失。
+
+本次全局控制已实际迁入当前开发库；策略、策略版本、旧账户状态和历史决策尚未迁入，不能据此宣布风险完整业务就绪。下一步逐字段完成策略控制语义与新模型差异，再推进账户状态及前端验收。应用未重启，整体目标继续。
+
+
+## 151. 全部旧风险策略版本字段预览与实际缺口（第二百二十一批）
+
+新增 risk-legacy-policy-mapping 纯字段预览器，保存原始配置文本摘要，输出可改名候选、未映射原值、原始平台控制及明确问题。候选不是完整 V4 策略，也不直接激活；不会将单笔 max_position_size 替换为总仓位，不丢弃去重字段或平台独立 min/max/locked/editability。无效数值不强转/截断，未知字段保留，values/defaults 与 controls/_controls 同时存在按歧义拒绝。4 项行为测试通过。
+
+在当前 dev_vue/既有 UUID/UTC 一致只读事务检查全部 10 个旧版本，3 个为当前 active_version。risk-policy-mapping-preview-20260909.json 仅导出版本标识、字段名称、源摘要和问题，不导出用户标识或原始配置正文。实际缺口：单笔手数 10 个版本，去重窗口与距离各 5 个版本，平台控制语义共 48 项。数据库写入 0。
+
+由当前数据确认，下一实施顺序必须先补 V4 单笔手数规则及独立平台边界，同步合同、后端解析/执行和前端可编辑能力；去重由 execution 公开能力承接，然后才生成可激活迁移策略。仅归档未映射规则不能算风险策略迁移完成。历史版本/变更关联及账户状态继续保持待完成，整体目标继续。
+
+
+## 152. 单笔最大手数模型、风险判定及 HTTP/前端字段（第二百二十二批）
+
+新增 maxOrderVolume / max_order_volume，独立于 maxTotalVolume。平台默认 0.05，与旧默认一致；平台配置缺失/非正数拒绝，不用总量替代。账户可向更严格方向修改，不能放宽平台上限。确定性 risk evaluateAction 对每笔市价单和挂单校验单笔上限，超限返回 RISK_ORDER_VOLUME_LIMIT，保留总量检查。
+
+同步域 HTTP 合同、运行 schema、生成类型、路由序列化/patch、前端 Zod 转换和保存映射；复用现有风险表单字段配置增加“单笔最大手数”，不新增通用 UI。DTO 将该字段设为必需，旧缺字段响应会被消费者拒绝；目前没有正式策略回填，已有策略回执历史 JSON 的兼容处理仍需在切换前核对。
+
+19 项确定性风险测试通过，包括上限相等、超限市价单/挂单和账户放宽拒绝。旧正常执行测试因新增 0.05 默认而提前拒绝，测试平台显式设为 1 以保留原测试意图，没有放宽运行默认。合同 25 项、API client 15 项、风险展示 3 项通过；server/trade 类型、两端边界及生成一致性通过。首次从根执行前端测试未被根配置发现，已在各包目录重跑成功。diff 检查通过。
+
+本批尚未补用户手动执行/最终派发路径的独立容量复核，也未做登录浏览器验收或重启服务；不得将此判定为单笔手数完整链路已验收。下一步补全部执行入口的最终单笔复核、错误中文展示及兼容证据，再将旧 max_position_size 纳入可迁移字段；平台独立 controls 和去重语义仍待实现。当前库数据未改变，整体目标继续。
+
+
+## 153. AI/手动执行持久化入口单笔手数复核（第二百二十三批）
+
+MysqlExecutionRepository 与 MysqlUserExecutionCommandRepository 使用事务内读取的最新有效策略，对每项预留手数追加 maxOrderVolume 检查，错误分别为 execution_order_volume_exceeded 和 user_command_order_volume_exceeded。回归首次发现只检查预留值不足：已批准评估可以包含较小的预留 volume，而动作正文手数更大。因此两入口同时检查市价/挂单动作正文，不仅信任评估结果或预留值。
+
+新增手动执行 MySQL 适配器行为回归，构造通过评估、较小预留和超限动作，验证 operations/reservations 写入前拒绝；与风险判定合计 26 项通过。原测试平台显式设置 0.1 以承载既有 0.1 手夹具，运行默认仍 0.05。类型/边界/运行合同检查通过，风险页面新增 RISK_ORDER_VOLUME_LIMIT 中文说明。
+
+本批检查点是准备/持久化执行意图的事务，不冒充最终 Bridge 发出时的检查。后续仍需检查派发前策略版本与命令正文复核、错误码消费者、缺字段旧策略 JSON 的显式兼容（部分基础设施解析器仍会合并默认值，第 152 节“缺失拒绝”仅指直接平台领域校验，尚不覆盖全部存储解析器）。当前库未写入，服务未重启，整体目标继续。
+
+
+## 154. 最终派发事务接入风险公开读取端口（第二百二十四批）
+
+新增 RiskDispatchPolicyReader 公开业务端口，由 risk/composition 将调用方同一 PoolConnection 绑定到风险自身的有效策略读取；worker-execution 和 bridge-gateway 运行入口注入 MysqlBridgeCommandRepository，不在 execution 新增风险表 SQL。order.place 在 markDispatched 状态更新前重读有效策略，校验用户/账户作用域、全局与账户开关、发送开关和当前单笔上限；校验对象是即将发送的不可变请求正文。
+
+新增订单派发规则与稳定错误码，BridgeCommandService 对确定性策略拒绝调用 markPreDispatchFailed，释放预留且不进行 transport.send。存储未知错误不伪装为确定拒绝；已派发/uncertain 仍走既有 reconcile，未增加重发。该检查与网络之间仍存在正常短间隔，不宣称数据库锁跨网络持有。
+
+Bridge 生命周期 26 项及手动执行边界 7 项通过，包含当前上限缩紧、开关暂停、跨账户、拒绝后无 socket 写且释放预留；服务端类型/边界/合同检查通过。此证据为规则和服务行为测试，真实 MySQL 派发事务端口、锁竞争及浏览器尚未验收，也未启动 Worker 或连接终端。下一步统一旧策略 JSON 兼容与错误消费者，再推进独立平台控制及历史策略迁移。当前库未写入，整体目标继续。
+
+
+## 155. 风险平台 JSON 兼容规则统一归属（第二百二十五批）
+
+移除 risk repository、AI execution repository、user execution repository 三处独立 platformValues，实现风险领域公开 readPlatformRiskValues，所有读取入口共用。保留旧 V4 flat/values 包装配置对缺省新增字段的兼容：maxOrderVolume 缺省为 0.05，独立于总量；显式 null/0/字符串/非法值拒绝，强制止损 false 不再被读取器偷偷覆盖为 true。蛇形旧规则、未映射 controls、未知字段与混合包装明确报 risk_platform_policy_unmapped，必须经正式迁移，不再静默丢弃语义。
+
+这是对第 152 节缺字段表述的落实修订：旧 V4 持久化缺字段采用单一明确默认；直接完整领域值缺字段仍拒绝。尚未将旧 V3 原始规则直接送入 V4 解析器。新函数只负责解析兼容与领域校验，不引入 MySQL/SDK 或跨模块内部访问。
+
+新增 13 项兼容行为测试，覆盖旧 flat/wrapped 同值、单笔不借用总量、非法/矛盾/未知规则拒绝、输入与默认数组不被修改。与 Bridge 生命周期、手动执行边界及确定性风险合计 65 项通过；服务端类型、边界和运行合同验证通过。本批未改数据库或重启服务。下一步实现平台独立 min/max/locked/editability 控制的公开模型、解析和前端权限，再解除实际 48 项控制语义缺口并迁移策略版本。整体目标继续。
+
+
+## 156. 平台独立控制领域模型及存储读取接入（第二百二十六批）
+
+对照旧 buildPlatformControls/applyAccountConfig 实现，新增规范 allowedMin/allowedMax/lockedValue/userEditable 数值控制。显式控制采用独立范围，账户可以高于平台默认但不能越界；未配置控制保持原有更严格方向限制。锁定值优先于旧账户覆盖值；禁止编辑时使用有界平台默认，editableFields 排除锁定和禁改字段。系统字段即使 control 声明 userEditable 也不会提升成账户可编辑字段。新写请求修改被锁字段在插入策略版本前报 risk_policy_field_locked。
+
+共享平台解析器现在接收规范 values+controls 包装，并严格验证控制字段、有限值、范围、锁定值、整数计数和正时长。未知旧规则仍按 unmapped 拒绝；新增 readPlatformRiskControls，风险、AI 执行、用户执行和最终派发（经风险 reader）全部接收同一控制模型。作用域及手动释放边界在有效策略完成后继续校验，不改变强制规则。
+
+新增 10 项控制测试及既有兼容/执行回归共 49 项通过，覆盖独立上限、锁定旧覆盖值、不可编辑、平台默认超范围归入边界、非法控制、系统字段及持久化包装读取。服务端类型/边界通过；初次类型测试显式 undefined 违反 exactOptionalPropertyTypes，改为省略可选属性；未知控制错误码保持原 unmapped 后回归通过。
+
+当前 HTTP 已返回有效值和动态 editableFields，但尚未返回上下界元数据，前端输入范围及 locked 写请求事务专门回归仍需补齐。旧策略控制映射、去重语义与回填未执行；不能将模型支持当作实际 48 项数据迁移完成。本批无数据库写入或服务重启，整体目标继续。
+
+
+## 157. 平台范围元数据 HTTP 与风险编辑器接入（第二百二十七批）
+
+有效策略增加可选 numericControls，HTTP 以 numeric_controls 返回按 wire 字段名索引的 allowed_min/allowed_max/locked_value/user_editable，数值以十进制字符串传输。域合同、生成类型、运行 schema、路由序列化与前端 Zod 同步；历史响应缺元数据解析为空对象，范围不存在时不展示猜测值。新生成有效策略会包含控制模型，后续历史 policy hash/receipt 的版本兼容仍须单独验证。
+
+复用现有 RiskPolicyEditorSheet、Input 与 FieldDescription，显示允许范围或平台锁定值，绑定 min/max 和 aria-describedby，提交前对新增修改检查允许范围。继续以服务端 editable_fields 控制能否编辑，客户端检查不能替代服务端校验。设计按 ui-ux-pro-max 的就近说明/非颜色表达及 shadcn-vue 现有组件要求处理，没有新增组件库。
+
+合同 26 项、风险领域/HTTP 29 项通过，既有组件源码检查 4 项通过；server/trade 类型、两端边界及生成一致性通过。初次批量替换误给人工解锁转换器增加不存在的 numeric_controls，类型检查发现并移除，重新验证通过。组件源码检查不代表浏览器交互或视觉验收。
+
+本批未登录浏览器、未更改数据库或重启服务。下一步补锁定写请求事务行为、精确元数据/旧回执兼容及旧平台控制转换；独立控制实际历史回填与去重字段仍未完成。整体目标继续。
+
+
+## 158. 锁定写请求事务回归与旧策略回执兼容（第二百二十八批）
+
+新增 lockedValue 和 userEditable=false 两种策略写入事务回归：当前拥有者请求仍返回 risk_policy_field_locked/422，执行器没有任何 INSERT/UPDATE/DELETE，事务回滚且不 commit。既有回执重放仍先于当前策略读取，不因新平台锁定而改变已经提交的历史结果。
+
+发现旧回执 values 缺 maxOrderVolume 时 HTTP 会输出字符串 undefined 并触发合同拒绝。修复为仅在原快照实际拥有该字段时序列化，HTTP 字段及前端接收改为可选，不为历史提交补造 0.05；当前策略仍由统一兼容读取器产生实际默认值。这区分了“现在如何执行”与“过去提交记录是什么”。历史 numericControls 缺省为空元数据，不修改存储回执及其摘要。编辑器缺字段初始化为空字符串，恢复成功仍按既有流程刷新当前策略。
+
+HTTP 回归验证旧快照 confirmed/200、不包含 max_order_volume、源对象未修改；合同消费者验证缺省字段仍为 undefined。事务/HTTP 7 项及合同 26 项通过，server/trade 类型及运行合同检查通过。首次 JSON 遍历遇到参数 required=true 布尔值，脚本停止于合同写入前；修正为仅处理列表后重新生成与验证。未改数据库、未启动服务或做浏览器验收。下一步继续旧平台控制精确转换和历史策略数据迁移，整体目标继续。
+
+
+## 159. 旧平台控制与单笔手数候选转换完成（第二百二十九批）
+
+risk-legacy-policy-mapping 将 max_position_size 明确映射 maxOrderVolume，去重字段仍保留为 execution 待处理。12 种实际旧数值控制按旧 RISK_RULES 硬范围计算有效 allowedMin/allowedMax/lockedValue/userEditable；完整原 controls 继续保留，不改历史。只接收明确的四字段/有限数值/布尔输入，无法表示的范围或整数规则拒绝转换；未知字段继续登记，activationReady 始终为 false。
+
+新增可重复的只读 preview-risk-legacy-policies-local，构建当前 server 后在 dev_vue 一致只读事务检查 10 个版本：48 项控制全部产生规范候选，剩余字段问题为去重窗口/距离各 5 个版本。risk-policy-mapping-preview-v2-20260909.json 记录实际平台解析：1 个接受，4 个 risk_platform_manual_release_boundary_invalid。这是新模型人工解锁默认上限与旧平台正常阈值不一致，不能通过静默提高解锁上限完成迁移。
+
+转换 4 项测试通过，server 构建与边界/运行合同通过。下一步明确旧策略迁移时人工解锁默认关闭与相关边界校验的语义，结合旧账户覆盖和锁定规则验证有效结果，再处理去重及版本关联。当前库写入 0；构建不等于运行服务已更新，未重启应用。整体目标继续。
+
+
+## 160. 旧策略人工解锁迁移语义及关闭后强制失效（第二百三十批）
+
+旧平台迁移候选明确设置 manualReleaseEnabled=false：不存在新授权时不自动开放人工解锁，不提高解锁上限以绕过正常阈值冲突。领域校验只在人工解锁启用时要求其上限不低于正常阈值，关闭时仍验证字段类型/范围。发现 manualReleaseApplies 原先未检查 enabled，补上当前能力开关，关闭后有效期内旧记录也不能继续释放规则。
+
+新增回归证明正常 daily loss=20、解锁上限仍5、能力关闭可解析；重新启用必须校验并拒绝不一致上限。另验证关闭后 assessManualRelease 返回 disabled，传入有效旧 release 仍按正常风险规则拒绝。34 项定向测试、server 构建/类型/边界/合同检查通过。
+
+当前 dev_vue 只读重跑：10 个版本、48 项控制候选，5 个平台版本全部通过新解析器及有效策略生成（合成账户作用域，不代表真实账户权限映射）。risk-policy-mapping-preview-v4-20260909.json 保留源摘要及明确 disabled_no_legacy_authorization 决策。剩余字段问题仍为去重窗口/距离各5个版本；真实账户覆盖、版本关系和历史归档尚待闭合。数据库写入0，服务未重启，整体目标继续。
+
+
+## 161. 当前账户策略与平台组合、撤权历史去向核验（第二百三十一批）
+
+扩展只读策略预览读取明确 active_version、scope/status 和当前/撤销所有权存在性；仅在唯一当前平台选择成立且账户所有者有效时生成当前账户有效策略，历史版本不猜测当时平台关系。布尔查询结果统一 Number(flag)===1，避免驱动返回字符串0时被 Boolean误判。
+
+当前 dev_vue 实际证据：平台版本9与账户版本10组合接受，四个账户覆盖字段均有新模型去向。另一个旧 active 策略集3/版本4没有当前所有权；追加核对确认账户与用户仍存在、旧关系role=owner但revoked=1，当前账户有有效所有者。因此将其归类 historical_revoked_owner_preserve_without_activation，保留原历史关系，不能移交给现任所有者或恢复授权。risk-policy-owner-disposition-20260909.json 与 risk-policy-mapping-preview-v6-20260909.json 记录上述结果，不导出用户身份。
+
+所有查询只读，数据库写入0。该预览证明当前关联与候选有效策略可解析，不证明历史各时刻配置语义完全相等，也不替代旧账户值归一、版本/变更原始归档及最终迁移。下一步处理 execution 去重规则和上述历史保留方案，再进行风险策略整包回填。整体目标继续。
+
+
+## 162. execution 归属的存量挂单去重领域实现（第二百三十二批）
+
+读取旧 live-pending-dedup 与 scheduler 最终发送前调用：dedup_price_atr 用于同用户/账户/策略、同规范品种和挂单类型的存量挂单价格距离，容差取 ATR倍数与broker tick/point较大者，不以magic单独确认归属。dedup_window_seconds 目前在旧server范围仅找到规则定义和迁移默认，未找到执行读取点；不能声称已存在对应运行行为，继续保留历史字段。
+
+新增 execution/domain/pending-order-dedup，接收规范请求和已验证来源的挂单快照，严格隔离user/account/strategy/instrument/type，缺失来源不当作系统自身订单。价格使用18位BigInt定点、ATR乘积36位比较，边界不经浮点四舍五入。ATR缺失或倍数0仍保留broker步长保护，缺失有效步长/非法价格明确拒绝，存量挂单不因旧时间窗口过期而被忽略。
+
+4项行为测试通过：精确边界及最小越界、ATR缺失/步长、全部作用域隔离、非法证据拒绝；server类型/边界/合同检查通过。该纯领域函数尚未连接最终派发，也未验证实时快照完整性和delivery/intent来源适配器；去重字段仍不从迁移待办中移除。下一步通过明确应用端口接入新鲜挂单快照和来源证据、事务内派发检查及无发送回归，再推进策略回填。本批无数据库写入或服务启动，整体目标继续。
+
+
+## 163. 去重专用完整快照应用端口与守卫（第二百三十三批）
+
+核对 trading 的 listPrivateCollection：来源/权限失效可返回 revision=0/items=[]，且页面读取接口不提供执行所需的新鲜度证明，不能直接把空数组用于去重放行。新增 execution 应用层 PendingDedupSnapshotReader 与 checkPendingDedup，要求明确完整标记、用户/账户、终端实例/epoch、所有权版本、预期集合版本和 UTC 采集时间。
+
+守卫冻结调用输入，读取后逐项核对上述作用域及版本，缺失/不完整/过期/未来快照均拒绝；只有完整新鲜的空快照可以得到“未发现重复”的结果。非空快照交给已有精确定点领域比较，重复返回 execution_duplicate_live_pending。端口要求适配器在调用方事务上确认投影来源与挂单来源关系，尚未绑定 MySQL 实现。
+
+新增11项应用行为测试，与领域4项合计15项通过，覆盖空快照有效/无效、epoch/撤权版本变化、过期/未来时间、真实重复及异步期间请求作用域变更；server类型/边界/运行合同检查通过。本批没有把空列表回退作为正式执行能力，最终派发/MySQL来源适配器仍待接入，去重历史字段仍保持未迁移。数据库无写入，整体目标继续。
+
+
+## 164. 交易模块专用挂单事务读取端口（第二百三十四批）
+
+新增 trading 公开 ExecutionPendingReader/Context/Snapshot，由 composition 创建同 PoolConnection 适配器。实现位于既有 mysql-trading-repository，复用 currentAccountSelect 与 projectionSourceMatches。先锁账户并核对当前owner/interval/revision/profile/instance，再锁定集合revision和provenance，要求期望epoch与唯一未断开session相符；读取全部挂单而非先过滤revision，混合版本、损坏JSON、跨账户正文或正文版本不符返回null。
+
+返回明确complete=true、UTC毫秒observedAt、revision和原生PendingOrder，仅在全部来源条件成立时允许空items。锁均留在调用方事务，无新连接、无commit，不把页面接口的revision0空列表当执行证据。此端口只证明交易投影来源，订单属于哪个策略仍需execution自身验证，不能用signalId或magic直接断定。
+
+新增9项MySQL适配器Mock行为测试，连同应用守卫11项共20项通过；类型/边界/合同和diff检查通过。初次引用不存在的parsePrivateItem被类型检查发现，改用现有parsePayload并显式验证account/revision/ticket后通过。尚未在真实MySQL读取验证该新端口，未接入最终派发；下一步execution来源适配与组合检查。当前数据库未写入，整体目标继续。
+
+## 165. 执行结果资源分类修正（第二百三十五批）
+
+检查挂单来源依赖的 execution_outcomes 写入发现：原结果票据提取不区分动作，position_ticket 优先于 order_ticket；失败或拒绝的挂单结果也可能被标为 pending_order。新增 executionOutcomeReference 并接入实际 persistExecutionOutcome 写入路径，按动作区分挂单、持仓与成交票据。失败/拒绝不形成资源归属，不确定结果保持 unknown；平仓不把 position_ticket 写成成交票据，市价订单的 order ID 不再直接当持仓 ID。原始 result_json 和摘要继续保存，已有数据库记录未重写。
+
+缺少相应资源票据时明确 unknown。该语义意味着旧错误归类记录在来源适配中还必须重新核对原结果及命令，不能仅信任 resource_kind；终端返回订单号但没有持仓号时也不能直接推断持仓归属。用于不确定命令对账的原始票据提示读取保持既有行为，与成功资源证据分开；后续仍需审查其动作匹配。
+
+5项新回归和26项命令状态机回归通过，server类型、边界、运行合同及diff检查通过。初次移除旧票据函数影响对账候选读取，类型检查发现后恢复该独立用途。尚未增加真实MySQL结果写入验收，未完成策略来源适配或最终派发去重。数据库无写入、服务未启动，下一批继续来源关联与主链路接入，整体目标保持未完成。
+
+## 166. 推理模块公开历史策略来源读取端口（第二百三十六批）
+
+新增 TradeDecisionOriginReader，由 inference 的 composition 绑定调用方事务，业务 index 仅导出端口与结果类型。SQL 留在 inference 内，核对 decision/riskDecision/user/account 和 accepted 状态，同时要求 trader run 成功，用户、账户、策略、策略版本、分析及输入快照全部一致。已核对实际决策生产者使用同一个 run 的 input_snapshot_id 并将 run 置 succeeded。历史来源不要求策略现在仍激活，也不替代当前账户授权。
+
+缺失、歧义、作用域不匹配返回 null，存储异常继续抛出，不能伪装为不存在来源。只使用调用方 execute 和 FOR SHARE，无独立连接或提交。该端口尚未接入 execution 来源组合器，不能表述为最终派发已完成。
+
+另核对 MT5 worker 的真实源码输出包含 position_id，在执行结果分类中补充对应字段及回归，仍不把订单 ID 推断为持仓 ID。9项来源适配器Mock测试和5项结果分类测试通过，server类型、边界、运行合同和diff检查通过；首次参数化空数组夹具被测试/类型发现，改为具名 rows 用例后通过。未运行真实MySQL或终端验证，未写数据库。下一步组合 execution 自有意图/结果/分发记录与本端口，再接派发守卫。
+
+## 167. 执行来源与交易快照组合适配（第二百三十七批）
+
+新增 execution 内 readPendingOrigins：同账户/用户/终端范围读取成功挂单意图、成功命令及相同结果摘要的成功 outcome；允许历史 epoch 早于当前重连。AI 通过 inference 的 TradeDecisionOriginReader 核对来源；分发通过 execution 自有 target/parent 关联核对目标用户、账户和子 operation。原始结果重新提取挂单票据，不依赖旧 resource_kind/ticket 分类。缺失策略证明、损坏正文或同票据策略冲突明确失败。
+
+新增 createMysqlPendingDedupSnapshotReader，将 trading 专用快照与来源组合为已有守卫端口，composition 可组装。保留快照的实际权限/epoch/revision，不用请求值覆盖来源；完整空快照无需扫描历史，投影 signal 标签不作为策略证明。尚未注入最终派发，symbol 到规范 instrument 的一致性仍需接入前核验。
+
+当前历史查询最多取1001条，超过1000明确拒绝而不截断放行；这只是安全边界，不是最终可扩展查询方案。接入主链路前需按当前票据收敛查询、验证旧错误票据兼容、账户终端路由及并发锁序，并完成真实MySQL验证，不能把该容量限制当作已完成的去重能力。
+
+9项来源测试、3项组合测试、11项守卫测试共23项通过，server类型/边界/运行合同和diff检查通过。首次空快照预期错误要求不存在的strategyId字段，修正为实际端口对象后通过。没有数据库写入、服务启动或真实交易。整体目标未完成，下一批继续来源查询和派发接入。
+
+## 168. 来源查询限定当前挂单票据（第二百三十八批）
+
+readPendingOrigins 改为显式接收当前完整快照 tickets，冻结、去重并验证规范票据；空集合不访问数据库。SQL 在用户/账户/终端/成功状态条件后，以参数化原始结果四个挂单票据字段筛选候选，避免仅按旧存储 ticket 筛选漏掉曾被持仓 ID 错误覆盖的结果。解析后再次要求实际选中的挂单票据在请求集合中，无关历史不再触发 inference 来源查询。
+
+原1000条限制现在针对匹配证据而不是账户全部历史，输入超限或匹配证据超限仍明确拒绝。JSON字段筛选仍可能扫描该账户历史，不能声称已走票据索引或完成性能优化；真实MySQL执行计划及索引化规范投影仍待核验。历史错票据兼容不能通过删除原始筛选简单解决。
+
+新增当前票据/无关历史、参数化原字段筛选及重复票据、空集合/非法票据测试，来源12项与组合3项共15项通过；server类型/边界/运行合同检查通过。未连接数据库或派发终端命令，下一批继续真实SQL验证与派发上下文，整体目标未完成。
+
+## 169. 来源适配器真实 MySQL SQL 语义验证（第二百三十九批）
+
+新增 verify-pending-origin-mysql-local，使用 server/.env 连接指定开发库，核对192.168.31.254/dev_vue/固定UUID及UTC后，在该连接创建7张临时表并运行当前构建的 execution 来源适配器和 inference 来源端口。没有将查询替换为Mock；临时表只保留查询需要的列，不作为正式DDL/外键和索引验收。结束销毁连接，临时表不会留给池中下一次调用；现有业务表写入0。
+
+实际5组检查通过：原始order_ticket与历史epoch、用户/账户/终端/epoch/持仓票据隔离、推理版本不一致拒绝、失败及结果摘要不匹配排除、分发目标用户与operation关联。两模块真实SQL在同一个事务执行，验证MySQL JSON字段筛选及跨模块端口协作；报告 pending-origin-mysql-local-20260909.json 保存身份、源码及构建摘要。
+
+server构建、边界及运行合同检查通过。此次不证明正式表迁移完整、索引性能、跨连接竞争或最终派发已接入；下一步仍需派发上下文、终端范围和并发锁序验收。没有启动应用或Bridge，未发送终端命令，整体目标未完成。
+
+## 170. 去重来源补齐券商与登录号范围（第二百四十批）
+
+检查派发上下文发现来源读取只有终端实例与epoch，没有明确券商/login。同一实例切换账户时不能只靠实例标识。ExecutionPendingContext、PendingDedupRoute 和来源适配统一要求 brokerServer/login；trading 对当前账户精确比较，守卫比较实际快照，execution SQL 用 BINARY 精确限定命令券商和登录号。组合适配保留实际范围，不从请求重新填充结果。
+
+35项定向回归通过；追加trading券商大小写变化和带前导零login拒绝用例后，该套11项通过。server类型、构建、边界、运行合同及diff检查通过。真实MySQL临时表探针重跑5组成功，包含 broker-demo 不等于 Broker-Demo、0123 不等于123；新证据 pending-origin-mysql-local-v2-20260909.json 保留旧报告。
+
+数据库持久业务写入0，未启动应用或发送命令。该改动补范围传播，不代表最终派发/并发去重完成；ATR、规范品种及策略配置上下文和锁序仍待接入。整体目标继续。
+
+## 171. 品种快照公开读取端口接入交易员 Worker（第二百四十一批）
+
+检查派发上下文时确认 inference 的 MysqlInstrumentSnapshotReader 直接查询 market_instrument_snapshots，缺少所属域公开读取能力。本批移到 trading：业务 index 只导出 InstrumentSnapshotReader/结果类型，composition 提供适配器；inference 上下文接收端口，worker-trader 在运行入口组装并注入。移除原 inference 重复实现，已接入现有交易员主调用链。
+
+读取保留账户/品种参数和原始精确数值文本；无记录返回null，不默认补造步长；非法正文形状或非正/不安全revision拒绝。6项读取回归和12项trader worker回归通过，server类型/边界/运行合同及diff检查通过。风险摘要读取和其它查询中的合约revision跨表关联仍待收口。
+
+当前server/src检索未定位到该表INSERT/UPDATE生产者，仅找到读取和关联；这不是全仓动态写入不存在的证明，需继续检查Bridge投影生产路径和数据库矩阵。不能以新增读取端口当作品种事实已存在，ATR和最终派发去重仍未接入。本批数据库无写入，未启动Worker，整体目标未完成。
+
+## 172. 服务端接入已有 Bridge 品种只读查询协议（第二百四十二批）
+
+核实 contracts/bridge-v4.schema.json 已含 market.instrument/SymbolParams，.NET Mt5WorkerQuerySource 调用 symbol_snapshot 并返回 instrument；MT5 worker 提供 point、tick_size/tick_value、volume范围及trade_mode。服务端 BridgeGatewayQueryTransport 原只支持 history 资源，查询入口缺失，不能把客户端支持等同入库链路完整。
+
+扩展现有 transport 的 queryInstrument 公共能力，复用当前租约、授权、进程route、并发限制、超时和响应关联，不另起网络客户端。请求冻结，新增品种请求构造及响应资源识别；品种成功结果要求恰好一项且无分页，字段正文仍由后续trading规范转换负责。原历史查询接口保持使用原参数族。
+
+新增真实transport内存sink往返与撤权不发送回归，连同历史收集和路由隔离共16项通过，server类型、边界、运行合同及diff检查通过。尚未发往真实Bridge，未写数据库。下一步实现trading品种结果规范转换、路由保护入库与采集触发；持久化及最终派发去重仍未完成。
+
+## 173. 品种方向权限修正与市场状态展示约束（第二百四十三批）
+
+核对MT5品种字段和MQL5官方交易模式定义，发现risk原parseTradeEnabled将所有正数视为可交易，丢失仅平仓和方向限制。新增trading公开instrumentTradePermissions解析，保留disabled/long/short/close/full语义；risk读取器复用，开仓动作按allowedOpenSides拒绝不允许方向。历史仅tradeEnabled字段保持兼容，明确终端mode不能被true覆盖；未知mode拒绝。前端增加对应操作拒绝原因中文映射。
+
+用户明确市场状态只显示“开市/休市”；已写入前端规范，交易权限不作为市场状态选项，也不直接推断市场开闭。没有新增仅平仓等状态徽标。12项权限解析和21项确定性风控测试共33项通过，server类型/边界/运行合同及diff检查通过。官方语义依据 https://www.mql5.com/en/book/automation/symbols/symbols_trade_mode 。
+
+本批未改数据库或运行真实终端，后台方向约束已接入风险读取和评估；品种投影入库与派发前复核仍待完成，整体目标继续。
+
+## 174. MT4/MT5 品种结果规范转换（第二百四十四批）
+
+新增 trading 的 normalizeInstrumentProjection。按实际客户端输出接受MT4的symbol和MT5的name，要求与请求券商原始品种完全一致；双字段冲突拒绝，不擅自去掉后缀。point/tickSize/tickValue/volumeMin/volumeMax/volumeStep统一为十进制文本，文本精度保留，MT5已收到的数值科学计数法显式展开；不声称恢复终端浮点发送前丢失的精度。
+
+缺字段、非有限/不安全数值、超过18位小数、无效步长和倒置手数范围拒绝；零tickValue保留原事实，不补默认盈利值。交易模式必须是终端0–4枚举，复用后台权限转换，保留trade_mode和allowedOpenSides，不增加市场状态展示。
+
+13项定向回归通过，server类型/边界/运行合同和diff检查通过。该转换尚待采集用例与持久化调用，未写数据库、未联系Bridge；入库仍需要请求/响应关联、当前路由权限再查、观察时间和版本防倒退，整体目标未完成。
+
+## 175. 品种投影事务写入适配（第二百四十五批）
+
+将既有applyTrustedProjection路由锁原样提取为trading内部lockTrustedProjectionRoute，原流投影继续调用。新增InstrumentProjectionWriter公开应用端口和composition工厂；实现复用账户/所有权区间/设备凭据/绑定/session锁，额外精确比较券商及login。生产写入必须携connection/installation/credential/ownership证明，不接受旧无连接调用路径。
+
+事务前冻结输入并规范转换，事务内锁品种行；相同完整payload重放不新增revision，期望版本不符拒绝，观察时间倒退或相等但正文不同拒绝，未来时间拒绝。写入规范字段、原始品种正文及用户/终端/所有权/源版本/观察时间证据；服务端revision递增，不将Bridge不透明sourceRevision当数字。网络查询仍在此写入端口之外。
+
+4项新事务适配器Mock回归、15项既有trading账户回归、6项stream回归共25项通过；server类型/边界/运行合同检查通过。提取产生的混合换行被diff检查发现，统一该文件换行后修复。尚未进行真实MySQL写入/并发验证，也未接采集触发；旧读取器还需按来源与新鲜度过滤，不能将入库接口完成当作完整品种链路可用。数据库实际写入0，整体目标未完成。
+
+## 176. 品种采集用例组合查询与写入端口（第二百四十六批）
+
+新增BridgeInstrumentCollector：冻结完整设备/所有权路由，先读品种revision，再调用queryInstrument，检查实际终端路由、资源、单项完整结果和观察时间，最后调用trading写入端口。网络查询不在数据库事务中，写入端口再次验证当前授权；结果带原sourceRevision和观察时间，不用收件时间刷新旧事实。
+
+8项定向Mock测试通过，覆盖调用顺序/版本传递、缺设备证明、过期或未来观察时间、分页/空结果和账户改变不写入；server类型/边界/运行合同和diff检查通过。首次测试显式给可选字段undefined违反exactOptionalPropertyTypes，改为移除字段后类型通过。
+
+采集用例尚未接调度/网关触发，也没有真实入库验收。当前观察时间要求在请求至完成窗口内，需在真实Bridge验证机器时钟误差及响应采样时点；不能以Mock证明时钟兼容。旧快照读者的来源/新鲜度与重连处理仍待收口。没有数据库实际写入或终端请求，整体目标未完成。
+
+## 177. 品种写入真实 MySQL 事务语义验证（第二百四十七批）
+
+新增verify-instrument-write-mysql-local，连接固定开发库身份与UTC会话，在同一连接创建9张临时夹具表，运行当前构建的writeInstrumentProjection完整SQL和真实begin/commit/rollback。只借用该连接，release不归池，结束销毁以清除临时表。正式业务表写入0；夹具DDL只覆盖所需列，不能代替正式DDL/外键/索引验收。
+
+实际4组检查通过：首次commit与同正文重放revision不增长；版本冲突/旧观察时间回滚；撤权后连重放也拒绝及login精确匹配；18位十进制文本、raw、来源所有权和UTC时间保留。instrument-write-mysql-local-20260909.json记录身份、源码及构建摘要。server构建/边界/运行合同通过。
+
+这证明单连接事务语义，不证明跨连接锁竞争、提交未知恢复、真实Bridge时钟或采集触发完成。下一步继续运行触发和来源有效读取；没有启动服务、真实终端请求或持久业务写入，整体目标未完成。
+
+## 178. 品种事实有效读取与刷新版本分离（第二百四十八批）
+
+trading品种读取加入当前所有者/revision、有效用户、档案绑定、实例和epoch来源比对、未断开且45秒内心跳session、300秒观察时间及未来时间排除；多条匹配来源拒绝。旧无来源记录不直接作为当前事实返回。现有trader通过同一公开reader使用这些检查，其它risk/execution直接读取仍待替换。
+
+新增只读InstrumentRevisionReader，采集用例使用该端口取得CAS版本，即使事实已过期或重连失效也能刷新，避免把失效事实的版本误当0。该接口只返回版本，不返回不可信旧正文。300秒为当前实现刷新上限，采集触发必须及时更新；尚未接触发，不能据此宣布交易员已可持续运行。
+
+26项定向测试、server类型/构建/边界/运行合同通过。真实MySQL临时表探针扩展至5组，验证当前可读、epoch变化不可读、所有权变化不可读、301秒过期不可读，同时readRevision仍为1；instrument-write-mysql-local-v2-20260909.json记录新证据。既有报告保留。正式业务表写入0，下一步继续运行触发与其余消费者，整体目标未完成。
+
+## 179. 风控品种正文读取迁至 trading 公开端口（第二百四十九批）
+
+MysqlRiskRepository.loadReviewCandidate 不再直接SELECT品种正文，改用trading的InstrumentSnapshotReader；API和risk worker运行入口均显式注入该实现。缺当前事实返回risk_review_market_context_incomplete，不回退到未经来源检查的旧表正文。配置/回执专用测试可不提供该能力，但调用风险评估读取时明确拒绝，不默认构造跨域SQL实现。
+
+品种数值和方向权限转换继续用于风险领域输入；候选/完成事务的revision跨表关联仍存在，本批不宣称该表所有跨域SQL已清除。25项既有风控与事务测试及新增1项端口失效不回退回归通过，server类型/边界/运行合同检查通过。首次补丁从文件末尾import向前匹配失败，未写入；重排补丁后完成。数据库写入0，采集触发及执行消费者仍待推进，整体目标未完成。
+
+## 180. 品种采集触发设计与增量请求结构（第二百五十批）
+
+检查bridge-gateway现有命令/历史消费者与队列，决定新增按需品种请求，不把品种塞入历史任务、不在网关轮询。收口方案18.7记录两轮复审、公开职责、ID-only队列、租约和未知结果处理以及实施顺序。
+
+追加045_instrument_collection_requests.sql：请求按user/account/券商品种/时间桶唯一，保留pending/running/succeeded/failed、lease token/期限、结果revision及机器错误。CHECK约束要求运行态有完整租约，终态有完成时间，成功有正结果版本。只新增DDL，不修改既有迁移或历史数据；尚未在数据库应用，也未完成独立升级证明或事务登记/队列消费者。diff检查通过，不声称DDL已经真实执行验证。当前已应用基线仍为175步，下一批继续持久登记及outbox，整体目标未完成。
+
+## 181. 品种采集请求与 outbox 同事务登记（第二百五十一批）
+
+新增trading公开InstrumentCollectionRequester及composition适配器。事务先锁账户，检查当前有效用户、owner及所有权revision，再以数据库UTC分钟桶去重。同用户/账户/券商原始symbol/分钟的请求重用同ID；新请求和instrument.collection.requested outbox同事务写入，事件正文只有request_id。允许symbol内部空格及后缀，不允许边缘空白、控制字符和超范围账户ID。
+
+outbox写入失败回滚，提交应答丢失报告instrument_request_commit_unknown，不把rollback调用等同已证实未提交。5项Mock行为回归覆盖新增事件、同桶重放、撤权重放拒绝、outbox失败和提交未知；server类型/边界/运行合同及diff检查通过。
+
+当前该事件尚未加入outbox消费白名单/队列publisher，也未接请求调用方，禁止把登记端口视为运行触发已完成。045未应用，数据库实际写入0；下一批接发布与网关消费者、租约状态及真实升级验证，整体目标未完成。
+
+## 182. 品种请求 outbox 发布到独立 ID 队列（第二百五十二批）
+
+将instrument.collection.requested加入outbox类型和MySQL领取白名单；publisher发布instrument.collection.collect到独立bridgeInstrument队列，正文只取requestId，账户和symbol等附带内容不传入队列。jobId继续使用outbox eventId，重放保持相同任务身份。队列纳入RuntimeTaskQueues创建与close生命周期。
+
+3项新发布回归验证ID-only、重放标识、缺ID拒绝和队列失败传播，连同11项现有runtime wiring共14项通过；server类型/边界/运行合同和diff检查通过。没有启动队列、迁移或网关，消费者与需求端仍未接上，045仍未应用。下一批实现租约领取/完成和网关消费者后再启用请求来源，整体目标未完成。
+
+## 183. 品种采集任务租约与回执验证（第二百五十三批）
+
+trading新增InstrumentCollectionTasks公开端口及MySQL实现。领取pending或已过期running任务时生成新token、增加attempts并设置90秒数据库UTC租约；活动租约返回busy及期限，终态不再领取。完成和释放同时限制请求、用户、账户、精确symbol、running状态、token及未过期租约。领取提交应答丢失报告instrument_request_claim_unknown，不向调用方返回未经确认的租约。
+
+新增10项任务端口回归，连同请求登记与outbox共18项通过。server类型、构建、边界、运行合同检查通过。真实MySQL临时表验证5组：活动租约互斥、用户/账户/大小写symbol范围、过期及接管后旧token拒绝、释放重领与成功终态不可覆盖、缺租约running违反CHECK。证据为docs/architecture/instrument-task-leases-mysql-local-20260909.json。
+
+探针从045取列和CHECK，仅去掉临时表不支持的外键，连接销毁后自动清理；正式表写入0，045仍未应用。这是单连接顺序状态转移证明，不是跨连接并发或正式迁移外键证明。网关消费尚未接入：下一步须处理busy延迟投递，避免90秒租约耗尽普通指数重试；补齐队列重试耗尽后的持久恢复及任务租约与事实写入的关系，再接需求端。整体目标未完成。
+
+## 184. 网关只读品种消费者与持久尝试上限（第二百五十四批）
+
+BridgeInstrumentWorker通过trading公开任务端口领取请求，再按数据库账户取得当前route并核对user/account，只有一致时调用已有collector。busy返回租约期限；采集失败释放租约并延迟5秒，原始错误不持久化。完成回执单独处理：条件更新未命中不报成功，应答异常向上抛出，不释放可能已成功的任务。
+
+bridge-gateway接入独立instrument队列消费者，使用moveToDelayed/DelayedError处理业务等待，避免busy消耗普通失败重试次数；消费者参与启动、关闭、就绪检查。AGENTS网关例外同步加入仅按请求ID处理的只读品种查询。MySQL领取增加5次持久上限：第五次活动租约仍保留，释放或过期后再次领取转failed，覆盖进程崩溃后的尝试计数；未修改045结构。
+
+28项定向测试、server类型/构建/边界/运行合同和diff检查通过。真实MySQL临时表新增第6组证明第五次活动租约不能提前取消、过期后转failed且旧token不能完成，报告instrument-task-leases-mysql-local-v2-20260909.json。此前报告保留，正式业务写入0；未启动网关、Redis或终端查询，045尚未应用，需求端尚未启用。
+
+下一步仍需收口：数据库/队列持续故障耗尽基础设施重试后的持久恢复；请求租约与事实写入事务的约束；正式迁移外键及跨连接并发；需求端接入与本地端到端。当前只证明消费代码、状态转移及定向测试，不宣称采集运行闭环或总体重构完成。
+
+## 185. 采集请求租约传入事实写入事务（第二百五十五批）
+
+BridgeInstrumentCollector调用要求collectionLease，Worker传入数据库领取的requestId/token，写入器在现有授权事务内按user/account/精确symbol核对running、token和数据库UTC期限并锁定请求行。锁顺序为账户及授权→请求→品种；写入后再次核对期限，等待品种锁期间过期则回滚本次写入。相同正文重放也先检查租约。独立事实写入端口保留不带请求的调用能力，但网关采集路径必须携带租约。
+
+第一轮复审确认租约校验归trading事务，Bridge仅传证明，未跨域写SQL。第二轮核对锁序和时间：领取/完成仅锁请求，不反向锁账户；已接管token不得进入写入，写入后复查覆盖等待品种锁的时间。任务完成回执仍是后续独立事务；事实可能已提交而回执未知，因此重投必须查询持久任务、按现有品种CAS重新处理，不能宣称两者已原子提交。
+
+24项定向测试、server类型/构建/边界/运行合同及diff检查通过。MySQL临时表探针6组通过，新增有效租约重放、旧token和过期租约拒绝且revision不变；证据instrument-write-mysql-local-v3-20260909.json。等待锁期间过期回滚由Mock验证，跨连接真实竞争仍待覆盖。正式数据库写入0，未启动服务或终端采集。下一步继续持久故障恢复、045正式升级验证和需求端接入；总体目标未完成。
+
+## 186. 未完成采集请求的持久恢复登记（第二百五十六批）
+
+新增trading公开InstrumentCollectionRecovery及MySQL实现。仅选择pending或租约已过期running、更新时间超过3分钟且无pending/dispatching outbox的请求；有界批量FOR UPDATE SKIP LOCKED，事务内登记新eventId的ID-only事件并更新恢复冷却时间，不修改租约或直接访问终端。已发布旧事件对应队列job耗尽重试时，新事件提供新的投递身份；业务5次上限继续由领取器负责。
+
+恢复调用接入现有scheduler-trade-history进程的调度循环，历史调度与品种恢复通过各自composition组装，未将业务合并到历史模块，也未增加网关轮询。第一轮复审确认只登记到期工作、队列仅携ID；第二轮确认事件与冷却同事务、提交未知明确报告、活动租约和终态不被恢复器更改。沿用进程名称以保持运行配置兼容；045未应用前不启动该新增能力。
+
+4项新增回归与server构建/边界/合同检查通过。MySQL临时表探针7组通过，新增冷却、已有待发布事件抑制及新eventId验证，报告instrument-task-leases-mysql-local-v3-20260909.json。仍是单连接临时表证据，不证明多调度器锁竞争、真实Redis恢复或正式外键升级。正式业务写入0，未启动调度器。下一步045升级证明、实际结构准备和需求端接入，整体目标未完成。
+
+## 187. 045增量登记及开发库父表只读核验（第二百五十七批）
+
+新增loadInstrumentCollectionMigration，将045固定源码摘要登记为inplace_045_01_instrument_collection_requests_v4，注册表共176步，完整保留此前175步对象及校验值。登记仅描述新表，不执行DDL或更新已生成的165步账户运行就绪合同；该合同只覆盖原有账户消费范围，后续品种能力就绪检查仍需接入。
+
+新增父表预检：users.id必须是非空int，trading_accounts.id必须是非空bigint unsigned，均为InnoDB单列主键。3项测试证明历史登记不变、兼容父表接受以及有符号类型/复合主键拒绝。使用当前env只读查询dev_vue的information_schema，确认父表条件满足、instrument_collection_requests_v4不存在。证据instrument-schema-prerequisites-20260909.json，数据库写入0，diff检查通过。
+
+此次只证明登记和父表前提，未把源SQL哈希当作实际表结构哈希。045仍未应用；还需正式DDL外键/约束参考、升级journal的提交未知恢复和重复执行验证，再升级当前开发库并接需求端。整体目标未完成。
+
+## 188. 单表升级协调复用与045中断恢复回归（第二百五十八批）
+
+将044已验证的单表升级检查/协调流程抽到single-table-upgrade-coordinator，原044包装保留错误码和入口，新增045范围包装。每次检查仍要求store验证实际连接身份、升级锁、执行计划、原迁移历史和受保护数据；新增明确拒绝缺少canonical DDL指纹的计划，不能将045源码登记直接视为可执行升级证明。
+
+第一轮复审核对共享边界：协调器只编排状态，MySQL/store负责实际证据与执行；044/045保留各自计划和范围。第二轮复审核对中断：开始记录、CREATE及完成记录应答丢失均停止当前调用，重入后核对日志和表，不盲目重发DDL；未知已存在表和结构漂移拒绝。风险升级工具的源码指纹列表加入新共享依赖；旧报告保留历史效力，但不代表新工具版本已经完成真实升级演练。
+
+14项登记、044回归和045协调测试通过，diff检查通过。本批045结构指纹在测试中明确是合成夹具，不作为真实外键/建表证据。正式数据库写入0，045仍待真实参考DDL、store和隔离演练后应用；总体目标未完成。
+
+## 189. 045真实MySQL外键与并发参考（第二百五十九批）
+
+本地Node经临时SSH通道在已核验UUID的MySQL新建随机隔离参考库，执行原045完整DDL，父表只建立已核验类型的主键。4组验证通过：真实user/account外键拒绝孤儿、业务范围唯一性且symbol区分大小写、租约/成功状态CHECK、两个连接并发领取仅一个获租约且接管后旧token无法完成。SHOW CREATE TABLE记录canonical DDL；参考库和本次通道均已清理，existingDatabaseWrites=0。
+
+报告instrument-schema-reference-20260909.json用于loadInstrumentCollectionUpgrade：要求源码摘要、指定数据库UUID、完整检查项、通过状态及参考库清理证据，绑定canonical DDL哈希和完整referenceHash，不改此前登记checksum。新增绑定/拒绝残缺证据回归，7项升级测试和diff检查通过。首次Python调用多传了mode参数，在连接前被拒绝；按其单输出路径接口重跑成功。
+
+该参考不是当前dev_vue的真实迁移。045仍未应用；尚须实现验证实际身份/升级锁/175步日志/受保护数据的store并在隔离恢复库验证，再实施当前库升级。并发证据限于请求领取与旧token回执，不覆盖事实写入等待锁的真实竞争。整体目标未完成。
+
+## 190. 045 MySQL升级执行器约束（第二百六十批）
+
+新增mysqlInstrumentCollectionStore，复用既有日志、快照和表结构哈希工具。每次写入前核对数据库/UUID/UTC/root可见性、同连接升级锁及无其它客户端，重新加载绑定真实参考的计划，对照持久基线175步历史和受保护表快照。新表必须是无触发器的InnoDB基础表；记录开始时要求表不存在，执行DDL要求对应started日志，完成要求真实结构哈希一致且表为空。缺日志结构明确拒绝，不将缺表检查视为已完成升级。
+
+本次新增连接及表保护回归，连同登记/协调共13项通过，diff检查通过。实现沿用044执行器的检查模式，未改已执行迁移SQL或checksum；共享单表协调器负责中断状态编排。本批没有调用实际执行器写库，尚未生成并验证隔离恢复库175步基线；下一步补齐该演练入口和真实中断/续跑，再应用当前库。045未应用，整体目标未完成。
+
+## 191. 隔离恢复库045真实中断与续跑（第二百六十一批）
+
+新增本地演练入口及临时SSH通道包装，在dev_vue_m1_source_20260909_01核验固定UUID、175步日志、既有风险结构和空回执表，保存instrument-restored-baseline.json。原有175步历史与既有恢复报告一致；基线源工具指纹、真实045参考和受保护数据快照在每轮校验。
+
+prepare不执行DDL；inject-create-loss真实建表一次后模拟应答丢失，日志为started、状态reconcile；resume核对真实结构后仅完成日志，DDL为0；再次resume为completed且DDL为0。四份instrument-upgrade-{prepare,create-loss,resume,replay}-20260909.json均通过，受保护数据摘要一致，续跑与重放176步日志完全相同。升级锁和临时通道随每轮退出释放，未删除既有恢复库或备份。
+
+本批只修改隔离恢复库，当前dev_vue写入0。源SQL、DDL指纹、外键参考、实际MySQL store和中断续跑均已有分层证据，下一步核验当前开发库基线并实施045追加升级；实际需求端与运行联调仍待完成，整体目标未完成。diff检查通过。
+
+## 192. 当前dev_vue追加045并恢复本地API（第二百六十二批）
+
+新增当前库执行入口，执行前核验隔离演练基线、工具摘要、真实参考及create-loss/resume/replay三份证据，按当前175步日志建立独立instrument-current-baseline.json。当前风险数据允许已有业务记录，使用当前全表受保护快照固定并逐阶段对账，不套用隔离库空表假设。
+
+首次prepare因本地3010账户API连接占用被执行器拒绝，DDL为0。确认PID45960只运行本项目run-local-account-api后暂停，重跑prepare通过。apply真实执行045一次并完成第176步；replay为completed、DDL和确认计数均为0，原有表数据/结构快照在store检查中保持一致。证据instrument-current-prepare-v2、instrument-current-apply、instrument-current-replay-20260909.json；失败报告保留，未改旧SQL或历史checksum。
+
+退出升级锁及通道后关闭旧API控制台，按原start-api.ps1和account-api.env在可见PowerShell控制台恢复3010。/health/ready返回status=ok、accepting=true、ready=true、dependencies_ready=true。未启动Bridge网关、调度器或真实终端查询。当前开发库已应用基线为176步；下一步接需求端和品种能力就绪检查，再验证本地采集闭环，整体目标未完成。diff检查通过。
+
+## 193. 交易员品种事实缺失时登记采集并等待（第二百六十三批）
+
+TraderContextBuilder在当前账户和基础投影校验后，发现品种事实缺失/失效时通过trading公开InstrumentCollectionRequester登记需求，返回trader_contract_pending。worker-trader运行组装必须注入该能力；TraderWorker保持queued并返回5秒deferred，由已有BullMQ延迟分支重投，尚未beginTrader或调用模型。请求登记提交未知也进入等待，后续使用既有同分钟范围去重核对；其它登记错误仍按既有失败处理，不一概吞掉。
+
+每次重试重新核对交易窗口、策略及分析有效期；分析过期先拒绝，不再登记品种请求。该需求触发不改变市场状态展示，仍只显示开市/休市，券商方向权限留在内部校验。
+
+15项交易员测试通过，新增普通登记/提交未知均不领取模型或调用模型，以及分析过期不登记。server类型/构建/边界/运行合同和diff检查通过。没有启动trader/gateway/调度器或发送终端查询；本批只是将需求端接入代码，当前运行API未因构建自动重启。品种能力就绪检查、其它消费者及本地队列采集闭环仍待验证，整体目标未完成。
+
+## 194. 品种请求能力的启动就绪检查（第二百六十四批）
+
+从045已验证参考生成instrument-collection-schema.ts，包含迁移ID/checksum及表结构哈希，不携数据库身份或业务数据。复用交易schema checker的升级锁、完成日志、结构指纹、触发器和连接清理逻辑，允许显式追加能力要求。worker-trader、bridge-gateway、scheduler-trade-history在启动业务消费者/循环前执行该检查；原165步账户要求保持原语义。
+
+生成一致性加入server类型检查和构建；22项schema回归、类型/构建/边界/运行合同检查通过。直接对当前dev_vue运行编译后的能力checker通过，报告instrument-schema-ready-20260909.json记录runtimeSchemaReady=true及目标表存在，数据库写入0。
+
+这是启动时结构检查，尚不是持续运行的全链路健康证明；也未覆盖品种事实表所有消费者的结构需求。没有启动新Worker、调度器或终端请求，当前API不因构建重启。下一步本地队列/网关采集联调及其余风险/执行需求端收口，整体目标未完成。
+
+## 195. 本地真实BullMQ延迟与失败重试验证（第二百六十五批）
+
+从网关入口提取createBridgeInstrumentProcessor，队列层处理moveToDelayed及DelayedError，业务端口继续只返回采集/终态/等待。网关使用同一适配器，入口保留健康状态与进程生命周期组装。
+
+本地127.0.0.1:16379的独立随机前缀队列实测2组通过：attempts=1时等待后再次消费成功，完成时attemptsMade=1；完成应答未知模拟错误触发正常失败重试，第二次业务读取终态后完成，attemptsMade=2。使用生产编译队列适配器，业务run为显式夹具，未连接MySQL或发送终端查询。报告instrument-queue-local-20260909.json；Worker/事件连接关闭后仅删除本次独立队列，未清空共享Redis。
+
+13项业务与outbox回归、server构建/边界/合同/生成一致性及diff检查通过。这是队列重投证据，仍不是数据库请求→outbox→真实网关→事实写入的完整链路验收。下一步继续组合这些真实适配器验证隔离业务链路，不触发真实下单；整体目标未完成。
+
+## 196. MySQL与Redis组合采集链路验证（第二百六十六批）
+
+扩展临时表探针，将真实requester登记/同分钟去重、数据库outbox正文、publisher、独立Redis队列、生产队列适配器、BridgeInstrumentWorker/Collector、MySQL事实写入器与任务完成串联。新请求完成后读取当前有效品种版本；不同队列job重复投递相同requestId返回terminal，查询夹具调用仍为1，事实revision不增长。
+
+共7组探针通过，instrument-pipeline-local-v2-20260909.json明确记录验证边界及关键源码/编译文件摘要。首份报告保留；第二次补充边界和摘要后重新验证。数据库全部业务写入只在连接临时表，连接销毁清理；Redis只删除本次随机前缀队列，无真实终端请求。
+
+明确未覆盖：outbox行由测试直接交给publisher，未经过dispatcher领取；route和query响应是夹具，未经过真实WebSocket transport、设备或终端。临时表是最小列结构，正式045外键由先前独立参考验证。本批不声称运行服务或完整终端链路完成。下一步补dispatcher/transport边界及风险执行消费端，整体目标未完成。diff检查通过。
+
+## 197. 组合链路纳入真实outbox领取和退避（第二百六十七批）
+
+临时表补齐outbox自增ID、租约及发布时间字段，使用MysqlOutboxRepository和OutboxDispatcher实际领取/状态更新。首次publisher故障夹具触发pending退避并清理租约；按真实到期时间再领取，实际Redis发布后标记dispatched。消费者完成、重复请求不再采集，后续dispatcher领取为0；outbox attempts=2且发布时间存在。
+
+首次立即领取断言失败，逐步定位为数据库时钟领先本机约1.36秒：v4报告记录databaseNow=04:00:09.903Z、applicationNow=04:00:08.548Z。测试改为最多10秒轮询真实到期，不回写available_at、不改生产时间或重试规则；自然退避后v5报告7组通过。该差值只是当次观测，不推断为固定偏移，也不是展示时区。
+
+证据instrument-pipeline-dispatcher-local-v5-20260909.json，前4份失败报告保留。生产业务代码未变，临时表连接和独立Redis队列已清理。仍使用fixture route/query响应，未覆盖真实WebSocket及终端；下一步继续传输和其它消费端，整体目标未完成。diff检查通过。
+
+## 198. 组合采集链路接入查询transport与回环WebSocket（第二百六十八批）
+
+替换直接query响应夹具为BridgeGatewayQueryTransport与InProcessBridgeGatewayDirectory，绑定127.0.0.1随机端口的真实WebSocket。模拟终端解析并核对query.request品种参数，通过响应request_id/correlation_id及route返回事实；生产transport解码关联后进入Collector和MySQL写入。链路仍包含真实outbox失败退避、Redis投递、任务完成和重复消费不再采集。最终inflight=0。
+
+instrument-pipeline-websocket-local-20260909.json共7组通过。测试Worker、WebSocket两端/监听器、Redis独立队列及MySQL临时表连接均清理，正式业务写入0。明确边界：WebSocket为回环连接，用户授权/当前route与终端数据是模拟；未经过生产网关认证握手，也未连接真实Bridge/MT5，不能据此宣称真实终端验收完成。
+
+本批强化已有链路证据，无生产协议修改。下一步回到风险与执行消费者，收口跨域品种读取、需求触发及挂单最终派发检查；真实设备联调仍待独立验收，整体目标未完成。
+
+## 199. 手动执行上下文的品种正文迁至公开端口（第二百六十九批）
+
+MysqlUserExecutionCommandRepository.loadContext不再直接SELECT品种正文，API组装注入trading InstrumentSnapshotReader，复用当前来源、所有权、epoch和时效检查；端口失败不回退旧表。方向权限使用instrumentTradePermissions，避免各域重复解释trade_mode。未提供该能力的事务专用测试仍可构造repository，但调用上下文读取时明确拒绝。
+
+缺少明确symbol时不再取账户最新任意品种充当目标，返回不可用品种上下文；多品种批量操作应按其实际目标准备各自上下文，尚待整体流程验证。原normalizeSymbol仍转大写，券商原始symbol与标准symbol映射是后续必须处理的边界，不把本批端口替换视为已解决。currentRevisions中的跨表版本复核及其它执行分发关联仍存在。
+
+7项既有命令边界、12项权限及1项新增端口失效不回退测试通过，server类型/边界/合同/生成一致性与diff检查通过。本批没有数据库写入、重启或真实命令发送。下一步规范品种身份并继续版本端口和最终派发检查，整体目标未完成。
+
+## 200. 手动命令保留券商品种大小写（第二百七十批）
+
+确认HTTP现有Symbol合同允许大小写，但手动执行领域参数、commandContext及repository.normalizeSymbol三处强制转大写。移除这三处转换并保留现有字符范围验证；XAUUSD.a读取和下发action均保持原值，大小写不同的请求摘要不同。账户货币和风险允许列表的既有标准化未改，标准品种映射也未凭名称猜测。
+
+9项边界/端口测试、既有命令service测试、server类型/边界/合同/生成一致性与diff检查通过。此改动不迁移历史幂等摘要：旧key对应不同规范化正文时应冲突，不能绕过已持久请求。带空格品种仍不在现有HTTP Symbol合同范围，后续须按原始品种与标准品种职责同步合同和消费者，不能据本批宣称品种身份已全量支持。
+
+数据库写入0，未重启或发送真实命令。执行通用领域仍有其它symbol标准化和跨表revision检查待收口，整体目标未完成。
+
+## 201. 执行动作与风险预留的品种一致性（第二百七十一批）
+
+定位execution.approvedRiskData仅将预留symbol转大写，而intent.action保留原值，导致XAUUSD.a动作对应XAUUSD.A预留。移除预留侧转换，保留与已批准动作完全一致的symbol；首尾空白原始动作明确拒绝，不只在预留中trim产生不同身份。账户货币标准化和现有风险数值计算未改。
+
+新增大小写预留一致及首尾空白拒绝回归，连同执行状态机/持久边界共17项通过；server类型/边界/合同/生成一致性及diff检查通过。没有重写历史预留或发送交易，数据库写入0。带空格品种的完整合同仍未放开，标准品种映射和最终派发去重仍待继续，整体目标未完成。
+
+## 202. 最终派发去重接线前的并发缺口复核（第二百七十二批）
+
+直接检查markDispatched、locked、checkPendingDedup及风险映射预览，确认最终事务尚无去重调用，risk尚无对应参数，现有快照不能覆盖已发送但尚未进入终端投影的挂单。locked已先锁账户，可作为串行化基础，但单独接纯快照guard仍不足以保证不重复发送。
+
+在收口方案18.8补齐两轮复审及实施边界：策略参数和冻结ATR来源先行，终端活跃挂单与execution未决派发共同检查，当前命令排除自身，queued竞争者不互相占用，未知结果须经对账才能释放。明确不同范围隔离、投影延迟及两连接验证要求。本批修改方案而未冒进接入不完整校验；数据库写入0，无测试或运行状态新增结论。下一步按18.8落实参数与来源端口，整体目标未完成。
+
+## 203. 风险领域增加系统ATR去重倍率（第二百七十三批）
+
+只读核验旧server/routes/ai/risk-policy.js：dedup_price_atr默认0.05、范围0–5、user_editable=false。V4 RiskPolicyValues新增pendingDedupAtrMultiplier并沿用这些语义，缺字段旧V4 JSON按0.05补齐。数值必须有限且在0–5；platform controls不能扩大至5以上或标记用户可编辑；账户patch仍不允许此系统字段。0仅代表ATR项为0，现有去重比较器仍至少使用tick/point距离，不等于关闭去重。
+
+9项新增及14项兼容测试通过，server类型/边界/合同/生成一致性与diff检查通过。有效策略值新增字段会影响策略摘要，旧评估应按既有摘要/版本校验失效，不回写旧策略或旧决策。
+
+本批只完成领域参数，HTTP DTO/消费者展示、旧dedup_price_atr显式迁移映射及最终派发使用尚未接上，映射预览暂不移除未完成标识。数据库写入0、未重启，下一步同步合同及冻结ATR来源，整体目标未完成。
+
+## 204. ATR倍率只读HTTP合同与前端解析（第二百七十四批）
+
+RiskPolicy响应新增pending_dedup_atr_multiplier，服务端使用定点文本形式序列化当前领域值；合同限制0–5的十进制字符串。账户patch及editable_fields未新增该系统字段。前端contracts解析为pendingDedupAtrMultiplier，兼容旧V4响应未提供字段时返回undefined，不自行伪造服务器值。字段只读数据解析已完成，页面尚未增加展示。
+
+同步生成OpenAPI、前端HTTP类型和服务端运行合同，仍为31项已登记运行操作。55项前端contracts测试及类型检查、6项服务端风险读写合同测试、server类型/边界、生成一致性通过。首次根vitest选择未包含前端包，随后使用包自身test脚本完整验证；Python改JSON产生CRLF差异，已恢复LF，diff检查通过。
+
+未写数据库或重启服务。旧字段迁移、冻结ATR来源和最终派发去重仍待实现，不能将接口新增字段当作执行规则已生效；整体目标未完成。
+
+## 205. 决策对应冻结分析的公开读取端口（第二百七十五批）
+
+核验AnalysisContextBuilder及TradingAnalysisMarketSource：当前冻结输入包含K线与可选EMA34，不含ATR。新增inference公开TradeDecisionAnalysisReader及事务组装入口，先验证accepted决策与succeeded交易员运行归属，再沿该决策market_analysis_id读取对应分析运行及输入快照。SQL关联用户、分析策略版本、精确品种和快照ID，保留调用事务共享锁；验证payload摘要、analysis类型、策略与品种、规范UTC时间。分析策略与交易策略可不同，返回时分别保留正确来源，不误用交易策略筛选分析输入。
+
+缺少或损坏来源返回null，数据库错误向上传播；这与有效快照中未提供ATR不同。没有读取任意最新分析、补写ATR或将模型正文解释为指标。当前端口尚未接最终派发，后续需确定冻结K线ATR计算口径及标准/原始品种对应，并组合未决派发占用。
+
+13项新增读取测试及9项既有归属测试通过；server类型、模块边界、运行合同与生成检查通过。测试初次空数组参数被it.each展开，已修正为对象用例后重跑通过。无数据库写入、重启或真实终端操作。现有工作区包含大量累计且相互依赖的未提交实现，本批不单独提交依赖尚未独立收口的端口；整体目标继续推进。
+
+## 206. 冻结分析ATR定点计算（第二百七十六批）
+
+按只读核验的旧H1/H4优先级与14项TR简单均值口径，新增frozenAnalysisAtr并接入TradeDecisionAnalysisReader返回值。只使用冻结且摘要已验证的K线；最后15根已收盘数据产生14项TR，18位BigInt计算、末步四舍五入。未收盘K线不参与价格计算，样本不足可回退冻结H4；足够样本但价格损坏、时间倒序/重复、未来或未真正收盘等均拒绝，不静默回退。定向复核与精度兼容差异记录在收口方案18.8。
+
+13项计算测试及13项读取端口测试通过；服务端类型、边界、合同生成检查通过。覆盖价格跳空、极小精度、循环小数舍入、H4回退、会话间隔与异常输入。没有真实MySQL或终端新增验证，没有写库/重启。最终派发仍需消费该证据及未决占用，整体未完成。累计依赖尚未独立收口，本批未单独提交推送。
+
+## 207. 开发依赖回归虚拟机（第二百七十七批）
+
+按用户纠正，MySQL与Redis均使用虚拟机192.168.31.254；本地只运行应用。server/.env的Redis旧IP已改，移除account-api.env中的Redis覆盖及run-local-account-api的loopback强制值，API与browser realtime启动器共用基础配置。健康验证报告改为记录实际Redis地址，不再硬编码本地地址。虚拟机Redis6379经现有凭据PING通过，本地API可见控制台重启后dependencies_ready=true。
+
+用户要求卸载本机Redis；已停止redis-server及承载控制台，确认本机Redis进程0、6379/16379监听0。它是工作区便携程序，未发现注册Windows服务。安装目录、测试数据、zip、配置及启动脚本的删除两次被工具策略blocked by policy拒绝，未删除，不能宣称卸载完成。遗留文件均在D:/dev_codex/.local-runtime/dev-vue下。此前本地Redis探针仍带loopback前提，后续须显式调整测试环境，不能重启本地实例。未清理虚拟机Redis键或MySQL数据。
+
+## 208. 虚拟机Redis下的API、队列和采集联调（第二百七十八批）
+
+新增developmentRedisConnection读取server/.env，限定开发库与已确认虚拟机地址、验证端口/DB/凭据存在。品种队列探针与完整pipeline fixture共用该配置，移除本地16379及account-api.env的Redis依赖；报告记录实际host/port/db，不输出凭据。仍使用每次随机队列前缀，只清理本次队列，禁止flush共享DB。
+
+实际配置192.168.31.254:6379 DB3：instrument-queue-vm-redis-20260909.json两项延迟/未知完成重试通过；account-api-vm-redis-20260909.json八项API、身份入口及自有登录事务验证通过并清理自有事务；instrument-pipeline-vm-redis-20260909.json七组真实MySQL临时表、Outbox Dispatcher、Redis/BullMQ与loopback WebSocket采集回写验证通过。后者新增配置helper摘要及依赖地址。只有模拟终端与固定授权/route，未证明真实Bridge认证或MT5数据链路；正式MySQL数据写入0。整体重构与最终派发去重仍未完成。
+
+## 209. 终端快照与派发占用组合校验（第二百七十九批）
+
+新增execution应用层PendingDispatchOccupancyReader及checkPendingDispatchDedup。先验证完整新鲜终端快照，再校验同账户、同route的完整占用集合；当前command与queued竞争者排除，dispatched/accepted/uncertain/reconciling及未对账succeeded继续参与相同策略/精确品种/类型价格比较。无deadline释放规则。重复commandID、来源不明、集合scope或项账户归属错误均拒绝。该端口要求适配器在同一账户锁事务读取，并只有确凿对账后才移除成功占用。
+
+13项组合校验与11项既有快照校验通过，服务端类型/边界/合同检查通过。数据库占用读取、成功占用释放证据及markDispatched接线尚未实现，本批不构成两连接并发或真实派发证明；没有运行服务或数据库写入。累计工作仍未独立提交，整体目标未完成。
+
+## 210. 恢复查询补选终端结果（第二百八十批）
+
+检查成功占用释放所需对账证据时发现listReconciliationCandidates关联bridge_command_results_v4，却沿用只选command和request的selectCommand，导致row.result_json始终缺失，terminalTicket不能从已有结果中恢复。现显式选出匹配当前result_sha256的r.result_json；同时将c.*改为CommandRow实际使用的明确列，避免表扩展隐式改变查询载荷。
+
+新增SQL投影模拟回归：仅JOIN不SELECT时无法返回ticket，修复后保留超安全整数的文本ticket；另验证查询上限在读库前拒绝。2项新测试及26项命令状态机测试通过，server类型、边界、合同生成及diff检查通过。ticket仍只是恢复提示，不能据此释放挂单占用或确认成交；通用resultTicket的资源优先级及成功命令投影覆盖证据仍须继续核对。本批未运行数据库或重启网关，尚无真实MySQL恢复查询新增证据；整体目标未完成。
+
+## 211. 按命令资源选择恢复ticket（第二百八十一批）
+
+只读核验.NET Mt5TerminalCommandSource.ReconcileParameters：terminal_ticket按原命令传入pending_ticket或trade_ticket，无提示时才采用原参数ticket或命令引用。原服务端通用resultTicket优先position，可能把挂单结果的position当order传入；平仓结果也不能用成交ID替换待核对持仓。新增execution领域bridgeReconciliationTicket并接入恢复查询：order.place按market/pending区分引用，其它命令只取冻结请求中的原目标；同类显式引用冲突返回null，保留长整数字符串，拒绝不安全数字。未知结果的提示不等于成功证据，未改变派发或结果状态。
+
+8项引用测试、2项恢复查询测试及26项命令状态机测试通过，server类型、模块边界、合同生成及diff检查通过。没有真实终端或MySQL新增验证，没有重启/交易。成功占用释放与最终派发接线仍待实现，整体目标未完成。
+
+## 212. 挂单派发候选的事务读取（第二百八十二批）
+
+新增readPendingDispatchCandidates：调用方持有账户锁时，按用户/账户/精确终端/券商/login及历史epoch有界读取dispatched、accepted、uncertain、reconciling、succeeded挂单命令，不按deadline或时间窗排除。显式列查询及FOR SHARE，冻结动作摘要、kind、价格文本和候选作用域校验；payload使用LEFT JOIN，缺失必须报错，不能因INNER JOIN漏掉占用。1001条探测上限并拒绝截断，保留精确券商品种与18位价格。返回的是候选，未冒充已验证策略归属或已释放占用。
+
+核验terminal_history_orders_v4及insertOrder：历史证据存在账户、ticket和原始内容，但未独立存terminal_instance/broker/login，不能只凭同ticket历史行释放占用。后续需来源验证、投影覆盖或确切终态证据适配器，不能将该候选读取直接作为完整占用服务。13项候选及13项组合guard测试通过，server类型/边界/合同及diff检查通过；无真实数据库查询、迁移、重启或终端操作。整体目标未完成。
+
+## 213. 派发候选的历史策略归属（第二百八十三批）
+
+新增readPendingDispatchOrigin：AI来源要求source_id与risk_decision_id一致，并通过inference公开TradeDecisionOriginReader核验决策、用户及账户；分发来源按精确intent/source target、目标账户、用户、child_operation关联历史distribution策略，保留事务共享锁，不读取今天的订阅设置替换历史来源。明确user_command返回非策略范围；不支持的来源、缺失/歧义证明和非法策略ID均拒绝。
+
+8项新归属测试及13项候选读取测试通过；server类型、模块边界、合同生成及diff检查通过。该适配器是候选转占用的来源步骤，成功占用释放证据、完整组装及markDispatched仍未接线；没有真实数据库、终端或并发新增证明，整体重构未完成。
+
+## 214. 派发候选与分发归属的真实MySQL验证（第二百八十四批）
+
+新增verify-pending-candidates-mysql-local.mjs，限定192.168.31.254/dev_vue及既定UUID/UTC，通过同一连接CREATE TEMPORARY TABLE遮蔽所需五张表，执行实际编译后的候选与归属读取。报告pending-candidates-mysql-20260909.json四组通过：成功候选的精确价格/分发归属；BINARY券商身份、未来epoch及queued排除；uncertain保留及错误child_operation拒绝；缺失payload不因JOIN丢失而明确报错。报告记录实际数据库身份与两项编译代码摘要。
+
+服务端构建及其类型/边界/合同生成检查通过，探针完成后回滚测试事务并销毁连接清除临时表。正式表写入0，无Redis或终端操作，未重启运行服务。此为简化临时DDL下单连接SQL行为验证，不代表完整正式表约束、账户锁或双连接并发验收。成功释放证据和最终派发组装仍未完成，整体目标继续。
+
+## 215. 派发占用与已覆盖终端投影组装（第二百八十五批）
+
+新增createMysqlPendingDispatchOccupancyReader组合候选、历史策略归属和已验证终端快照。guard传入前一步projectionRevision，适配器复核同版本、scope、route及完整性；成功候选按当前resultHash读取精确intent/account成功outcome，只有ticket、品种、类型及策略归属被当前快照覆盖才移除原始派发价格占用，交由已执行的快照guard使用当前价格比较。非成功状态始终保留，成功ticket缺席/证据缺少均不视为释放，明确手动非策略来源排除。
+
+9项适配器测试及13项组合guard测试通过，server类型/边界/合同生成及diff检查通过。覆盖当前价格变化、结果缺失、不同策略、快照版本变化及未知命令保留。本批没有终态历史释放证明；历史成功命令缺席仍保留，因此尚不接入最终派发，避免将未完成的释放规则作为长期行为。无数据库/服务/终端操作，整体目标未完成。
+
+## 216. 历史采集事务重验当前终端路由（第二百八十六批）
+
+检查终态释放证据来源发现MysqlTradeHistoryCollectorRepository.lockAccount只校验账户ID/platform。新增trading公开TerminalFactRouteGuard及事务组装工厂，复用既有lockTrustedProjectionRoute核验当前所有权区间、设备凭据、绑定、连接epoch及connectionId，并追加BINARY broker/login与platform精确校验。历史collector的begin/persistPage/complete/fail均先调用注入端口再接触同步/历史数据，移除其弱账户SQL；bridge-gateway入口完成工厂注入，跨域只通过index和composition规则协作。
+
+4项新回归确认四个入口撤权/路由校验失败时无历史SQL、无commit且rollback/release；9项历史归属回归保留，测试夹具显式记录guard先于sync的调用。初次旧断言仍要求collector自身账户SQL，修正为公开端口调用顺序后13项全通过。server类型/边界/合同生成及diff检查通过。未重启网关或操作真实数据库/终端；此改动加固新增事实入口，未给旧历史数据补造终端来源，终态释放证据仍未完成，整体目标继续。
+
+## 217. 历史订单来源追加结构与释放缺口复审（第二百八十七批）
+
+收口方案18.9完成职责及兼容/并发两轮复审，追加未执行046_terminal_history_order_provenance.sql，关联历史订单与精确终端身份、查询响应、原事实摘要及来源摘要；保持旧历史JSON、hash和归属不变。唯一键支持同订单/响应幂等，实际写入需检查摘要冲突而非忽略重复。当前只落结构设计，尚未进入迁移计划注册、真实DDL参考、演练或readiness；未启用新表写入。
+
+明确MT4只有history.trades导致挂单撤销/到期证据缺口；当前候选扫描含全部succeeded，需最终增加可索引释放登记，否则历史累积触发1000上限。不得用时间过期释放、提高上限或只保守保留作为最终实现。diff检查通过，无SQL执行或服务重启；下一步完成来源证据写入/验证及升级准备，整体未完成。
+
+## 218. 历史订单来源证据规范化（第二百八十八批）
+
+新增historyOrderProvenance应用函数，供事务路由授权后的来源写入使用：核对history.orders响应类型、精确终端/broker/login/epoch、正整数账户/归属版本、UTC观察/发送/接收时序、事实摘要及该事实确实存在于响应items。保留query correlation、request ID、response ID及source revision，生成稳定来源摘要；receivedAt排除于摘要外，保证同一响应延迟重放不产生假冲突。046仍未执行，补充query_message_id字段以保留correlation。
+
+9项定向回归、server类型/边界/合同生成及diff检查通过；覆盖路由不符、证据不属于响应、未来观察和接收时间重放。未接新表写入、未执行SQL或重启。来源元数据本身不证明订单终态，终态校验、迁移参考/演练/readiness及占用释放登记仍待完成，整体目标继续。
+
+## 219. 历史来源的幂等事务写入器（第二百八十九批）
+
+新增persistHistoryOrderProvenance，供已授权路由的同一账户/sync事务调用：先按account/platform/ticket锁定历史订单并比对原始摘要，再构建来源证据，按orderId/responseMessageId锁定幂等记录；同摘要返回原id，不更新接收时间，不同摘要明确冲突。新插入使用全部显式列与占位符，受影响行数不为1拒绝，不使用INSERT IGNORE或覆盖旧记录。底层异常直接交给事务所有者处理。
+
+5项写入测试及9项来源构造测试通过，server类型/边界/合同生成及diff检查通过。覆盖原始事实不匹配、幂等重放、证据变化冲突及丢失插入确认。写入器尚未接运行入口，046尚未执行，也未完成真实DDL/FK或事务验证；没有数据库写入或重启。下一步真实参考结构及升级准备，整体目标未完成。
+
+## 220. 046真实DDL参考与事务验证（第二百九十批）
+
+新增verify-history-provenance-reference-local.mjs及私密stdin/短时SSH隧道runner，复用既有VM本地测试机制，不输出root凭据。固定目标UUID，新建随机隔离参考库，最小users/account/history-order父表后执行046完整DDL；运行实际编译的来源写入器并获取SHOW CREATE TABLE及迁移SHA。history-provenance-reference-20260909.json四组通过：真实插入/重放/摘要冲突、三个外键、版本与摘要CHECK、事务回滚保留首条来源记录。参考库已删除，existingDatabaseWrites=0。
+
+server构建及其边界/合同检查通过，diff检查通过。046此后保持已验证源不改动；若需要纠正应追加新迁移。当前dev_vue未执行046，未完成176→177计划注册、恢复副本演练、现库保护快照或启动readiness；唯一键并发、真实完整父表兼容及完整collector接线也未由本次最小父表参考证明。整体重构未完成。
+
+## 221. 046在位升级计划登记（第二百九十一批）
+
+新增history-provenance-upgrade.mjs，沿用045真实参考与原176步，固定046源SHA d794d24368c2904bcaeabcea8d88263363548042320a3e8536f8479157558113、单条CREATE范围及priorRegistryHash，生成第177步。真实参考afterHash仅附加于执行step，不反向修改已登记checksum。载入参考时校验数据库UUID、迁移摘要、四组检查、已清理及无现库写入；协调器限定176→177和精确目标表后复用single-table coordinator。
+
+9项node测试通过：全部旧步骤/新checksum保持稳定、重复计划摘要一致、非法参考拒绝及错误目标在访问store前拒绝。diff检查通过，无数据库连接或写入。数据库store、完整父表验证、恢复副本演练与现库升级/readiness仍待完成，不把计划登记当作迁移已执行，整体目标继续。
+
+## 222. 046存储校验与现库缺失历史父表（第二百九十二批）
+
+新增独立mysql-history-provenance-store，复用045保护机制但不修改已冻结旧工具，要求root/UTC/精确库UUID、当前连接拥有升级锁、无其它客户端、176步保护基线、计划及旧数据快照不变。新增父表结构前置检查，verifyPlan在接触迁移日志前拒绝父表未就绪。
+
+只读现库报告history-provenance-parents-v2-20260909.json证实users/trading_accounts正确，但terminal_history_orders_v4不存在。首次失败报告未记录父表明细，已补充诊断并再次只读确认。inplace现有迁移没有该历史事实表CREATE，仅025含history migration checkpoint。故此前176→177单表方案的现库前置假设不成立，不能执行；最小父表参考通过仅证明046本身DDL。下一步先盘点历史域完整结构缺失并设计前置表升级，再重新登记046的实际序列；旧046源码保持不变。相关store/计划测试通过，数据库写入0，整体目标未完成。
+
+## 223. 历史域完整现库盘点与前置结构草案（第二百九十三批）
+
+新增只读inventory脚本与trade-history-schema-inventory-20260909.json，确认仅checkpoint存在、7张历史运行表缺失。追加未执行047，从013取7条CREATE并去除IF NOT EXISTS，排除checkpoint；再取014/020/026中的4条相关ALTER，保留审计索引、可空历史归属区间与明确货币证据。限定来源语句数量7/1/1/2，记录来源文件，无旧数据DML。
+
+收口方案18.10完成两轮修正复审：计划改为176→187运行结构→188来源表，047依赖先于046；既有176步和已参考执行的046源码不改，旧未执行046计划注册必须重做。schema inventory为只读，未创建现库表或启动服务；diff检查通过。真实组合DDL、逐步恢复与readiness尚待完成，整体目标继续。
+
+## 224. 历史前置结构与046组合真实参考（第二百九十四批）
+
+新增独立history-runtime-reference工具与报告。随机隔离库以最小外部users/account/ownership-interval父表为脚手架，按047顺序执行7条CREATE及4条ALTER，逐步记录语句摘要、SHOW CREATE及最终7表结构，再执行原046并运行来源写入器。history-runtime-reference-20260909.json五组通过，包含11步顺序、真实写入/重放/冲突、三个来源外键、CHECK及事务回滚；参考库清理成功，既有库写入0。
+
+本批比最小history-order父表参考扩大为完整历史7表及后续变更，但外部三表仍为明确脚手架，不冒充恢复副本或现库完整外键验证。047已执行参考验证，此后源保持冻结；若纠正需追加。diff检查通过，无现库升级、服务重启或终端操作。下一步基于逐步真实结构登记176→188计划并准备恢复副本演练，整体未完成。
+
+## 225. 完整176→188历史结构计划登记（第二百九十五批）
+
+新增history-runtime-upgrade.mjs，固定047源SHA并验证组合参考的服务器、源文件、检查项及11步顺序/语句摘要/每步canonical DDL，登记7条CREATE、4条ALTER及最后046。每次ALTER绑定此前同表afterHash为beforeHash，最终8表摘要与参考一致；原176步逐项保留，046新登记基于187步前置摘要。旧单表协调器即使apply=true也明确拒绝，防止使用被否定的176→177假设。
+
+4项新计划测试及既有9项测试通过。初次范围判断仅允许表名后空格，遇到ALTER换行误拒绝，修正为SQL空白后重跑4项全通过；diff检查通过。未执行数据库操作，实际188步store、逐步恢复协调器和副本演练仍待完成，整体未完成。
+
+## 226. 历史结构多步断点恢复协调器（第二百九十六批）
+
+新增history-runtime-coordinator，按完成日志前缀推导各表当前结构，允许同一表后续ALTER更新摘要；所有目标表均预检，未登记的提前建表、结构冲突、日志跳步和未完成批次已有业务数据均拒绝。每次begin、DDL及complete之间重新验证计划、旧176步、保护数据与各表状态；只有已登记started且真实结构等于该步afterHash才能补记完成，不重复DDL。异常确认未知立即退出，下一次调用重新检查。全部完成后允许正常业务行存在，但仍核对最终结构。
+
+41项协调器内存适配器测试及4项真实参考计划载入测试通过，覆盖12步各自begin/execute/complete确认丢失、DDL未生效、完整重跑零DDL和冲突拒绝。本批未连接数据库、未执行迁移，内存失败注入不代表MySQL真实断线恢复验收。下一步实现绑定身份、排他锁与保护快照的多表MySQL store，再进行恢复副本演练；整体目标未完成。工作区仍有大量相互依赖的累积改动，本批依赖未提交的188步计划，未独立提交或推送。
+
+## 227. 多表MySQL升级适配器与执行摘要补强（第二百九十七批）
+
+新增mysql-history-runtime-store，复用既有精确数据库UUID/root/UTC/排他锁/无其它客户端检查，独立校验users、trading_accounts、ownership intervals三个外部父表键类型。动态表名仅允许8张新增表，检查真实SHOW CREATE、InnoDB、无触发器和精确行数。保护快照排除本批8表，保留其它表；begin/execute/complete均再次调用完整协调器检查计划、旧日志、保护快照及所有目标表，再按当前唯一可执行步骤执行。
+
+计划摘要新增绑定priorSteps与added执行列表，防止只修改执行视图而全量registry摘要不变。首次测试发现完整plan含旧验证函数不能structuredClone，改为明确复制执行数据及prior.steps，保留函数在外部verifyPrior端口。5项新store只读/拒绝用例、41项协调器、5项计划及4项原身份检查共55项通过，diff检查通过。尚未验证新store真实写入链与恢复副本；下一步准备持久基线、完整旧结构验证回调和演练入口。本轮无数据库连接或迁移，累积依赖尚未独立提交，整体目标继续。
+
+## 228. 176→188恢复副本真实升级与确认丢失演练（第二百九十八批）
+
+新增rehearse-history-runtime-upgrade-local.mjs及独立私密SSH隧道runner，固定dev_vue_m1_source_20260909_01与既有服务器UUID。准备阶段核对176步真实日志、旧结构与风险/receipt/instrument表，确认8张新表缺席，并持久写入history-runtime-restored-baseline.json（排他创建、sync，不覆盖）。新工具与046/047源摘要写入基线，后续运行保持一致。
+
+history-runtime-upgrade-{prepare,create-loss,alter-loss,resume,replay}-20260909.json五份报告通过：prepare零DDL；首个CREATE成功后注入确认丢失，识别reconcile；从该断点继续执行另6次CREATE和首条ALTER后再次注入，仍识别reconcile；resume补记ALTER并执行剩余4条DDL，188步完成；再次resume零DDL。五次baselineHash和protectedSnapshotHash一致，最终8表存在且为空，188条日志全部completed。注入发生在真实DDL返回之后，验证的是协调器确认丢失恢复，不冒充真实网络断线或MySQL进程崩溃演练。
+
+本批仅改变恢复副本，currentDatabaseWrites=0，当前dev_vue仍未执行本轮12步；未重启服务、启用来源写入或操作终端。语法和diff检查通过。演练工具及已记录摘要依赖后续保持不变；下一步准备当前开发库专用基线/升级入口及readiness，整体架构目标尚未完成。
+
+## 229. 现库升级入口与副本证据执行门（第二百九十九批）
+
+新增apply-history-runtime-upgrade-local.mjs及独立current runner，固定dev_vue与既有UUID，准备/执行分离。现库保护基线使用排他创建与sync；保留已有业务行，逐项核对旧176步和风险/receipt/instrument结构。执行前须验证恢复副本基线、五份报告与工具源码摘要，基线绑定整组演练证据摘要，避免准备后替换证据。
+
+新增history-runtime-rehearsal-gate核对prepare、CREATE确认丢失、ALTER确认丢失、恢复、零DDL重放五阶段；校验精确身份、日志checksum/状态、DDL数量、每步实际表结构及保护快照一致。已用真实私有基线和五份报告通过只读验证；11项可移植测试覆盖通过与缺失报告、目标/工具/保护数据变化、虚假完成、重复DDL、日志/结构变化及非空表拒绝。脚本语法与diff检查通过。新入口尚未连接当前库，未保存当前基线、执行DDL或重启服务；启动readiness仍待补齐。整体未完成，累积依赖未独立提交。
+
+## 230. 历史模块启动结构检查（第三百批）
+
+新增history-runtime-schema生成器，从已验证188步计划生成全部checkpoint checksum和8张历史表最终结构摘要，加入server类型检查及构建的生成漂移检查。trade-history拥有独立只读readiness，通过composition供API、Bridge gateway和历史scheduler在监听/消费前按顺序调用；不会跨域导入trading内部实现，也不会与其它模块争抢同一个升级锁。
+
+检查UTC会话、升级排他锁、188步checksum及所有日志completed、8表SHOW CREATE摘要和无触发器；连接/结构失败统一trade_history_schema_not_ready，释放锁异常销毁连接。16项行为测试通过，覆盖全部目标表缺失/漂移、日志异常、触发器、UTC和锁行为。初次类型检查发现测试夹具字面量类型过窄，明确测试记录类型后server类型/边界/合同和生成一致性检查通过；修改文件换行统一后diff检查通过。
+
+尚未构建并重启运行角色，当前dev_vue仍176步；新检查启用后该库在完成升级前应拒绝启动。下一步完成现库基线、升级、零DDL重放及真实readiness验证。来源writer仍未接collector，整体重构未完成。
+
+## 231. 当前dev_vue升级至188步并恢复本地API（第三百零一批）
+
+构建通过后，核实本地API PID39208及其专用PowerShell父进程43068，暂停两者释放现库连接。current prepare通过176步日志/旧结构验证并持久保存history-runtime-current-baseline.json；执行12条DDL完成188步，再次apply零DDL。history-runtime-current-{prepare,upgrade,replay}-20260909.json三份报告baselineHash和protectedSnapshotHash一致，最终8表存在，188条日志全部completed，升级与重放日志完全一致。
+
+恢复可见PowerShell本地API，加载本轮构建；新增历史schema gate已在监听前实际通过。account-api-history-upgrade-20260909.json记录8项真实API/Redis检查通过，/health/live和/health/ready均200，Redis为192.168.31.254:6379（8.0.5），本次登录启动测试自建事务已清理。补查时误用/health得到404，正确健康端点由既有smoke报告确认，不能把旧路径404解释为服务不健康。
+
+本批仅升级开发库，未涉及公网或终端交易。旧数据保护快照一致不代替全部历史功能验收；新来源writer尚未接入collector，MT4挂单历史覆盖、来源终态证明、可索引占用释放和最终派发防重仍待完成。整体架构重构继续，累积依赖尚未独立提交。
+
+## 232. 历史订单采集事务接入来源写入（第三百零二批）
+
+188步结构验收后，MysqlTradeHistoryCollectorRepository.persistPage在当前路由授权、sync锁和事实兼容检查后，逐订单写入事实，再在同一连接事务调用persistHistoryOrderProvenance；来源冲突或写入确认异常向外传播，由整页事务rollback，sync更新时间不会提前成功。已有相同来源按摘要幂等重放。入口在首次await前复制route、response和now，避免调用方在连接等待期间改变本次证据。
+
+5项新增collector组合测试及既有来源构造9项、来源writer5项、route guard4项、归属9项共32项通过，服务端类型/边界/合同生成和diff检查通过。测试使用SQL适配器模拟，证明组合调用和回滚路径；真实MySQL来源writer已有参考验证，但本批尚未验证完整collector事务、启动Bridge网关或实际终端采集，也没有终态释放结论。下一步补充完整采集事务真实依赖验证及公开终态证明读取，整体目标继续。
+
+## 233. 完整采集页事务真实MySQL验证（第三百零三批）
+
+新增verify-history-collector-mysql-local.mjs及专用SSH隧道runner，随机隔离数据库执行冻结047/046组合DDL，调用本轮构建的真实MysqlTradeHistoryCollectorRepository及来源writer，记录collector构建摘要。外部父表使用明确脚手架，route guard测试替身仅锁定测试账户；报告明确不覆盖真实所有权/会话授权。
+
+history-collector-mysql-20260909.json五组通过：11条前置结构、采集事实/来源共同提交、重复响应保持原receipt、同页后续订单来源冲突回滚前面新事实/来源及sync更新时间、回滚后有效页面可继续提交。测试库已删除，existingDatabaseWrites=0。首次runner调用多传mode参数，被参数检查拒绝且未访问数据库；改用runner要求的单一报告路径后通过。构建及边界/合同/生成检查通过，无运行服务重启或终端操作。
+
+本批扩大到真实collector页事务，但不证明双连接竞争、Bridge真实授权、终态证明或最终派发释放。下一步继续实现历史终态公开证据端口及其消费者，整体目标未完成。
+
+## 234. 订单终态时间证据校验与生产者缺口（第三百零四批）
+
+核对.net Mt5ProjectionSyncSource使用history_orders集合，现有Python _normalize_history_order将time_done缺失回退time_setup并产生通用time_utc_msc；服务端投影也接受该通用字段作为done时间。因此旧doneAt投影本身不足以证明完成，不能用它直接释放命令。
+
+新增terminalOrderCompletion纯领域校验，复核原始JSON摘要及重新解码结果与存储投影一致；仅filled/cancelled/rejected/expired可提供事实层终态，MT5数字枚举严格限定平台。完成时间必须来自明确done/close UTC毫秒字段，多字段矛盾、晚于观察或早于setup拒绝；只有通用历史时间则返回未证明。19项测试及服务端类型/边界/合同生成检查通过，diff检查通过。
+
+该函数尚未作为完整释放证明公开或接执行消费者；缺少路由来源、命令身份和实时挂单矛盾校验。生产者还需提供独立完成时间且保留旧事实摘要兼容，不能直接改变原始记录格式导致同ticket重采冲突。下一步设计追加完成时间证据的兼容路径，补齐MT4/MT5生产者和公开读取端口；无数据库/服务/终端操作，整体未完成。
+
+## 235. 完成时间追加证据方案与MT5原生提取（第三百零五批）
+
+收口方案18.11记录两轮复审，采用独立版本化完成证据集合，保留旧history_orders原文/摘要，并明确.NET同批SQLite缓存、服务端追加证据存储、MT4独立枚举及执行域消费者的后续边界。禁止修改原事实格式引发重采冲突。
+
+新增MT5 order_completion.py纯提取函数，只读取原生time_done_msc/time_done；零/缺失返回未证明，不回退setup。秒与毫秒矛盾、非整数/布尔/负数/溢出、转换UTC无效或晚于观察均拒绝；时钟验证异常直接传播，保留毫秒。7项Python离线测试通过，diff检查通过。尚未接Worker输出或Bridge缓存，未运行真实终端、数据库或服务；整体目标继续。
+
+## 236. MT5分页历史批次追加完成证据（第三百零六批）
+
+history_range_sync在原订单集合完成范围过滤后追加order_completion_evidence（version=1/platform=mt5/items），只从该页选中的原生订单且实际输出的ticket提取。明确终态才产证据，保留原生状态、UTC完成时间、时区偏移和观察时间；未知/部分成交/缺少原生完成时间不产生证明。重复ticket或损坏时间拒绝批次，原history_orders内容不变。正常分页继续复用已有原生快照，不增加终端查询。
+
+70项Worker测试及8项提取测试通过，覆盖两页订单证据不串页、范围过滤和旧原文不新增字段。新增Python依赖加入已识别源码启动和release复制/布局检查，PowerShell仅做语法解析，未执行启动、打包或发布。diff检查通过。该集合尚未被.NET缓存和服务端合同消费，不能作为端到端证明；下一步接入同批缓存和查询传输。整体目标未完成。
+
+## 237. 回归核心架构与统一验收入口（第三百零七批）
+
+按用户最新要求，收口方案18.12覆盖终端细节的优先级，Bridge完成证据缓存等留后续阶段。当前实时对账为98/98业务路由、950/950 Schema编译，服务端与前端已检测边界均无越界；运行同源校验仍31项，不换算整体完成率。
+
+新增verify:server-boundaries、verify:api-contracts、verify:architecture统一命令。协议例外清单明确6条认证method/path及理由，inspect-api-contracts现拒绝额外、缺失、重复例外；2项正反例测试通过。完整verify:architecture运行通过，保留core-architecture-check-20260909.log，diff检查通过。本轮没有数据库/服务/Bridge操作；后续优先API运行校验覆盖及数据所有权收口，核心与全栈目标尚未全部完成。工作区含大量累计依赖，未将混合改动整体提交。
+
+## 238. 历史API模块同源校验收口（第三百零八批）
+
+listTradeHistory/getTradeRecord接入合同请求、成功及problem响应校验，认证先于输入检查；AuthError保持原始状态而非转为通用503，损坏响应返回受校验的稳定错误且不泄漏字段。测试发现域合同未声明401，补充两操作401响应并同步OpenAPI、运行Schema和前端生成类型。运行校验登记从31增至33项。
+
+11项历史核心/HTTP测试通过，覆盖鉴权优先、非法查询不访问数据、损坏成功输出拦截、正常列表/详情及未知币种空值；前端api-client1项和contracts6项通过，server类型/边界/合同生成及api-types一致性检查通过，diff检查通过。未重启服务或操作数据库，属于核心API标准化工作；Bridge细节继续延期。剩余65操作仍需按模块核对，整体目标未完成。
+
+## 239. 学习读取API同源校验（第三百零九批）
+
+listLearningCourses/getLearningCourse接入请求、成功和错误响应校验；补齐400/401/404/421/503的problem合同，错误Host优先拦截并返回受校验错误，详情仍只解析www会话及执行原有内容权限。异常输出拦截且不回显损坏数据。同步OpenAPI、运行Schema及前端生成类型，登记操作35项。
+
+12项学习读取测试、11项学习完成既有测试及2项前端合同测试共25项通过；server类型/边界/生成及api-types检查通过，diff检查通过。覆盖非法cursor不读库、损坏DTO拦截、Host优先、受限内容不泄漏。学习写入仍沿用原事务/幂等实现，本轮不将其既有错误路径视为新增验收。未重启服务或访问数据库；继续核心API模块收口，整体未完成。
+
+## 240. 设置API同源校验（第三百一十批）
+
+readAdminSystemSetting/updateSystemSetting接入请求、成功及problem响应校验，运行登记从35增至37项。保留认证/CSRF在先、应用层配置策略、精确版本及幂等冲突；HTTP调用现有纯命令校验以保留策略拒绝422，再验证传输合同，应用服务继续独立校验。写入返回后DTO异常映射setting_commit_unknown/503，提示保留原请求编号和内容，不自动重试。读取仍区分NULL、空值、缺失和受保护凭据；错误处理封装限于settings传输层。
+
+11项服务端设置测试和23项api-client包测试通过（其中4项设置消费者测试）；server类型、边界、运行Schema生成一致性检查通过。新增覆盖鉴权优先、非法请求头不写库、损坏成功输出不泄漏及提交未知语义。未改变数据库、重启服务或推进Bridge细节。当前只证明源码与离线合同行为，核心架构目标尚未全部完成；累计改动依赖交织，未整体提交。
+
+## 241. 返佣规则API同源校验（第三百一十一批）
+
+commerce现有两个HTTP操作listReferralRules/updateReferralRules接入请求、成功与problem响应校验，运行登记39项。修正写接口接受未声明query及路由错误未统一no-store的问题；认证/CSRF仍先执行，既有规则策略、版本和幂等事务不变。成功提交后的DTO损坏返回referral_rule_commit_unknown，不回显损坏字段、不自动重试。返佣计算、付款业务及Bridge细节未扩展。
+
+17项规则HTTP、管理与列表测试通过，server类型/模块边界/生成一致性检查及diff检查通过。新回归覆盖401优先、错误请求不写库、成功/失败缓存策略、异常读输出与提交未知。前端当前只有生成的传输类型，没有返佣规则业务消费者，后续前端阶段补齐，不能宣称端到端验收。未访问数据库或重启服务；核心与全栈目标仍未完成，累计依赖改动未整体提交。
+
+## 242. 订阅计划数据所有权归回策略域（第三百一十二批）
+
+SQL源扫描发现97张已解析写入目标，其中outbox_events、risk_decisions_v4、subscription_schedules存在多域来源。此次实际解决subscription_schedules：到期扫描和条件更新适配器移入strategies，新增公开AnalysisScheduleStore，调度入口通过策略composition创建能力并注入inference调度器。推理不再直接写该表，策略域不依赖推理内部类型；原inference应用类型名称仅作公开业务合同的类型兼容导出。SQL、到期条件更新和任务分组逻辑保持，未引入新事务或重试。
+
+12项计划查询/调度Worker测试通过，覆盖竞争更新返回false、数据库错误传播且无重试；server类型/边界及生成检查通过。重扫确认subscription_schedules仅strategies写入。outbox事务生产者和risk_decisions_v4关联更新仍需独立审查，15项未解析候选及间接调用不构成已证明的所有权；不以扫描清单代替全量数据验收。未访问数据库、启动调度器或修改迁移，核心目标继续。
+
+## 243. 风控决策关联写入归回risk（第三百一十三批）
+
+execution原先直接更新risk_decisions_v4.operation_id，现经risk公开RiskDecisionExecutionWriter调用所属域SQL。API和执行Worker入口注入同连接工厂，关联仍在原准备事务内、bundle之后/outbox之前；不独立提交、不重试，false仍映射execution_source_revision_conflict。SQL保留未关联和版本条件，并显式核对用户与账户，与原源读取范围一致。未修改风控规则、执行状态或迁移。
+
+8项事务写入端口/执行准备/既有持久边界测试通过，server类型、模块边界和生成检查通过。端口测试证明使用传入连接、绑定作用域与版本、冲突false、异常传播且无事务生命周期调用；现有持久边界测试含源码检查，不视为真实MySQL事务证明。源重扫risk_decisions_v4仅risk写入，多域字面SQL目标剩outbox_events，事务生产者需单独定义合法边界。未连接数据库、启动Worker或部署；核心目标继续。
+
+## 244. Outbox写入角色门禁（第三百一十四批）
+
+outbox_events允许业务域基础设施在原业务事务追加事件；投递器基础设施拥有状态更新，业务域不得更新、删除、替换或upsert。新增inspect-outbox-boundaries及3组正反例测试，复用SQL字面量分词，识别模板固定目标，拒绝越层写入、角色反转、DDL和已知含糊目标形态。当前源扫描无发现。verify:outbox-boundaries接入完整服务端边界检查，轻量扫描接入类型/构建已有增量边界入口。
+
+此门只检查可识别SQL的写入角色，不证明事务成员关系、事件合同、初始pending/attempts值、动态目标/片段、存储过程或可执行SQL注释。没有把97张表的源清单自动批准为全量数据所有权，也不声称间接写入已经收口。正反例和当前源扫描通过，未修改业务SQL、服务或数据库；核心目标继续。
+
+## 245. 执行操作状态API同源校验（第三百一十五批）
+
+getOperation接入请求、成功及problem响应校验，补齐400/401/403/503合同并同步OpenAPI、运行Schema和前端类型。修正AuthError被映射execution_unavailable/503，保留401/403；认证先于输入，拒绝未声明query，成功/失败均no-store。原service继续按当前用户读取，不泄漏异常DTO。运行登记40项。
+
+8项服务端执行读取/持久边界测试、15项api-client及27项contracts测试通过；server类型、模块/outbox边界、合同及前端类型生成一致性检查通过。新用例覆盖401优先、非法query不访问repository、损坏输出拦截及用户范围。前端消费者包含operation解析和客户端路径测试，但尚未进行浏览器流程或真实依赖验收。未操作数据库或启动服务，核心与整体目标继续。
+
+## 246. 执行前上下文API同源校验（第三百一十六批）
+
+getExecutionCommandContext接入请求、成功与problem校验，补充401合同，同步OpenAPI/运行Schema/前端类型。读取仍按已认证用户和账户调用服务；未知、重复、空ticket等非法查询不进入数据读取。认证失败不再变成通用503，成功及失败no-store。保留缺失报价/品种返回null，异常DTO不回显。运行登记41项；同文件命令POST尚未纳入此次运行校验。
+
+12项执行读取/命令既有边界测试、15项api-client和27项contracts测试通过；类型、模块/outbox边界及生成一致性检查通过。覆盖401优先、非法请求不读取、异常响应拦截及缺失数据语义。未操作数据库、终端或服务；核心目标继续。
+
+## 247. 用户执行命令写API同源校验（第三百一十七批）
+
+createExecutionCommand接入请求头/严格命令体/202与problem校验，认证和CSRF在先，缺失幂等键仍428。补齐401/404/428合同；ExecutionCommand组合层明确unevaluatedProperties=false，各oneOf分支仍独立拒绝未知字段。Ajv将OpenAPI discriminator登记为提示，不用其替代oneOf校验。旧camelCase/嵌套兼容请求在HTTP入口被拒绝，应用校验及真实事务未修改。
+
+新测试发现原details违反统一Problem合同；现将既有resource/ticket冲突信息映射标准errors，保持409状态。写入后响应损坏返回user_command_commit_unknown/503，保留原请求编号和正文，不自动发起新命令。所有该路由响应no-store，原认证错误码得到保留。运行登记42项，OpenAPI/运行Schema/前端类型同步。
+
+23项执行HTTP/读取/服务/持久边界测试、4项公共校验器测试、15项api-client及27项contracts共69项通过；类型、模块/outbox边界、生成一致性与diff检查通过。HTTP新回归使用模拟执行服务，未进行真实终端交易或数据库写入，也不代表全部命令变体的端到端验收。核心目标继续，累计依赖改动未整体提交。
+
+## 248. 执行命令传输格式单一化（第三百一十八批）
+
+HTTP入口严格合同已经生效，清除转换器中不可达的commandType/expected/parameters嵌套、平铺revision及camelCase参数别名。传输层只将标准snake_case合同映射应用模型，应用内部camelCase及领域校验保持。此举清除双格式维护分支，不改变上一批已明确的HTTP兼容范围。
+
+追加六类命令经过真实Fastify入口的转换验证，覆盖市价、挂单、修改持仓、平仓、修改挂单和撤单，精确小数字符串、资源版本及显式移除标记正确传入模拟服务。移除标记按既有const true合同，false不是合法请求；测试修正为真实合同输入，没有修改限制。12项HTTP/服务测试、类型/模块/outbox边界及diff检查通过。未操作数据库或真实终端，核心目标继续。
+
+## 249. 分发预览与详情API同源校验（第三百一十九批）
+
+previewExecutionDistribution/getExecutionDistribution接入请求、成功与problem校验，补齐400/401/422/503合同并同步生成产物。认证先于输入校验，管理员检查保留在原服务；未知/重复query拒绝，所有读取响应no-store，损坏DTO及内部异常不回显。运行登记44项。预览只代表即时估算，目标仍由后续分发事务冻结，写入两操作尚未接入此次校验。
+
+14项执行读取/分发服务测试、27项contracts和15项api-client共56项通过；server类型、模块/outbox边界及生成检查通过。覆盖非法参数不调用服务、认证优先、用户/角色传递、损坏预览输出和内部错误遮蔽。未操作数据库、服务或终端，核心目标继续。
+
+## 250. 分发创建和平仓写API同源校验（第三百二十批）
+
+createExecutionDistribution/createDistributionCloseCommand接入请求头、严格正文、202及problem校验，补齐401并同步OpenAPI/运行Schema/前端类型。认证CSRF先执行，非法query、额外字段和不合规header在业务调用前拒绝；固定目标及版本转换保持。两个写接口完成后DTO异常映射distribution_commit_unknown/503，提示保留原key/body，不自动重试。分发读写在本模块复用错误输出，所有响应no-store。运行登记46项。
+
+16项分发HTTP/服务/读取测试、15项api-client及27项contracts共58项通过；类型、模块/outbox边界及生成一致性检查通过。新HTTP测试使用模拟服务，分别覆盖创建和平仓路径的认证、严格参数、身份/key/版本传递、提交未知及不泄漏；真实事务、目标冻结和执行未被替代或重跑。未操作数据库、服务或终端，核心目标继续。
+
+## 251. 执行模块集成回归与推理列表缺口核实（第三百二十一批）
+
+执行相关14个测试文件87项通过；完整verify:architecture通过：98个实际业务操作与合同全部匹配，980/980 Schema编译，6条认证协议例外精确匹配，前后端已检测边界无发现，outbox角色检查及负例通过。运行合同46项。构建完成但未重启运行服务，不能把离线注册或构建视为当前进程已更新。
+
+接续核查发现listMarketAnalyses的合同声明cursor/symbol/strategy_id，但HTTP只传page_size，InferenceService.analyses只转交条数，MysqlInferenceRepository.listAnalyses仅按owner_user_id查询并限制条数。响应只有items，缺少返回下一页游标的合同。此项是功能缺口，不能靠注册运行校验或删除声明参数宣称完成。
+
+下一工作包先建立分析列表的应用筛选/分页端口，再完成稳定键游标、用户及筛选范围绑定、limit+1与next_cursor响应、MySQL参数化读取及前端消费者。排序需明确保持created_at_utc/id并把用于游标的时间纳入内部读取，不能使用可能不同的analyzed_at替代。第一轮复核确认这是已批准API核心规范化范围、列表不读取大正文；第二轮确认游标不可跨用户/筛选复用、同时间ID稳定排序、严格页大小、空页/末页以及错误输入不查库。未实施数据库迁移或调整终端细节；整体目标继续。
+
+## 252. 分析列表筛选与稳定分页用例（第三百二十二批）
+
+新增MarketAnalysisListService与窄读取端口，严格1–200条、规范十进制页大小、品种/策略筛选；按limit+1生成末页标志和下一页游标。游标版本绑定用户/品种/策略，使用createdAt/id定位，不混用analyzedAt；错误输入和跨范围复用在读取前拒绝。游标不是授权凭据，数据库每页独立按当前用户过滤；当前未提供签名，不声称防止客户端修改翻页位置。
+
+新增MysqlMarketAnalysisListReader，仅读取摘要与创建时间/快照哈希，owner参数必带，品种精确大小写比较、策略参数绑定，created_at/id降序键查询，不读取大正文或使用OFFSET。4项用例/SQL模拟测试通过，覆盖同时间翻页、末页、空页、范围不匹配及SQL参数；类型和模块/outbox边界检查通过。尚未接HTTP、composition和前端消费者，现有列表入口仍待替换；没有通过未接入能力宣称列表功能已完成。未访问数据库或修改迁移，下一批完成调用链切换。
+
+## 253. 分析列表HTTP与客户端接线（第三百二十三批）
+
+API入口经composition创建MysqlMarketAnalysisListReader/MarketAnalysisListService并注入列表路由，原service/repository无筛选列表方法移除。listMarketAnalyses接入同源校验，未知或重复参数拒绝、认证先执行、no-store；响应增加必填next_cursor。合同、运行Schema、前端类型同步，运行登记47项。离线注册脚本及组装测试同步新端口，没有默认回退旧列表。
+
+api-client支持pageSize/cursor/symbol/strategyId选项，保留数字参数调用，条数上限由100对齐合同200；contracts把next_cursor映射nextCursor。HTTP测试使用真实列表用例和模拟读取器完成首屏→下一页→末页、筛选绑定、权限优先和输入拒绝，未用假next_cursor填补未实现分页。21项服务端列表/推理/组装测试、16项api-client及27项contracts共64项通过；服务端、客户端、trade类型及生成/边界检查通过。
+
+未访问真实数据库或重启服务，不能声称当前运行进程已更新；SQL真实分页与索引性能尚需开发库验证。页面分页交互按用户优先级留前端阶段，当前接口和客户端读取链路已切换，整体核心目标继续。
+
+## 254. 推理详情及决策读取同源校验（第三百二十四批）
+
+getMarketAnalysis/listTradeDecisions/getTradeDecision接入请求、成功与problem校验，补齐400/401/403/503，同步生成产物。认证优先，非法额外query和不规范条数拒绝，成功/错误均no-store，404保持。原数据库读取继续带user_id，决策列表带账户；损坏结果不回显。运行登记50项。服务决策列表从静默截断100改为严格1–200，客户端上限同步合同200。
+
+11项推理读取/列表/纵向测试、15项api-client及27项contracts共53项通过；类型、模块/outbox边界及生成检查通过。新用例覆盖三个接口401优先、查询前拒绝、详情缺失及用户传递、200条参数和损坏决策列表；不以这些模拟测试代替真实数据权限或全部模型动作响应验收。未操作数据库、服务或终端，核心目标继续。
+
+## 255. 推理任务写入同源校验（第三百二十五批）
+
+createAnalysisJob/createTraderEvaluation接入请求、202及problem校验，补齐认证、输入、缺失、冷却和服务错误合同，同步生成产物，运行登记52项。保留手动模式限制、服务端冷却、幂等键及订阅版本应用校验，未知query/字段和不合规header不调用用例。路由no-store；提交后响应不合规返回inference_commit_unknown并提示保留原key/body。retry_after_ms在429中保留，认证错误不再统一降级503。
+
+12项推理写入/读取/纵向测试、15项api-client及27项contracts共54项通过；server类型、模块/outbox边界及生成检查通过。HTTP测试使用模拟服务，覆盖两操作输入边界、真实actor/key传递、冷却与提交未知；未启动模型调用、调度器、数据库或真实交易。策略列表虽暂由同路由文件承载，仍需按所属策略域单独收口；核心目标继续。
+
+## 256. 策略列表路由归属与同源校验（第三百二十六批）
+
+listStrategies从inference路由移至strategies，URL/响应DTO和原策略服务读取不变，推理不再承载策略目录；删除推理旧列表DTO和失去调用方的旧错误函数。策略列表接入请求/成功/problem校验，补齐400/401/403/422/503并同步产物，运行登记53项。认证优先、拒绝未知/重复kind及额外query，成功及错误no-store。
+
+17项策略列表/推理/真实Fastify组装测试和15项api-client共32项通过；server类型/边界/生成检查通过。覆盖独立策略插件注册列表、参数及用户传递、错误鉴权优先和损坏输出。推理composition参数中遗留的策略服务仍需移除，后续策略详情/写入尚未收口；不把本次路由搬迁视为整个策略模块完成。未修改数据库或启动服务，整体目标继续。
+
+## 257. 清理推理HTTP遗留策略依赖（第三百二十七批）
+
+策略列表迁移后，删除InferenceRoutesOptions与createInferenceHttp中无用途的StrategyService参数和类型导入；API入口、离线路由清单脚本、组装及HTTP测试同步三参数接口。推理应用内部分析策略权限/版本依赖没有删改，移除的是传输组装的多余依赖。
+
+6个定向测试文件22项通过，server类型及模块/outbox边界、运行Schema检查通过。类型检查最初找到一个遗漏的测试注入项，已修正并重验通过。未改变HTTP合同或53项运行登记，未操作数据库或服务；继续策略详情及写接口收口。
+
+## 258. 策略详情与订阅列表读取校验（第三百二十八批）
+
+getStrategy/listStrategySubscriptions接入请求、成功与problem同源校验，补齐400/403/422/503并同步产物；运行登记55项。策略详情保留ETag和原访问规则，订阅列表保留用户与可选账户筛选；认证优先，未知query/重复参数拒绝，成功和错误no-store。
+
+6项策略HTTP/管理测试、15项api-client及27项contracts共48项通过；类型、模块/outbox边界与生成检查通过。新用例覆盖权限优先、非法输入不访问服务、详情404、用户/账户传递和损坏订阅输出。未操作数据库或服务，策略写接口仍待收口，整体目标继续。
+
+## 259. 策略写入提交未知状态与错误边界（第三百二十九批）
+
+核对发现策略管理尚未传递持久幂等键；不能仅接入Schema就宣称写入规范化完成。本批先修正实际事务错误链：策略域共用strategyTransaction，commit确认失败返回strategy_commit_unknown并销毁连接，不回滚推断结果或重放；提交前失败保留原错误，回滚失败销毁连接。五个策略管理写入的提交后详情回读，缺失或异常统一为提交未知，避免已经创建成功却返回404或普通可重试503。订阅写入沿用同一事务入口，其回读本来位于事务内。
+
+HTTP提交未知明确retryable=false；鉴权错误保留401/403，错误no-store及application/problem+json。八个策略POST/PATCH合同补齐503，compile补403，并同步OpenAPI及前端类型；运行校验登记仍55项，未宣称策略写入已接入同源校验。52项定向测试通过（策略事务/HTTP/管理10、contracts27、api-client15），服务端类型及边界检查、生成类型一致性与diff空白检查通过。前端测试首次误用根配置未发现用例，改为各包配置后通过。
+
+仍需完成策略持久幂等回执、同键同体重放/异体冲突、审计和写入运行合同。当前提交未知须先核实结果，尚不能承诺重发同键安全。验证为本地Mock和HTTP注入，未验证真实MySQL断线，未迁移、重启或部署；整体目标继续，前端与Bridge细节保持后置。
+
+## 260. 策略域持久写回执基础（第三百三十批）
+
+新增048_strategy_write_receipts.sql迁移源，只增strategy_write_receipts_v4，归strategies所有，不修改旧表。用户与幂等键联合主键覆盖七类业务写入；动作、版本化请求摘要、资源ID、结果版本、原始结果快照及摘要、UTC毫秒时间共同提供重放与审计证据。请求正文不额外复制到审计；结果快照含策略内容时属于用户私有数据，不能作为公开日志。新表尚未建成，当前188步升级计划没有加入048，不能宣称现库具备回执。
+
+应用层新增严格JSON摘要规则，固定actor/action/target/revision/payload参与哈希；键仅定位用户内回执，换动作、目标、版本或正文均冲突。对象顺序不改变摘要，数组顺序保留；undefined、NaN、BigInt、Date等有损输入拒绝。基础设施executeStrategyWrite要求同连接业务回调、结果验证器及必传的当前资源授权回调。锁顺序先用户，再由授权回调按目标业务锁序核验账户/资源，之后读取回执和执行业务；所有回调必须沿用同一事务，不能嵌套事务或网络调用。回执与业务同事务提交，结果校验和回执保存都在commit之前；确认丢失沿用strategy_commit_unknown。
+
+复审一（职责/权限）：回执执行器保留在策略基础设施，未从业务index导出连接或SQL能力；重放也必须重新校验用户与目标权限，权限撤销不得回读私有历史结果。复审二（持久化/兼容）：回执不更新、不删除；历史返回值从快照恢复，禁止重查当前版本冒充原结果。业务回调失败、结果无效均不得留下成功回执。actor串行化简化同键首次并发，但七类实际调用方的锁序及权限仍需逐项验证，不能用基础设施单测替代。
+
+10项回执/事务测试、server类型及模块/outbox边界、生成一致性检查通过；覆盖并发首次提交、已提交确认丢失后恢复、异体/异动作/异版本冲突、用户隔离、权限撤销、损坏快照和失败回滚。模拟锁和提交不是MySQL行为证明。下一批接入七类写操作（请求键贯穿服务/持久层，先重放后重新计算业务默认值），更新HTTP生产者/消费者与未知结果恢复策略，再完成048真实DDL参考、checksum/checkpoint、恢复副本演练、在位升级和启动readiness。未启用新表依赖、未连接数据库、未重启服务；整体目标继续。
+
+## 261. 创建策略接入持久回执与合同（第三百三十一批）
+
+createStrategy实际调用链已接入048回执执行器：HTTP传递必填Idempotency-Key，应用提供首次写入prepare回调，MySQL适配器在回执查找后才编译和规范化草稿；策略、首版本、同连接详情回读及回执在一个事务中提交。原始输入参与摘要，持久化trim不吞掉同键异体差异。重放返回原始结果快照，不重新编译或查询当前策略；删除原创建路径的事务外回读，避免已提交又因为后续查询失败而重新创建。
+
+createStrategy加入运行登记，当前56项；请求query/额外字段/缺失键在写入前拒绝，补400/409，成功和错误同源校验，201与ETag保留。响应映射发生在服务返回后，若此时失败保持strategy_commit_unknown且不直接重试。应用仓储create端口改为首次准备回调，内存测试消费者已同步，未引入SQL跨域调用。
+
+客户端createStrategy改为显式键参数，现有策略工作区同步；sessionStorage按用户保存原正文与键，未知结果不清除，同体可确认、异体禁止另起请求。已明确拒绝的400/401/403/422可清除；成功先结束请求，再刷新列表，列表失败不再被当作创建失败。仅改必要请求状态，未重构页面；浏览器刷新后恢复原草稿的交互和敏感业务正文的保存期限仍待前端阶段处理，当前要求恢复相同正文以确认原请求，不宣称完整恢复体验。
+
+17项服务端定向测试、15项api-client与1项请求保留测试共33项通过；server与trade类型检查、前后端边界和生成一致性通过。新增HTTP→真实应用→MySQL适配器Mock验证确认丢失后仅一组业务/回执写入、规范化前正文冲突、无事务外读取与回读失败不留成功回执。初次合同测试发现旧fixture CSRF长度不足，修正fixture后通过。证据不含真实MySQL并发或DDL。
+
+048仍未执行，当前运行服务未重启；新创建代码启用前必须完成回执表升级及readiness。其余六类策略写入、真实恢复副本演练、当前dev_vue升级仍待完成，不能将这一个创建链路视为整体幂等验收。整体目标继续，前端与Bridge展示细节后置。
+
+## 262. 策略资料修改的幂等与版本闭环（第三百三十二批）
+
+updateStrategyMetadata已改走策略回执事务。用户锁与目标归属校验每次执行；已存在的同键回执在CAS和退役检查之前返回原结果，新请求才检查当前状态与版本。更新、详情回读、结果版本核对及回执写入均使用同连接；取消原事务外回读。原始name/description参与摘要，首次准备回调才trim；修改expectedRevision或正文会产生幂等冲突。服务端拒绝安全整数上界版本继续加一。
+
+运行登记增至57项；资料PATCH需要幂等键，保留If-Match缺失428，新增400/409，同源校验成功与problem响应。客户端显式传键，按用户和策略保存原正文、原版本与键；当前页面读到较新版本也不能覆盖待确认请求的原版本。成功后列表刷新失败不再将已提交修改当作失败。必要请求状态接线已完成，未改UI布局或Bridge。
+
+18项后端定向测试、15项api-client和2项浏览器请求状态测试共35项通过；server/trade类型检查、前后端边界、生成类型一致性检查通过。新增HTTP→应用→MySQL适配器Mock证明一次更新/一条回执、确认丢失恢复、后续修改/退役后原结果重放、异版本同键409、换键旧版本412及权限撤销403；没有事务外读取。客户端断言实际传送创建/修改幂等键并保留原版本。
+
+048仍未执行，真实MySQL锁序/断线/恢复及启动readiness尚待验证；其余五类策略写入继续接线。当前运行服务未重启，无数据库或公网操作；整体目标未完成。
+
+## 263. 策略版本与退役写入收口（第三百三十三批）
+
+createStrategyVersion、publishStrategyVersion、retireStrategy接入回执事务。提取策略基础设施私有writeOwnedStrategy，资料修改也复用该入口：每次校验当前归属，重放先于首次业务状态/CAS检查，首次才执行变更并在同连接回读快照。版本编译由应用prepare回调在回执缺失后按已锁定策略kind执行，移除原事务外查策略再编译路径；新增版本号校验。发布只查询目标版本归属所需字段，保留原订阅绑定更新，订阅更新与策略发布及回执同事务；退役重放不会重复递增版本。移除已无人调用的strategyCommittedRead及其专属过时测试，当前五类策略写入均无事务外结果回读。
+
+三项HTTP合同加入运行登记，当前60项；幂等键必填，保留If-Match缺失428、成功状态/ETag和安全problem。发布/退役拒绝未声明正文，所有新增写入拒绝额外query。客户端三方法显式传键，按用户/策略保存动作、正文或versionId、原版本与键；未确认的发布不能被替换为退役或另一版本。仅更新必要请求状态，页面设计与完整恢复交互仍后置。
+
+现存20项策略后端定向测试、15项api-client及3项请求状态测试共38项通过，server/trade类型、前后端边界与产物一致性通过。新参数化HTTP→应用→MySQL适配器Mock覆盖三个操作确认丢失后重放、不重复版本插入/订阅更新、退役后原结果读取、同键异版本冲突与归属撤销；客户端断言五类策略请求实际传送各自键。最初替换脚本因定位文本不匹配退出且未写文件，修正定位后完成；未将该次生成命令当作新操作已登记证明。
+
+真实MySQL事务/锁序与048升级仍未验证，当前服务未重启。接下来是订阅创建与订阅修改：其动态默认值、计划到期时间和策略绑定必须在重放之后计算，不能将运行时间写进请求摘要。随后完成回执表真实DDL参考、恢复演练、在位升级和readiness。整体目标继续。
+
+## 264. 订阅创建接入原结果回执（第三百三十四批）
+
+createStrategySubscription加入实际回执事务及同源校验，当前运行登记61项。输入可选字段保留省略状态，首次prepare回调才计算默认开关、规范品种及nextDueAt；不把运行时间或当前策略版本放进请求摘要。同键省略analysis_enabled与显式true仍为不同请求。账户所有权在首次与重放均核验，策略活跃版本只在首次事务解析；显式traderStrategyId即使未启用交易员也校验其可见性与类型，保留原应用约束。
+
+订阅、计划、执行偏好和回执同事务，初始化偏好失败仍回滚全部。应用移除事务外requireActiveVersion调用，不再在回执查询前计算动态计划。客户端显式传键，按用户/账户保存原创建正文，确认未知结果不会另起请求；API合同补400/404及键声明，保留ended创建的422业务拒绝。
+
+17项服务端定向测试（创建HTTP1、策略管理4、执行偏好12）、api-client15及请求状态1共33项通过；server/trade类型、前后端边界与生成一致性检查通过。新HTTP→应用→MySQL适配器Mock验证：一次订阅/计划/偏好/回执写入，确认丢失后推进时间并改变活跃策略版本仍返回旧计划/旧版本，撤销账户所有权拒绝重放。旧偏好初始化失败用例同步新增actor/receipt读取后继续证明rollback，不将失败事务看作提交未知。最初新Mock未匹配真实CAST查询而失败，修正后通过。
+
+未连接数据库或重启服务；048仍待真实升级与readiness。下一步订阅修改须保留原补丁用于摘要、首次才合并当前状态/计算计划，原结果重放不能被后续ended或版本变化误挡。整体目标继续。
+
+## 265. 订阅修改与策略域运行合同收口（第三百三十五批）
+
+updateStrategySubscription接入回执，原补丁/期望版本直接用于摘要，不先合并当前状态；首次才解析实际改变的策略绑定，加锁后二次核对订阅版本和账户，再执行应用prepare计算开关、状态、品种和nextDueAt。普通开关保留原绑定版本，删除应用预读及显式versionId回填入口。已提交请求重放仍核验当前账户所有权，但不会被后续ended或较新revision挡住。修改订阅、计划与回执同事务，计划UPDATE必须影响一行，否则整笔回滚；客户端修改/结束统一保留原补丁、版本及键。
+
+compileStrategy补同源校验，保持纯编译无持久写入，正常编译问题仍200/valid=false；额外字段/query拒绝，鉴权优先，输出损坏不冒充提交未知。移除已无消费者的旧字段转换函数。实际枚举确认strategies合同11项全部在runtime登记，运行总登记63项；七类持久写入均已代码接线，纯编译不写回执。
+
+本批23项服务端定向用例（订阅更新5、订阅创建1、偏好12、策略管理4、编译1）、api-client15和订阅请求状态2共40项通过；server/trade类型通过。更新Mock覆盖恢复、绑定变更、结束后重放、不重复计算计划、加锁前版本变化拒绝及计划行缺失回滚。完整verify:architecture通过：370个服务端文件/1403条边、358个前端文件/1654条边无当前扫描发现，98/98真实注册业务路由与合同匹配，1046/1046 Schema编译通过，协议例外/生成类型检查通过。扫描范围限制不变，非业务或真实依赖验收；检查构建了server产物但未启动或重启服务。
+
+048尚未在数据库执行，尚无真实并发/确认丢失/恢复演练证据，启动readiness也未纳入回执结构。因此七类操作只完成源码及本地Mock层，不宣称dev_vue已具备回执。下一步验证048的真实DDL参考、checksum/checkpoint和恢复副本演练，完成当前dev_vue可直接升级及启动检查；其余域API规范化和全栈模块化目标仍继续，不以策略域收口替代整体目标。
+
+## 266. 真实MySQL参考验证与订阅升级前置修正（第三百三十六批）
+
+当前dev_vue只读inventory确认188条历史记录未变，但旧strategy_subscriptions有5行，运行计划/偏好缺失；007三张准备表存在且空，strategies/versions均空，旧模板3行、权威账户6行。不能只追加048或新建空订阅表。已将复用准备表、历史映射/对账、恢复副本namespace提升及启动readiness顺序记录到next-plan§18.13；本批没有修改当前库。
+
+新增隔离参考探针，通过临时SSH转发在虚拟机MySQL随机命名参考库使用真实策略运行迁移结构和当前构建的服务/仓储；用户/账户/归属为明确列出的最小父表，不冒充完整业务数据库。首次真实执行发现创建订阅把ISO Z文本直接绑定DATETIME(3)，MySQL报ER_TRUNCATED_WRONG_VALUE，定位next_due_at_utc后修复策略域SQL时间边界：写入/比较转换UTC毫秒SQL文本，dateStrings回读按UTC解析，不采用Windows本地时区。创建、修改、计划扫描和CAS推进同步修复，既有秒级UTC输入仍接受并规范毫秒。
+
+31项时间/计划/订阅定向测试通过，server构建和边界通过。真实参考v4通过七类写操作、创建已提交后注入确认丢失恢复、真实同键并发仅一条业务结果、后续退役/结束后的历史重放、计划查询/CAS UTC参数、准备失败无回执、撤销权限拒绝重放、一项外键与五项CHECK拒绝。记录048真实SHOW CREATE、SQL摘要和实际构建/探针摘要；真实参考验证的确认丢失为commit成功后注入异常，不等于真实网络故障注入。失败v1/v2、成功v3/v4证据均保留；所有临时参考库已删除，SSH转发已随探针退出。
+
+现库前后只读v2/v3证据identity、所选表结构/计数及188步历史完全一致。当前库写入0，没有启动本地MySQL/Redis，没有重启应用或访问公网。下一步执行旧模板/订阅映射及恢复副本升级准备，而不是把临时空库成功当作现库可覆盖证明；整体目标继续。
+
+## 267. 当前账户结构下的策略迁移输入核对（第三百三十七批）
+
+新增inspect-strategy-upgrade-sources-local.mjs，按当前已提升的账户命名空间读取旧模板和订阅，复用已有元数据、品种和时段转换器；旧review-dev-vue-strategy-source脚本仍查询升级前账户字段，本批保留其历史用途。新探针验证目标host/database/UUID，以REPEATABLE READ只读一致快照读取，使用已落库data_migration_id_maps而非将旧账户ID直接当新ID；报告不包含提示词正文、账户登录或凭据，输出独占创建。
+
+真实dev_vue证据strategy-upgrade-source-inventory-v2-20260909.json：3模板、5订阅、4旧账户、6当前账户、4条持久映射，升级历史188条。旧模板/订阅合并sourceHash与20260906冻结源完全相同。5订阅均通过源账户用户、持久目标映射、品种和时段转换核对。订阅1和3映射账户1、订阅5由旧账户4映射账户2，仍有当前owner；订阅2和4映射账户2但只有已结束归属区间，标为historical_only，不能重新激活。缺少历史区间时探针会标unresolved并记录问题，不以缺少当前权限直接推定历史归属。
+
+3模板元数据转换通过，源版本分别44、1、11；生命周期active、retired、active。它们的inference_mode均为platform_model，不能据此判断V4的analysis/trader角色；roleResolved仍false。时间解释采用用户已确认UTC，不继续将历史时区列为待确认条件。此次只读核对和摘要断言通过，不代表业务回填已完成；没有执行DDL/DML或重启服务。下一步补齐角色/输出合同转换与来源保留，再进行恢复副本回填、逐项对账和命名空间提升。
+
+## 268. 复盘读取合同接线与策略语义核验（第三百三十八批）
+
+只读核验旧模板1、3正文的输出相关段落，确认同时声明行情机会、持仓退出和挂单取消，并引用旧signal_type/position_evaluations/pending_evaluations输出语义；模板2无相关声明且已退役。V4 gateway分别追加market-analysis/v1和trade-decision/v1合同，旧模板不能只改kind字段就宣称行为等价。完整来源仍保留，业务回填尚未执行；需形成显式角色及配置转换，不以旧模板进入新表或编译通过替代语义验收。本批继续独立的核心API标准化，不深入前端或Bridge细节。
+
+复盘域6个GET操作完成同源请求、成功和problem校验。认证先行、未知query拒绝、响应no-store，输入不合法时不调用服务；详情保留成功ETag，输出无效返回503并删除ETag，底层异常不泄漏。读取与写入处理暂分开，未登记的6个写操作继续待收口，不宣称已有幂等回执。
+
+真实Fastify注入发现StrategyMemoryDetailResponse的allOf引用additionalProperties=false摘要，导致合法详情扩展被拒绝。改为共享StrategyMemoryFields，摘要及详情分别使用unevaluatedProperties=false封闭；同时验证列表不能混入详情字段、详情拒绝未知字段。案例/手动候选page_size上限与应用100一致，不再合同允许200却静默截断。生成OpenAPI、前后端类型及运行合同同步，登记63→69；1081个schema编译通过、生成类型一致。
+
+复盘读取新增3项HTTP测试及既有8项核心测试通过，覆盖六条正常读取（含非空案例、记忆、候选、更新）、鉴权优先、非法/重复过滤、未知query、错误隔离和坏响应。服务端类型检查及当前依赖边界通过。数据库本批只读、应用未重启；没有接触公网。整体仍缺其余29个操作的运行校验及各域写入语义、策略升级和全栈验收，目标继续。
+
+## 269. 观摩管理读取同源校验（第三百三十九批）
+
+listObserverSourcesForAdmin、listObserverChannelsForAdmin、listObserverChannelAccesses和listObserverManagementOperations接入同源请求/成功/problem校验，运行登记69→73。保留应用管理员检查、原游标/未知query/分页验证以及操作记录DTO白名单；读取成功和失败均no-store，问题响应为application/problem+json，底层错误正文不返回客户端。6个管理写操作仍未登记，未以读接口覆盖替代写入语义验收。
+
+现有测试源列表仅提供id、操作记录缺created_at_utc，在严格输出检查下已正确拒绝；补齐测试夹具而不放宽合同。追加非空频道/授权页、非法枚举和缺字段响应拒绝、重复limit/科学计数/零游标/未知query拒绝、非管理员不访问仓储、底层SQL错误隔离。观摩HTTP/值边界3文件21项测试通过；服务端类型及已检测依赖边界通过，1092/1092 schema编译、生成类型一致与本批diff检查通过。无数据库连接或写入，无进程启动/重启。剩余25个未登记操作、各域写入事务和数据迁移仍需推进。
+
+## 270. 观摩写事务提交未知修复（第三百四十批）
+
+核对6个观摩管理写接口共用仓储：配置修改、注册表revision、操作回执及授权失效outbox已在同事务；同actor/key重放先复核管理员生命周期，并比较命令摘要。发现commit异常被当普通错误回滚并释放连接，不能区分服务端已提交而确认丢失。改为进入commit后任何异常返回observer_management_commit_unknown/503，销毁连接，不尝试推断回滚；提交前异常仍回滚，若回滚也失败则销毁连接并保留原错误。HTTP该错误retryable=false，调用方只能保留同键同请求查询或重放，不能改键重试。
+
+定向复核：不改变原锁序、回执或业务写入，不增加自动重试及迁移；毁弃连接避免未知事务返回池。新Mock先提交持久状态再注入确认丢失，随后同键重放只保留一条源、回执和outbox；不同摘要409、撤销管理员403，回滚失败不覆盖原403。HTTP验证503/不可自动重试。仓储与HTTP共40项测试、server类型/现有边界及diff检查通过。6个写操作补503合同并重生成；尚未完成其同源校验及客户端请求恢复，运行登记仍73。没有连接数据库或重启应用，本批是源码与Mock证据，不是真实网络故障或数据库提交证明。
+
+## 271. 观摩管理六类写入合同接线（第三百四十一批）
+
+创建/修改观摩源、创建/修改频道、设置授权和设置默认频道完成请求、成功和problem同源校验。assertWrite认证/CSRF先行，禁止未知query，保留既有命令规范化、Idempotency-Key、正文expected_revision和服务端权限/事务。共用writeResponse只处理已返回的服务结果，DTO映射或校验损坏转observer_management_commit_unknown/503、retryable=false；不将已完成写入误报为普通可重试失败。所有观摩响应no-store，错误统一application/problem+json。
+
+观摩域10项全部登记，运行总数73→79。补各写操作实际400/401/403/404/409/422/503问题合同并同步生成OpenAPI、运行产物和前后端类型。六类成功写入及query注入无副作用、写后坏响应测试通过，原夹具补真实必需CSRF header；与仓储提交未知/回执测试合计41项通过。server类型、已检测边界、1104个schema编译、生成一致及本批diff检查通过。
+
+前端源码搜索尚无这些管理接口的实际消费者，不能宣称客户端恢复已实现；按用户核心优先要求，将管理页面及同键恢复交给前端阶段，保留服务端合同。没有访问数据库、启动服务或公网操作。剩余19个未登记操作（认证8、Bridge凭据5、复盘写入6），数据库策略升级和全栈流程验收仍未完成。
+
+## 272. 身份中心与应用会话读取合同（第三百四十二批）
+
+getAuthCenterSession和getApplicationSession完成请求、成功及problem同源校验，运行登记79→81。保留身份中心Host校验、应用client定位及安全/开发Cookie选择；会话解析后拒绝未知query，不让参数指定其它用户或应用。成功与错误均no-store，错误使用application/problem+json；无效服务端会话投影转安全503。身份中心退出等未适配协议暂保持原application/json，不把两条读取接线视为全部认证协议统一。
+
+扩展既有SSO测试：安全和开发Cookie两种身份中心场景、无会话先401、错误Host404、未知用户/client参数400、损坏CSRF/应用类型响应503，原登录/回调/退出及www/trade应用流程继续通过。13项认证测试、服务端类型/已检测边界、1109个schema编译及生成类型和本批diff检查通过；为本地Fastify与内存依赖证据，没有连接真实数据库、Redis或重启应用。剩余17个运行未登记操作及写入异常恢复、数据库升级、全栈用户流程仍需继续。
+
+## 273. 无正文响应合同与四类退出接口（第三百四十三批）
+
+运行合同生成器支持明确无正文204，拒绝204声明JSON正文，其他有正文响应仍要求schema；运行校验器只对已登记204接受undefined，不接受null、空字符串或对象，也不把未登记204当成功。四类退出接入请求及problem同源校验，副作用前校验成功响应声明，保留无正文/无Content-Type的204。认证/CSRF后拒绝未知query与多余正文，Cookie到期、Host-only及no-store保持。identity logout、current app logout、all web logout、all sessions/devices revoke范围未合并。
+
+运行登记81→85，OpenAPI/前后端类型/运行产物同步。新增204边界测试及三个应用退出HTTP范围测试：非法请求不撤销、当前应用退出保留身份中心、全部网站退出不撤销Bridge、revoke-all撤销Bridge。认证与通用合同21项测试通过，server类型/已检测边界、1119个schema编译、生成一致及本批diff检查通过。本批无数据库/Redis访问或重启；不以合同通过声称MySQL、Redis及设备跨系统副作用具备原子恢复，相关业务验收仍需完成。剩余13个未登记操作（登录/实时票据2、Bridge凭据5、复盘写6），核心数据库升级与全栈验收继续。
+
+## 274. 登录与实时票据合同（第三百四十四批）
+
+loginAtIdentityCenter/createRealtimeTicket接入请求、成功与problem同源校验，认证8项业务操作全部登记，总数85→87。登录先校验Host/Origin，再校验严格请求；授权字段与登录字段从开放AuthorizationFields组合后分别封闭，修复原allOf继承封闭授权对象导致登录字段不合法的问题。remember省略仍为false，不接受字符串布尔值。实时票据保留trade会话、CSRF和精确session绑定检查，拒绝未知query或任何正文。
+
+两条路径均在Set-Cookie前验证结果；登录同时检查会话secret结构和实际回调origin/path与已批准请求一致，实时票据检查secret结构，错误不下发Cookie、不泄漏密码，成功/错误no-store。标准OAuth路由未混入业务校验，保持协议例外。原认证副作用失败恢复未在此批重写。
+
+17项认证测试及24项api-client测试通过，涵盖合法登录、缺省remember、非法字段/type/query/Origin在认证前拒绝、错误会话secret/回调拒绝、票据非法请求不发放及错误secret不发Cookie。server类型/已检测边界、1126个schema编译、生成类型一致和本批diff检查通过。未连接数据库/Redis或重启应用。剩余11个未登记操作（Bridge凭据5、复盘写6），数据库升级及核心业务验收继续，接口登记完整不等于全栈重构完成。
+
+## 275. Bridge配对同源合同与提交未知（第三百四十五批）
+
+配对创建/兑换接入同源请求、成功和problem校验，运行登记87→89。移除路由重复body Schema，保留正文大小限制；未知字段不再可能被Fastify默认removeAdditional静默删除。创建认证/CSRF先行，兑换校验机器凭据；两条路径拒绝未知query，错误统一application/problem+json并no-store。成功DTO构建/校验在服务返回后失败，统一bridge_pairing_commit_unknown/503、retryable=false；不回显配对码或refresh token。
+
+核对配对仓储也存在commit异常后rollback/release问题，修复为提交阶段异常销毁连接、不假定已回滚；提交前错误按原路径回滚，回滚失败销毁连接并保留原领域错误。仍复用原幂等键和相同配对码/安装ID/token的重放规则，未改变凭据绑定、用户资格或账户授权。两项SQL double故障测试及额外字段/坏响应HTTP测试加入；23项配对测试、24项api-client测试、server类型/当前边界及diff检查通过。不是实际网络/数据库故障证明，未连接数据库或修改桥接客户端。
+
+剩余9个未登记操作为Bridge旧凭据兑换/撤销/会话票据3项与复盘写6项。核心数据库策略升级、真实依赖及全栈验收仍继续，未将配对源码验证当成整个重构完成。
+
+## 276. Bridge三类凭据接口同源校验（第三百四十六批）
+
+旧凭据兑换、精确撤销与会话票据接入同源请求/成功/problem校验，总登记89→92，Bridge凭据/配对5项全部登记。移除重复请求/响应Schema和专用preValidation，保留4/8KiB正文上限、领域凭据校验、元数据和绑定规则；严格拒绝未知字段、类型转换与query，不靠Fastify序列化器静默删字段。成功及错误no-store，错误application/problem+json且instance去除query，防止误放URL的凭据被回显。
+
+服务返回后结果不符合合同，使用新增bridge_credential_result_unknown/503、retryable=false，不返回坏结果里的secret。新增三路径非法字段/类型/query均不调用服务以及坏结果隐藏测试；既有兑换、票据、幂等精确撤销等12项服务/仓储Mock测试通过。类型检查发现错误码联合类型缺项，已补齐并重新通过server类型/当前边界、生成类型一致及diff检查。
+
+凭据仓储inTransaction仍需单独核对提交确认丢失及回滚失败；本批只完成传输接线，不能把result_unknown误作真实数据库commit证明。没有连接数据库/Redis、启动应用或改变桥接客户端。剩余运行未登记为复盘6个写操作，数据库策略升级、事务失败恢复与全栈验收继续。
+
+## 277. Bridge凭据提交未知处理（第三百四十七批）
+
+凭据仓储inTransaction区分提交阶段：commit异常返回bridge_credential_commit_unknown/503、retryable=false，销毁连接，不尝试回滚或释放给连接池。提交前错误正常回滚，回滚失败销毁连接并保留原始领域错误。区别于result_unknown：前者数据库提交确认未知，后者服务结果已返回但传输投影无效；两者都不能解释成业务未发生。
+
+定向复核保留兑换/使用/精确撤销原SQL及锁序，不增加自动重试、不更改旧凭据或绑定。兑换恢复仍依赖原V3凭据、安装/档案和来源指纹，不能复用配对兑换的另一套秘密；精确撤销保留原token/绑定确认，票据续取保留现有refresh凭据。新Mock分别对三条路径注入commit错误，验证只destroy、无rollback/release；另测rollback失败保留401。HTTP三路径保留新错误及retryable=false，不泄漏token。仓储与HTTP共16项测试、server类型/当前边界及diff检查通过；没有真实数据库故障实验，不宣称物理提交恢复已验收。运行登记仍92，下一步继续复盘写入规范与核心数据库升级。
+
+
+## 278. 复盘事务提交未知边界（第三百四十八批）
+
+继续遵循核心后端/API/数据库优先，前端与Bridge交互细节留到对应阶段。复盘共享事务 helper 在 commit 抛错时销毁连接并返回 review_commit_unknown，不再假定 rollback 能证明未提交；提交前 rollback 失败保留原领域错误并销毁连接。HTTP 将该错误标记 retryable=false。Worker 完成写入遇到该错误直接上抛，不追加模型失败记录、不在本轮再次调用模型。队列重新投递与租约恢复的端到端证明不包含在本批。
+
+新增 SQL double 的提交确认丢失、回滚失败保留版本冲突，Worker 不误记模型失败以及 HTTP 不提示自动重试测试。15 项定向测试、server 类型检查、当前边界和生成一致检查通过。未连接数据库、Redis或启动服务。运行登记仍为92；复盘6个写操作的完整合同、提交后读取、持久幂等回执及核心数据库策略升级仍需继续，不能据本批称核心重构完成。
+
+
+## 279. 复盘写接口同源合同（第三百四十九批）
+
+复盘生成、用户版本、确认、退回、手工创建和记忆决策6项写操作接入请求、成功与problem同源校验。认证/CSRF先行，已有版本接口先保留If-Match要求；严格拒绝未知query和body字段，遵循合同中的类型及枚举。写入服务返回后才构建并验证DTO，失败返回review_result_unknown/503、retryable=false，不回显坏结果或遗留ETag。成功/错误no-store，领域与认证错误保留HTTP状态，错误统一application/problem+json并去除instance查询串。
+
+补足写接口错误合同，生成OpenAPI、runtime和前端类型；运行登记92→98。6类HTTP测试覆盖非法字段/query无写入、合法成功状态和ETag、坏结果未知以及401不写入，连同复盘领域/事务/Worker共29项通过。server类型和当前边界通过。实际Fastify离线路由检查为98/98匹配，OAuth6条协议例外无增减；这不证明全业务及真实依赖就绪。前端应用源码搜索没有这些写路由的实际消费者，页面恢复交给前端阶段。
+
+尚未解决：手工创建的同key异body冲突、其他复盘写操作持久幂等、提交后读取失败、队列未知提交恢复，以及当前dev_vue策略结构升级。不会以98项登记宣称核心重构完成。本批未连接数据库、Redis、启动服务或操作公网。
+
+
+## 280. 复盘写入结果纳入事务（第三百五十批）
+
+6个HTTP写用例仓储不再commit后从pool读取结果。生成、版本、确认、退回及手工创建/重放在原transaction connection读取详情；缺失结果明确review_write_result_missing并回滚，不使用非空断言把null返回给传输层。记忆决策在同事务按update_id及已授权library_id读取并投影结果。读取或投影失败发生在commit前；commit确认未知仍使用上一批review_commit_unknown语义。权限、CAS、outbox和业务SQL保持原序。
+
+新增18项SQL double行为测试，覆盖生成、版本、确认、退回、手工重放、记忆拒绝的成功/读取失败/结果缺失，验证不访问pool读取、读取在commit前以及异常回滚。更新原commit未知夹具以实际走过新增读取。39项定向测试、server类型/当前边界和生成一致检查通过。手工首次创建、记忆accept/revoke以及真实MySQL端到端尚需更强证据；本批不是数据库集成验收。
+
+当前仍98项HTTP运行登记。后续继续复盘持久幂等和当前dev_vue策略升级；没有连接依赖、启动服务、操作公网或改变前端/Bridge。此前章节中的提交后读取待办由本批源码修复取代，其余待办未据此消除。
+
+
+## 281. 复盘持久幂等设计与追加表源码（第三百五十一批）
+
+核对现有手工scope_key重放和其余5项端口，确认尚无原始请求摘要/冻结回执。正式设计见[复盘写入持久幂等实施设计](architecture/review-write-idempotency-plan-20260909.md)，已记录需求职责与兼容故障两轮复审。明确6动作统一actor+key、原始命令摘要、原CAS重放、结果摘要验证、当前资源授权、业务/outbox/回执同事务；禁止可选key或表缺失降级。旧案例无回执无法证明原请求一致，保留可读但不伪造自动重放。
+
+追加049_review_write_receipts.sql源码，仅创建reviews拥有的回执表，不更改旧迁移或数据。现有SQL分句器确认单条CREATE TABLE；尚未执行DDL，尚未证明真实MySQL约束或升级可用。未新增只复述DDL字符串的测试。实施剩余为私有回执模块、6项服务/端口/仓储/HTTP接线、当前账户owner权限检查、恢复副本及升级链/readiness。当前98项合同登记和已执行188步journal状态不因此变化，没有启动服务、访问依赖或操作公网。
+
+
+## 282. 复盘命令摘要与私有回执组件（第三百五十二批）
+
+实现reviews application的不可变命令摘要：动作/目标/原CAS/原始正文组成规范JSON，排序对象键、保留数组顺序和null/省略差异；拒绝非JSON类型、非有限数、环、稀疏数组及过深结构。摘要不含运行时now/request_id，不保存正文。创建必须无目标/CAS，其余动作必需两者；key16..128。
+
+实现reviews infrastructure私有executeReviewWrite：有效actor行锁、按actor/key锁回执、同key动作/摘要冲突、结果形状/摘要/资源/版本校验、每次返回前调用当前权限检查；首次业务结果与回执同事务。抽取原reviewTransaction并让现有仓储使用，保留提交未知destroy和回滚异常处理。该回执组件尚未接入6个业务方法，不能称现有接口已持久幂等；后续须实现真实资源权限回调与领域结果验证，不能用通用单测回调代替。
+
+50项定向测试通过后，补稀疏数组额外属性反例，命令13项再验证通过；累计51项测试覆盖命令/回执/既有事务读取。server类型及当前边界检查通过。回执故障测试为内存SQL double模拟提交后确认丢失，非真实MySQL或并发证明。049未执行，6项接线、实际恢复验证与升级readiness继续，未连接依赖或启动服务。
+
+
+## 283. 退回复盘完整回执链路（第三百五十三批）
+
+returnReviewCase作为首条业务链路接入持久回执。HTTP要求Idempotency-Key，原reason不经transport trim即传入service，原始正文与预期版本进入命令摘要；业务reason仍按原规则trim。端口command必需，仓储复核actor/action/target/CAS，使用executeReviewWrite包住原CAS写入、outbox和结果读取。重放返回原始结果/ETag，不重新执行当前CAS或outbox。
+
+新增领域详情结构检查，回执结果与案例ID、用户、退回状态、预期revision+1一致才能持久化或重放。首次和重放均锁当前案例并查询账户owner有效关系。核对真实迁移定义发现ownership无id字段，授权SQL使用实际user_id，不使用Mock虚构列。049尚未应用，无表时不提供旧写路径降级；其余5写用例仍待接入，不能宣称复盘幂等完成。
+
+本批34项既有HTTP/事务回归与23项回执/领域/HTTP链路测试通过，server类型、当前边界和生成类型一致检查通过。新增完整Fastify→service→repository链路验证原正文空格变化409、原CAS重放、变化CAS冲突、冻结ETag、权限撤销后新请求/重放均拒绝以及缺key400。测试夹具曾忽略key作用域导致新请求误查旧回执，已修正并复测；非真实MySQL并发证明。没有连接数据库或启动服务。
+
+
+## 284. 案例写入共用回执与三类业务接线（第三百五十四批）
+
+提取reviews私有executeReviewCaseWrite，共用actor/action/目标/CAS检查、当前case及账户owner授权、领域详情与结果revision/status核对，退回路径迁入此组件。生成、用户版本、确认三项新增必需Idempotency-Key和端口command，并接入原业务事务及回执。版本原始wire正文在service生成摘要后才转换为领域content，确认version_id也不提前trim；禁止将规范化后的内容冒充原请求。refresh_evidence不支持的首次请求仍409，但同key改变mode首先按命令冲突处理，不绕过回执分支。
+
+43项HTTP/事务/领域回归及3项service→repository重放测试通过，验证三用例返回原结果、旧CAS重放不再次写业务/outbox、内容变化冲突及owner撤销拒绝。server类型、当前边界、生成运行合同与前端类型一致检查通过。证据为本地SQL double，尚非真实MySQL。
+
+复盘6个写操作已有4项接入持久回执源码，剩手工创建与记忆决策；049仍未应用，回执读取结构readiness及恢复副本验收待做。运行登记仍98，没有新增业务路由、启动服务或访问依赖。当前核心目标未完成。
+
+
+## 285. 策略记忆决策持久回执（第三百五十五批）
+
+decideStrategyMemoryUpdate新增必需Idempotency-Key并贯通原始decision摘要、端口command及私有executeReviewMemoryWrite。首次和重放均锁update关联library并核对当前owner；结果领域形状、ID、状态和原revision+1匹配才持久化/返回。接受、拒绝、撤销保留原业务限制、library CAS、候选支持数、版本写入和outbox，重放不重复合并/撤销或新增版本。
+
+复核撤销SQL发现审计引用merged_revision_id但查询漏列，已增加明确投影及类型；撤销审计现在保留prior_merged_revision_id。3个新service→repository SQL double测试验证三决策首次效果、原CAS冻结结果重放、异decision冲突、当前owner撤销拒绝；accept/revoke仅产生1个library版本、各操作仅1个outbox，并检查撤销审计关联。连同36项既有HTTP/领域/事务检查，共39项不同测试通过；server类型/当前边界和生成类型一致通过。不是实际MySQL事务/并发验收。
+
+复盘写入已有5/6项接入回执源码，剩手工创建，049升级/readiness和恢复副本验证仍待完成。当前运行登记98，不据接线宣称实际数据库已就绪；本批没有连接依赖、启动服务或修改公网。
+
+
+## 286. 手工复盘创建持久回执（第三百五十六批）
+
+手工创建最后一项接入executeManualReviewWrite，复盘6/6写操作完成持久回执源码接线。service在候选/凭据/策略/自述归一化前生成原始正文摘要，保留自述省略/null/空格差异，不持久化选择token原文。HTTP不再提前trim策略ID。首次候选锁显式限定m.user_id与当前账户owner，原有效期/资格/策略校验保持；重放按回执案例复查当前账户权限，不重验已过期或已消费的选择凭据。
+
+旧scope_key两处成功重放捷径改为先验证案例权限再review_legacy_receipt_unavailable/409，保留全部历史案例，不伪造无法证明的原始回执。共享案例授权抽为reviews私有函数。用6项新手工创建SQL double场景取代3项不再符合目标的旧无回执重放测试，覆盖首次成功、过期后精确重放、原正文变化冲突、当前权限撤销、读取失败/缺失/回执写失败回滚、旧案例不重建及模拟commit确认丢失恢复。连同其它定向测试43项及server类型/当前边界通过。
+
+049仍未执行，真实MySQL恢复副本、并发、升级协调器/readiness仍是下一阶段工作。新表缺失不降级成旧非幂等写入。本批没有访问依赖、启动服务、修改公网或删除用户数据。README已合并为当前6/6源码状态，移除过期4/6、5/6说明；核心架构目标未完成。
+
+
+## 287. 复盘回执真实MySQL基础组件验证（第三百五十七批）
+
+新增本地runner和隔离reference脚本，SSH别名实际指向192.168.31.254，MySQL UUID校验为ac423207-6ef3-11f1-b302-000c29fda104。凭据仅经管道进入本地探针、不记录密码，临时SSH转发结束后关闭。构建当前server产物后，在VM创建随机dev_vue_review_ref_*数据库，使用049实际DDL及最小users/effect脚手架，调用实际executeReviewWrite/命令摘要/事务组件。
+
+[真实证据](architecture/review-write-receipt-reference-v1-20260909.json)：MySQL8.4.8，6动作各4个同键并发仅一次测试effect，原正文变化409；实际commit后注入确认丢失并恢复，仅一次effect；回执插入故障使已写effect实际回滚；当前授权撤销拒绝重放，回执摘要损坏拒绝执行；真实外键与5类CHECK拒绝非法行。最终7effects/7receipts，临时库已DROP并报告referenceDatabaseRemoved=true，existingDatabaseWrites=0。源码与构建产物摘要随报告保存。
+
+该证据只证明通用回执组件/049约束及并发，不是6个业务仓储全部SQL、完整012复盘schema、历史数据恢复或dev_vue升级证明。当前188步开发库journal未被本脚本写入，049尚未向现库应用。下一步仍需恢复副本的复盘业务SQL、升级链/readiness及策略结构升级。核心重构继续，不以本批测试替代全目标验收。
+
+
+## 288. 复盘完整业务SQL真实验证与UTC绑定修复（第三百五十八批）
+
+新增business reference脚本，在同一VM随机临时库应用原始012完整复盘表及约束、049回执表和025原始outbox定义，其他域使用明确最小前置表。首次探针有局部created变量遮蔽清理标记的问题，留下一个空临时库；查明确切名称和0张表后独立删除，修正变量并将恢复记录附在v1失败证据。之后每轮均自动清理临时库，不隐去失败。
+
+v2在create_manual出现ER_TRUNCATED_WRONG_VALUE：ISO Z字符串不能直接绑定当前MySQL DATETIME。修复reviews私有SQL时间边界，所有仓储SQL写入UTC参数转显式DATETIME文本；SQL dateStrings按UTC解释，候选有效期/排序/租约时间不再依赖Date对象或本机时区。保留协议ISO UTC输出，没有改变终端展示时区或历史数据。
+
+[最终v4真实证据](architecture/review-business-reference-v4-20260909.json)通过：手工并发同key一个案例；生成实际commit后注入确认丢失后恢复；用户版本、退回、确认原CAS重放；记忆accept/revoke/reject及重放；真实owner撤销后拒绝手工重放；启用dateStrings验证UTC读取。最终1案例、3版本、2记忆版本、9回执，临时库已删除，existingDatabaseWrites=0。实际012外键开启，直接seed前置版本用于模拟先前AI完成，不冒充Worker或模型调用验收。
+
+89项复盘本地测试、server类型/构建、当前边界通过。真实业务SQL验证仍不是当前dev_vue历史恢复/升级证明；012迁移未向现库执行，049/readiness/升级链及策略结构迁移仍需推进。未启动业务服务、安装本地数据库或操作公网。
+
+
+## 289. 当前复盘历史与升级依赖只读核对（第三百五十九批）
+
+新增inspect-review-upgrade-sources-local.mjs，server/.env指向192.168.31.254/dev_vue，UUID一致；只读事务读取DDL与计数，不读取复盘正文。v2证据逐ID/checksum/status确认database_upgrade_steps_v4与188步计划完全一致。旧schema_migrations214条没有混同成当前升级记录。
+
+实库缺12张复盘目标表，仅3张已有V4记忆表且均空。现strategy_subscriptions.id仍INT、账户FK指向legacy，不能直接承接012的BIGINT UNSIGNED订阅FK。盘点保留25周期案例/33版本、3手工案例/1版本、155交易复盘案例，以及2记忆库/20记忆版本/10待决项/5417注入记录等来源；完整各表计数和DDL见[只读证据](architecture/review-upgrade-source-inventory-v2-20260909.json)。
+
+已补充复盘方案第8节实际前置顺序：先策略/订阅namespace升级，再追加缺失复盘结构并核对复用已有3张表，随后恢复副本内历史映射/计数金额对账及readiness。未直接执行012、049或修改现库；该证据确认下一步需回到总计划18.13的策略/订阅升级主路径。盘点不是完整历史迁移验收，没有永久阻塞，核心目标继续。
+
+
+## 290. 策略与订阅迁移关联预检（第三百六十批）
+
+重新读取当前策略源v3，3模板/5订阅/4旧账户/6当前账户/4持久账户映射，输入hash与v2一致、升级历史188。新增strategy-subscription-lineage纯预检模块，将每条旧订阅及各品种关联到持久账户映射和明确双角色目标；拒绝重复源、源摘要变化、跨角色目标/版本ID冲突，历史所有权必须带证据摘要，不从旧ID猜新ID。
+
+生成[strategy-subscription-lineage-v1](architecture/strategy-subscription-lineage-v1-20260909.json)：保留全部3源模板和5订阅，每条均XAUUSD；1/3/5为当前owner，2/4为historical_only。已识别账户/品种/计划无新增问题，现每条订阅仍缺strategy_role_mapping。没有自动把旧复合提示词当成单一分析策略或授权历史订阅。预检即使目标引用齐全也保持executable=false，另需提示词/config转换、目标外键、偏好、恢复回填和namespace提升验证。
+
+4项行为测试通过：多品种/历史标记保留、缺角色映射显式报告、源变化/重复/目标碰撞拒绝、持久账户与历史证据缺失拒绝。该预检不是实际回填，未写数据库或变更旧策略。下一步明确源模板的角色和配置转换，再形成可执行回填记录；全目标继续。
+
+
+## 291. 退役模板的明确历史保留路径（第三百六十一批）
+
+修正上一批预检“所有模板必须双角色”的过度约束。基于源v3的退役模板2及当前订阅无引用事实，增加严格archive_only：必须retired、无订阅引用、原auto_prompt_types/PK/hash匹配且不夹带可执行角色。活跃模板不能走该分支，已有订阅的退役源也不自动归档。历史记录继续保留，不删除或复活；复盘/记忆等全库引用仍需后续证明。
+
+6项预检行为测试通过，生成strategy-subscription-lineage-v2-20260909.json，模板2明确保留原始历史，模板1/3继续等待双角色与配置转换。next-plan§18.14记录两轮定向复核和剩余风险。该改动删除了不必要的角色转换前置条件，不减少在用策略迁移目标；没有写数据库、执行归档或激活订阅。
+
+
+## 292. 策略双角色配置转换（第三百六十二批）
+
+新增v4-strategy-role-config-conversion，将已核实的市场数据计划转换到analysisConfig、入场方式转换到traderConfig，并通过实际V4 compileStrategy检查。原配置字段逐字保留并独立摘要；不向宽松trader JSON塞入尚无消费实现的旧策略policy。旧use_ema34_filter仅为数据开关，不能凭开关创造EMA声明或猜测M1周期；显式policy仍需整体转换。
+
+只读源inventory-v4确认当前开发库仍3模板、5订阅、188条升级记录；模板3的配置字段转换完成，模板1已转换市场计划及入场方式，Chan与结构化policy仍需后端映射。模板2的配置可转换不改变既定archive_only保留安排。配置转换不等于角色提示词、身份映射和回填完成，没有激活订阅或写数据库。
+
+5项定向测试通过，覆盖双角色拆分、原文保留、未知语义显式报告、EMA开关无声明、不合法输入和规范化后源摘要区别；本次文件diff检查通过。第一轮复核检查字段职责与目标编译器，第二轮复核检查源字节保留与默认行为。下一步完成在用模板角色转换与回填，不继续扩展前端或Bridge细节。
+
+
+## 293. 在用EMA策略声明转换（第三百六十三批）
+
+核对实际模板1：policy为shadow，仅启用M1 EMA34，constraints/features/prompt_rules/selectors/stages均空。新增v4-strategy-policy-conversion，完整匹配已支持的managed EMA结构，将声明转换为analysis ema34_evidence；保留原开关、声明enabled及off模式行为。其它规则、额外字段、不同参数或强制执行模式仍明确未转换，不利用trader宽松JSON绕过功能实现。原policy字节留在转换输入，inventory仅记录字段摘要，避免未来将用户prompt_rules写入日志。
+
+9项转换测试和14项服务端市场计划测试通过。测试穿过实际compileStrategy及analysis-context-builder.marketPlan，证明目标指标配置进入分析计划；不代表真实终端取数验收。只读现库inventory-v5确认模板1的EMA配置已转换，剩余Chan映射；模板3配置转换完成。最终日志采用inventory-v6脱敏字段摘要，仍3模板/5订阅/188步，未写业务库。角色提示词、回填、恢复演练和namespace提升仍未完成。
+
+定向复核分别检查旧开关与纯数据声明语义，以及未知字段/参数/工作流不被静默丢弃。下一步继续角色转换和回填准备，前端及Bridge细节保持后置。
+
+
+## 294. 双角色历史标识唯一性修复（第三百六十四批）
+
+回填准备核对006发现strategies及strategy_versions的来源表/legacy_id均有唯一索引，不能给分析和交易角色重复写相同旧ID。新增strategy-role-legacy-identity：目标策略legacy_id为sourceId:role，目标版本为sourceId:role:vSourceVersion；来源表仍auto_prompt_types，迁移映射sourcePk仍原始整数字符串，通过strategy-analysis/trader及strategy-version-analysis/trader区分entityKind。不修改冻结表结构，不把带角色的文本反解释为旧主键。
+
+关联预检输出上述计划标识，archive_only不生成目标标识；lineage-v3保留3模板5订阅。9项身份与关联测试通过，覆盖大于JS安全整数、双角色唯一、版本变化但策略身份稳定、非法ID/角色、历史保留和退役路径。该批解决目标唯一键冲突，未分配实际目标ID、未写业务库，角色提示词和恢复回填仍待完成。
+
+定向复核一检查双角色身份及已有通用迁移映射支持；复核二检查ASCII/长度、原始整数精度、版本重复和已冻结唯一约束。真实MySQL插入与重入证明随回填演练完成，不把纯预检当作数据库写入验收。
+
+
+## 295. 双角色标识真实MySQL验证（第三百六十五批）
+
+扩展既有临时策略参考库验证，使用实际004目标DDL与strategy-role-legacy-identity生成的标识，在VM MySQL内插入同源analysis/trader及各自44版，并回读当前版本关联。两角色均成功；重复策略legacy key、不同version_number下重复版本legacy key均ER_DUP_ENTRY；跨角色active_version_id违反复合FK被拒绝。大于JS安全整数的源ID按字符串保留。身份验证事务最终回滚，参考数据库随后删除。
+
+strategy-write-reference-v5 passed=true、referenceDatabaseRemoved=true、existingDatabaseWrites=0，保留实际server UUID和脚本/运行产物hash；原七类策略写入、回执重放、提交确认丢失及UTC调度检查同时通过。这里验证的是DDL与映射规则，不是旧数据回填：重复INSERT被拒绝不等于迁移器可重入，后续必须通过持久ID映射和逐字段核对完成恢复/重入。未转换实际角色提示词，未执行当前dev_vue提升或回填。
+
+
+## 296. 策略角色投影可重入写入器（第三百六十六批）
+
+新增mysql-strategy-role-writer，冻结目标策略/版本投影，显式列白名单、整数字符串及父子关联检查；同时按目标ID和legacy唯一键读取，已有记录逐字段核对，不做覆盖式upsert。新记录按策略空版本指针→版本→指针写入，所有操作位于调用方事务；writer不commit、不自动重试。verifyOnly缺行即失败，不补写。
+
+实际MySQL参考v6通过：analysis/trader首次各写2行，重复及verifyOnly新增0行；变更冻结输入被拒绝；手工构造库内正文冲突后再次回填失败，冲突正文原样保留。时间采用UTC DATETIME(3)，读回规范化后比较；JSON按规范对象比较，整数保持字符串。参考脚本与writer摘要已入证据，最终事务回滚及临时库删除，existingDatabaseWrites=0。
+
+本层仅是目标写入器，尚未接入源行锁/源摘要、持久ID maps、原始证据和批次checkpoint；这些由后续外层回填事务统一处理，不能单独用于当前开发库升级。角色提示词及恢复副本回填仍待完成。定向复核覆盖固定SQL标识符、不可变输入、唯一键冲突、读回比对和事务归属；未把顺序重放等同并发/提交确认丢失的完整回填验收。
+
+
+## 297. 回填源锁定与四类ID映射接线（第三百六十七批）
+
+新增mysql-strategy-source-writer，接收既有MysqlBackfillTransaction，在其连接中SELECT旧模板全部明确字段FOR UPDATE并核对冻结源摘要。两个角色的legacy标识/版本号与原始来源绑定，先检查四类持久ID映射是否冲突，再调用目标投影writer，缺少映射时调用既有insertMapping并逐条读回核对。所有映射仍使用原始整数sourcePk；源行变化/消失、映射冲突、冻结输入变化均停止，不覆盖。
+
+5项定向Mock测试通过，覆盖四映射登记与重放、源变化或删除时零目标读取、映射冲突提前拒绝、verifyOnly不补映射、映射读回失败上抛。测试证明调用顺序与错误边界，尚未证明该外层在真实MySQL事务中的原子性；下批接参考库进行映射失败回滚及提交后重放验证。目标writer的真实MySQL证据仍为v6。
+
+角色转换审查、实际源语义/用户/配置校验由准备阶段负责；本层不以冻结快照取代这些校验。批次准入、来源完整归档、row receipts/checkpoint及恢复副本演练仍需接入外层协调器。没有执行当前dev_vue业务写入或激活策略。
+
+
+## 298. 源校验与ID映射真实事务验证（第三百六十八批）
+
+strategy-source-write-reference接入实际MysqlBackfillRepository与source/role writer，临时库使用实际025迁移日志DDL和完整字段名的LONGTEXT源fixture。第二个ID map INSERT完成后注入故障，整个事务回滚，目标策略/版本/map均0；源行内容改变时拒绝并保持0。随后实际commit成功再注入确认丢失，返回backfill_commit_unknown，重连后2策略/2版本/4map已存在；两连接并发重放均新增0，verifyOnly通过。
+
+strategy-write-reference-v7 passed=true、referenceDatabaseRemoved=true、existingDatabaseWrites=0，保存新验证脚本、writer、通用事务及025源码摘要。该证据证明目标与映射的事务原子性和提交确认丢失恢复，不证明实际dev_vue源DDL恢复、角色转换语义或批次升级准入。源fixture明确记录named-columns-longtext，未将其冒充旧库镜像。
+
+下一步继续来源归档、batch/row receipts与checkpoint接线；实际角色提示词和恢复副本回填仍待完成。未改当前开发库，未启动交易或服务。
+
+
+## 299. 策略回填批次与来源归档事务（第三百六十九批）
+
+新增strategy-source-batch，将旧模板完整源JSON、行回执、批次记录和checkpoint接入既有MysqlBackfillTransaction，与策略/版本/四类ID maps一起提交。限定每批100行/2MiB、严格源ID升序及显式游标；运行bindings精确匹配，重放不仅核对batch摘要，还检查目标、映射、源行及归档/行回执内容。原始正文只写数据库归档，不进入报告日志。source/role writer在第一次await前复制输入，修复异步调用期间外部对象变更窗口。
+
+真实MySQL参考v8通过：归档INSERT成功后注入异常，策略/版本/maps/batches/receipts/archives六表本批写入均0；commit后确认丢失返回unknown，后续重放成功，checkpoint sequence=1/processedRows=1；归档JSON篡改后重放拒绝。6项源writer定向测试通过，新增异步等待期间修改调用方对象不影响冻结写入。临时库删除，existingDatabaseWrites=0。
+
+本批完成事务层批次记录，仍需实际188步schema准入、角色提示词与配置完整准备、旧库恢复副本及订阅namespace提升。参考源仍为命名字段fixture，不能当作恢复副本。全目标继续，尚未对当前dev_vue执行回填。
+
+
+## 300. 当前开发库策略回填结构预检（第三百七十批）
+
+新增strategy-backfill-schema-preflight，将原188步registry、策略最终DDL、六张迁移日志/归档表、auto_prompt_types及users纳入统一只读预检。策略与迁移表参考来自冻结加载器，旧源/用户DDL来自既有实际inventory-v3；比较规范DDL摘要、InnoDB基础表属性及零额外触发器。限定dev_vue或显式命名的策略恢复副本，并匹配实际VM UUID；结构就绪不等同apply授权或数据准备完成。
+
+只读现库inventory-v7结果schemaReady=true：188/188条ID/checksum/completed精确一致，10/10表结构匹配，触发器0。仍3模板/5订阅，businessWritesPerformed=false。applyReady保持false，剩余实际角色转换、source snapshot绑定、恢复数据对账和订阅提升。源码读取、语法执行及当前正向查询通过；未声称已覆盖故障注入或恢复副本准入。
+
+本批将原分散结构证据接入策略源inventory；实际apply协调器仍待接入该检查与恢复凭据，当前不会仅凭10表匹配执行回填。
+
+
+## 301. 角色转换发现仓位责任契约缺口（第三百七十一批）
+
+实际读取模板3/version11原文并对照V4 AnalysisContextBuilder、TraderContextBuilder、MarketAnalysisResult、TraderDecisionResult及risk.evaluateAction。旧模板只输出仓位档位，旧position-sizing/risk-policy代码支持服务端档位定仓；当前V4开仓风控直接要求parameters.volume。另有平台参考组合与实际账户组合差异。此前“模板3配置转换完成”仅指市场计划及入场方式字段，不能扩展为角色语义或运行已完成。
+
+next-plan§18.15记录两轮职责/兼容复核及顺序修正：先核对确定性定仓合同映射，再转换提示词；不改策略参数、不让模型猜手数、不复制旧路由。此次获得的证据改变后续实施动作，尚未新增运行代码或执行数据库写入。迁移事务与现库结构证据仍有效，实际角色转换/恢复回填继续未完成。
+
+
+## 302. 风控档位定仓计算模块（第三百七十二批）
+
+核对旧risk-policy.js：风险预算为equity×max_risk_per_trade_pct×档位系数；优先匹配broker order_calc_profit，否则按SL距离/tick_size×tick_value计算每手损失。此次实现V4已有tick metadata路径的position-tier-sizing纯领域模块，保留probe/light/standard的1/4、1/2、1系数，显式接收证据上限与加仓状态；不擅自默认缺失档位或加仓事实。
+
+使用18位定点BigInt，在最终手数步长选择前保留预算/损失比值；同时限制券商及策略最大手数，并按volumeMin为起点的格点向下取合法数量。数学口径对应旧half-up后超预算退一步的接受结果，但不继承旧浮点1e-9容差，极限边界更严格。缺失/非法/非正输入、零止损距离、低于最小手数均拒绝；不自行移动止损。
+
+6项计算行为测试通过，覆盖档位预算、非零格点起点、两类上限、临界预算、方向对称、无效输入与明确档位降级。服务端typecheck及边界/98项运行合同一致性检查通过。该模块尚未接入实际风控动作转换，未导出跨域端口；冻结版本、volume/tier互斥、加仓归属、批准动作持久化仍需接线验证。旧broker计算路径未迁入，不能称完整旧定仓等价或模板3已可运行。
+
+
+## 303. 档位动作接入风控评估（第三百七十三批）
+
+position-tier-actions接入evaluateRisk，在硬门禁通过后把position_size_tier转换成明确volume，再运行原单动作与总仓位限制。要求独立server-owned PositionSizingContext绑定decision ID/revision、账户/用户、policy hash及全套当前revision，逐动作携带明确evidenceCap/isAdd；不读取模型参数里的加仓声明作为可信事实。tier与volume/factor同时出现拒绝，缺少上下文拒绝，明确volume旧路径不要求新上下文。
+
+批准动作去除tier意图字段，仅携具体volume，避免下游再次评估时变成双模式冲突；原模型动作不修改，requested/resolved tier、计算来源、手数和降级事实入RISK_POSITION_SIZE_RESOLVED审计规则。批准动作再评估通过，不绕过现有总量限制。修正初版类型引用循环，将计算所需结构定义在本模块内，未添加边界豁免。
+
+33项相关测试通过，包含6项纯计算及27项风险行为测试；服务端typecheck与检测边界清零通过。当前真实candidate loader尚不生产PositionSizingContext，模型网关输出契约及批准动作持久化/执行前校验仍需完整接线；缺上下文的tier动作保持拒绝。没有真实交易或数据库迁移，本批不能作为模板迁移已完成的证据。
+
+
+## 304. 定仓证据上限与持久化端口核验（第三百七十四批）
+
+继续追踪旧llm.js normalize路径：置信度≥0.75允许standard、≥0.62允许light，否则probe；缺周期或context_status=partial统一probe。新增legacyPositionEvidenceCap将其对应到V4 0–100尺度，完整性必须来自服务端事实；未知完整性和无效置信度拒绝，不能从模型dataGaps推断源数据完整。该函数尚待实际冻结输入读取端口接线。
+
+核对当前completeReview源码直接保存完整evaluation_json，执行侧读取evaluation.approvedActions；新增Worker→持久化端口行为验证，确认实际process传递明确volume与档位审计、保留原始无volume模型动作。35项相关测试通过。端口Mock不是MySQL持久化/执行证明，实际上下文生产仍未完成。
+
+补充兼容事实：旧resolvePositionSizeTier提供isAdd参数，但本次核对到的llm normalize调用未传入isAdd；因此不能仅因函数具备加仓封顶能力就宣称旧运行调用已使用。真实加仓上下文须按已冻结策略/持仓来源明确，后续不得擅自加紧或放开策略。当前无服务重启、数据库写入或真实交易。
+
+
+## 305. 分析输入冻结K线数量覆盖证据（第三百七十五批）
+
+核对现有TradeDecisionAnalysisReader只接受accepted且绑定riskDecisionId，不能将其放宽后直接用于proposed风控阶段。继续追踪实际TradingAnalysisMarketSource发现只要求每周期非空，并未冻结数量覆盖状态，不能据此默认证据完整。新增candle_coverage/v1子对象，由实际构建器在模型切片后记录每周期requested_bars/available_bars及complete/partial，不读取模型dataGaps。
+
+3项定向测试通过，包括实际TradingAnalysisMarketSource调用验证：H1请求3实际2为partial，M5请求1只记录选中的1条。类型与检测边界检查通过。该证据只证明计划数量覆盖，不证明时间新鲜、连续性、已收盘或指标就绪，后续消费者必须分别核对；旧快照无字段保持未证明，禁止改写旧摘要或补造状态。新字段属于内部冻结行情输入，不修改浏览器/Bridge协议。
+
+下一步建立proposed决策的独立只读公开证据端口，核对冻结snapshot摘要/归属后消费覆盖证据；实际风控candidate尚未生产positionSizingContext。本批未查询或写数据库、未发送模型请求或交易。
+
+
+## 306. 待风控决策的公开证据读取端口（第三百七十六批）
+
+新增ProposedDecisionEvidenceReader及MySQL适配器，独立于accepted历史端口；限定proposed、risk_decision_id为空及精确decision/analysis revision、用户/账户范围，关联成功trader/analysis runs和对应analysis snapshot。核对决策payload摘要与confidence列、冻结输入摘要、内嵌策略/版本/品种和规范UTC时间；不读取latest分析或替换当前策略。
+
+通过inference index公开类型、composition公开事务组装工厂，不在risk新增跨域SQL。返回已验证市场输入及来源hash；旧输入无candle_coverage时保持缺失，不据此默认complete。4项新端口测试加22项既有accepted读取测试共26项通过，服务端类型和边界检查通过。当前测试使用Mock连接，真实SQL/FK范围仍需MySQL证明；risk candidate和上下文构建尚待接线。没有数据库写入或启用定仓交易。
+
+
+## 307. 风控Worker接入冻结定仓上下文（第三百七十七批）
+
+新增risk应用层withPositionSizingContext，通过inference公开ProposedDecisionEvidenceReader核对决策/分析版本、账户、品种及原始decision payload hash，验证coverage与实际K线数量一致；缺覆盖证据、声明数量不符或来源冲突时清除旧上下文，保留显式拒绝。指标ready=false降低证据上限，未知指标状态不默认完整。输出绑定policy/revisions及snapshot/decision hashes，审计规则保留来源摘要。
+
+MysqlRiskRepository的candidate读取接应用构建器，worker-risk在entrypoint组装公开证据端口；新增读取是单条关联SELECT，最终completeReview继续重查现有版本，不把单次读取当作跨查询事务锁。明确volume动作不增加该证据查询，HTTP策略服务原构造保持兼容。
+
+依据304批核实的旧调用行为，字段改为applyAddCap/add_cap_applied表示是否执行加仓降档政策，避免isAdd=false被误读成“账户没有加仓”。legacy上下文明确不启用旧实际调用未使用的降档；未来若启用需独立规则，不从模型is_add取值。
+
+45项相关测试通过，类型/边界检查通过：覆盖公开证据→应用上下文→风险批准/审计、数量不足降低档位、旧快照和摘要不符拒绝。实际proposed查询MySQL联调、模型输出合同声明、完整策略回填仍需完成；没有运行Worker、重启服务或发送交易。
+
+
+## 308. 模型仓位输出合同与校验接线（第三百七十八批）
+
+原assertTraderActionParameters强制market/pending提供volume，会在进入风控前拒绝合法档位动作；现增加严格二选一：position_size_tier仅接受probe/light/standard原始字符串，不允许volume或position_size_factor同时出现（含null），并要求模型给出合法正定点SL。管理动作禁止带tier。明确volume旧路径继续兼容，入场方式及expectedState检查保持生效。
+
+模型网关系统合同同步声明：按策略选档位或明确手数，档位由服务端计算，不由模型猜绝对手数。7项新合同测试及8项既有推理流程测试共15项通过；补测数组伪装档位、前导零及超精度SL拒绝。类型/检测边界检查通过。只是模型输入输出代码接线，没有调用模型或运行真实交易；proposed证据SQL的真实MySQL验收及实际策略恢复回填仍待完成。
+
+## 309. 核心范围收口与待风控版本关联补强（第三百七十九批）
+
+按用户最新要求，优先完成服务端/API/数据库核心重构，前端与Bridge细节延后至对应阶段。核对proposed证据查询发现未绑定Trader运行时analysis_revision，现补充a.revision=tr.analysis_revision，防止引用同一分析ID下不同版本的证据。42项定向测试及服务端构建、当前边界和合同生成检查通过。
+
+新增verify-proposed-evidence-mysql.mjs，设计为从当前表DDL建立会话临时影子表，验证版本、归属、状态、摘要，回滚后销毁临时表。实际运行尚未完成：v1尝试同名LIKE遇ER_NONUNIQ_TABLE，改为SHOW CREATE后v2/v3确认现库缺trade_decisions，v3定位shadow:trade_decisions。不得将此脚本或Mock通过记为真实SQL验收通过。连接结束自动释放会话临时对象，没有永久表写入、服务重启或交易。
+
+下一步仍是既定数据库升级主线：在临时参考/恢复库验证目标DDL与策略父级迁移，完成恢复副本回填及对账，再依序收口现有dev_vue升级。当前缺表不能靠临时创建孤立业务表绕过迁移链；前端和Bridge细节不作为当前主线。
+
+## 310. 待风控证据SQL的真实MySQL参考验证（第三百八十批）
+
+上一批有实质进展：修复Trader分析版本关联，并确认现库尚未具备目标表。本批不在dev_vue绕过升级链单独补表，而是扩展既有临时参考库验证器：在隔离库按004剩余语句及005/006/007生成分析、推理和风控目标结构，提取其DDL生成会话影子表验证查询。复用独立proposed-evidence-reference帮助器；独立现库探针仍需现库具备目标表，不能作为当前已通过的验收入口。
+
+strategy-write-reference-v9-20260909.json记录通过：9组顶层验证（包含既有策略写入/回执/迁移批次回归），新增证据查询11项检查。真实MySQL拒绝Trader分析版本不符、账户不符、分析任务失败、品种大小写不符、非proposed状态、已有risk引用及两类payload篡改。有效查询返回冻结快照摘要；事务回滚后7张临时表全部为空并删除，最终整个随机参考库删除，existingDatabaseWrites=0。源码/构建产物及迁移摘要随报告保存。
+
+证据界限：新查询测试使用从迁移派生的临时表，并明确移除FK以构造拒绝场景，不证明新证据链外键完整性、跨查询并发锁或端到端Worker交易。既有策略部分的实际FK验证保持独立记录。未改冻结迁移、未启用Worker或调用终端。
+
+继续核对007准备表与当前lineage端口：订阅的双角色映射、历史归属、配置承接和恢复副本对账仍是切换前置，不能因本次SQL通过跳到048或运行名称替换。仍按18.13/18.15推进，前端/Bridge细节后置。
+
+## 311. 订阅准备表的三表冻结投影写入（第三百八十一批）
+
+只读核对模板3原文摘要仍为11b5e0dc40438592a56a39d001712812ad1c1624a1a1282ed5928badb71e8ed7。行情计算、止损与仓位参数保持原值；平台参考组合与实际账户组合、80%部分平仓、入场加速周期来源仍需显式衔接，未把原提示词直接复制为两个已完成角色。
+
+为继续推进独立的核心迁移工作，新增mysql-subscription-build-writer：只接受冻结的subscription/schedule/preferences完整投影，写入现有007三张准备表。显式列清单排除生成列；ID以十进制字符串保留，日期按UTC原墙钟校验且拒绝丢失精度；校验父子ID、交易角色成对引用、状态/开关与偏好版本。输入在首次异步操作前深拷贝，建立writer后变更投影被拒绝。
+
+读取同时覆盖目标ID、legacy键和业务唯一键。完整三表逐字段一致才视为重跑成功；已有不同数据拒绝且不覆盖；缺一张表的部分投影拒绝，不自动补成“已迁移”。调用方继续拥有事务、源行锁/摘要、角色与配置审核、ID映射、回执、原文归档和最终命名切换，本层不提交、重试或启用运行订阅。
+
+验证：4项Node定向测试通过，覆盖标识精度、日期、关系、批内冲突与异步输入冻结。strategy-write-reference-v12-20260909.json通过10组顶层真实MySQL验证，其中新增7项准备表检查：子表故障三表回滚、verifyOnly缺失拒绝、提交结果完整重放、子表冲突保留、部分投影拒绝、业务/legacy键冲突保留、真实复合版本FK拒绝。v10/v11首次验证暴露冲突分类顺序，已修正为先识别已有内容冲突，再判断缺失子表；失败记录保留。
+
+本次参考使用原007 DDL和账户父表支架，证明写入/回滚/约束行为，不证明已提升账户命名空间的全链升级。v12参考库已删除，现有数据库永久写入为0。下一步将该写入层接入源订阅与持久映射/批次证据，完成角色转换后在恢复副本回填对账；没有创建新的正式迁移、改写188条历史、切换运行表或运行交易。
+
+## 312. 旧订阅源与持久父级映射接线（第三百八十二批）
+
+新增subscriptionLegacyIdentity与mysql-subscription-source-writer。多品种展开保留原始整数source PK，用受长度限制的品种摘要区分entityKind，目标legacy_id保留sourceId:symbol。持久映射指向最终逻辑strategy_subscriptions名称，物理写入仍限定007准备表；不能把准备表名称永久写进映射后要求升级时改历史映射。
+
+写入前锁定并核对旧订阅完整20字段及其旧模板完整26字段摘要，使用既有品种转换器核对展开集合，防止遗漏或增加品种。目标user必须等于源user；账户必须命中既有trading_account映射，分析/交易策略及版本必须命中双角色持久映射；任何父级或订阅映射冲突在目标写入前拒绝。三表投影写入和品种映射共用调用方事务，写后回读映射，verifyOnly不能补写缺失映射。
+
+17项定向测试通过（含既有策略源和订阅三表测试），新增覆盖原PK、双品种、源/模板变化、父映射缺失、源用户替换、品种遗漏、输入异步冻结及映射回读失败。strategy-write-reference-v13-20260909.json通过11组顶层真实MySQL验证：新增一源两品种六条目标记录与两条订阅映射，源漂移和缺账户映射无目标写入，映射故障回滚六行，真实commit后注入确认丢失并在新连接核对重放，已提交结果并发重放均0新增。临时参考库已删除，existingDatabaseWrites=0。
+
+证据界限：旧订阅输入为会话临时20列支架，旧模板与映射/目标为参考库真实表；不是现库完整恢复证明，也未验证首次并发插入。每次归还连接直接结束会话以移除临时源，避免影子表泄漏。父级所有权区间、记忆/风险配置转换、run/schema准入、回执和源归档仍由上层协调器负责；当前层不能独立作为最终升级入口。未改现库、未启动交易、未改冻结迁移。下一步补订阅批次回执、源归档和检查点，再进入完整恢复副本对账。
+
+## 313. 订阅批次回执、归档与检查点闭环（第三百八十三批）
+
+新增subscription-source-batch，把一条旧订阅的全部品种目标放进同一批次行回执；转换摘要同时绑定策略源摘要与全部投影，原始20字段源行保存在既有data_migration_source_rows，不把原数据输出到日志。检查点计数按原始源行计数，而非展开后的目标行数。
+
+策略和订阅共用frozen-source-batch，源转换/父级映射仍留在各自writer，公共层只拥有已有run、批次、行回执、归档与检查点协议。保持100行/2MiB上限和原PK严格递增。提取前记录的策略v1 batch/stream黄金摘要在提取后保持完全一致，不改变既有请求身份或回执含义。没有引入第二套迁移表或修改冻结DDL。
+
+补强重跑检查：已存在批次回执时也必须核对检查点已覆盖该批次；缺失、回退或同序列cursor不符拒绝，合法后续批次已前进时仍允许核对旧批次。21项定向测试通过，包含黄金摘要、边界、检查点冲突及后续批次兼容。
+
+strategy-write-reference-v14-20260909.json通过11组顶层真实MySQL验证：订阅批次归档写入后注入故障，三张目标表、映射、批次、行回执和归档七类表全部回滚，检查点保持0；真实commit后确认丢失，重跑核对同一条源、六个目标引用与原文，检查点为1行/源ID32。已提交检查点回退与归档JSON篡改均被拒绝。既有策略批次的回滚、确认丢失和归档校验回归仍通过。参考库已删除，现有dev_vue永久写入为0。
+
+未证明事项保持明确：上述为迁移写入与恢复协议的参考验证，旧订阅是会话源支架，不是现库完整恢复；未进行正式命名切换或运行启用。完整恢复副本前仍需角色/配置转换结果、父策略源归档与所有权区间准入一致，再组织两类批次回填并对账。
+
+## 314. 旧订阅止盈偏好与UTC时间的实际转换（第三百八十四批）
+
+新增v4-subscription-preferences-conversion，通过strategies公开的现有V4偏好/档位选择合同验证四种模式，保留已核对的旧空值/大小写规范化。created_at/updated_at按已授权UTC原墙钟转换，拒绝缺失、非法日期和精度损失，不以迁移时间补值。只生成已有执行偏好列，不把记忆或风险选项塞进无消费者的JSON。
+
+订阅source writer在任何目标写入前核对投影偏好必须等于该转换结果，覆盖模式、版本、revision及历史时间，阻止调用方冻结了错误投影后仍写入。19项定向测试通过，包含四模式、空值/未知模式、日期精度、投影模式/时间冲突，以及源/批次既有验证。
+
+只读刷新strategy-upgrade-source-inventory-v9-20260909.json：仍为3模板、5订阅、188升级记录，当前策略回填结构检查通过（不代表整个运行库完成）。5条订阅偏好均转换为ai_recommended，均为platform_only记忆模式，个人risk_profile_id与conflicting_strategy_id均缺省；其中2条属于历史归属。新inputHash绑定风险父级输入，避免父配置变化时沿用旧输入摘要。保留v8中间报告，v9为补全依赖摘要后的当前证据。
+
+strategy-write-reference-v15-20260909.json通过11组顶层真实MySQL回归，准备表、源映射与订阅批次继续通过，参考库已删除，现库永久写入0。该转换不授予执行权限；个人风险引用缺省只代表没有该条源引用，不证明平台有效风险策略迁移完成。platform_only仍需对应记忆保存/运行能力承接，模板双角色语义与恢复副本对账也仍未完成。
+
+## 315. 统一策略记忆的公开运行读取端口（第三百八十五批）
+
+核对旧scheduler与手动strategy运行：均经getStrategyMemoryLibraryForRuntime读取统一库，库缺失使用空默认；不能把subscription.platform_only解释为V4库active开关。接续方案18.16完成职责与兼容两轮复核，保持reviews拥有人工确认、修订及读取权限，模型仅消费后续冻结内容。
+
+新增RuntimeStrategyMemoryReader公开类型和MySQL适配器，composition组装；限定strategy/user/kind及平台/个人库归属，只关联current_revision_id属于该库的修订。absence、disabled、ready分开；off/shadow及非active状态不返回正文；active内容验证UTF-8字节与SHA-256，超过64KiB拒绝，不截断。没有读取待确认候选，也没有新增写入口或自动调整记忆模式。
+
+6项定向测试、服务端类型/构建和边界检查通过。strategy-write-reference-v17-20260909.json通过12组顶层真实MySQL验证，新增8项记忆检查，覆盖平台/个人授权、缺库、模式/状态、归属、正文篡改、超长正文及真实当前修订复合外键。v16首次参考验证发现个人策略实际scope=user，而非personal，已同步修正查询和测试并重验；失败证据保留。此处012仅执行选定的两张记忆表和当前版本FK，父表为参考支架，不表示复盘全链或现库已升级。
+
+参考库已删除，现有dev_vue永久写入0。接口尚未接模型输入；下一步经应用构建器冻结库/修订/模式/摘要与正文，并记录注入来源，继续保持待确认内容不参与运行。原始记忆历史迁移、模板双角色与恢复副本对账仍待完成。
+
+## 316. 分析与Trader输入冻结记忆来源（第三百八十六批）
+
+新增freezeStrategyMemory应用层，通过reviews公开只读能力获取一次当前记忆，核对策略范围与active正文摘要，深拷贝并投影固定字段，禁止额外候选字段进入输入；disabled强制去掉正文。AnalysisContextBuilder和TraderContextBuilder支持注入该能力，内部snapshot增加可选strategyMemory；旧快照和未配置能力时保持字段缺失，不读取今天的库补造历史状态。
+
+库ID/revision、当前修订ID、模式/状态、正文摘要、正文和预算元数据跟随完整输入参与contentHash。源码核对beginAnalysis/beginTrader现有事务保存整个JSON及其摘要，模型调用在快照保存之后；因此来源可随输入留存，但本批不宣称专用注入日志已经完成。构建器及composition只依赖reviews公开类型，未新增跨域SQL或循环。
+
+相关38项测试通过（原37项加Trader范围冻结1项），类型/边界检查通过：覆盖缺库与未接线区分、异步返回后内容变化不影响快照、额外字段剔除、错误策略/正文拒绝、分析输入摘要覆盖及Trader当前策略/user范围。没有修改现库或调用模型。
+
+运行启用前仍需收口：012的strategy_memory_injection_logs_v4.runtime_kind只有analysis/review/memory_compression，没有trader；token_count与max_context_tokens尚无实际计数/预算接线。不能以0伪装真实计数，也不能把64KiB读取限制当成token预算。当前Worker entrypoint暂未注入该reader，继续完成版本化审计字段、预算策略和同事务来源登记后再组装。此处是核心推理链完整性工作，不涉及前端或Bridge细节。
+
+## 317. 记忆估算预算与版本化审计DDL（第三百八十七批）
+
+核对旧strategyMemoryEstimatedTokenCount为ceil(UTF-8 bytes/4)，明确是估算。新增strategyMemoryBudget，冻结输入记录utf8_bytes_div4_v1、字节数、estimatedTokens和maxTokens，按现有max_context_tokens字段拒绝超预算正文，不截断或自动改写。该估算不代表模型真实token用量或完整请求上下文预算。30项相关测试及类型/边界检查通过。
+
+新增inplace/050_strategy_memory_runtime_audit.sql，仅追加扩展：支持trader类型，token_count可NULL，record_version区分旧行与新准备记录，新增输入快照FK/摘要及估算字段。历史行默认版本1并保留token_count；新版本2要求完整来源和已知估算方法。两轮职责/兼容复核见接续方案18.17，未改012或已有188步。
+
+strategy-write-reference-v18-20260909.json通过12组顶层真实MySQL验证。050先在临时参考库应用，旧token_count=12原值保留；新准备记录真实用量NULL、estimated_token_count=3、injected=0；缺失快照FK、非法摘要和未知方法均拒绝。这里验证DDL兼容和约束，业务层purpose/user/strategy与输入正文对应关系仍须由后续审计端口验证，不能把任意FK合法的记录当成正确注入证明。临时库已删除，现库永久写入0。
+
+尚未在dev_vue执行050、未启用Worker记忆。下一步实现reviews公开事务审计端口，并与分析/Trader保存快照共用提交边界；准备记录仅表示输入已留存，不宣称模型已经使用记忆。
+
+## 318. 核心范围收口与记忆准备事务（第三百八十八批）
+
+按用户最新要求，本阶段优先完成核心后端、API和数据库重构。前端交互、视觉与Bridge客户端细节进入对应重构阶段；数据保全、身份权限、跨域职责、事务一致性及核心业务语义继续作为本阶段验收条件。后续顺序为核心推理链收口、旧策略双角色转换与订阅承接、恢复副本升级对账及API核心流程验收，不因零散表现问题扩大当前任务。
+
+reviews新增RuntimeMemoryPreparationWriter公开事务端口，校验策略/库归属、当前修订、内容摘要与预算；inference通过公开类型与注入工厂，在beginAnalysis/beginTrader保存快照后、创建模型任务前登记准备记录，共用同一连接与提交边界。输入摘要覆盖完整快照，内容或预算不符拒绝；active输入未配置审计端口时拒绝继续。Worker源码完成组装，未启动或重启进程。准备记录injected=0、token_count=NULL，不宣称模型已使用记忆。
+
+真实参考验证暴露并修正两项运行兼容问题：推理启动的ISO UTC时间不能直接绑定MySQL DATETIME，现按严格UTC转为SQL毫秒格式；OCTET_LENGTH在bigNumberStrings连接上返回字符串，记忆读取/写入现在接受经过验证的十进制字节数。v19至v21失败报告保留，v22通过12组顶层真实MySQL验证，新增实际beginAnalysis审计后故障回滚和正常提交证明；快照、payload、审计、任务、attempt、outbox及run状态没有半提交。还验证普通连接与大整数配置连接读取结果一致。
+
+36项定向测试及服务端构建、模块边界与API生成检查通过。参考库已删除，现有dev_vue永久写入0；050尚未应用现库。Trader同事务源码已接线，但本次真实事务证明仅覆盖analysis，不能代替Trader全链验收。整体重构仍未完成，后续优先完成剩余核心迁移和业务链验证。
+
+## 319. 订阅准备表到运行名称的保全验证（第三百八十九批）
+
+按接续方案18.19完成两轮复核，新增subscription-root-promotion纯命名映射、结构/行摘要预测与结果分类；没有增加针对现库的迁移执行入口。单条RENAME保留旧strategy_subscriptions为strategy_subscriptions_legacy_v3，提升007三张准备表；支持逆序还原。预测只改变表定义及FK中的目标名称，保留约束标识、注释、行数和内容摘要；源缺失、目标冲突及部分状态不能当作已完成。
+
+新增独立随机参考库实验，采用冻结006/007及归档现库旧订阅DDL，并核对六张策略/订阅表的定义与归档dev_vue一致。账户父表使用最小支架并模拟已完成的名称提升；全部数据为夹具，不是旧5条历史订阅恢复副本。对全部参考表读取显式列（包含不可见/生成列），核对切换前后DDL和逐行摘要。
+
+strategy-write-reference-v26-20260909.json通过13组顶层真实MySQL验证；订阅切换新增5项检查：六表结构一致、目标碰撞整条失败、模拟DDL回执丢失后完整状态识别、旧引用跟随旧表/新子表跟随新表且账户FK及CHECK有效、单条逆向重命名恢复原始结构与数据。4项纯函数测试通过。v23首次实验复用切库前已准备的语句，导致夹具写入比对冲突；改成新库独立连接，v24至v26通过，失败证据保留。两处临时参考库均已删除，现有dev_vue永久写入0。
+
+尚未证明历史数据回填、跨进程写入冻结、完整历史依赖和升级journal切换；这些仍须在恢复副本收口后才能对现库执行。本批补齐命名切换行为证据，不代替旧策略双角色转换或整体API运行验收。
+
+## 320. 比例平仓的确定性合同（第三百九十批）
+
+只读查询当前dev_vue确认auto_prompt_types.id=3/version=11仍包含平仓80%的规则，未输出或落盘完整提示词。接续方案18.20完成职责与数据/异常两轮复核。新增close_position的close_percent字符串意图，范围严格为0到100之间，与明确volume互斥；inference校验并通过通用模型合同说明，不按策略ID或名称增加执行规则。
+
+比例与具体手数的换算归risk/domain/partial-close-actions，使用18位定点十进制、向下步长取整和最小剩余量限制。要求唯一ticket、持仓品种与规格匹配、持仓及合约revision当前；同批同一持仓还有平仓/改单时拒绝。数量不足、数量网格不合法或超过合约最大单笔量拒绝，不改为全平。旧position-guard-execution仅作为取整/保留剩余量参考，不宣称它就是模板3实际执行路径。
+
+纯管理以及混合开平仓均输出去掉close_percent后的明确volume，换算审计记录保留原比例、原持仓、解析数量、剩余量、步长与revision；原模型结果不修改。例：0.10手的80%解析为0.08手并保留0.02；最小持仓0.01手的80%拒绝。明确手数和全平旧合同继续兼容，execution/Bridge没有新增比例解释入口。
+
+80项相关测试通过，覆盖小数精度、非十进制比例拒绝、最小/最大限制、品种和revision冲突、同ticket重复管理、输入不可变、两条风险路径及原有定仓/用户命令回归。服务端构建、模块边界、API生成一致性通过。未调用模型、启动进程、修改现库或执行终端交易。本批是核心语义承接，模板双角色输入/输出完整转换、平台参考组合差异和恢复副本对账仍待完成。
+
+## 321. 平台参考组合的迁移判定修正（第三百九十一批）
+
+追踪旧scheduler的两条独立分支：includePortfolioContext只控制private且开启标记时的私人持仓/挂单；platform策略另外根据观察源匹配调用loadPlatformReferencePortfolio，与该标记无关。reference-portfolio通过策略对应的open/closing outcomes及精确ticket关联实时组合，不是普通账户全部持仓；读取失败返回unavailable，不能当成空组合。该来源差异不能由档位、记忆和比例平仓已实现抵消。
+
+新增v4-strategy-portfolio-conversion源语义检查，并接入角色配置转换：platform标记strategy_reference及观察源匹配条件，显式保留运行映射缺口；private启用与关闭分别为private_account/off。平台参考组合的V4目标角色仍标为unresolved，不能把旧组合策略模型的输入直接判定归分析师，也不能等同订阅者实际账户。模板3先前的converted仅覆盖市场配置/入场字段，现在修正为partial，防止工具对完整语义给出过强结论。
+
+9项定向测试通过。最新strategy-upgrade-source-inventory-v11-20260909.json只读确认仍3模板、5订阅、4旧账户、6新账户、4已持久化账户映射、2历史订阅、0未解析归属、188升级记录。v10中间报告保留，v11进一步明确平台目标角色尚未确定；没有执行DDL/DML。源提示词及原始配置未改写，本批不宣称运行组合读取端口或策略双角色转换完成。
+
+定向复核：源语义判定按scope与私人标记共同区分，不凭一个布尔字段忽略平台分支；未知值不默认关闭；不把参考组合的旧归属/终端过滤规则原样移植为新模块跨域SQL。下一步围绕平台参考组合的观察与账户执行分离明确承接合同，并结合现有execution/trade-history公开归属能力实现。
+
+## 322. 交易员参考组合的冻结合同（第三百九十二批）
+
+接续方案18.21完成两轮复核：平台参考组合交给交易员作独立策略上下文，分析师继续负责行情判断。参考组合不能并入当前账户持仓/挂单，也不能作为执行目标；旧组合相关策略条件如何与两个角色正文配合，仍须在提示词转换中逐项验证。迁移检查的targetRole由unresolved更新为trader，但status仍为mapping_required，不把角色确定当成运行完成。
+
+新增StrategyReferencePortfolioReader消费端口及freezeStrategyReferencePortfolio，限定user/目标账户/分析策略/交易策略/品种/asOf；公开index仅导出合同类型。未接线保留字段缺失，端口可显式返回not_applicable；ready必须有参考源账户、正集合revision、规范UTC时间且不超过30秒。每类最多1000项，引用ID必须带命名空间前缀，数量/价格为正十进制，挂单类型/方向及有效期单独验证。显式投影剔除terminal ticket及额外字段，冻结源信息与摘要；失败不补空集合。端口提供方仍负责权限、观察源选择和精确策略归属，摘要本身不证明这些外部事实。
+
+TraderContextBuilder和composition增加可选端口，结果放入单独strategyReferencePortfolio字段并随完整输入参与快照摘要；模型通用合同说明仅当前账户集合可以成为执行目标。实际构建器测试确认参考源账户9的持仓没有进入目标账户7的positions/pendingOrders。36项相关服务端测试、9项迁移检查及类型/构建/边界/API生成检查通过。
+
+只读刷新strategy-upgrade-source-inventory-v12-20260909.json，仍3模板、5订阅和188步，无业务写入。没有在Worker入口注入真实reader、没有调用模型/Bridge或启用迁移；本批仅完成冻结合同与构建器接入，执行账本归属适配器、真实源数据验证和最终双角色回填继续待完成。
+
+## 323. 挂单创建归属的公开读取能力（第三百九十三批）
+
+复用execution内现有readPendingOrigins，新增PendingOrderOriginReader公开应用合同及composition工厂。端口限定用户、账户、terminal instance、broker server、login、epoch与至多1000个ticket，验证整数范围和字符串后冻结输入；复用原同连接SELECT，不新增跨域SQL、提交或重试。每个请求ticket明确返回strategy或unresolved，缺失证据不能变成manual、不属于策略或已证明空组合。该能力只证明历史创建来源；当前授权、观察源选择、当前集合完整性及后续生命周期仍由调用链另行验证。
+
+原挂单去重快照适配器已改用这一公开能力的实现，保持原verifiedOrigin三字段投影；未来参考组合读取可复用同一来源查询。定向复核新增同ticket同时出现策略和非策略创建记录的冲突拒绝，两个行顺序均拒绝，不再忽略非策略记录后保留策略归属。仅position_id/position_ticket的结果不能当成挂单ticket。
+
+30项定向测试、服务端构建/类型/边界/API生成检查通过，包含公开端口范围、未解决来源、输入变化、混合来源冲突、原挂单去重和派发归属回归。这里是源码和Mock验证，本批未查询或修改数据库，也未验证实际终端。参考组合整体适配器仍未完成，持仓归属与挂单后续生命周期证明不能由该创建端口代替。
+
+## 324. 挂单归属端口的真实SQL验证（第三百九十四批）
+
+新增pending-origin-reference，在既有随机参考库的会话临时表中运行公开composition工厂及实际查询。五表定义取自冻结009/010/011，保留字段、索引、CHECK并应用011来源族变更；外键移除且推理来源reader为受控桩，因此只证明查询/类型/关联行为，不证明完整FK或真实推理历史归属。脚本记录三个迁移来源摘要，未复制或修改现库数据。
+
+strategy-write-reference-v28-20260909.json通过14组顶层真实MySQL检查，新增5项挂单检查：原始order_ticket优先于旧存储position标识、历史命令epoch允许且未来epoch拒绝、user/account/terminal/server大小写/login前导零作用域、未成功状态/结果摘要不匹配不归属、分发target与child operation断链拒绝，以及实际查询中的混合来源冲突拒绝。以源码定义核对后将公开端口epoch上限收紧为9007199254740991，broker server/login长度分别128/64，与010一致。v27为首次通过证据，v28为最终源码复验。
+
+30项定向测试和服务端构建/边界/API生成检查通过。五张临时表和两处随机参考库均清理，现有dev_vue永久写入0。此处的摘要检查是记录间关联，不宣称已重算完整终端原始载荷摘要；持仓归属、后续生命周期、观察源权限和参考组合整体读取仍须继续完成。
+
+## 325. 实际推理归属查询与核心范围收拢（第三百九十五批）
+
+挂单参考验证已替换推理来源桩，调用inference公开composition提供的实际MySQL读取器；临时表增加ai_trader_runs和trade_decisions。决策的风控关联、接受状态、运行成功状态、用户、账户、策略版本、分析和输入快照关联均进入实际SQL验证。strategy-write-reference-v29-20260909.json记录passed=true、inferenceOriginReader=actual_mysql_adapter、existingDatabaseWrites=0及参考库清理结果。临时结构移除了外键，仍不宣称完整外键或真实终端验收。
+
+按用户再次明确的优先级，停止向终端适配细节扩展当前范围。后续工作回到服务端模块合同与运行接线、API规范、开发库增量升级及历史数据对账；前端和Bridge的具体体验、适配与现场验证由对应重构阶段承接。无法精确归属的数据继续unresolved，不能为缩小范围猜测ticket映射。参考组合实际读取、双角色迁移和现库升级仍未完成，不因本批查询通过而标记整体完成。
+
+## 326. 推理事务入口的输入一致性（第三百九十六批，2026-09-10）
+
+核对beginAnalysis/beginTrader发现：完整输入摘要校验原先依赖memoryPreparationForSnapshot，未带strategyMemory时直接跳过；两个入口还在等待连接和SQL期间持续引用调用方对象。现在两个入口在首次异步等待前structuredClone整个输入，并统一验证snapshotHash与实际快照内容一致，不匹配时在获取数据库连接前拒绝。记忆准备校验继续承担记忆专属内容与预算验证，不再替代通用快照一致性。
+
+定向复核：保留现有业务作用域、revision、窗口和偏好检查，不改变策略或交易规则，不重算错误摘要后静默接受；副本同时保护run/user/snapshot/task标识和嵌套正文。16项定向测试通过，覆盖两个入口无记忆时摘要错误及获取连接期间身份变更。服务端类型、构建、模块边界、98个API运行合同和188步结构生成检查通过。
+
+strategy-write-reference-v30-20260910.json通过14组真实MySQL参考检查。实际beginAnalysis在获取连接期间被外部修改市场品种、记忆正文和快照ID，仍提交入口时的完整快照及匹配审计摘要；原审计失败回滚验证继续通过。两处随机参考库清理，existingDatabaseWrites=0。此证据不覆盖实际beginTrader完整事务或真实模型调用；旧策略双角色迁移、参考组合读取及现库剩余升级仍待完成。工作区存在大量混合依赖改动，本批未提交或推送。
+
+## 327. 订阅窗口归回策略模块并接通运行入口（第三百九十七批，2026-09-10）
+
+按后续方案18.22的两轮复核，将inference/mysql-trader-window-guard直接读取订阅和调度表的SQL移入strategies。新增SubscriptionExecutionWindowReader公开合同及composition工厂；参数只包含订阅、用户、账户、revision和交易策略/版本，不依赖推理模块类型。保留owner未撤销、订阅active、trader_enabled、策略版本匹配和FOR SHARE。返回null仍由inference映射subscription_revision_conflict，时间窗口和时钟判定规则不变。
+
+API、分析调度器、分析Worker和交易员Worker显式注入工厂；交易员输入构建前窗口检查、beginTrader同事务复核及completeTrader冻结证据复核都调用该端口。查询使用调用方连接，不增加事务或提交。该收尾只迁移窗口查询；inference中其它账户上下文、订阅分发等跨域查询尚未全部整改，不能据此宣称完全模块化。
+
+41项定向测试、服务端类型/构建、边界及98个API生成合同检查通过。新增测试以公开端口返回窗口，消费端禁止任何SQL仍能完成校验；既有真实适配器Mock测试保留事务和参数约束。v33真实MySQL参考报告通过14组检查，新增窗口读取验证用户/账户/订阅/版本/策略作用域，以及暂停、停用、撤销owner、非owner、缺失schedule的拒绝。订阅与schedule使用真实007提升结构，ownership为临时夹具，不代表完整归属表结构验收。
+
+v31中窗口查询已通过，但测试事务内插入策略导致回滚后AUTO_INCREMENT变化，完整结构恢复断言失败；将新增夹具纳入初始基线后v32通过，最终换行整理后v33复验通过。保留失败报告，未降低结构对账条件。参考数据、临时表和两处随机库清理，现有dev_vue写入0；没有启动服务或调用模型、Bridge及真实交易。工作区混合改动未能安全拆分，未提交推送。
+
+## 328. 自动订阅分发通过所属模块端口（第三百九十八批，2026-09-10）
+
+完成18.23两轮复核及运行接线。completeAnalysis原先合并订阅、窗口、owner、持仓、挂单、集合revision的大SQL拆为strategies.AnalysisSubscriberReader和trading.AccountInventorySummaryReader。前者限定用户、分析版本、品种、active、分析/交易员启用及未撤销owner，按account/id稳定排序；后者在原连接重验owner，按账户及exact symbol读取集合存在性及revision。两个业务index仅导出类型，MySQL工厂经composition注入。
+
+API、分析调度器、分析Worker、交易员Worker已注入两项能力；inference继续负责时间窗口、entry/manage/both模式、过期旧任务、新任务及outbox，未把推理状态移给策略模块。库存不可确认返回null时回滚完成事务；零revision仍是原投影缺失语义，不代表真实终端确认空集合。查询从一次join变为候选读取加逐账户摘要，后续批量优化须维持授权及锁序。手动requestTraderEvaluation和traderContextRevisions的跨域查询仍待收尾。
+
+45项定向测试及类型/构建/边界/98项API生成检查通过。新增端口驱动的实际repository测试覆盖entry、manage、无机会无持仓不建任务、归属撤销回滚，并校验同连接、传入scope、落库revision及outbox。v35真实MySQL参考通过14组检查，新增候选作用域/启用过滤、库存账户/品种隔离、owner撤销及集合revision验证。订阅/schedule使用007真实结构，库存表为隔离库最小夹具、owner为会话临时夹具，不宣称整套交易投影schema或真实终端验收。
+
+v34因MySQL不允许同一TEMPORARY TABLE多别名读取而报ER_CANT_REOPEN_TABLE；库存revision夹具改为随机参考库内普通表并纳入初始结构/数据指纹，保留原生产SQL，v35整体回滚及逆向表名恢复通过。两处随机参考库清理，existingDatabaseWrites=0，无服务启动或真实交易。现库策略迁移、整体升级和完整核心验收仍未完成，未提交推送混合工作区。
+
+## 329. 手动交易员请求经公开端口并绑定分析来源（第三百九十九批，2026-09-10）
+
+按18.24两轮复核扩展strategies.AnalysisSubscriberReader.readForEvaluation，限定订阅、用户、账户、revision、交易策略版本，以及当前分析结果的分析策略版本和品种；保留FOR UPDATE并验证未撤销owner。手动请求不要求analysis_enabled，避免把关闭自动分析误判为禁止手动请求。原requestTraderEvaluation跨域大SQL移除，库存读取复用trading公开摘要能力，inference仅操作自身分析、任务和outbox。
+
+requestTraderEvaluation在首次await前复制请求，将requestedAt转为UTC SQL毫秒值；保留前置幂等读取、订阅锁后幂等复查和原手动无机会entry行为。分析结果与订阅的版本/品种不匹配返回subscription_revision_conflict；库存归属不可确认返回trader_account_forbidden并回滚。此处不会启用订阅、请求模型或发送交易命令。
+
+30项定向测试、类型/构建/边界/98项API生成检查通过。新增实际repository配合端口夹具测试正常管理任务及outbox、订阅拒绝、库存拒绝、原任务重放无写入、作用域复制和UTC毫秒绑定。v36通过14组真实MySQL参考检查，新增手动读取的分析版本/品种与用户/账户/订阅/revision/策略拒绝、分析自动开关关闭仍允许手动读取；保留既有owner停用/撤销拒绝。数据库证据覆盖实际查询，不是完整requestTraderEvaluation MySQL事务验收。
+
+参考库清理、existingDatabaseWrites=0。账户上下文revision联合读取仍包含跨域SQL，策略双角色迁移及现库剩余升级仍未完成；下一步处理traderContextRevisions的表所有权与同事务公开读取。未提交推送混合工作区。
+
+## 330. 风控摘要与版本查询归回risk（第四百批，2026-09-10）
+
+按18.25两轮复核新增risk.AccountRiskSummaryReader及MySQL实现，提供完整摘要read与不加载正文的readRevision。两者均按user/account及未撤销owner限定；revision在调用方事务连接上FOR SHARE。inference消费方端口由入口注入结构匹配实现，未新增inference→risk反向依赖，避免与既有risk→inference证据依赖成环。
+
+交易员Worker构建器已注入risk摘要读取，repository开始/完成上下文检查已改从risk读取版本。删除inference/mysql-trader-context-readers源码及其旧编译产物，源码搜索确认inference不再直接读取account_risk_summaries。其它订阅、账户、报价、合约和集合revision联合查询仍待收尾，不能把这一项归属清理当成全部上下文模块化完成。
+
+42项定向测试（38项既有回归及4项新增版本端口测试）通过，新增检查同事务注入、当前查询参数数目、版本变化/缺失时begin拒绝及complete选择stale/risk_changed。完成阶段测试在捕获stale决策INSERT处主动中断，不宣称该测试证明完整事务成功。类型/构建/边界/98项API生成检查通过。
+
+v37真实MySQL参考通过14组检查，新增risk摘要正文与revision、缺失、用户/账户隔离、owner撤销/角色变更及revision更新验证。风险表为随机参考库最小夹具，owner为会话临时夹具；不是完整风险DDL或真实交易验收。两处参考库已清理、existingDatabaseWrites=0。无服务启动、现库迁移或真实交易，工作区混合依赖未提交推送。
+
+## 331. 交易员上下文联合查询拆分完成（第四百零一批，2026-09-10）
+
+按18.26两轮复核，traderContextRevisions仅查询本域market_analyses，再通过同连接公开能力顺序读取strategies订阅状态/版本、trading账户与报价/合约/集合版本、risk版本。新增订阅的分析版本/品种绑定；状态暂停与版本变化保留事实供调用方比较，不把它们当作找不到记录。交易投影缺失保留null，owner不存在返回整体null。账户行锁也归trading.lockAccount，保留先锁账户再锁任务的既有顺序，锁本身不等于授权。
+
+源码检查MysqlInferenceRepository已无strategy_subscriptions、trading_accounts、account_runtime_snapshots、market_quotes、market_instrument_snapshots、trading_projection_revisions、account_risk_summaries直接SQL；outbox仍属于已声明的事务写入基础设施。该结论仅限这个repository，其他推理文件及全项目仍需后续核对。
+
+47项定向测试通过，其中22项开始/完成上下文检查覆盖风控变化/缺失、订阅revision/暂停/缺失、owner撤销、账户/报价/合约/持仓/挂单revision变化，并断言公开端口作用域、同连接及读取顺序。完成路径在捕获stale决策INSERT时中断，不能称完整提交证明。类型/构建/边界/98项API生成检查通过。
+
+v38、最终v39真实MySQL参考通过14组检查，新增订阅当前版本/状态及错配拒绝、各交易投影版本与空值、账户/品种隔离和owner撤销验证；最终版还调用实际账户锁方法。交易/风险表为隔离参考夹具，非全部生产DDL及并发锁竞争验收。两处随机参考库清理，existingDatabaseWrites=0。模块说明同步更新，现库迁移、双角色策略转换及完整核心验收仍未完成，未提交推送混合工作区。
+
+## 332. 分析窗口与模型任务恢复的查询归属（第四百零二批，2026-09-10）
+
+按18.27两轮复核，把分析启动窗口SQL移入strategies.AnalysisWindowReader；inference新增纯application的AnalysisWindowService，Worker入口经createAnalysisWindowGuard显式注入。原MysqlAnalysisWindowGuard源码及旧编译产物删除。保留手动跳过、源账户必需、当前订阅查询、时钟按需只读一次、signals_only及缺失时钟判定；没有把独立数据库/时钟读取升级为原子性声明。
+
+MysqlModelTaskRecoveryRepository不再直接锁trading_accounts，scheduler-analysis通过createMysqlModelTaskRecovery注入trading公开lockAccount；恢复顺序仍为账户→run→task。39项定向测试、类型/构建/边界/98项API生成检查通过，新增直接业务端口消费、多窗口单次时钟、恢复同事务锁调用、analysis不锁账户、锁失败零后续写入并回滚。
+
+v40真实MySQL参考通过14组检查，新增分析窗口user/account/strategy/version/symbol错配、analysis停用/订阅暂停/owner撤销/缺schedule过滤，且trader停用不影响分析窗口读取。使用真实007订阅/schedule结构和已说明的参考owner夹具，非完整真实终端/恢复事务证明。参考库清理、existingDatabaseWrites=0，无启动或现库写入。
+
+历史capture-subscription-window-sql.mjs已依赖退休接口与旧fanout源码形态，不修改冻结历史工具；后续应提供新版当前SQL采集入口，不能把该旧工具标为当前可运行。模型配置解析与模型用量仍读取users.plan，并有策略校验/模型配置所有权待核对；下一步按主体、权益、策略和模型配置的真实职责收尾，不把全项目模块化完成当作本批结论。混合工作区未提交推送。
+
+## 333. 模型策略访问与共享额度的主体事实分离（第四百零三批，2026-09-10）
+
+按18.28两轮复核及所有权矩阵，模型配置/共享策略/用量保留在inference；settings并不因此接管这些表。新增strategies.RuntimeStrategyAccess承接当前活动版本与冻结复盘访问，解析器不再查询strategies。实时拒绝非active/错版本；冻结复盘允许退役但未删除、仍属平台或本人策略。
+
+模型解析器不再查询users，套餐事实来自既有auth.AccountPrincipalReader。共享额度预留复用ActivePrincipalAccess update锁→AccountPrincipalReader share当前事实→本域policy update锁→统计/插入，保留串行限额。缺失/非活动/已删除主体拒绝共享调用；不把plan过期解释或套餐升级逻辑混入本批。分析、交易员、复盘Worker及调度用量恢复均显式注入能力，模型调用和加解密继续留在推理模块。
+
+44项相关测试通过（43项原定向集及新增一项含三分支的共享解析端口测试），类型/构建/边界/98项API生成检查通过。v42真实MySQL参考共15组通过，新增两连接竞争最后一次共享请求额度仅一个成功；错误套餐、缺失/删除用户、token耗尽、共享关闭均无新增日志，并验证策略活动版本、私有归属、退役复盘保留及软删除拒绝。用户/共享policy/usage使用隔离最小夹具，策略使用既有真实参考结构；不代表完整模型配置DDL或供应商调用验收。
+
+v41首份数据库报告因复用了前序已停用的用户7导致成功数断言失败，认证端口正确拒绝；改用独立活动夹具70后v42通过，未修改拒绝规则。最初脚本语法错误发生于建参考库前，已修复。两处参考库清理、existingDatabaseWrites=0，无模型请求/真实交易/现库升级。双角色策略迁移、参考组合运行及数据库整体升级仍待完成，混合工作区未提交推送。
+
+## 334. 参考组合绑定具体分析结果（第四百零四批，2026-09-10）
+
+核对实际分析创建使用randomUUID，分析运行保存market_source_account_id，参考组合scope此前仅含策略ID而无法指定具体分析来源。新增必需analysisId，由TraderContextBuilder从已读取分析summary传入，读取前校验UUID格式，响应必须回显完全相同scope。冻结内部证据升级schemaVersion=2并保存analysisId；同策略、同账户但不同分析结果不能复用同一份参考证据。未接reader仍保留字段缺失，历史快照不重写，HTTP合同未变。
+
+定向复核覆盖ready和not_applicable的分析错配拒绝、缺失/错误ID在调用provider前拒绝、不同分析的evidenceHash不同，以及真实构建器传入分析ID。24项测试、服务端类型、模块边界和98项运行合同生成检查通过。首次测试失败来自旧测试夹具使用非UUID分析ID，调整为实际生成格式后通过，未放松校验。
+
+此修改提供实际读取分析来源的必要定位信息，不是来源授权或参考组合完整接通证明。后续provider仍须按user/analysis读取本域分析运行事实，核对观察源与策略绑定，使用公开交易投影和执行归属能力；不得根据模型输出推断来源。当前未连接数据库、启动服务或修改Bridge。现库升级和双角色迁移仍未完成，混合工作区未提交推送。
+
+
+## 335. 冻结分析行情来源读取与真实SQL验证（第四百零五批，2026-09-10）
+
+新增本域AnalysisSourceReader及MySQL工厂，通过单条查询关联market_analyses、成功ai_analysis_runs、analysis用途的inference_snapshots及其payload。关联同时约束用户、策略、版本、品种及snapshot引用；服务端复核实际payload摘要、kind、策略版本和market.source_account_id。请求按用户/analysisId/analysisStrategyId/symbol限定，不读取其它域表，不输出原始提示词。运行记录预设源非空时必须与快照一致；手动分析未预设源时以冻结market实际来源为准，不查询当前默认账户。
+
+定向复核：历史来源事实不等于当前观察源授权或新鲜持仓；关联缺失返回null、证据矛盾抛analysis_source_evidence_invalid，后续消费者不得把null转换为已证明空组合。查询使用调用方连接但不自行开启事务，不宣称覆盖后续跨模块读取的原子性。
+
+17项定向测试、类型/构建、模块边界和98项运行合同生成检查通过。v43在192.168.31.254隔离随机参考库通过16组检查，新增实际SQL测试运行用户/版本/品种/状态/snapshot错配、快照用户/策略/用途/账户错配、缺失payload、手动未预设源、冲突源和篡改正文。新增查询使用临时最小表夹具，未验证完整外键DDL或当前观察授权。参考库已清理、existingDatabaseWrites=0，现有dev_vue未写入，无服务启动、模型请求或真实交易。
+
+下一步将这一历史来源能力与trading的观察源授权、当前完整投影及execution精确归属组合，完成参考组合实际provider和Worker接线。现库整体升级、双角色迁移和核心全链验收继续保持未完成。混合工作区未提交推送。
+
+
+## 336. 指定分析策略与源账户的观察授权（第四百零六批，2026-09-10）
+
+按18.29两轮复核新增trading.StrategyObserverAccessReader及同快照工厂，复用MysqlObserverAccessReader既有主体/套餐/显式授权/归属区间规则。查询严格限定analysisStrategyId和sourceAccountId，按channel ID分页，每页100条，跳过不可访问频道并选择首个有效发布授权；不依赖浏览器当前账户，不回退其它账户。输出绑定策略及source/channel/access/owner revision和TTL，读取过期拒绝。调用方必须持有一致快照，端口不独立开启事务。
+
+38项相关测试、类型/构建、模块边界和98项运行合同生成检查通过。新增定向测试覆盖指定账户/策略、主体缺失、发布停用、套餐到期、拒绝页后继续读取、读取期间TTL到期及错误传播。首次TTL测试误用固定时钟helper，修正为既有可推进时钟helper后通过，未修改权限策略。
+
+v44隔离MySQL参考验证通过17组，新增实际SQL覆盖准确源/策略/主体、源停用/未配置、频道未发布/账户错配、owner撤销/区间结束/起点错配/版本错配、账户删除、无显式授权及授权后撤销。基础授权查询用临时最小结构，auth主体使用既有参考用户；不代表完整外键、真实终端或并发撤权验收。随机参考库和临时表已清理，existingDatabaseWrites=0，无现库升级、服务启动或真实交易。
+
+下一步完成授权源账户的当前完整库存读取与精确执行归属，再组合inference历史分析来源、trading授权和库存、execution归属并注入Worker。当前仅完成其中授权能力，参考组合运行、双角色迁移和现库完整增量升级仍未完成。混合工作区未提交推送。
+
+
+## 337. 参考源完整投影与当前连接验证（第四百零七批，2026-09-10）
+
+按18.30两轮复核新增StrategyObserverInventoryReader及事务工厂，复用策略观察授权和owned账户读取。读取使用operator身份，按已授权源账户核对唯一profile/instance、broker/login、暂停状态、当前路由；MySQL验证投影owner区间/revision、profile/instance/epoch、会话connection ID及45秒心跳。两个集合都必须有正revision和30秒内、非未来的采集证据，读取后再检查路由未变及授权未过期。
+
+普通UI持仓读取保留原行为；新路径读取集合全部revision行，拒绝混合替换、ticket与payload不符、账户错配、重复ticket或超过1000项。不把截断或过滤后的集合描述为完整；业务价格/数量和最终模型字段仍须经参考冻结器校验。端口使用调用方一致快照，不开启嵌套事务；只证明参考库存，未证明execution策略归属。
+
+14项定向测试、服务端类型/构建、模块边界及98项运行合同生成检查通过。v47真实MySQL参考整体17组通过，观察授权组追加12项库存检查，使用真实工厂和auth/账户读取查询，覆盖正常空集合、暂停/绑定变化、缺来源、版本与归属区间/epoch错配、旧采集、断连/过期心跳/connection ID变化、混合集合版本。DDL为隔离临时最小夹具，路由为注入值，不是完整FK、真实Redis或终端验收。
+
+v45/v46初始夹具用DB的UTC_TIMESTAMP生成采集时间，虚拟机时钟约快于本机2秒，正常断言被未来数据规则拒绝；改为测试采集端UTC时间生成观察夹具后v47通过，没有放宽校验。保留失败报告，诊断临时代码已删除。参考库清理，existingDatabaseWrites=0，无现库升级、服务启动或真实交易。下一步核对持仓精确归属并组装完整参考组合provider与Worker。双角色迁移、数据库整体升级和核心全链验收仍未完成，混合工作区未提交推送。
+
+
+## 338. 持仓ticket与历史position identifier区分（第四百零八批，2026-09-10）
+
+核对当前MT5 worker trade.py：order_send成功证据的position_tickets为空，不能从返回order/deal猜持仓ticket；历史query把原生position_id写入raw.position_id和ticket，而active_position查询从positions_get行的ticket读取。risk_snapshot虽含identifier，当前OpenPosition投影并无独立identifier字段，因此历史position_id与当前ticket不能直接等同，也不能只凭一次创建结果证明净持仓全部属于某策略。
+
+修正executionOutcomeReference的market_order/modify_position分类：优先明确position_ticket；仅found=true、complete=true、kind=trade、current_state=active_position的当前查询证据允许ticket别名。无上下文position/position_id/ticket及历史查询保持unknown，补充uint64上限验证。原始结果和命令成功状态保留，不重写历史行、不触发重试或重放。定向复核确认唯一写入消费者是execution_outcomes分类，挂单归属与占用仍使用独立pending分支。
+
+55项定向测试、服务端类型/构建、模块边界及98项运行合同生成检查通过。新增当前持仓证据正例及历史订单/成交、未完成查询、未找到对象、错误类型和超uint64反例；修正此前把position_id等同ticket的旧测试预期。本批未连接数据库、调用终端或修改Bridge，v47仍是上一批隔离SQL证明，不用于证明本批新行为。
+
+参考持仓归属下一步必须保留ticket/identifier区分以及混合来源的unresolved，不能把原pending创建归属查询换个动作类型就当成完整持仓归属。Bridge完整字段与真实终端验证按用户要求保留对应阶段，服务端先完善证据合同及可验证路径；参考组合完整运行、双角色迁移和现库整体升级仍未完成。混合工作区未提交推送。
+
+
+## 339. 当前开发库完整备份恢复与策略结构预检（第四百零九批，2026-09-10）
+
+回到现库增量升级主线。v13只读库存核对192.168.31.254/dev_vue：188条已完成升级checksum与预期一致，策略源3、订阅源5、旧账户4、当前账户6、持久账户映射4、历史归属订阅2、未解决账户映射0。源输入摘要与v12一致，策略准备表结构检查通过；schemaReady仅指回填前置结构，不表示迁移或业务完成。
+
+复用既有backup-risk-dev-vue-local.mjs和本地SSH编排，以新runId 20260910-01生成加密备份并恢复到dev_vue_m1_source_20260910_01。数据目录确认为/www/server/data，操作前VM可用空间约17GiB，本机C/D均超过工具要求。使用已存在的便携MySQL客户端，没有安装或启动本地MySQL/Redis。LOCK INSTANCE FOR BACKUP仅在导出阶段阻止DDL，未改变源库业务数据；备份和密钥目录分别设置私有ACL。
+
+完整恢复验收通过255张表、338745行：逐表行数及行摘要一致、列元数据一致、语义DDL等价、重新导出完整INSERT值对账一致、解密完整性和SQL作用范围校验通过，最后再次确认源库未变化。仅存在工具已识别的冗余utf8mb4显式声明差异，完整记录于报告。保留加密备份及恢复库供后续演练，明文SQL和临时客户端凭据已删除，13316临时SSH监听已结束；currentDevVueWrites=0。
+
+只读策略结构预检扩展接受备份工具的严格dev_vue_m1_source_日期_批次命名，仍核对准确库名、server UUID、188条journal和目标表DDL，不接受任意库名。新增inspect-strategy-restored-baseline-local.mjs只读入口，并在恢复库实际执行通过，mismatchedTables为空；2项入口边界测试通过。预检不赋予applyReady，不替代数据回填和完整升级验证。公共证明为docs/architecture/core-refactor-restored-baseline-20260910.json；备份原始凭据/正文不写入仓库。
+
+下一步在这份已验证完整恢复副本上推进策略/订阅源归档、双角色映射、回填及表名提升，并补齐尚缺运行schema；不能再以小型参考夹具替代完整副本演练。参考持仓身份映射和全链运行验收仍列未完成，现有dev_vue尚未执行剩余升级，混合工作区未提交推送。
+
+
+## 340. 完整恢复副本源归档事务与回执丢失恢复（第四百一十批，2026-09-10）
+
+按18.31两轮复核新增source-preservation-v1独立流，白名单只含auto_prompt_types与旧strategy_subscriptions全部字段。复用冻结源批次和现有5张迁移账本表，targets明确指向本次归档表复合主键；不创建角色、版本、业务ID映射或启用订阅。源行按ID锁定并与冻结hash比对，原始文本/NULL/时间字符串保持不变，提示词正文不写入报告或仓库。
+
+7项定向测试通过，覆盖源表/字段/类型/hash准入、独立稳定stream与batch ID、源漂移在归档写入前拒绝及既有冻结批次回归。新增恢复副本演练入口验证公共基线/私有备份回执摘要、实际server UUID和188步结构，并核对v13中每条源hash。run ID由基线、源输入和用途确定，bindings保存执行工具hash；重跑不能通过换输出文件生成重复运行。
+
+在dev_vue_m1_source_20260910_01完成实际8行源归档（3策略、5订阅）。首次注入中途失败使整批事务回滚，完整255表摘要恢复；随后真实提交并注入回执丢失，捕获backfill_commit_unknown，再按同run/batch重放，两个批次均replayed=true，全表摘要不再变化。最终新增本run账本为runs=1、checkpoints=2、batches=2、row_receipts=8、source_rows=8；没有写ID映射。
+
+每次核对完整恢复库时仅排除本run在5张账本表中的行，剩余所有表数据与原恢复基线逐行摘要、DDL均一致，因此证明原有业务数据和既有迁移账本未改变。公共证明为docs/architecture/strategy-source-archive-restored-20260910.json。现有dev_vue写入0，未启动服务或调用模型/终端，临时SSH隧道已关闭，完整恢复库及归档保留供下一阶段。
+
+本结果仅完成源保全，不是双角色策略转换完成，也不代表旧订阅已迁入运行表。下一步继续生成经过语义复核的角色映射、在同一恢复副本回填及逐项对账，再提升订阅表名和推进剩余schema。已有运行的bindings已冻结本批工具hash，后续纠正应版本化，不能原地修改已执行批次合同。混合工作区未提交推送。
+
+
+## 341. ATR角色候选与参考来源事务组装（第四百一十一批，2026-09-10）
+
+ATR源3/version11已生成双角色候选，13个原文章节均有分配，配置编译通过；公开报告atr-role-prompt-candidate-20260910.json只记录摘要和章节元数据，原文候选保存在私有备份目录。semanticAcceptance仍pending，executable=false；参考组合运行、入场加速周期来源及部分平仓后的剩余止损流程仍缺失，没有激活或写入策略。
+
+新增createMysqlStrategyReferenceSourceReader组装历史分析来源和trading当前观察库存，同一REPEATABLE READ只读一致快照，复核分析、策略、观察用户、源账户和operator绑定。调用方作用域及返回证据复制隔离；缺少来源/库存或查询失败直接拒绝，正常结束回滚并释放，启动/回滚失败销毁连接。该工厂尚未接入Worker，也不证明持仓执行归属，不输出模型ready组合。
+
+9项定向编排测试、服务端类型检查、零已登记模块边界债务与98项API运行合同生成检查通过；测试覆盖同连接、输入变更、缺失和跨作用域、提供方错误及连接清理。没有连接数据库或启动服务，实际MySQL组合事务验证仍待完成。完整恢复副本业务回填及当前dev_vue剩余升级继续保持未完成，混合工作区暂未提交推送。
+
+
+## 342. 参考来源组合读取的真实MySQL验证（第四百一十二批，2026-09-10）
+
+在随机隔离参考库内接入实际createMysqlStrategyReferenceSourceReader、历史分析来源SQL、trading观察授权及完整库存工厂。分析夹具增加健康状态回调，组合验证在相同连接的临时结构上运行，不复制运行SQL。v48-20260910报告通过17组既有参考检查，其中strategyObserverAccess.inventory.combinedSource记录五类新增验证：正常来源与两个完整空集合、分析用户/策略/品种拒绝、当前发布撤销、终端断连拒绝、七次调用成功或失败后的连接复用。
+
+连接由外层参考工具持有，pool lease仅代理该真实连接并统计release，避免内部释放后临时表失效；不是实际连接池竞争或跨连接并发快照证明。SQL与事务真实执行，Redis route仍注入，临时结构没有完整外键，因此不宣称真实终端、生产结构或执行归属完成。原有数据与结构恢复检查通过，两处随机参考库已清理，existingDatabaseWrites=0，端口13316临时隧道已关闭。
+
+继续核对发现挂单来源公开能力仅证明创建来源，含FOR SHARE历史读取；不能未经事务设计直接并入READ ONLY读取，也不能由创建来源推出后续完整生命周期归属。持仓的历史position_id与当前ticket映射仍缺精确证据。下一步仍需执行模块补足完整归属能力及其读取事务合同，再组装模型参考组合和Worker；本批未激活策略、迁移现库或启动服务。混合工作区仍未提交推送。
+
+
+## 343. 历史创建归属支持一致快照读取（第四百一十三批，2026-09-10）
+
+按18.34两轮复核，execution和inference分别新增显式snapshot组装工厂，挂单创建证据与推理决策来源可以在调用方一致快照中非锁定读取。两种模式共用原SQL和证据校验，原公开工厂及去重调用继续默认FOR SHARE。没有改变业务端口字段，没有把历史创建来源升级为当前持仓归属，也没有绕过同账户/终端/历史epoch、风险决策、运行状态和歧义检查。
+
+38项定向测试、服务端类型/构建、模块边界及98项API运行合同检查通过。v49真实MySQL参考通过17组检查，挂单组新增READ ONLY事务内风险决策来源、分发来源、用户错配和混合创建歧义验证；默认锁定读取既有行为同时保留验证。夹具仅提交会话临时表数据，最终临时表与两处随机参考库清理，existingDatabaseWrites=0。临时结构不证明完整外键、跨连接并发快照或真实Redis/终端。
+
+当前仍需把历史归属能力接入组合提供器，并补足持仓标识与完整生命周期证据。没有启动服务、激活旧策略或升级当前dev_vue；未提交推送混合依赖工作区。
+
+
+## 344. 参考源挂单创建归属实际组装（第四百一十四批，2026-09-10）
+
+按18.35两轮复核新增inference消费方ReferencePendingCreationReader结构端口，避免inference到execution反向依赖。readReferencePendingCreation按已授权源operator和当前route读取完整挂单ticket集合，校验结果一一对应、无重复/额外/缺失、策略ID合法及用户账户匹配；保留unresolved，未注入能力时pendingOrigins为null，已证明空集合才为[]。输入、返回结果分别复制，输出仅投影需要字段。
+
+bootstrap.createStrategyReferenceEvidenceReader实际注入auth主体、trading库存、execution快照挂单创建归属及inference快照决策来源。四项能力使用来源读取器拥有的同一只读一致快照连接；各业务域只接触公开端口。尚未接入Worker或生成模型ready组合，持仓生命周期归属仍缺失。
+
+20项定向测试、服务端类型/构建、边界及98项API生成检查通过。首次参数化测试发现数组被Vitest展开为多个参数，类型检查暴露问题，改为具名rows用例后复验；反例现在实际覆盖缺失、重复、额外、用户/账户/策略错配。v50验证实际bootstrap空库存与其他账户同号ticket保持unresolved；v51追加源账户/终端精确匹配的分发挂单返回策略22。参考报告combinedSource共有七类检查、9次连接释放。
+
+SQL为真实MySQL，route为注入夹具；连接lease由外层工具持有并统计释放，临时表无完整外键，不宣称真实Redis或真实终端验收。所有夹具仅位于随机参考库/会话临时表，现有数据库写入0，参考库及隧道清理。当前dev_vue剩余schema/业务回填和核心整体验收仍未完成，混合工作区未提交推送。
+
+
+## 345. 当前持仓稳定标识的服务端保全（第四百一十五批，2026-09-10）
+
+按18.36两轮复核，Bridge positions合同追加可选position_identifier，接受null或精确UINT64字符串。schema正则和服务端解码均拒绝数字类型、0、前导零、负数、小数和溢出；OpenPosition以positionIdentifier保存，现有JSON投影写入路径可原样存储，参考库存读回时重新验证字段。旧流缺字段时保持缺失，不用ticket或signal_id补值。
+
+稳定标识只供历史关联，当前ticket和BridgeExactTradeState保持不变；HTTP和实时持仓DTO仍显式投影原字段。未修改Bridge软件发送端，旧客户端可继续发送原流，新字段发送必须在Bridge阶段确认服务端支持。没有声明当前终端已经提供此标识，也未完成持仓策略归属。
+
+34项定向测试、服务端类型/构建、边界及98项API生成检查通过。类型检查纠正了一处测试宽泛断言后通过。v52真实MySQL参考通过17组验证，其中库存组新增实际decoder生成的数据经JSON入临时表、真实库存读取返回UINT64_MAX且ticket仍为10、污染为溢出标识后拒绝；此处验证JSON行回读，不代替完整Bridge投影写事务或真实发送端。
+
+两处随机参考库清理，现有dev_vue写入0，未启动服务、发布Bridge或交易。下一步通过稳定标识获取历史成交及完整性证据，再将交易来源关联到策略；缺标识继续未知。核心全量迁移和运行验收仍未完成，混合工作区未提交推送。
+
+
+## 346. 当前持仓生命周期数量核对（第四百一十六批，2026-09-10）
+
+按18.37两轮复核新增trade-history纯领域reconcileOpenPositionLifecycle，经公开index导出。按稳定positionIdentifier核对同品种成交，使用8位定点BigInt计算净数量，毫秒相同时按uint64数值ticket排序，避免字符串排序使10排在9之前。支持in加仓、out/out_by部分或完全扣减、inout真正反转；返回当前可能贡献的入场order tickets，归零或反转清除旧贡献，部分平仓不猜测逐来源分摊。
+
+21项定向测试及服务端类型/构建、模块边界和98项API生成检查通过，覆盖数值顺序、重复/外来成交、未来时间、UINT64最大值、最小8位手数、精度越界、超平、错误方向、反转与最终快照不符。仅忽略明确零手数且无方向的fee事实，未知/修正类型不被静默跳过。测试为纯领域证据，本批无数据库或终端访问。
+
+结果刻意命名matches_snapshot，不包含complete或策略归属标记。当前sync状态只有fresh_through，成交原始行也缺少订单同等级的逐响应route来源记录，因此不能据数量相等证明从起点到观察时刻无缺失；下一步补历史采集范围和成交来源证据，再提供同事务公开读取。当前函数尚未接入Worker，整体策略迁移和现库升级仍未完成，混合工作区未提交推送。
+
+
+## 347. 采集分页一致性实际接入（第四百一十七批，2026-09-10）
+
+按18.38两轮复核新增HistoryPageChain并接入TradeHistoryCollector。核对Bridge原型显示分页使用FrozenRevision，但observedAt可能取各页最后一条记录，故要求同资源source/revision稳定，不要求页间observedAt相等，不把它当覆盖终点。复用Bridge响应校验并复核route/resource，游标连续/循环及终页检查在persistPage之前完成。
+
+入口route、begin窗口、查询响应与传给外部能力的对象复制隔离。每条资源链生成绑定route、window、resource和响应摘要的滚动hash，返回页数、条数、source/revision及窗口；仅所有资源完成且repository.complete成功才返回ready和pageChains。混合版本页被拒绝，不保存坏页，也不调用complete；保留原fail路径与已写页事实。
+
+19项定向测试、服务端类型/构建、模块边界及98项API生成检查通过。首次类型检查发现循环变量推断问题，为response及next显式添加合同类型后复验通过。测试覆盖不同资源版本可不同、同资源变更拒绝、route/游标错误、窗口及caller输入变更、正文变化影响摘要、未完成链不能finish。本批无数据库连接或服务启动。
+
+pageChains目前只在collect结果内返回，未持久化，不是每笔成交来源证明，也不证明缓存查询窗口覆盖。下一步仍需版本化数据库回执和成交来源落库，再供持仓生命周期读取；不把这次校验完成写成整个历史完整性或核心重构完成。混合工作区未提交推送。
+
+
+## 348. 采集完成回执写入同一事务（第四百一十八批，2026-09-10）
+
+按18.39两轮复核新增051_history_collection_receipts.sql和历史完成回执构建/写入能力。collect将两条MT5或一条MT4分页摘要传给complete；repository在入口复制输入，事务内先route guard、摘要验证和sync锁，再写回执、更新ready/历史revision、重建派生汇总和outbox。回执失败使本次完成事务整体回滚。
+
+回执记录冻结账户/用户/平台/终端/profile/broker/login/epoch、可空ownershipRevision、统一UTC窗口和各资源计数/来源版本/摘要；缺失、重复、额外资源、窗口错配和不合法计数/hash拒绝。规范摘要不含接收时间，account+hash唯一键防止同回执重复写入，已存正文重新计算hash后才能复用。此幂等仅针对回执，不宣称重复complete不会再次更新revision或outbox。
+
+42项定向测试通过，覆盖回执在ready/outbox之前、写失败回滚、同摘要复用和正文损坏拒绝；服务端类型/构建、边界及98项API生成检查通过。首次测试optional字段写undefined不符合exactOptionalPropertyTypes，改为删除字段后类型复验通过。
+
+v53通过18组真实MySQL参考检查，新增051迁移派生临时表的实际writer回滚/提交/重放、规范JSON及UTC毫秒回读、坏正文拒绝和窗口/epoch/hash CHECK约束。此参考移除了外键，fullCollectorTransactionVerified=false；完整collector事务顺序目前只有离线测试证据。两处随机参考库清理，现有dev_vue写入0。
+
+051尚未注册入已执行188步链或应用到dev_vue，运行本版collector完成路径之前必须准备该新表。回执证明应用分页遍历，不是逐笔成交来源或缓存覆盖证明；下一步推进051完整结构准入和成交来源记录。未启动服务，混合工作区未提交推送，核心整体尚未完成。
+
+
+## 349. 051完整约束与采集启动准入（第四百一十九批，2026-09-10）
+
+051明确表默认utf8mb4_unicode_ci后，在随机参考库直接执行完整DDL，不再移除外键或创建临时替代。v54实际验证账户/用户两项外键拒绝，并保留回执回滚、JSON/UTC毫秒回读、同摘要重放、正文损坏拒绝及CHECK测试；父表为最小参考夹具，不能称整套业务父表/当前dev_vue已验收。18组参考检查通过，existingDatabaseWrites=0，参考库清理。
+
+新增loadHistoryCollectionReceiptUpgrade，以历史运行188步为前置，保持原步骤不变，追加一个inplace_051_01步骤，绑定源SQL、v54真实DDL、priorRegistryHash及afterHash。生成historyCollectionSchema，并将生成漂移校验纳入服务端类型/构建入口。目标为189步，未执行当前库升级。只读核对既有v13回执显示实际188项与该历史前置匹配；这是已有回执核对，不是本批重新连接dev_vue确认。
+
+新增assertMysqlTradeHistoryCollectorSchemaReady，Bridge gateway启动改用该能力，在同一个升级锁内验证旧要求及051 checkpoint/完整DDL/触发器。历史HTTP读取和调度保持原只读结构要求。31项定向测试、服务端类型/构建、边界及98项API生成检查通过，覆盖新表/步骤缺失、checksum/DDL/触发器错配，以及旧读取无需051。
+
+本批未启动服务或升级当前数据库。下一步仍需当前库升级预检、完整恢复副本上的051断点恢复与原数据对账，再推进实际增量升级及逐成交来源证据。完整collector事务重复执行语义与生命周期归属仍未完成；混合工作区未提交推送。
+
+
+## 350. 051完整恢复副本断点演练（第四百二十批，2026-09-10）
+
+在完整恢复副本dev_vue_m1_source_20260910_01完成188→189。prepare、开始记录回执丢失、DDL回执丢失、完成记录回执丢失及最终重放五份报告均通过；实际DDL总数1，后续重放0。原255张表中的254张非升级账本表保持完整数据/DDL摘要一致，原188项账本时间与checksum原值不变；新表0行。演练基线共338766行，包含此前源归档新增的21条账本行，不是当前开发库业务迁移结果。
+
+汇总证据history-collection-restored-proof-20260910.json已保存；冻结演练工具、迁移SQL和私有完整恢复备份。当前开发库本阶段只读核对仍188项，未写入。下一批将这些原始回执做成自动执行门禁，再推进当前库升级。
+
+
+## 351. 当前开发库051升级完成（第四百二十一批，2026-09-10）
+
+按18.42方案新增当前库入口与演练证据门禁。门禁逐份检查prepare、三种持久操作回执丢失、重放的真实状态、原188项记录、工具/备份指纹及保护表摘要；15项定向测试通过，覆盖证据缺失、目标/UUID/工具/备份错配、旧数据及账本修改、伪完成和重放DDL。
+
+开发库首次prepare在任何DDL与私有基线写入前停止：完整备份快照带columns元数据，而通用快照仅含name/rows/rowsSha256/ddl。修正为先验证完整备份原始hash，再比较共同的完整行摘要和DDL，不删除或放宽数据/结构验证。首次失败回执保留；prepare-v2成功后当前工具冻结，未修改已执行恢复演练工具。
+
+通过VM SSH临时隧道对指定UUID的dev_vue实际执行051，188→189，表数255→256。执行DDL一次；--replay确认completed且DDL0。254张非升级账本旧表的全部数据与DDL摘要不变，原188项账本原值不变；原表共338745行，新增回执表0行，仅追加一项迁移记录。history-collection-current-proof-20260910.json汇总三份成功回执，完整备份及加密密钥保留。隧道已关闭，未启动服务或修改公网。
+
+此为结构升级，不代表完整collector重复提交恢复、逐笔成交来源、策略记忆或旧策略/订阅回填完成。旧188步专用预检/归档入口属于冻结证据，后续应另建接受189步的版本，不能改写原回执或旧工具。下一步继续策略运行和迁移收尾；混合工作区改动无法安全独立拆分，本批未提交推送。
+
+
+## 352. 采集完成提交不确定恢复（第四百二十二批，2026-09-10）
+
+检查发现collector完成事务COMMIT回执丢失后，原transaction会尝试rollback并向上抛出普通错误，collect再调用fail将可能已经提交的ready改为failed。按18.43两轮复核抽出本域historyTransaction，明确COMMIT开始后的错误为HistoryCommitUnknown，销毁连接，不声称rollback能撤销已提交结果；提交前错误照常回滚，回滚失败销毁连接并保留原错误。
+
+complete在当前route授权与账户sync锁后读取规范完成回执；已有同hash且正文一致时直接返回，不重复ready/revision/派生汇总/outbox。没有回执只在syncing状态允许创建，其他状态不插入。collect遇到完成提交未知，以相同route/window/pageChains只重试确认一次，不重新向终端分页；若确认仍失败维持unknown并跳过fail。分页提交未知同样不写failed；begin错误仍直接向上传播。
+
+37项定向测试通过，覆盖提交未知连接销毁、提交前回滚失败保留原错误、已提交同回执重复完成不重复副作用、非syncing无回执拒绝、两次完成确认与分页未知不写失败。服务端类型/构建、已检测模块边界和98项API生成校验通过；初次类型检查发现闭包引用pageChains丢失类型推断，添加显式HistoryResourcePageChain数组类型后复验通过。
+
+本批仅源码/离线测试，不进行数据库写入或启动服务。完整MySQL完成事务回执丢失演练、跨进程持久恢复、并发采集批次身份及逐笔成交覆盖仍未完成；不可把本次有界同进程确认视为全部历史采集运行验收。当前dev_vue的189步结果沿用上一批已验证回执，未重新连接确认。混合工作区未提交推送。
+
+
+## 353. 真实MySQL完成事务与并发重放（第四百二十三批，2026-09-10）
+
+按18.44在VM MySQL随机dev_vue_history_ref库验证实际MysqlTradeHistoryCollectorRepository.complete。sync、交易记录、汇总、ownership interval及outbox使用完整已验证备份DDL，051使用完整迁移DDL，全部外键保留；users/trading_accounts为最小父表，route guard注入固定授权。验证范围是实际完成SQL和事务，不是完整授权、终端分页或当前开发库业务回填。
+
+插入一笔实际已平仓夹具，毛利12.25、佣金-2.25、净利10，以非空汇总验证真实聚合SQL。outbox写入后、COMMIT前抛错，回执、sync、汇总、outbox均与执行前完全一致。实际COMMIT成功后再抛提交未知，连接销毁，持久状态为ready/revision1、一份回执、一个outbox和精确汇总。新连接同证据确认后四类状态完整深比较不变；不同sourceRevision的证据不能复用旧回执，拒绝且无变化。
+
+两条独立真实连接并发完成下一份相同证据，最终只追加一份回执和一个outbox，revision仅1→2，汇总金额不变。五项检查通过，最终报告history-completion-transaction-reference-v2-20260910.json记录源码/运行产物指纹、DDL来源及server UUID。首次运行四项事务检查均通过但最终hash不接受Date对象导致报告失败，已将摘要输入统一为JSON时间格式，保留失败报告；两次参考库均确认删除，临时隧道关闭，existingDatabaseWrites=0。
+
+本批未改服务端业务源码或启动服务。当前能力覆盖同进程有界确认、直接同证据重放及相同证据并发SQL；跨进程保存并恢复原采集窗口/页链、不同采集批次隔离、逐笔成交来源及缓存覆盖仍待完成。核心整体尚未完成；混合工作区未提交推送。
+
+
+## 354. 逐笔成交来源模型与完整DDL验证（第四百二十四批，2026-09-10）
+
+按18.45新增052_terminal_history_deal_provenance.sql，以及trade-history域内historyDealProvenance/persistHistoryDealProvenance。按MT5 history.deals或MT4 history.trades校验资源，保存确切deal ID、账户、终端/profile/broker/login、connection/epoch/ownership revision、请求/响应ID、source revision与原始事实hash。receivedAt不参与证据hash，相同响应重放不生成不同关联。写入前锁定确切账户/platform/deal ticket的原事实，唯一且hash一致才能继续；同deal+response摘要变化拒绝。
+
+校验缺失owner revision、64位上界、路由错配、JSON原文摘要与响应成员关系；不以order/position ticket替代deal ID，不猜历史来源。19项构建/写入定向测试、服务端类型/构建、已检测边界与98项API生成校验通过。
+
+真实MySQL参考v3在随机隔离库创建原完整terminal_history_deals_v4 DDL与完整052，保留三项外键。实际writer验证调用者事务回滚、同deal/response重放只一条、同响应来源版本改变拒绝、成交/账户/用户外键拒绝，以及epoch/owner revision为正和大小写敏感hash CHECK；采用UINT64_MAX成交ticket夹具。五项新检查通过，并复验此前五项完整完成事务检查。参考库确认删除，现有库写入0，未启动服务。
+
+本批052仅在隔离参考库执行，dev_vue仍沿用上一批189步；writer尚未接入persistPage，collectorIntegrationVerified=false。下一步以v3完整DDL为结构证据登记052增量及采集启动要求，经恢复副本与开发库升级后接入采集事务。旧订单来源、既有迁移和完成回执不改写；跨进程批次恢复及历史完整覆盖仍待完成。混合工作区未提交推送。
+
+
+## 355. 052结构准入与实际采集分页集成（第四百二十五批，2026-09-10）
+
+按18.46，新增loadHistoryDealProvenanceUpgrade，在051的189步后追加inplace_052_01_terminal_history_deal_provenance_v4，目标190步。计划绑定v3真实参考DDL、SQL hash和原步骤列表；生成historyDealSchema，类型/构建加入生成漂移检查。采集准入同一升级锁检查052 checkpoint、完整DDL与触发器；只读历史准入保留188步合同。初次生成发现新工具模板替换错误表名，修正后生成通过，未执行数据库升级。
+
+persistPage的deal分支已在原route guard/sync/fact事务内调用deal provenance writer。49项定向测试通过，含052缺失/checksum/DDL/触发器拒绝以及只读历史独立；类型/构建、已检测边界和98项API生成检查通过。
+
+真实MySQL参考v4实际调用repository.persistPage：在来源INSERT后、COMMIT前抛错，成交事实、来源行及sync更新时间与之前一致；成功后各有一条，重复同响应不增加关联。新证据见dealCollector，验证MT5单条成交分页；未验证完整平仓投影与MT4闭仓分页，不扩大结论。已有完成事务五项和deal writer五项同时通过；随机参考库已删除，现有dev_vue写入0。
+
+运行采集器现在要求190步，当前开发库上一批验证为189步，尚未启动本版服务。按18.47继续恢复副本052演练；新工具初始预检因旧history读取工具只允许8张表而拒绝，未写DDL或基线。已在新工具中明确允许读取051表，原冻结工具不修改。恢复演练尚待最终结果，核心整体未完成。
+
+
+## 356. 052恢复副本190步完成（第四百二十六批，2026-09-10）
+
+在dev_vue_m1_source_20260910_01完成189→190。prepare-v2、开始记录回执丢失、DDL回执丢失、完成记录回执丢失及最终重放五份报告全部通过：实际DDL总数1，重放0。原256表基线338767行（包含此前归档与051账本增量），255张非升级账本表完整数据/DDL摘要保持一致，原189项账本原值不变；052新表0行。history-deal-restored-proof-20260910.json汇总真实报告，当前dev_vue写入0。新演练工具/052源/计划/私有基线已经冻结，后续不得修改。
+
+补查实际repository全部测试消费者发现旧MT4归属夹具未返回新增fact provenance查询和完整sync锁字段，出现4项失败。夹具现从真实insert参数保留fact hash，返回合法UUID和当前owner revision，补齐来源写入回执与sync状态，未更改原归属规则；9项MT4/生命周期归属测试通过，原route与completion的16项也通过。此补查共25项，加本批49项定向测试均通过。
+
+恢复副本升级已完成，开发库最后验证仍189步。下一步新增052演练证据门禁与当前库入口，复核051当前库基线及完整备份后执行190步，再验证采集启动准入。未启动服务、未部署公网；混合工作区未提交推送。
+
+
+## 357. 当前开发库052升级与采集准入通过（第四百二十七批，2026-09-10）
+
+按18.48新增052演练证据门禁和当前库执行入口。门禁逐份检查五份原始演练回执，验证三类持久操作回执丢失的中间状态、原189项账本、工具/备份/计划指纹、全部保护表及零DDL重放；15项接受/拒绝测试通过。
+
+当前库prepare复核051当前重放报告、原189项记录、完整备份中254张旧保护表的数据与DDL、051表0行和规范DDL，捕获256表新基线后冻结工具。实际dev_vue执行189→190，DDL一次；随后重放completed且DDL0。原256表共338746行（包含上次051新增账本行），255张非升级账本表的完整数据/DDL不变，原189项账本原值不变；新增052表0行，最终257张表。
+
+apply与replay均在升级协调器释放锁之后调用实际编译版assertMysqlTradeHistoryCollectorSchemaReady，通过190步及十张运行所需表检查；该调用只读，不启动Gateway/Worker或终端连接。成功证据history-deal-current-proof-20260910.json绑定三个当前回执。临时隧道关闭，完整备份和加密密钥保留；未修改公网。
+
+此为成交来源结构与现有采集SQL的落地，不表示历史已有成交被自动补齐来源，也不证明跨进程采集恢复、不同批次隔离或完整历史覆盖。下一步补齐持久采集批次及恢复，再推进参考持仓证据/策略运行与旧策略订阅迁移。当前工具绑定的旧运行产物用于此批验收，后续结构变更应新增版本，不改写历史回执。混合工作区未提交推送，整体核心重构仍未完成。
+
+
+## 358. 持久采集任务结构与租约锁（第四百二十八批，2026-09-10）
+
+按18.49新增053_history_collection_tasks.sql，任务保存固定UTC窗口、状态、租约token/期限、路由与完成摘要及最终receipt引用；生成active_account_id唯一索引保证每账户只有一个pending/running/completing任务，终止记录保留。CHECK约束租约/窗口/路由/完成阶段/结果关系，账户与完成回执保留外键。053尚未进入当前升级链或执行dev_vue。
+
+新增historyTaskRoute和HistoryCollectionClaim校验，冻结账户/终端/profile/broker/login/connection/session/epoch/owner revision/时区；新增本域lockHistoryCollectionTask要求调用者先授权route，并在同一UTC事务中按任务/账户FOR UPDATE检查token、数据库当前时刻租约有效性、固定窗口及路由hash，重算持久路由正文hash。page仅接受running，complete仅接受completing，不能在完成准备之后继续分页。当前只是写入前的锁能力，尚未接入运行采集器。
+
+15项定向测试、服务端类型/构建、已检测边界及98项API生成检查通过。真实MySQL参考v5使用完整053 DDL，7项新检查通过：单账户活动任务唯一、实际UTC窗口与租约锁、旧token/过期租约拒绝、持久路由损坏拒绝、状态CHECK、账户FK及终止任务保留后创建替代任务。此前完成事务和deal来源/分页SQL参考检查一并通过；随机库确认删除，现有数据库写入0。
+
+claimTakeoverImplemented=false、queueIntegrationVerified=false；后续需实现创建/领取/续租/接管、待完成摘要持久化、task与完成业务同事务及队列任务ID接线。当前dev_vue仍沿用上一批190步验证，本批未启动服务或改变运行流程。完整批次隔离与跨进程恢复尚不能宣称完成，混合工作区未提交推送。
+
+
+## 359. 完成摘要持久化与换租约读回（第四百二十九批，2026-09-10）
+
+按18.50新增historyTaskCompletion/restoreHistoryTaskCompletion，将task/account/routeHash/固定窗口/分页摘要和051 receiptHash规范保存；不把leaseToken放入业务证据，合法新租约可复核原内容。恢复时从持久JSON重新构建摘要并比较原JSON和摘要hash，额外字段、task/account/route/window/receipt错配、缺资源及坏正文拒绝。
+
+新增prepareHistoryTaskCompletion/loadHistoryTaskCompletion。调用者先授权route并持有同连接事务；prepare取得当前task租约锁，running→completing条件更新并续租90秒，同内容重放不更新，已有不同内容拒绝覆盖。load仅接受completing有效租约，并重新校验完整持久正文。任务锁新增prepare阶段，page仍只能running，complete仍只能completing。
+
+27项定向测试、服务端类型/构建、已检测边界与98项API生成检查通过。真实MySQL参考v6新增5项验证：准备事务回滚、相同摘要零更新重放、不同摘要不覆盖、夹具换租约后原摘要读回且旧租约被拒绝、坏持久正文拒绝。连同原7项任务结构/锁检查共12项通过，其他完成/成交参考检查保持通过；参考库确认删除，现有库写入0。
+
+换租约由参考夹具执行SQL，不能表述为真实任务接管服务已经完成；claimTakeoverImplemented=false、queueIntegrationVerified=false仍成立。053未升级dev_vue，运行入口尚未调用这些能力。下一步实现任务创建/领取/续租/接管，再接入调度/队列及最终完成事务。混合工作区未提交推送，核心整体仍未完成。
+
+
+## 360. 真实任务领取、续租与过期接管（第四百三十批，2026-09-10）
+
+按18.51新增HistoryCollectionTasks应用端口及MysqlHistoryCollectionTasks实现。claim冻结route，先调用route guard，再按taskId/account锁定任务；pending领取新token，活动租约返回busy，终止任务返回terminal。过期接管增加持久attempts且保留固定窗口，最多5次；第5次活动租约不提前终止，到期后拒绝第6次领取。claim提交未知复用HistoryCommitUnknown连接销毁逻辑。renew也经route guard与同连接任务锁，旧token或已过期租约不能续租。
+
+completing接管先验证旧路由原文hash及完整准备摘要。同路由返回原completion；换路由清空待完成摘要并切回collecting，窗口原值不变，不能把旧epoch证据用于新route完成。坏路由或坏摘要拒绝接管，不能覆盖后掩盖异常。
+
+36项定向测试、服务端类型/构建、已检测边界及98项API生成检查通过。真实MySQL参考v7新增6项验证：两个独立连接并发只有一个claim、过期接管和旧token续租拒绝、真实claim恢复原准备内容、新route保留原窗口重新采集、第5次活动租约与到期停止、实际claim COMMIT后回执丢失不立即再消耗attempt。taskClaims.claimTakeoverVerified=true，授权为注入route guard；queueIntegrationVerified=false。此前完整完成/来源/任务结构参考检查均通过，随机库已确认删除，现有库写入0。
+
+任务创建、调度/outbox登记、队列传taskId以及claim贯穿分页/完成/失败仍需接入。053尚未升级dev_vue，现行运行入口未使用该工厂，未启动服务或连接终端。下一步收口调度与实际采集任务流程；混合工作区未提交推送，整体核心重构未完成。
+
+
+## 361. 任务与outbox原子登记（第四百三十一批，2026-09-10）
+
+按18.52新增HistoryCollectionRequest及registerHistoryCollectionTask。调用者承担账户资格与事务，helper经trading公开AccountInventorySummaryReader.lockAccount锁定同连接账户，再检查UTC会话、同taskId及已有active task。相同ID窗口改变拒绝，已有活动任务保留原ID/窗口；首次创建任务后插入trade.history.task.requested，event ID与task ID相同，payload只含task_id。helper不自行提交或发送队列。
+
+重复登记须核对原outbox的aggregate/type/task_id正文，缺事件或不一致拒绝，不补造回执。新事件独立于旧trade.history.requested，当前dispatcher及Gateway尚未激活此新类型；新登记helper尚未在运行调度器调用，避免未配套消费者时切换队列语义。
+
+16项登记/领取定向测试、服务端类型/构建、已检测模块/outbox边界及98项API生成检查通过。真实MySQL参考v8复用实际trading公开composition账户锁：outbox插入后提交前错误使任务/事件一起回滚；实际COMMIT后回执丢失，同taskId重放不增加任务或事件；变更窗口和缺outbox拒绝；两个连接并发不同requestId只创建一份活动任务及事件，固定窗口属于先取得账户锁的请求。4项新检查通过，其余参考检查保持通过，随机参考库确认删除，现有库写入0。
+
+queuePublicationVerified=false；任务创建基础完成，但调度调用、dispatcher投递和taskId消费入口还需统一接入，053也未在dev_vue升级。下一步让claim贯穿实际采集分页/准备/完成/失败，再切换调度与队列并执行真实端到端验证。混合工作区未提交推送，核心整体仍未完成。
+
+
+## 362. 采集任务结果确认与租约结束回归（第四百三十二批，2026-09-10）
+
+按18.53继续验证任务绑定仓库。新增history-task-result.test.ts，覆盖成功任务在租约接管后以原完成摘要只读确认、completing不误认为成功、关联回执缺失/重复/摘要错配/正文损坏/非法JSON拒绝、不同完成内容拒绝、finish/fail/renew最终写入失去租约拒绝，以及不合规错误正文不进入数据库。
+
+本批新增12项测试通过，原完成回执、成交来源、归属与路由、任务锁和准备摘要六组57项回归通过。服务端类型检查、构建、已检测边界、98项API生成与相关diff检查通过。该证据只证明本地行为回归及编译一致，不能代替绑定任务后的完整MySQL事务和队列运行验证。
+
+053尚未升级当前dev_vue，运行入口仍为accountId旧流程。本批没有连接数据库、启动服务或终端；下一步继续实际任务绑定的分页/完成/失败事务参考验证，再接调度、outbox和taskId消费入口。整体核心目标保持未完成，混合工作区未提交推送。
+
+
+## 363. 任务绑定完成的真实MySQL事务验证（第四百三十三批，2026-09-10）
+
+新增history-task-collector-reference.mjs，在既有随机参考库中领取原子登记阶段创建的pending任务，调用实际编译版MysqlHistoryCollectionTasks与绑定claim的MysqlTradeHistoryCollectorRepository。begin传入不同时间仍返回原任务固定窗口；授权注入精确route，并检查连接库名与server UUID。
+
+真实outbox INSERT之后、COMMIT之前注入异常，sync/完成回执/汇总/outbox完整行保持不变，而独立准备事务已将任务保留为completing且保存摘要。新增仅在task succeeded UPDATE执行后的真实COMMIT丢弃确认，避免准备事务提前消耗故障注入；验证任务succeeded、租约清空、确切receipt关联，回执/outbox各增加一份，history revision只增加1。相同证据新连接重放所有业务行不变。结束任务再次begin或fail均被lease_lost拒绝，sync不被改写。
+
+reference-v9报告passed=true，新增taskCollector五项检查通过，既有完成、逐笔来源、任务约束、领取接管和原子登记检查同时通过。脚本语法与diff检查通过；随机参考库已确认删除，existingDatabaseWrites=0。报告绑定本批脚本以及任务结果源码/编译产物hash。
+
+该验证使用合成完成页链和既有非空汇总夹具，不宣称终端分页、旧token分页写入或队列集成通过；taskCollector.queueIntegrationVerified=false、terminalPaginationVerified=false。053尚未升级dev_vue，未启动服务。下一步补齐任务绑定分页和接管隔离，并接通任务用例、调度/outbox及消费入口。整体核心重构未完成。
+
+
+## 364. 任务绑定分页与接管隔离（第四百三十四批，2026-09-10）
+
+扩展实际任务采集参考：用有效claim写入一笔无position_id的MT5成交，在来源INSERT之后注入失败，完整比较成交/来源/task/sync/receipt/summary/outbox行，确认整笔分页事务回滚。随后仅在随机参考库把租约设为已过期，通过实际MysqlHistoryCollectionTasks.claim接管并取得新token，而不是手工替换token。
+
+旧绑定实例的persistPage和fail均返回history_task_lease_lost，接管后任务与全部业务数据保持不变。新绑定实例能写入该页，成交与来源各一行，任务保留新token；同响应重放事实/来源/业务行不变，允许任务续租时间更新。随后仍执行准备回滚、完成提交确认丢失和成功重放的真实事务验证。
+
+reference-v10全部通过，taskCollector新增三项检查，boundMt5PageVerified=true、leaseTakeoverFencingVerified=true。脚本语法通过，随机参考库确认删除，existingDatabaseWrites=0。该页使用合成Bridge响应，不含平仓投影，不证明真实终端分页、MT4完整流程或队列接线。053未升级当前开发库，未启动服务。
+
+下一步新增任务消费应用用例：busy/terminal不创建采集器；collecting使用claim绑定仓库采集；completing使用原持久摘要直接完成，不调用begin或查询终端。之后统一组装、调度、outbox与任务ID消费，并完成053准入及升级。核心目标仍未完成。
+
+
+## 365. 持久任务消费与真实恢复组装（第四百三十五批，2026-09-10）
+
+按18.54新增HistoryTaskProcessor及createMysqlHistoryTaskProcessor。应用用例仅依赖任务端口、绑定仓库工厂和Bridge查询端口；MySQL实例在composition组装。busy/terminal不触发采集，collecting走现有分页用例，completing重建持久摘要并直接完成。任务/账户/路由身份错配和摘要损坏在构造写入仓库前拒绝。claim未知不重领；complete未知只确认一次；恢复失败不写failed。
+
+新增11项用例测试与原12项采集测试通过，服务端类型/构建、已检测模块边界和98项API生成校验通过。真实reference-v11改为经公开composition处理已过期completing任务：实际claim接管、读取原摘要、最终COMMIT成功后丢弃确认、用例再次确认成功，终端查询0次。原任务绑定分页/旧token隔离/事务回滚及成功重放检查均通过。源码、产物和composition指纹记录在报告；随机库删除确认，现有库写入0。
+
+此为实际任务消费用例和组装验证，不代表BullMQ消费入口已激活。queueIntegrationVerified仍false，053尚未升级dev_vue；下一步统一任务ID解析、Gateway消费、scheduler原子登记、outbox发布及过期任务恢复，再执行结构升级与完整队列验收。整体核心重构未完成。
+
+
+## 366. 任务ID worker与队列延迟适配（第四百三十六批，2026-09-10）
+
+按18.55新增HistoryTaskLocator/MySQL读取、HistoryTaskWorker与公开composition工厂。只从持久task解析accountId，活动任务核对当前route账户后交任务处理器；已成功/失败任务直接确认，脱机终端不阻塞结束消息。新增独立BridgeHistoryTaskJob及BullMQ适配器，busy用原worker token移动到租约到期后，再抛DelayedError；非法retryAt拒绝。尚未注册到运行Gateway，不改变旧accountId消息语义。
+
+12项worker/队列适配测试与11项消费用例测试通过，类型/构建、已检测边界、98项API校验通过。真实reference-v12暴露参考pool仅实现getConnection而无execute，locator无法调用；失败报告保留且参考库已删除。补齐参考pool.execute，仍使用独立真实连接和finally释放，未修改生产locator来迁就夹具。
+
+reference-v13通过：公开worker工厂真实读取任务账户、取得route、接管completing并恢复提交未知；再次run已成功任务不再查询route。既有分页/接管/回滚/幂等验证通过，随机库确认删除，现有库写入0。队列适配仅本地行为验证，尚无实际BullMQ投递；053当前库升级、Gateway/调度/outbox统一接线与恢复扫描仍待完成。整体核心重构未完成。
+
+
+## 367. 053增量结构与191步任务准入（第四百三十七批，2026-09-10）
+
+按18.56新增loadHistoryCollectionTaskUpgrade，将inplace_053_01_history_collection_tasks_v4追加在完整190步后，绑定reference-v13的collectionTasks及taskCollector成功证据、完整DDL和SQL摘要。脚本检查确认原190步完全不变，目标191步。首次生成因新工具模板替换顺序导致目标表名不符而拒绝，修正为实际history_collection_tasks_v4后生成成功；未执行数据库操作。
+
+新增生成historyTaskSchema和独立assertMysqlHistoryTaskSchemaReady，在同一连接/升级锁内读取全部191步与11张表，核对完整DDL和触发器；原188/190步检查文件及冻结升级工具不改动。公开composition导出新门禁，类型/构建加入生成漂移检查；Gateway尚未切换调用。
+
+新增10项准入测试加原25项结构回归通过，覆盖053缺失/校验和/started/DDL/触发器、非UTC、旧步骤缺失、锁争用与释放失败；服务端类型/构建及98项API生成校验通过。当前dev_vue仍沿用190步既有验收，未执行053。下一步新增独立191步恢复副本演练与当前库升级入口，再统一激活任务调度与消费。核心整体未完成。
+
+
+## 368. 053恢复副本191步升级完成（第四百三十八批，2026-09-10）
+
+按18.57新增独立task演练脚本及SSH临时隧道入口，复用冻结升级协调器，不修改已执行051/052工具。在dev_vue_m1_source_20260910_01完成prepare、开始记录确认丢失、DDL确认丢失、完成记录确认丢失及最终replay五次检查，全部passed。实际DDL总计1，重放0；新history_collection_tasks_v4保持0行。
+
+准备基线257表338768行；256张非升级账本旧表数据/DDL完整摘要保持不变，原190项账本原值不变，最终191项完成。history-task-restored-proof-20260910.json绑定五份报告和私有基线；生成证明时复核所有演练工具实际hash和完整备份回执hash。私有history-task-upgrade-baseline-v1.json及其绑定工具已经冻结。
+
+新增verifyHistoryTaskRehearsal逐项检查实际状态而非只读passed；15项门禁测试通过，覆盖缺报告、错目标/主机/工具/备份、旧数据/账本改变、伪完成、缺注入、错DDL、意外新增行、重放DDL与开发库写入。脚本语法和diff检查通过。每次临时隧道由调用者finally关闭，恢复副本保留；currentDevVueWrites=0，未启动应用服务或终端。
+
+当前dev_vue最后验证仍190步。下一步新增独立053当前库入口，使用本次演练门禁和冻结全表基线执行191步升级及实际任务结构准入，然后推进调度/outbox/Gateway统一接线。核心重构整体未完成。
+
+
+## 369. 当前dev_vue完成053与191步准入（第四百三十九批，2026-09-10）
+
+按18.58新增独立task当前库入口，读取五份053演练原始报告、冻结工具与备份回执，核对052当前库190步重放及私有基线，旧原始业务表与完整备份摘要一致，051/052完整DDL且0行。prepare捕获257表338747行当前基线，apply只执行一次CREATE history_collection_tasks_v4并追加一项账本，replay零DDL。
+
+当前dev_vue最终258表、191项completed；256张旧非账本表完整数据/DDL摘要保持一致，原190项账本原值不变，新任务表0行。apply和replay均在升级后调用真实编译assertMysqlHistoryTaskSchemaReady，通过全部191项与11张相关表准入；未启动服务。history-task-current-proof-20260910.json逐项复核三份原始报告、基线及实际工具hash，passed=true、businessWritesPerformed=false、taskSchemaReady=true。
+
+独立脚本语法与diff检查通过；没有修改冻结051/052/053恢复工具。私有history-task-current-baseline-v1.json以及当前升级工具、编译任务准入文件与生成要求现已绑定冻结，后续升级新增版本。临时SSH隧道已关闭。下一步接通调度器原子登记、outbox任务ID投递、Gateway延迟消费及过期任务恢复扫描；这些运行入口仍未切换，不以数据库就绪声称核心整体完成。
+
+
+## 370. 调度/outbox/Gateway任务ID接线（第四百四十批，2026-09-10）
+
+按18.59新增独立BRIDGE_HISTORY_TASK_QUEUE及RuntimeTaskQueues生命周期，消息只有taskId。outbox合同、SQL领取白名单与BullMQ publisher接入trade.history.task.requested，正文只允许合法UUID task_id，投递重放沿用eventId。Gateway改用公开HistoryTaskWorker工厂与busy延迟适配，消费新任务队列；旧accountId队列消息保留，本版不再执行无任务身份采集。
+
+MysqlTradeHistoryScheduleRepository改为筛选无活动任务的到期在线账户，读取fresh_through UTC毫秒，首次从2000-01-01、后续回看24小时确定固定窗口。经注入trading公开账户锁调用已有原子登记helper，不提前改sync；事务改用historyTransaction，拒绝未来fresh值。scheduler和Gateway启动均接入已在当前库验收的191步任务准入。未启动服务。
+
+新增4项调度测试和4项投递测试，加12项worker/12项旧采集回归共32项通过；类型/构建、已检测边界及98项API生成检查通过。验证窗口、任务/事件关联、outbox失败回滚、未来时间拒绝、重放jobId、额外账户字段拒绝及队列失败上抛。真实新调度SQL/实际BullMQ全链路未在本批验证，活动任务过期恢复扫描尚未实现；不能把源码接线视为运行闭环。下一步优先收口这些缺口，旧队列退役在证据完整后处理。核心整体未完成。
+
+
+## 371. 过期历史任务恢复扫描（第四百四十一批，2026-09-10）
+
+按18.60新增HistoryTaskRecovery/MysqlHistoryTaskRecovery及composition工厂，接入scheduler-trade-history轮询。三分钟冷却后扫描pending或租约过期running/completing，排除尚未投递的任务outbox；同连接锁任务，原子写新eventId与更新时间，payload仍只有原task_id，不改变业务任务身份或证据。提交未知沿用安全事务助手，不盲重发。
+
+真实reference-v14新增五项检查通过：pending outbox阻止重复恢复；事件插入后异常使事件/冷却/任务整笔回滚；两条连接并发只产生一次新投递，完整任务字段除updated_at外保持不变且冷却生效；有效running租约不重投；过期completing在真实COMMIT后确认丢失，原窗口/路由/摘要/token/attempts均保持，下一次扫描0且数据不变。实际调用composition工厂，任务登记/领取/准备仍用真实实现。随机库删除确认，existingDatabaseWrites=0。
+
+服务端构建、已检测模块/outbox边界与98项API生成检查通过。报告taskRecovery.queueDeliveryVerified=false；本批验证恢复SQL与事务，不是Redis/BullMQ实际投递。新调度账户筛选SQL、完整队列消费与旧队列退役仍待验收，未启动应用或终端。核心整体未完成。
+
+
+## 372. 真实调度筛选与并发登记（第四百四十二批，2026-09-10）
+
+新增history-task-scheduler-reference.mjs，在随机隔离库使用完整备份bridge_connection_sessions DDL与全部外键，父users/trading_accounts/terminal_profiles为最小夹具。创建在线首次账户、心跳过期、已断开、已删除、刚ready及超过失败冷却的六类账户。实际调用createMysqlTradeHistoryScheduler及公开账户锁，不用mock替代筛选SQL。
+
+reference-v15新增四项检查通过：实际任务登记outbox写后抛错，task/outbox/sync全部回滚；两连接并发只为在线首次与失败到期账户创建各一份任务/事件，UTC窗口分别为固定2000起点与fresh回看24小时；已有活动任务再次调度为空，sync完整行不被提前改写；终止任务可创建后继，真实COMMIT确认丢失后再调度不重复创建。六类账户中其余四类没有任务。
+
+既有完成/分页/接管/恢复SQL参考同时通过。报告taskScheduler记录完整会话DDL hash与最小父夹具范围，actualTerminalConnectivity=false；随机库确认删除，现有库写入0。脚本语法通过，本批未改服务端源码。下一步验证实际BullMQ投递、延迟及MySQL消费结果的完整链路；不将合成会话的在线筛选称为真实Bridge在线证明。核心整体未完成。
+
+
+## 373. 实际Redis/BullMQ任务恢复链路（第四百四十三批，2026-09-10）
+
+新增history-task-queue-reference，使用developmentRedisConnection读取server/.env的现有192.168.31.254 Redis DB3，每次独立history-reference-UUID前缀。实际MysqlOutboxRepository领取事件、BullMqOutboxTaskPublisher重复投递、新任务Queue/QueueEvents/Worker与公开HistoryTaskWorker组装贯通。以真实completing任务持有短租约触发busy延迟，随后接管并在最终COMMIT后注入确认丢失。
+
+reference-v22及v23连续通过：同事件投递两次只有一个waiting job且payload仅taskId；实际DelayedError延迟至租约到期；worker用持久摘要完成并确认提交未知，MySQL任务succeeded关联receipt、终端查询0次；再次投递已完成事件没有新的waiting job。taskQueue.queueDeliveryVerified=true、queueRemoved=true，现有库写入0，两次随机参考库均删除确认。Queue/Worker仅本次临时测试进程，未启动应用服务或接入真实终端。
+
+失败报告v16-v21保留：v16探针误用缺QUEUE_REDIS的完整运行配置，后改用既有开发Redis助手；v18本机时间落后VM导致未领取刚生成事件，探针领取使用数据库时间；v19清理误调用BullMQ包装客户端scan，已改独立ioredis并finally关闭。v19数据库清理已完成且Redis无测试键，但遗留本次node连接，核对PID/命令后结束该测试进程。v20/v21修复清理后暴露夹具未begin就prepare，实际worker正确拒绝sync_not_active；现改为真实begin后准备摘要，不修改生产状态规则。
+
+v17另有一次并发调度登记失败，旧报告没有数据库错误码，无法可靠定因。后续报告新增脱敏ER错误码；v18-v23该阶段通过，但该偶发失败仍保留为待定位问题，不能因两次链路通过宣称并发长稳完成。下一步扩大有界调度并发复现，补真正collecting任务通过队列查询合成终端响应的路径；当前队列证明覆盖completing恢复。核心整体未完成。
+
+
+## 374. 复现并修复调度并发死锁（第四百四十四批，2026-09-10）
+
+扩展调度参考为20轮双连接并发，reference-v24明确失败ER_LOCK_DEADLOCK，栈位于registerHistoryCollectionTask实际写入。该证据定位此前v17偶发失败的同类调度锁冲突；原v17缺错误码，不能宣称其错误码已直接确认。
+
+新增historyScheduleTransaction，在同数据库候选扫描之前取得固定命名锁，忙时返回本轮空结果，不开启事务。使用数据库名hash控制锁名长度与隔离；同连接复用原historyTransaction，COMMIT未知销毁连接释放锁，不自动重试。正常释放必须确认，失败销毁连接，保留原始业务错误。调度器改用此助手，未修改冻结升级工具或historyTransaction。
+
+6项锁生命周期/提交未知测试与4项调度测试通过，服务端构建、已检测边界与98项API生成校验通过。reference-v25真实20轮双调度每轮恰好新增两份任务和事件，只有两条pending，sync原行不变；此前SQL/租约/回滚/恢复及实际Redis/BullMQ链路也通过。随机隔离库与测试队列确认清理，现有库写入0。该结果是有界并发回归，不宣称生产长稳运行。
+
+下一步补齐新collecting任务通过实际队列完成分页采集的路径，再整理历史模块退出验收与旧队列退役。整体核心重构未完成。
+
+
+## 375. 新任务经真实队列完成分页与闭仓投影（第四百四十五批，2026-09-10）
+
+新增history-task-queued-collection-reference，在既有Redis随机前缀及MySQL随机库中原子登记全新pending任务，实际outbox领取/投递、worker claim、begin、查询、persistPage、prepare/complete全链路执行。查询端口注入合成MT5响应，按固定任务窗口返回一页空订单及两页开仓/平仓成交；account_trade_record_deals使用完整备份DDL和外键。
+
+reference-v28通过四项新检查：实际查询严格为orders/null、deals/null、deals/page2三次；两笔成交及各自来源落库，生成一笔归属user7的closed记录、两条成交关联，净利10；完成回执记录两页/两笔成交，sync ready且revision只加1；删除已完成测试job后重投同一原始outbox事件，MySQL任务直接返回terminal succeeded，查询仍3次、全部任务/事实/来源/记录/关联/回执/sync行不变。
+
+此前completing恢复队列链路和20轮调度并发验证同时通过，报告taskQueue.collection.passed=true，queueRemoved=true，随机库确认删除，现有库写入0。终端接口为合成query port，不是实际MT5/Bridge连接；本批证明MT5两页闭仓投影，MT4端到端及复杂拆单/费用等仍按各自证据范围保留。
+
+v26/v27失败报告保留：合成响应使用DB时钟而本机接收时钟慢约2.6秒，来源校验正确拒绝trade_history_deal_provenance_invalid；响应改由本机时钟生成，未放宽生产校验。该环境时钟差不等于业务时区转换错误，实际终端联调仍须按既定时间规则验证。
+
+下一步整理历史采集核心验收范围与旧队列退役，再回到剩余策略迁移、交易上下文和执行链路核心缺口。不得把单域队列验收当整体核心完成。
+
+
+## 376. 旧历史队列接线退役与核心证据整理（第四百四十六批，2026-09-10）
+
+移除RuntimeTaskQueues旧bridgeHistory实例、旧消息类型/常量与无任务采集composition工厂。发现outbox入口waitUntilReady和健康检查仍指向旧队列，现改为bridgeHistoryTask，并补上bridgeInstrument检查。旧trade.history.requested退出MySQL领取白名单，显式publisher调用返回稳定retired错误；旧数据库事件和Redis消息不删除、不伪造成功。
+
+28项定向测试、服务端构建、已检测边界与98项API生成校验通过。reference-v29实际MySQL验证插入的旧事件未被领取，完整队列流程结束后仍pending/attempts0；新任务分页、恢复、20轮并发与旧证据全部通过。独立参考库和Redis测试前缀清理确认，现有库写入0。运行源码已无旧队列和旧工厂引用。
+
+新增history-task-core-acceptance-20260910.md，重写模块README为当前职责/端口/数据所有权/验证入口，替换互相矛盾的历史追加状态。将该任务主链路的源码与隔离依赖验收收口，明确真实终端、MT4完整路径、复杂历史覆盖及策略归属不在本次证明范围。接下来回到剩余策略迁移和交易上下文核心工作；整体目标未完成。
+
+
+## 377. 当前持仓历史数量读取（第四百四十七批，2026-09-10）
+
+新增OpenPositionLifecycleReader端口与MySQL组装工厂，复用已有MT5生命周期数量核对。按账户、稳定持仓标识及观察时间读取最多10001行，超过10000拒绝；原始事实逐项核对hash、ticket、position与UTC毫秒。缺少稳定标识或数量不符保持unresolved，坏存储拒绝。UTC DATETIME换算改用TIMESTAMPDIFF，避免会话时区偏移。
+
+37项定向测试通过，覆盖部分平仓、缺失事实、坏hash/JSON/身份/时间、超限、异步输入变化、非法范围和未来事实；服务端类型、已检测模块/outbox边界、98项API生成检查通过。本批未连接数据库或启动服务，MySQL读取SQL尚无本批真实依赖证据。读取器还未接入授权库存一致快照与推理worker，完整覆盖及精确策略归属仍待完成。整体核心目标保持未完成。
+
+
+## 378. 授权库存与持仓历史同快照接线（第四百四十八批，2026-09-10）
+
+bootstrap策略参考证据工厂已注入持仓历史读取，源分析/授权库存/挂单创建/持仓历史在原一致只读事务内完成，异常不返回部分结果。新增调用方ReferencePositionLifecycleReader结构端口；首次直接依赖trade-history触发模块环门禁，调整为bootstrap组装后边界零新增、零存量，未添加豁免。
+
+发现库存汇总时间取持仓和挂单最早时间，不适合历史数量核对；positions公开自身observedAt，取持仓来源而非汇总时间。MT5读取前核对完整集合账户、revision、唯一ticket及稳定标识；MT4显式unsupported。匹配返回重新校验身份、数量及有界唯一订单/成交ID，unknown保持未决。
+
+定向验证共78项通过（生命周期37、参考来源17、授权库存14、挂单创建10），其中来源新增7项验证同连接、持仓独立时间、失败回滚、坏库存、MT4及错身份。服务端构建及98项API/结构生成、已检测边界校验通过。未连接数据库、启动服务或发终端命令。本批只证明源码组装和Mock行为，真实同快照SQL验收、历史覆盖、策略归属及推理worker最终接线仍未完成。
+
+
+## 379. 持仓生命周期真实一致快照验证（第四百四十九批，2026-09-10）
+
+新增open-position-lifecycle-reference，在独立随机参考库调用实际编译composition工厂和现有一致只读事务。第一连接先建立历史表快照，第二连接提交观察时间之前的部分平仓成交；原快照仍只读开仓、与1手库存相符，新快照读到两笔成交、与0.5手库存相符。授权库存与源分析使用注入夹具，不冒充真实授权链路验收。
+
+reference-v30全部passed，positionLifecycle五项检查通过：并发提交隔离、新快照可见、UTC+8会话下UTC读取不变、观察时间截止筛选、坏事实hash拒绝。既有MySQL任务并发/完成/恢复和实际Redis队列参考同时通过；随机库及队列前缀已清理确认，existingDatabaseWrites=0。报告绑定新参考工具及实际源码/编译读取器hash，不修改冻结迁移或旧报告。
+
+本批没有当前dev_vue业务写入或应用启动。已证明数量读取真实SQL与事务隔离，尚未证明完整历史覆盖、精确策略归属、真实授权库存端到端及模型输入接通；下一步继续补齐这些核心证据。
+
+
+## 380. 历史遍历范围读取与真实验证（第四百五十批，2026-09-10）
+
+新增HistoryTraversalReader和MySQL公开组装工厂。按授权route/UTC窗口读取051回执，验证正文hash、列窗口和重建完整身份；terminal连续区间返回traversed且completeHistoryProven=false，local_projection不补终端范围，缺口未决。保持分页遍历与完整历史证据的明确边界，未将数量一致或has_more=false提升为完整性证明。
+
+10项定向测试通过，覆盖连续区间、1ms缺口、缓存范围、缺回执、hash/JSON/窗口/路由错误、10001行和非法输入。服务端类型/构建、98项API/结构生成和已检测边界通过。新增真实history-traversal-reference：reference-v31五项验证通过，UTC+8会话范围查询、缺终端范围、缓存不足、两张连续回执及坏hash拒绝；同时重验前一批真实快照和任务/队列参考。新报告绑定实际源码/编译工厂hash。
+
+随机数据库及Redis前缀已确认删除，existingDatabaseWrites=0，未启动应用服务。现阶段可读取可验证遍历证据，但完整来源覆盖、成交来源与策略订单归属组合，以及最终推理worker接线仍未完成。后续不能把traversed作为完整历史授权。
+
+
+## 381. 历史来源覆盖声明合同与接收校验（第四百五十一批，2026-09-10）
+
+核对Bridge原型已有ProjectionQueryCoordinator覆盖记录检查，但query.response未传递覆盖事实。新增可选history_coverage v1机器合同和HistoryQueryCoverage运行校验，约束完整声明的请求范围、来源修订、采集时间与观察时间；禁止instrument携带。HistoryPageChain拒绝声明范围不符、跨页增删或变化，响应hash包含声明。缺字段兼容旧采集，不认定完整历史。
+
+新增13项合同/接收/分页测试，加10项既有分页与10项遍历读取测试通过。服务端类型及98项API/结构生成、已检测边界通过。类型检查发现前批测试给exactOptionalProperty显式undefined，已改为删除可选字段并重验。未操作数据库或启动服务。
+
+文档明确旧服务端additionalProperties=false的升级顺序，生产者尚未发送该字段；旧051/052/053及完成回执不变。finish和持久消费仍无完整覆盖结论；下一步新增独立版本化覆盖证据与任务关联，之后补Bridge生产者及真实来源验收，不把接收校验称为覆盖链路完成。
+
+
+## 382. 覆盖声明任务持久化与实际队列恢复（第四百五十二批，2026-09-10）
+
+复核现有053结构后取消新增覆盖表方案：completion_json已保存完整pageChains，扩展可选historyCoverage即可沿用prepare、接管恢复、原子完成与确认未知流程。finish冻结输出声明，historyTaskCompletion重建时校验声明版本/字段/来源修订/窗口/时间；无声明不添加空值，旧任务摘要结构不变，051回执语义不变。
+
+42项定向测试、服务端构建、98项API/结构生成与已检测边界通过。新增测试覆盖声明持久化、输入/返回复制、接管恢复、准备后修改拒绝、坏正文重算外层hash仍拒绝，以及旧v1 canonical JSON兼容。真实reference-v32的实际队列合成两页携带coverage，最终COMMIT后丢失确认，worker恢复成功；完成task的两份声明/hash/taskId实查一致，删除测试job重投后查询仍3次且所有行不变。
+
+reference-v32全部passed，coveragePersisted=true，独立数据库及Redis测试前缀已删除确认，existingDatabaseWrites=0。未新增迁移或启动应用服务。供应方为synthetic-query-port，不代表真实Bridge发出覆盖声明；下一步完成读取succeeded任务及回执联合校验，之后与成交来源/策略归属组合。整体核心未完成。
+
+
+## 383. 已完成覆盖任务与回执联合读取（第四百五十三批，2026-09-10）
+
+新增HistoryTaskCoverageReader，按确切taskId/account读取已成功任务与关联回执，校验完整路由及完成摘要重建hash，核对回执JSON/hash及身份、归属和时间列。未完成/旧路由/缺声明分别返回稳定未决；通过后只返回provider_asserted和任务/回执/完成hash/资源链，不提升为策略归属。抽出不含lease的证据重建函数供只读使用，原写路径仍验证claim。
+
+19项读取器测试加18项完成摘要回归通过；服务端类型/构建、98项API/结构生成与已检测边界通过。新增真实reference-v33读取实际队列已完成任务，在UTC+8会话下核验两份覆盖声明；另一login返回route_mismatch；篡改回执hash拒绝，恢复后所有行与原捕获一致。coverageReaderVerified=true，既有恢复/并发/队列证据同时通过。
+
+随机库及Redis前缀已清理确认，existingDatabaseWrites=0，未启动应用服务。下一步把任务覆盖证据与持仓成交来源连接，并核对各开仓订单的策略归属；真实Bridge生产者和整体模型接线仍未完成。
+
+
+## 384. 成交来源与成功任务覆盖版本关联（第四百五十四批，2026-09-10）
+
+新增HistoryTaskDealSourceReader公开端口/MySQL工厂，复用成功任务覆盖读取后查询指定MT5成交及052来源。按完整授权route、资源sourceRevision/sourceKind、任务窗口及采集时间筛选；重建provenance JSON/hash和原始fact JSON/hash，核对ticket/持久ID/UTC时间。最多1000请求票号、10000来源行，缺失保持unresolved，损坏拒绝。仅返回source_matched，未误称exact page membership。
+
+服务端构建、98项API/结构生成与已检测边界通过。真实reference-v34在队列创建的两笔成交上调用公开reader，dealSourceVerified=true；验证两笔来源hash、缺成交未决、来源hash损坏拒绝、来源修订不同不匹配，并恢复夹具后全行捕获一致。既有任务回滚/确认丢失/队列/覆盖/快照验证通过。独立MySQL库和Redis前缀清理确认，existingDatabaseWrites=0。
+
+未新增迁移或启动应用。核对现有execution来源读取仅支持pending_order，市价开仓订单创建归属仍缺；下一步补齐市价与挂单订单来源的共同读取能力，再组合持仓生命周期。精确分页成员、真实Bridge覆盖生产者与最终模型提供器尚未收口。
+
+
+## 385. 市价开仓订单来源端口与真实验证（第四百五十五批，2026-09-10）
+
+新增OpeningOrderOriginReader和createMysqlSnapshotOpeningOrderOriginReader，复用既有创建来源查询并显式允许市价/挂单；原pending专用调用行为不变。新增openingOrderTicket严格区分订单和持仓标识：市价仅order_ticket/order，冲突或非法别名拒绝，裸ticket/position不推断。历史策略仍经真实trade_decision/run/risk关联或分发目标链查询，当前订阅不参与重写。
+
+33项定向测试、服务端类型/构建、98项API/结构生成与已检测边界通过。真实strategy-write-reference-v56使用迁移派生临时表和实际inference reader验证市价来源，pending旧入口不读取市价，裸ticket/position未决、订单别名冲突拒绝，openingOrderOriginVerified=true。临时表不带FK，不能称完整执行表外键验收；随机参考库已删除，existingDatabaseWrites=0。
+
+v55市价来源检查已通过，但整组在旧库存exact-object断言失败；更新断言以包含前批新增positions.observedAt，v56全组通过，失败报告保留。所有夹具事务恢复/临时表清理已确认。下一步在参考持仓组合中注入订单来源端口，结合成交生命周期与覆盖来源；真实Bridge生产者、精确分页成员和模型最终接线仍未完成。
+
+
+## 386. 参考持仓生命周期与订单创建来源接线（第四百五十六批，2026-09-10）
+
+新增readReferencePositionCreation并接入实际bootstrap参考证据工厂；生命周期、库存与OpeningOrderOriginReader共享原只读一致快照。抽出共用订单结果校验，挂单调用保持原行为。对有效开仓订单全部核对策略，一致返回creation_strategy_matched；混合策略、缺订单来源或生命周期未决分别保留原因，未进入模型上下文。
+
+49项定向测试、服务端类型/构建、98项API/结构生成和已检测边界通过。真实strategy-write-reference-v57在实际bootstrap中使用授权观摩库存、临时成交表、真实生命周期/执行分发来源查询，验证挂单成交与市价订单均指向策略22；只有裸ticket/position回执时order_origin_missing。positionCreationVerified=true，executionAttributionVerified仍false；最小临时成交表不证明完整DDL/FK。
+
+本次沿用用户恢复后的192.168.1.254 SSH配置；reference-v57全部passed，临时库已删除，existingDatabaseWrites=0，未启动应用或终端。下一步组合任务覆盖和成交来源证据、处理精确分页成员及参考组合最终准入，再接入推理worker。整体核心尚未完成。
+
+
+## 387. 按授权路由选择完整窗口覆盖任务（第四百五十七批，2026-09-10）
+
+新增HistoryWindowCoverageReader及MySQL工厂，按完整routeHash和包含所需UTC窗口筛选已完成任务，再复用覆盖/回执联合验证。只选择一个任务，不拼接不同快照；允许跳过旧缺声明任务，坏证据和候选身份/状态变化拒绝。100候选上限、完整ID校验和返回窗口校验保证不会用截断结果代替证据。
+
+10项定向测试、服务端类型/构建、98项API/结构生成与已检测边界通过。真实reference-v35使用192.168.1.254的MySQL/Redis，实际队列任务被正确选中；请求结束时间多1ms或login不同均无可用任务，windowCoverageVerified=true。所有既有队列/恢复/覆盖/来源参考通过，随机库及Redis前缀已清理，existingDatabaseWrites=0。
+
+未启动应用或修改结构。下一步由持仓所需历史窗口调用选择器，再逐笔核对成交来源并组合创建策略；真实Bridge覆盖声明与模型最终接线仍未完成。
+
+
+## 388. 持仓生命周期、覆盖任务与成交来源组合（第四百五十八批，2026-09-10）
+
+新增ReadOpenPositionHistory应用用例与MySQL工厂，在同一授权快照连接串起现有生命周期、稳定持仓历史最早时间、完整窗口任务选择及成交来源核验。按观察时刻过滤历史，超过1000票号分批读取并比较同一task/receipt/completionHash和完整唯一票号集合；未决不输出部分成功。
+
+12项定向测试、服务端类型/构建、98项API/结构生成与已检测边界通过。真实reference-v36在队列两页成交夹具补充明确订单号，以两笔成交之间的库存观察时间调用实际工厂：仅开仓成交60001进入生命周期和来源，订单61001被保留，选择实际完成任务，positionHistoryVerified=true。后续平仓不混入该观察时刻；旧闭仓汇总/回执/队列重放验证同时通过。
+
+192.168.1.254独立MySQL/Redis测试资源已清理，existingDatabaseWrites=0，未修改数据库结构或启动应用。下一步将组合读取接到参考库存并核对创建策略，真实Bridge覆盖发送、精确分页成员和模型最终接线仍未完成。
+
+## 389. 参考库存组合历史证据的路由接线（第四百五十九批，2026-09-10）
+
+参考证据工厂新增显式完整Bridge租约参数，并在原只读一致快照内调用OpenPositionHistoryReader。推理域只声明消费端结构端口，bootstrap负责Bridge、交易历史与推理的组装；不会从最小库存路由推测sessionId或时区。读取前逐项比较账户、操作者、终端、connection/epoch、ownershipRevision，要求会话和时区存在；读后完整租约变化丢弃结果。复用库存/生命周期集合验证，保留每个持仓的task/receipt/completionHash和未决原因，MT4明确不支持。
+
+49项定向测试、服务端类型检查/构建、98项运行API与生成结构门禁通过。新增测试覆盖缺会话、缺时区、所有权/路由不符、读取中会话切换、生命周期不符、覆盖缺失和同连接事务回滚。真实strategy-write-reference-v58通过，随机库已删除，existingDatabaseWrites=0；该真实回归验证原有策略来源链，新组合接线本轮仅有离线端口测试，不能声称真实Redis完整路由或组合SQL端到端通过。
+
+新参数尚未在worker配置，缺省positionEvidence=null明确表示未读取。下一步在真实隔离夹具补齐完整路由与覆盖数据，串起创建策略与来源证据，再收口模型准入和worker接线；精确分页成员证明、Bridge覆盖发送及其余核心迁移仍未完成。未启动服务、改结构或接触公网。工作树混有大量此前改动，未提交推送。
+
+## 390. 参考历史快照实证与策略归属读取统一（第四百六十批，2026-09-10）
+
+配置完整positionEvidence后，参考来源读取直接使用覆盖/来源核验返回的生命周期进行开仓策略归属，不再另走仅数量匹配的生命周期路径。完整票号集合必须与库存相同；覆盖未决不查询开仓归属，不产生creation_strategy_matched。未配置完整证据的旧内部诊断路径保留，不能当作模型准入。
+
+52项定向测试、服务端类型/构建、98项API与生成结构检查通过。history-completion-transaction-reference-v37/v38使用独立MySQL/Redis：实际bootstrap适配器+实际历史SQL在UTC+8会话读取正确时刻的持仓；一致快照不受并发来源损坏混入，回滚后新读识别损坏，所有权版本不符返回route_unavailable。v38另通过真实来源事务编排，把匹配到的开仓订单61001交给策略来源端口并返回策略21；库存、分析源、路由与策略归属端口是注入夹具，不能宣称真实权限/执行归因端到端完成。
+
+两次独立测试库及Redis前缀均已清理，existingDatabaseWrites=0。下一步仍是精确分页成员证据与最终参考组合准入，并接入worker；Bridge覆盖声明发送和其余核心迁移验收尚未完成。未修改dev_vue结构、启动服务或提交混合工作树。
+
+## 391. 任务分页精确成员证据（第四百六十一批，2026-09-10）
+
+新增有界pageMembership v1，保存每页响应标识、原响应hash、cursor、itemCount和去重原文hash，随053 completion_json原子持久化。完成/恢复重建分页摘要并检查上限、成员唯一排序、数量及标识；原有无清单任务继续恢复，不授予精确成员资格。每资源最多10000逐页去重成员，超限整份清单省略而不截断伪造完整性。新摘要排除installationId/credentialGeneration临时凭证字段，保留任务路由/会话/时区，支持数据库存储路由的恢复。
+
+成交来源读取除原scope/原文/provenance核验外，必须匹配完成任务清单中的request/query/response三标识和factHash。缺清单或同sourceRevision但来自其它响应均source_missing。现有052写入已经校验原文属于响应items，这次把响应精确关联到任务；没有修改执行过的SQL或dev_vue结构。
+
+69项定向测试、服务端类型/构建、98项运行API与结构生成门禁通过。真实history reference-v39/v40/v41通过，v41绑定最终源码：exactPageMembershipVerified=true，真实任务完成确认丢失/恢复/重建队列保留清单；构造同revision但三标识不同且provenance hash有效的来源，被实际SQL消费者拒绝。原组合持仓/策略来源和快照并发回归通过；授权/库存/订单策略来源仍为注入夹具，终端为synthetic query port。独立库及Redis前缀已清理，existingDatabaseWrites=0。
+
+下一步完成参考组合模型准入和worker接线，真实Bridge覆盖声明发送及真实权限全链验收仍未完成，其他核心迁移清单保持原范围。未启动服务或提交混合工作树。
+
+## 392. 参考组合模型准入与交易员Worker源码接线（第四百六十二批，2026-09-10）
+
+新增ReadStrategyReferencePortfolio应用用例，把同一授权来源工厂的库存、精确历史成员及开仓来源转换为模型参考字段。仅保留当前symbol/traderStrategyId，同品种未知来源/历史未决拒绝；明确其它策略的项排除。核对源分析/用户/账户、完整票号集合、开仓订单与生命周期一致、读取完成时30秒新鲜度和授权TTL，最终仍经过既有冻结合同的revision/数值/字段白名单验证。参考ID为上下文限定hash，不把ticket或历史原文放进模型。
+
+bootstrap提供createStrategyReferencePortfolioReader，worker-trader复用完整Bridge租约并传入TraderContextBuilder；新增启动历史053结构检查。源码接线已完成，但未启动Worker。有参考持仓时真实Bridge缺覆盖声明仍会失败关闭，不能把源码接线称为真实交易可用；MT4历史证明仍未就绪。
+
+80项定向测试（参考读取/冻结/来源51，Worker/运行组装29）、服务端类型/构建、98项运行API及结构门禁通过。真实history reference-v42由实际历史SQL/任务来源/一致快照组合生成ready模型参考项，使用opaque position hash且保留entryPrice，未输出可执行票号。modelReferencePortfolioVerified=true；分析/库存授权/创建策略仍为注入夹具，因此没有真实权限或终端全链证明。独立MySQL库、Redis前缀清理，existingDatabaseWrites=0，未改dev_vue数据或提交混合工作树。
+
+核心重构仍未全部完成：真实Bridge覆盖发送/权限全链验收、旧策略与订阅业务转换、剩余策略运行能力（入场周期与部分平仓后的保护工作流）、记忆结构现库升级和最终API/执行验收仍需按原范围逐项推进。前端/Bridge产品细节仍后置。
+
+## 393. 记忆审计第192步升级准入（第四百六十三批，2026-09-10）
+
+新增只读inspect-memory-upgrade-local及memory-runtime-audit-upgrade加载器。当前inventory-v2确认dev_vue的191项journal完整，记忆库/修订/审计表存在且为空，策略父表为空、inference_snapshots789行。首次检查误用了不存在的strategy_memory_versions_v4名称，v2已改为SQL定义的strategy_memory_library_revisions_v4，保留两份报告，不据v1误判缺表。
+
+真实strategy-write-reference-v59在原独立库新增捕获050前后完整SHOW CREATE，前态与当前库一致，后态hash为9bf190abcd230aab2609603405b722b51c9ae86b5cd09b6a8d9762b05bc34474。所有原真实策略/记忆/约束/事务参考通过，测试库清理，existingDatabaseWrites=0。新加载器绑定源SQL、报告、6个父表hash和191步前序注册表，作为inplace_054_01追加第192步；未编辑已执行SQL/旧协调器。
+
+7项Node测试通过，复用原协调器验证开始/DDL/完成三处确认丢失均最终恰好一次DDL，重复执行零额外DDL，以及dry-run/结构冲突/证据漂移拒绝。本批仅脚本、测试和计划变更，无需服务端重建；没有执行现库或恢复库ALTER。下一步完成完整恢复副本故障恢复/全库对账，再应用现库并添加记忆运行结构门禁。整体目标继续。
+
+## 394. 完整恢复演练揭示推理父表缺口并修正准入（第四百六十四批，2026-09-10）
+
+已执行记忆恢复副本prepare和start-loss，随后DDL-loss场景未达到注入点。只读复核确认目标审计DDL仍是183e2689d0cc176f4fe69d2bac550f59bc5f597a99119686870a10adbd43775b、record_version不存在；副本保留191 completed及1 started。现库191 completed、0 started，未受演练写入影响。
+
+原因是实际inference_snapshots仍为旧BIGINT结构，而050外键需要V4 CHAR(36)父键。额外只读发现缺004的9张表，旧快照789行、旧ai_model_tasks9317行、旧订阅5行。上一批绑定当前父表hash但未判断V4父键语义，是准入缺陷，已通过新增v2 loader显式拒绝旧类型/排序规则/主键/用途/摘要字段，6项测试通过。旧已执行脚本和基线不修改，失败报告不覆盖，未继续盲重试DDL。
+
+下一步执行新前置方案的推理完整结构检查及build/订阅迁移，建立新的完整恢复副本验证后再考虑记忆现库升级。详见docs/inference-current-upgrade-prerequisites-20260910.md及接续18.78。此次不能报告第192步升级完成；模型参考/Worker源码接线也不能替代缺失物理表的运行验收。目标仍在推进。
+
+## 395. 推理与决策12表隔离构建候选（第四百六十五批，2026-09-10）
+
+从独立参考库004/005/006/007的最终SHOW CREATE生成055_inference_decision_build.sql和追加加载器，12张表、13DDL，候选注册表191→204。为解决trade_decisions与risk_decisions的双向引用，风控决策及正文加入构建范围，最后恢复循环FK；现有用户/账户/策略/风险策略版本父表复用，订阅指向已有build表。没有删除或重命名旧数据表。
+
+真实reference-v60首次因重排约束后的显示逗号比较失败，修复hash比较后v61通过；进一步扩展循环风险依赖和实际父列核对，最终v65记录每条DDL前后hash及全部外键。12个新名字/完整CHECK/FK/快照任务关联/孤儿拒绝均通过，原策略/记忆/执行来源回归继续通过。现库inventory-v4为191 completed、0 started，7个外键父列与参考类型/排序规则/NULL性一致，build名字均不存在。随机参考库已清理，现库写入0。
+
+7项Node测试验证保留前191checksum、结构标识映射、未知父表/父键漂移拒绝，以及13步过程的三种确认丢失恢复和重放零额外DDL。新候选只承诺结构构建，不代表旧789快照、9317任务、5订阅已经迁移或上线。下一步在新完整恢复副本执行构建演练及原数据/旧账本对账；原失败副本和memory054脚本保持冻结，未启动服务或提交混合工作树。
+
+## 396. 新191步完整副本恢复与推理准入检查（第四百六十六批，2026-09-10）
+
+复用既有加密备份/SQL范围审查/逐行与列元数据对账工具，建立独立目标dev_vue_m1_source_20260910_02，私有归档位于D:\dev_codex\.backup-core-20260910-02。加密导出约711 MB、源快照复核和SQL范围检查通过；本记录时导入进程仍在运行，尚无verified回执，不能宣称恢复完成。保留旧01副本的失败证据，不清理started或重跑旧记忆脚本。现库数据写入0。
+
+新增verify-inference-restored-baseline-local.mjs与run-inference-baseline-local.py，供新备份完成后只读验收。它们绑定新02归档、备份回执、SQL055候选及reference-v65；重新比较源/恢复快照语义、实时258表全部行摘要/DDL、191项完整历史、7个外键父列，以及12个目标名字尚未存在。未通过完整副本前不执行候选DDL。Node候选7项定向测试通过；新真实准入尚待运行。
+
+继续观察现有备份进程，禁止因等待时间长重复启动。待receipt.json出现且原进程成功退出，运行python -X utf8 scripts/run-inference-baseline-local.py --prepare D:\dev_codex\dev_vue\docs\architecture\inference-restored-baseline-20260910.json；随后编写并执行13步真实故障恢复演练。本轮不启动应用、部署公网或提交混合工作树。
+
+本批后续观察：导入阶段已结束，现有进程进入independent-restore-verification；继续等待该进程和完整verified回执，尚未执行准入或055 DDL。
+
+## 397. 完整副本204步推理构建验收（第四百六十七批，2026-09-10）
+
+新02完整备份恢复成功：258表338748行、原值与列元数据、DDL语义及二次导出全部一致，备份回执sha256为5c3901ad66471bc14618f285e0ce041091ed84639a9aee1d6b381843fb9aab9d。私有归档明文SQL与临时凭据已清理，加密备份及密钥分目录保留。独立只读准入同时核对源和恢复副本均191 completed、0 started，7父列兼容、12新名字不存在。
+
+随后完成真实副本prepare、开始确认丢失、建表确认丢失、完成确认丢失、最后循环FK确认丢失、续跑和重放。对应DDL次数0/0/1/0/12/0/0，累计13个不同步骤各执行一次。副本现204 completed、270表，12张build表为空且完整DDL hash匹配，原有257张非journal表全列摘要/DDL不变，旧191条历史含时间戳不变。全流程只写新02副本；原01失败副本未触碰。
+
+新增inference-build-rehearsal-evidence汇总校验器重新核对7份报告、执行序列、工具sha256、最终结构和历史前缀，输出inference-build-restored-proof-20260910.json。源库只读inventory-v5再次确认191 completed、0 started、仍为旧BIGINT快照、build名字不存在。下一步将该已验证计划接到dev_vue升级执行入口，复核备份后源数据未漂移后完成build结构落地；仍须继续业务映射、原子提升、历史可追溯入口及记忆升级，不能将空build表视为全部核心重构完成。
+
+## 398. dev_vue完成204步推理build结构升级（第四百六十八批，2026-09-10）
+
+新增现库执行入口apply-inference-build-local及SSH编排器，复用13步coordinator与完整副本演练证据，不修改已经执行的055或旧迁移。执行前重新验证711 MB加密备份的字节数/sha256、密钥文件、私有源快照、7份演练报告和工具hash；现库prepare与备份时258表/191项历史完全一致。prepare基线随后冻结，apply完成13DDL，replay为0DDL。
+
+当前dev_vue：204 completed、0 started、270表，12张build表均为空且完整DDL hash匹配。原257张非journal表全列值与DDL不变，原191条迁移历史含时间戳不变；只新增结构及13条journal，无业务回填。独立只读inventory-v6再次确认所有新build表及204步状态；旧inference_snapshots仍BIGINT，canonical推理/订阅名字尚未切换，memory050仍未应用。
+
+证据：architecture/inference-current-prepare/apply/replay-20260910.json、inference-schema-current-inventory-v6-20260910.json，以及汇总inference-build-current-proof-20260910.json。私有现库基线inference-build-current-baseline-v1.json位于新02归档目录，已执行工具与证据冻结，不原地改写。源备份、两个恢复副本均保留，未启动服务或涉及公网，未提交混合工作树。
+
+下一步回到既有策略/订阅业务转换：模板1/3需明确analysis/trader角色，模板2按已批准archive_only保留；已有ATR角色候选只证明原文分段和编译通过，semanticAcceptance仍pending。先核对现有参考组合/仓位输入端口是否补齐该候选所列阻断，再完成可追溯转换与恢复副本回填/原子提升，不以空表替代旧业务迁移。旧快照/任务保留与读取映射、记忆审计升级及运行入口完整readiness继续列为核心未完成项。
+
+## 399. 持仓创建决策与版本来源保留（第四百六十九批，2026-09-10）
+
+检查旧ATR角色候选的三个阻断后，确认参考组合源码已接线，但创建来源从execution到inference只保留strategyId，原始trade decision/risk decision/version被丢弃，不能继续追溯入场分析。此次修复保留opening-order来源的decisionOrigin，再通过消费方结构端口和持仓生命周期聚合保留每个贡献订单的creationDecisions。混合不同版本的净持仓保留各订单自己的版本，不替换为当前版本。旧提供者或人工分发无决策时creationDecisions为null，不伪造AI依据。
+
+定向复核：execution继续拥有订单/执行来源查询，inference消费自有结构端口，无新增反向模块依赖；普通pending去重端口保持原返回行为。Opening来源对同一order的不同decision/risk/version拒绝，即使strategyId一致；人工分发与AI证据混合也拒绝，不能按SQL顺序任选。参考组合模型输出尚未加入这些内部ID，当前账户执行目标边界保持原实现。
+
+134项不同相关用例通过（82项来源/组合用例及额外52项去重/派发回归；31项来源组合已重复验证），typecheck/build、模块边界、98操作合同和schema生成检查通过。初次编译的可空owner分支已显式收窄修复。真实strategy-write-reference-v66/v67因新增测试夹具分别复用唯一trader_run和目标组合失败，报告保留；v68使用独立运行记录及订阅revision后通过，pendingOrigins.openingDecisionLineageVerified=true，真实SQL验证版本读取和同策略不同决策拒绝。该部分使用迁移派生临时表，不宣称外键全链验收；随机参考库已清理，existingDatabaseWrites=0。历史reference-v43继续通过实际历史/任务/参考组合链，临时DB和队列清理。
+
+下一步按精确creation decision读取当时冻结的分析结果及输入快照，校验hash和每个贡献订单的关联，再把入场周期证据提供给管理判断。此处只完成来源传递，entry_acceleration_timeframes_not_bound_to_position和partial_close_then_remaining_stop_workflow_not_supported仍未解除；角色候选semanticAcceptance保持pending。dev_vue仍为已完成的204步，本轮未对其写入或启用服务。
+
+## 400. 原始入场分析三份正文关联与读取（第四百七十批，2026-09-10）
+
+新增inference自有TradeDecisionEntryAnalysisReader及MySQL实现，沿精确accepted决策、succeeded交易员运行、分析/分析运行、分析输入快照与交易员输入快照读取原文。单条SQL限定用户/账户/交易策略和版本/风险决策/品种，全部连接使用历史固定ID，保持snapshot读取，不加FOR SHARE或最新记录/当前有效期过滤。校验分析正文hash、分析输入hash、交易员输入hash，并要求交易员冻结analysis.id/contentHash/result与原分析正文一致；仅有相同analysis ID不足以通过。
+
+持仓来源管道新增readReferencePositionEntryAnalyses，按每个贡献订单的原版本查询，账户使用来源操作人和来源账户；全部分析均成功才返回完整entries，否则标记unresolved。最多1000个不同查询作用域并复用已读结果，所有结果防御复制。bootstrap在原一致性事务内接入，同连接读取发生于rollback之前，存储失败继续向上传递。此输出目前属于内部证据，不直接作为模型入场周期结论或真实终端执行授权。
+
+定向复核覆盖账户/版本/品种边界、三份内容摘要、入场时点有效性、历史过期可读、被重新计算hash的伪造交易员分析、多个净持仓贡献、缺失和混合作用域，以及snapshot事务生命周期。58项定向测试通过，server类型/构建及模块/98操作合同/schema生成检查通过。新增集成测试的字面量类型修正后类型检查通过。
+
+真实strategy-write-reference-v70通过，在完整004/005/006/007推理表及外键下创建独立交易策略版本和冻结分析/交易员/决策/风险链，验证过期历史可读、不同策略版本、错账户/版本/状态/三种hash及重算hash的错误固定分析均拒绝。测试数据事务回滚，随机库清理，existingDatabaseWrites=0；用户/账户/订阅仍为参考支架，不宣称真实身份或执行链验收。v69夹具将ISO UTC字符串直接传给DATETIME导致拒绝，已改用UTC Date绑定，失败回执保留。
+
+下一步从该历史分析证据生成有界、可校验的入场周期/加速依据并接入模型参考与管理输入，明确原始创建动作对入场条件的选择；不得根据当前分析或最新版本补猜。旧ATR候选两个核心运行阻断尚未解除，80%部分平仓保护流程、旧策略/订阅业务回填、canonical提升及记忆审计仍需继续。dev_vue仍204步，本轮现库无写入、未启动服务或公网操作。
+
+## 401. 历史创建条件接入模型参考输入（第四百七十一批，2026-09-10）
+
+读取实际旧ATR原文确认规则为“入场时参与同向加速的全部周期”，不是任选一个周期。新增reference-entry-evidence投影，将已核验的每个创建订单历史分析keyLevels/invalidation/dataGaps及必要摘要/版本/时间加入参考持仓entryEvidence。保留各贡献订单的不同条件，缺失明确unavailable；服务端不按策略ID选加速周期、不根据当前分析补猜。
+
+ReadStrategyReferencePortfolio已实际消费positionEntryAnalyses，并逐个核对订单/决策/风险/账户/版本/品种及原结果hash，最终freezeStrategyReferencePortfolio重新验证字段和摘要后进入模型快照。referenceId不可用作执行ticket，原订单/决策/风险/快照ID与完整长文均不附带输出。每持仓32条/32KiB，整体256KiB；超限不截断条件。模型合同明确这是creation_analysis_only，不是终端成交时行情；缺字段时不得推断原入场状态。合同见reference-entry-evidence-contract-20260910.md。
+
+33项相关测试、server类型/构建、模块边界和98操作合同/schema门禁通过。strategy-write-reference-v71真实历史SQL→受限投影→最终冻结通过，modelEntryEvidenceVerified=true，原多周期条件保留、内部ID不附带输出；参考库清理，existingDatabaseWrites=0。现库保持204步，未启动服务。下一步继续旧角色语义核对与部分平仓后保护状态机；原创建与实际成交时间的差异仍不可隐去，不宣称两个旧策略运行阻断已经解除。
+
+
+## 402. 部分平仓续作的确定性资格判定（第四百七十二批，2026-09-10）
+
+按partial-close-protection-workflow-plan-20260910.md新增execution域evaluatePartialCloseProtection：pending等待，uncertain即使已过期也要求原命令对账；明确失败/取消停止续作。成功回执仍须精确父intent/command、账户/终端/券商/login、仓位identifier/ticket/品种/方向及关闭数量证明。证明由未来历史适配器建立，纯函数输入本身不构成数据库或终端事实验收。
+
+完整新投影须revision更新、观测不早于成交且处于指定新鲜度内；目标消失、重复身份、ticket复用或外部数量变化停止原续作。数量用18位定点BigInt保留大数与极小剩余量。输出只为risk_review_required并复制冻结意图及新投影范围，不返回命令、不复用旧风控批准；原close/modify并行冲突规则保持。
+
+24项定向测试通过，覆盖未知确认、缺历史、错父子/身份、过期/旧快照、外部变更和大数精度。server类型检查、零已检测模块越界、98操作合同及schema生成门禁通过。本轮没有数据库写入或服务启动。尚需接入持久化workflow/attempt、精确历史证明适配器、当前风险审核、唯一保护intent/outbox、结果归并和故障恢复；本轮纯判定尚未接入运行入口，不代表串行保护已可用。
+
+
+## 403. 部分平仓续作的不可变注册与审计（第四百七十三批，2026-09-10）
+
+新增056两张候选表和execution注册应用端口、事务绑定MySQL写入器。冻结原意图/命令/目标/数量/保护计划，父intent与command唯一，注册及审计同事务保存。账户优先锁顺序与执行链一致；只准在父intent为prepared、命令queued且仍有效时首次注册。核对原action和Bridge request摘要、账户/route、ticket/方向/品种及数量/revision，额外要求同事务当前授权目标端口证明position identifier。现有Bridge expected_state缺少identifier，不能以ticket代替。
+
+同一计划在父命令完成后仍可重放；更换ID或正文拒绝，持久正文摘要及第一条注册审计必须一致。注册写入器不提交事务、不发送命令；未来接在原命令创建事务内，必须在父intent离开prepared、outbox提交前完成。本轮未开放外部API或接入运行入口，目标端口实际实现和后续阶段仍未完成。
+
+server类型/构建、零已检测模块越界和98操作合同/schema门禁通过。strategy-write-reference-v73真实MySQL两会话和故障注入验证单次注册、共同回滚、事件失败、COMMIT确认丢失后重放、改变内容/ID冲突、失效父级、损坏正文和缺失审计拒绝。两张完整候选表及外键创建成功；execution父表为最小查询支架，目标授权端口注入，不能宣称完整执行链或恢复演练完成。随机库清理，existingDatabaseWrites=0。056未应用开发库，现库本轮无升级。
+
+下一步继续实际目标/历史证明端口、原意图及命令创建接线、当前风险审核回执、唯一保护intent/outbox和结果归并；随后进行完整DDL与恢复副本故障演练。旧策略/订阅业务回填、canonical提升与记忆审计仍保持未完成状态。
+
+
+## 404. 续作注册接入实际授权仓位读取（第四百七十四批，2026-09-10）
+
+新增trading专用ExecutionPositionReader，按完整gateway route在同一事务复核当前账户归属/区间、设备凭据/代次、绑定及精确会话，检查暂停、心跳、投影来源和新鲜度。读取完整仓位集合，拒绝混合revision、坏数据、重复ticket/identifier和ticket复用；只返回同时匹配稳定identifier和ticket的目标，数量保持字符串。独立模块实现，不扩充巨型repository；数据库故障不转换为空仓位。
+
+bootstrap新增实际注册组装工厂，绑定trading和execution公开端口且复用同一连接；route在事务前捕获、事务内重新验证，不在短事务中请求Redis。注册writer核对父命令表/request/当前route的connectionEpoch。现有命令创建入口仍未调用该工厂，后续须与父命令/意图/outbox同事务接线。
+
+44项定向测试、server完整类型/构建及零已检测越界、98操作合同/schema门禁通过。reference-v76真实MySQL执行route授权SQL→新仓位端口→注册写入器，29项目标边界检查通过，包括撤销授权、换设备/绑定/连接、broker大小写、错epoch、缺失/过期/未来时钟事实、identifier和集合错配。复核修复Number(null)误当零延迟，NULL心跳与观测年龄明确拒绝。注册事务回滚，随机库清理，existingDatabaseWrites=0。父结构是临时最小查询支架，不是完整FK/真实终端验收。v74的临时表自引用夹具失败已在v75修正，v76为本轮最终证据，历史报告保留。
+
+056仍未应用开发库。下一步继续精确平仓历史证明、原保护意图/父命令创建接线、当前风险审核及唯一子intent/outbox、结果归并与故障恢复；旧业务迁移/canonical提升/记忆审计仍未完成。
+
+
+## 405. 部分平仓历史归因的精确回执入口（第四百七十五批，2026-09-10）
+
+沿现有.NET/MT5 Python回执生产者核对结果实际嵌套raw_result/evidence结构，新增execution关闭订单/成交编号解析器和持久回执读取端口。只接受明确order/deal编号及一致别名，uint64精度严格校验；不把裸ticket、position、数量减少或already_absent成功当成命令成交归因。
+
+MySQL单条读取绑定指定父intent/command、用户/账户、route、成功状态及当前结果message/hash，重新核对命令请求/hash、冻结数量/目标/epoch/时间和结果正文/hash。结果表terminal_code是VARCHAR，读取按合同编码复算number/string/可选null候选并要求原hash匹配，避免合法数字retcode因存储类型转换丢失可验证性。无最新命令或旧成功回执回退，不写数据、不开放派发。
+
+34项定向测试、server完整类型/构建、零已检测模块越界和98操作合同/schema门禁通过。reference-v77在实际MySQL只读一致性快照验证读取及25项scope/状态/当前message/hash/时间/正文/编码边界；随机库清理、existingDatabaseWrites=0。表为临时最小查询结构，非完整FK或真实终端证明。输出仍是关闭订单与成交编号入口，不是已验证历史数量：后续须沿完整历史任务页面/来源证据核对全部成交及方向、稳定identifier、数量，才可进入保护审核。056候选未升级现库，原命令创建和后续保护流程尚未全部接通。
+
+
+## 406. 部分平仓证明贯通完整历史来源（第四百七十六批，2026-09-10）
+
+新增trade-history关闭订单事实/数量/完整来源读取，按明确order读取全部成交，不以position、时间或方向预过滤冲突数据。原文/hash和编号/时间一致后，按stable identifier、相反方向、entry=out及命令时间窗用18位定点汇总关闭量；允许明确零数量费用，但回执deal必须是真实closing fill。所有成交必须与同一完整历史任务的页面成员及来源记录匹配，数量相等不能抵消来源缺失。
+
+bootstrap将原命令持久回执与ClosedOrderHistoryReader连接为VerifiedPartialCloseHistoryProof，保留命令结果、task/receipt/completion和逐笔来源摘要供后续工作流审计。账户/终端相同的重连可用更高epoch历史，命令epoch晚于当前route或身份错配拒绝。实际工厂在调用者同一事务内复核route；该证明仍须经过新仓位确认和当前风险审核，不能直接派发。
+
+79项相关测试、完整server类型/构建、零已检测越界和98操作合同/schema检查通过。history-completion-transaction-reference-v45真实MySQL/Redis从实际task、两页collector、历史回执和来源读取关闭订单，错误quantity/scope/window/hash及source缺失拒绝；额外一笔成交即使使总量相符，没有任务页面来源仍拒绝。测试历史DDL真实，终端查询和权限为注入、命令编号为明确测试锚点；不宣称真实终端或完整执行工作流验收。随机库和自有队列清理，existingDatabaseWrites=0。
+
+现库及候选056状态不变。下一步进入父命令/工作流持久推进的实际接线，补显式后续保护意图、当前风险审核及唯一保护子intent/outbox、结果归并与故障恢复，再做完整DDL和恢复副本升级验证。旧业务回填、canonical提升及记忆审计仍未完成。
+
+
+## 407. 显式续作意图与父命令注册接线（批次477，2026-09-10）
+
+inference明确after_close_protection字段及服务端保留target，risk编译当前稳定仓位identifier、原量、revision和明确partial volume，保留原保护价格及后续风险审核审计。补齐显式volume非正/非十进制拒绝，并统一相关十进制长度。execution新增纯计划构造器，从完整、hash已验证的action派生父intent稳定workflow ID，核对Bridge请求目标、原量、关闭量、期限和字段边界。
+
+MysqlBridgeCommandRepository提供事务外捕获、事务内登记的可选回调，插入parent/payload后、command event/outbox前登记计划。相同父命令重放重新核验计划；BridgeCommandService不再用get结果跳过repository重放验证。源action读取移到独立基础设施文件，移除repository对inference的类型依赖。未配置回调时含续作的创建拒绝，queued恢复/dispatch仍明确拒绝该类父命令，待完整保护流程完成后才开启。现有worker未配置回调，模型系统合同未宣传能力。
+
+217项定向测试通过，含32项提议/风控合同和17项计划/父事务编排测试；完整server类型与构建、零已检测越界、98操作合同/schema检查通过。父事务测试为模拟连接，证明调用时序、错误传播及回滚调用，不替代真实InnoDB原子性。真实MySQL整笔父事务、COMMIT确认丢失及完整DDL恢复演练仍需补齐，候选056未执行，现库零写入。工作区混合未提交改动未整体提交或推送。
+
+后续：补事务外route捕获的实际bootstrap工厂及真实父事务验证；实现工作流持久阶段推进、当前风控/唯一保护子intent与outbox、结果归并和故障恢复。随后完成056恢复演练、旧业务回填、canonical提升及记忆审计。核心重构总目标仍未完成。
+
+
+## 408. 父命令真实事务与提交不确定性（批次478，2026-09-10）
+
+提取bridgeCommandTransaction，COMMIT确认失败返回bridge_command_commit_unknown并销毁连接，不尝试以rollback推断提交失败，不在事务帮助函数内部重跑写入。提交前失败保留原错误、回滚失败丢弃连接。bootstrap新增createPartialCloseRegistrationCapture，在SQL事务外获取并冻结gateway route和command，回调复核profile/账户/epoch后只使用调用者SQL连接；运行入口仍未启用。
+
+真实父事务验证暴露ISO字符串直接绑定DATETIME被MySQL严格模式拒绝，已修正命令创建及命令事件的UTC SQL绑定，接口/冻结请求仍保留ISO。下一步须延伸检查同repository其余状态推进、回执、reservation和operation的时间绑定，不能将父创建修复视为全部执行生命周期时间验收。
+
+94项定向测试、完整类型/构建、零已检测越界、98操作合同/schema检查通过。strategy-write-reference-v84真实InnoDB验证parent/payload/workflow/两类audit/outbox三处写入故障全部回滚、COMMIT成功后注入确认丢失再以原命令恢复恰好一组、改变保护计划冲突、queued恢复派发拦截，以及真实DATETIME UTC字段/毫秒保存。v78–v82保留失败证据：测试表重名/不存在、前序测试撤销的owner未重置、ISO DATETIME绑定问题；v83首次父事务通过，v84补UTC毫秒检查并核对最新构建。
+
+证据限定：056及outbox是实际表，执行父表/权限表为明确的永久查询脚手架，目标读取端口仍注入，故不等于完整DDL、完整route授权与真实终端集成。随机测试数据库已删除，existingDatabaseWrites=0，现dev_vue及候选056未修改。工作区混合改动未整体提交/推送。
+
+下一步先收口已发现的执行生命周期SQL时间绑定及恢复验证，随后完成工作流阶段持久推进、当前风险审核、唯一保护子intent/outbox、结果归并、完整DDL/恢复副本升级演练。旧业务回填、canonical提升和记忆审计仍未完成，总目标保持进行中。
+
+
+## 409. 执行命令生命周期UTC落库与恢复（批次479，2026-09-10）
+
+修正MysqlBridgeCommandRepository中派发、accepted、终端结果、execution outcome、intent事件、风险reservation释放/重持有、operation与distribution归并的UTC SQL时间绑定。数据库绑定显式DATETIME字符串，接口/冻结JSON保持ISO；terminal completed、server received/updated与聚合完成时间分别保留原语义，不互相代替。
+
+新增bridge-command-lifecycle-reference.mjs，经实际repository在隔离永久InnoDB表跑成功/重复回执、冲突回执、派发前失败释放、uncertain→reconciling→rejected四条路径。v85首次通过，v86增加dispatch/result在真实COMMIT后注入确认丢失：返回bridge_command_commit_unknown、销毁连接，重读得到已派发状态；旧revision重派发拒绝，相同结果重放只返回duplicate且结果表一行。终端/服务端UTC时刻及毫秒、风险预留重持有和分发父操作归并验证通过。
+
+80项定向测试、完整server类型/构建、零已检测越界和98操作合同/schema检查通过。数据库结构仍是明确查询脚手架（不等于完整目标DDL），未创建transport或连接真实终端。v86隔离库已删除，existingDatabaseWrites=0，现库与候选056未变。该阶段覆盖命令repository全部识别出的日期绑定，不代表其它execution repository已完成同等真实库验证。
+
+下一步回到部分平仓续作工作流：实现持久阶段推进、当前风险审核、唯一保护子intent/outbox及结果归并；补完整DDL/恢复副本演练，之后推进旧业务回填、canonical提升和记忆审计。运行入口尚未启用续作能力，整体核心目标仍进行中。
+
+
+## 410. 部分平仓续作待审核阶段持久化（批次480，2026-09-10）
+
+新增execution应用进度端口及独立MySQL实现，采用账户→父intent→父command→workflow锁顺序，核对scope、计划hash、注册审计及当前阶段审计。awaiting_close仅在精确关闭证明与新完整仓位资格满足时推进risk_review_required；明确失败或剩余量/目标不匹配停止，普通过期不依赖历史读取，uncertain即使过期仍保持对账。等待不写重复事件。阶段更新、证据审计及ID-only outbox同事务，已推进阶段重放原审核请求，不创建或批准保护命令。
+
+审计保存原计划摘要、历史命令/成交页面来源证明、projection摘要及待审核目标/新revision/剩余数量。事实端口要求同事务读取；外部route捕获在事务前。当前工厂仍未接实际新仓位projection/运行消费者，也未接风控或保护子intent；risk_review_required始终不是交易许可，后续需再核对期限、父命令和当前风险事实。
+
+101项定向测试、完整server类型/构建、零已检测越界和98操作合同/schema检查通过。strategy-write-reference-v90真实InnoDB11组推进验证覆盖错owner/parent、损坏计划与缺失/损坏审计、等待不写入、失败/数量变化停止、过期与unknown优先级、stage/audit/outbox失败原子回滚、COMMIT确认丢失恢复和两连接竞争只生成一条阶段/审计/outbox。v87首次推进通过；v88过期夹具用本地时刻触发expiry CHECK失败，v89改为数据库UTC时钟后通过，v90补scope/审计损坏检查，保留原报告。
+
+真实SQL事实读取端口仍注入，父表仍查询脚手架；不代表真实MT成交或当前仓位/权限集成，未创建保护子命令、未审核风险、未启用运行入口。隔离库已删除，existingDatabaseWrites=0，现库/候选056未改变。下一步接实际当前projection和审核上下文，再完成唯一保护子intent/outbox、结果归并与恢复扫描；之后完整DDL/恢复副本、旧业务回填、canonical提升及记忆审计。核心总目标继续进行。
+
+
+## 411. 实际当前仓位集合与续作事实组装（批次481，2026-09-10）
+
+将原执行仓位reader中的授权、心跳、provenance和完整集合校验抽成ExecutionPositionCollectionReader；原精确revision/目标reader基于同一实现筛选，避免两套授权或集合校验。新端口可读取实际最新revision，返回经验证的空集合或null不可用，保留稳定identifier缺失信息。观察时间增加真实日历及毫秒格式校验。
+
+bootstrap/partial-close-progress.ts将完整集合转为精确目标projection：只按原ticket或稳定identifier匹配，保留换ticket/identifier/symbol/side用于停止判定；不按symbol或数量替换目标。匹配仓位缺稳定identifier时返回不可用，完整集合确无目标才表达absence。createPartialCloseProgressCapture在事务前冻结一次gateway route，将实际历史proof与实际当前collection绑定到同一SQL连接；未接运行入口。
+
+第一轮复核确认trading拥有完整仓位事实及授权，execution只处理专用状态，bootstrap负责组装；原registration不放宽revision。第二轮确认空仓/来源缺失区分、未知identifier、同品种其它仓位、身份改变、非法观测时间和route缺失；事实错误继续抛出，不伪装为空仓。
+
+74项定向测试、完整server类型/构建、零已检测越界和98操作合同/schema检查通过。strategy-write-reference-v92在真实MySQL临时查询脚手架保留原29项授权/注册验证并新增2项最新仓位/空集合验证，共31项；实际SQL及bootstrap projection接入纯资格判定通过。v91为参考脚本新增factory漏import的失败报告，v92补齐后通过，原报告保留。历史证明在此projection验收仍注入，完整progress+history+projection同一真实事务联合验收未完成，不能将分项通过视为全流程完成。
+
+隔离库已删除，existingDatabaseWrites=0；现库/056候选不变，未连接终端或创建保护命令。下一步接当前风险审核与唯一保护子intent/outbox、结果归并和恢复扫描，并完成真实事实联合验收、完整DDL/恢复副本及业务回填/canonical/记忆剩余工作。核心重构总目标继续进行。
+
+
+## 412. 独立保护风险审核与当前保护事实（批次482，2026-09-10）
+
+risk新增PositionProtection独立审核域和应用端口，不复用riskReducing提前批准。核对授权、暂停/停机/发送开关、完整与新鲜事实、精确目标与剩余量、期限和版本；SL不得放宽，SL/TP须在报价正确一侧且符合tick。使用18位BigInt定点，只返回modify_position候选与expectedState和摘要。应用端口读取并冻结上下文后再取可信时间，避免查询期间过期仍批准。
+
+trading完整集合新增可选stopLoss/takeProfit，保留明确null和精确价格；缺失/非法保持unknown，不冒充无保护。既有权限、来源、版本与完整集合唯一身份校验不变。第一轮复核确认risk/trading/bootstrap职责，第二轮核对方向、期限、开关、精度、缺失字段和集合污染。
+
+118项定向测试、server类型/构建通过，边界扫描无已检测越界，98操作合同/schema检查通过。strategy-write-reference-v93真实隔离MySQL目标事实检查32项通过，新增JSON null、18位小数和未知保护字段验证；隔离库已删除，existingDatabaseWrites=0。实际风险上下文和SQL clock绑定、审核审计/唯一子intent-outbox事务及结果归并/消费者仍待完成。056仍是候选，现库未改、入口未启用。之后继续联合验收、完整DDL恢复、业务回填/canonical提升和记忆模块剩余工作。
+
+
+## 413. 保护审核事务风险汇总与可信SQL时钟（批次483，2026-09-10）
+
+新增PositionProtectionSummaryReader及MySQL实现，调用者先持有账户锁，reader在同连接以FOR SHARE读取当前ownership、account_risk_states和account_risk_summaries。核对状态/汇总revision、毫秒UTC时间及正文account/user/revision/time，严格读取V4字段；拒绝字符串布尔、缺失clock、非法日期/数量/计数，不以legacy别名或默认值生成完整风险事实。缺失当前授权返回null，损坏正文明确409，数据库错误保留。旧通用reader行为不改。
+
+新增PositionProtectionReviewClock实际SQL工厂，在调用者连接读取UTC_TIMESTAMP(3)，验证会话UTC和真实日历/毫秒格式，不取本机时间，也不修改会话配置。应用reviewer已保证上下文读取完成后才取时钟。两个工厂由risk composition导出，应用只暴露所需端口。
+
+第一轮复核：风险汇总与clock属于risk自身基础设施，bootstrap负责后续交易事实与策略组装；不能直接复用未锁正文的通用reader。第二轮：核对双表版本/时间、正文身份、精确字段、权限撤销、UTC会话与错误传播；这不是整个账户/行情/合约上下文完成的证明。
+
+73项定向测试、server类型/构建和边界/98操作合同/schema检查通过。strategy-write-reference-v96真实MySQL新增9组风险输入/clock验证，与原32项目标事实合计41项；查询表为临时脚手架，未证明跨会话锁竞争或完整生产DDL。v94/v95因参考脚本新增helper误插入已有事务，嵌套begin破坏旧fixture回滚而失败；v96将helper仅放在独立事务间后全套通过，失败证据保留。所有随机库清理，existingDatabaseWrites=0。
+
+当前PositionProtectionContextReader总组装、账户/quote/合约当前事实锁定、审核审计与唯一子intent/outbox、结果归并和消费者仍未完成。056候选及运行入口不变，未写开发库。下一步补交易事实端口和bootstrap接线，再贯通子工作流/完整DDL恢复演练及业务回填、canonical提升、记忆模块剩余项。
+
+
+## 414. 当前账户执行事实与行情来源缺口确认（批次484，2026-09-10）
+
+trading新增ExecutionAccountReader及实际MySQL工厂，使用同事务TerminalFactRouteGuard验证身份/权限，并锁定当前session/settings、账户projection/revision/provenance。要求心跳和账户事实新鲜、三处revision一致、来源与正文UTC毫秒时间一致，且来源精确匹配当前owner interval、ownership revision、profile、instance和epoch。明确false交易许可、null/unavailable时钟作为事实保留，缺失/非法字段不转换成允许。
+
+第一轮复核确认trading拥有账户事实、risk只通过公开端口消费，caller持有事务和账户锁；第二轮核对完整来源、过期/未来时间、暂停连接、owner撤销、未知权限、非法时钟和错误传播。104项定向测试、类型/构建以及模块/98操作合同/schema门禁通过。v97真实MySQL在查询脚手架增加8项账户验证，目标/风险/账户事实检查共49项；随机库清理，existingDatabaseWrites=0。测试不是完整上下文或跨会话锁竞争的证明。
+
+源码核实了下一项实质缺口：mysql-trading-repository的writeProjectionProvenance仅写account.metrics/positions/pending_orders，020和inplace038的chk_projection_provenance_kind也不允许market.quote。因此不能把只读market_quotes/revision组装为可信当前行情，也不能新增永远得不到证据的reader后称接入完成。本轮仅交付可被现有写入链路供给的账户reader，未更改行情写入和现库。
+
+下一步为market.quote追加来源表约束增量迁移，保留既有三类记录；不猜测补写历史行情来源，新可信quote写入时在原事务同步记录owner/terminal/epoch/revision/time。需要先完成升级/readiness与实际写入回滚验证，防止旧schema下新writer报错；然后实现当前行情reader，与现有合约来源校验/锁、账户/仓位/风险汇总组装PositionProtectionContextReader。后续审核-唯一子intent/outbox、归并/消费者、完整DDL恢复、业务回填/canonical/记忆剩余项仍未完成，056及保护运行入口未启用。
+
+
+## 415. 行情来源候选增量与真实父事务验证（批次485，2026-09-10）
+
+057_market_quote_provenance.sql以单个ALTER替换现有kind CHECK，保留三类既有记录并允许market.quote，不删除/回填历史行情。QuoteProvenanceWriter应用端口由基础设施实现，精确写入已锁定route/ownership、symbol、revision和UTC毫秒时间。MysqlTradingRepository接受显式同事务writer能力，可信quote在原snapshot/revision事务追加来源；重复或旧revision不再写来源。默认运行入口尚未传入该能力，未改变现网或现库行为。
+
+能力检查要求指定表、指定CHECK、ENFORCED及精确允许值；旧schema/缺约束/弱化表达式拒绝。MySQL实际CHECK_CLAUSE使用UTF8字符集前缀和转义单引号，v98/v99由真实库揭示仅支持ASCII渲染的问题，修正并补回归后v100通过；v101进一步让未知kind存在合法revision父行，单独证明CHECK拒绝而非由FK代拒绝。该能力检查是过渡保护，不替代完整启动表hash/升级journal检查。
+
+26项测试及server类型/构建、边界/98操作合同/schema门禁通过。v101在第二个随机隔离库使用实际020来源表DDL及所有来源FK、057 ALTER、真实MysqlTradingRepository、MySQL CAS/quote/provenance写入验证5组：旧CHECK及旧schema能力拒绝；旧三类记录原样保留；来源插入后故障全部回滚；正常提交和毫秒/revision重放；未知kind及错误user FK拒绝。repository权限SELECT为显式注入，业务写入和事务是真实SQL；父表是满足外键/查询的脚手架。不能称完整当前权限链路或终端联调通过。
+
+两个随机库均清理，existingDatabaseWrites=0；v98/v99失败报告和v100/v101通过报告保留。057未纳入现库升级协调器/readiness，未应用dev_vue；056和保护入口不变。下一步完成057正式升级计划/准确schema hash与启动profile适配，接可信quote reader/合约锁及完整PositionProtectionContextReader，再推进唯一子intent/outbox、结果归并/消费者、完整DDL恢复和业务回填/canonical/记忆剩余项。
+
+
+## 416. 行情来源205步升级计划与启动结构版本（批次486，2026-09-10）
+
+quote-provenance-upgrade加载冻结的055后204步计划，追加独立inplace_057_01_market_quote_provenance成为205步；056未启用候选不混入已执行基线。绑定057文件hash、v101真实DDL证据、前序registry hash和原/目标表hash。原表af9447…f26e与当前165步trading消费profile一致，目标5b2fe3…5db8。复用coordinateInplaceSchema，在每次journal/DDL前要求store证明计划/锁、原204步及受保护数据，支持开始/DDL/完成确认丢失后的持久状态恢复。
+
+新增生成的quoteProvenanceSchema及生成漂移门禁。通用trading readiness无057记录时仍严格要求旧结构；有已完成且校验正确的057记录时，要求完整205步并切换到精确新hash，不能把新旧hash当作无条件二选一。仅改表、仅加记录、错误checksum、未完成步骤或触发器均拒绝。专用assertMysqlQuoteProvenanceSchemaReady要求完整205步，供后续运行入口启用前调用；本批未连接入口。
+
+第一轮复核：不改已执行历史迁移/165步基线生成源，结构版本切换必须由受校验的journal决定；第二轮核对DDL未知恢复、无journal的新表拒绝、旧表配新记录拒绝和保护数据变化。25项readiness测试+7项升级协调器测试通过，server类型/构建、模块和98操作合同/schema门禁通过。
+
+strategy-write-reference-v102在随机隔离MySQL中使用实际journal表、205条升级记录、同连接GET_LOCK和原来源表，依次注入开始/DDL/完成确认丢失，恢复后DDL总计1次，原三类行保持不变。前204条为明确构造的已审核history fixture，未声称该小库包含全部204步实体，也未代替恢复副本的整库验证。原v101是冻结DDL加载证据，不更新为v102。两个随机库清理，existingDatabaseWrites=0。
+
+现dev_vue仍未执行057，本批只完成计划/协调器和readiness接线；当前库应用脚本、恢复副本演练与完整数据保留证明待补。仍需可信quote reader、合约锁和完整风险上下文，唯一子intent/outbox、归并/消费者及业务回填/canonical/记忆剩余项。核心总目标继续进行。
+
+
+## 417. 057恢复副本演练及dev_vue现库升级完成（批次487，2026-09-10）
+
+在既有已验证恢复库dev_vue_m1_source_20260910_02执行quote-restored prepare/apply/replay，绑定原加密备份及key、冻结055演练、270表和204条历史。三阶段DDL为0/1/0，恢复库到205步，所有269张业务表行摘要不变，来源表无回填。
+
+现库首次预检因脚本沿用恢复库原始DDL文本摘要而拒绝（quote-current-prepare、failed-v2、prepare-drift三个失败报告保留，DDL均0）。逐表核对currentDrift=[]，现库与自身204步基线完全一致，恢复库与现库行摘要也一致；真正差异是SHOW CREATE对CHARACTER SET utf8mb4的显式渲染。修正为：现库与自身旧基线继续原样比较，跨库用既有tableDefinitionHash标准化结构并严格比较全部行摘要。不是放宽数据一致性，也没有覆盖失败报告。
+
+quote-current-prepare/apply/replay-v4通过，现dev_vue完成205步/0 started、270表；本次仅1条ALTER，重放0 DDL，269张业务表338557行数据保持不变。trading_projection_provenance_v4仍0行，本次未写任何业务数据。完整证据由verify-quote-upgrade-evidence-local读取三个实际报告、恢复演练、工具hash、计划和备份引用生成：docs/architecture/quote-provenance-current-proof-20260910.json。临时SSH隧道由各runner自有清理，未启动应用/终端。
+
+第一轮复核锁定唯一目标、UUID、UTC、无恢复模式/其它客户端、备份校验及同连接升级锁；第二轮复核原204条history逐项不变、全部业务行和非目标结构不变、来源表只允许已审核前后CHECK、跨库结构标准化和实际0/1/0执行数。新Node/Python脚本语法检查通过，实际恢复/现库全过程验收通过；本批未改服务端运行代码，无须重跑上一批已通过的构建。
+
+当前数据库权威状态更新为205步，旧204步证明保留作历史。056部分平仓工作流候选未执行，行情来源writer和保护工作流运行入口仍未启用。下一步接可信quote reader、合约锁与完整PositionProtectionContextReader，随后审核审计/唯一子intent-outbox、结果归并/消费者，继续完整DDL/业务回填/canonical提升和记忆模块剩余工作。核心重构总目标未完成。
+
+
+## 418. 可信行情/合约与完整事务保护审核上下文（批次488，2026-09-10）
+
+trading新增ExecutionQuoteReader，读取实际market_quotes及057允许的来源记录，要求精确owner interval/revision、profile/instance/epoch、当前session/暂停状态，以及snapshot/projection/source三处revision和UTC毫秒时间一致。完整十进制字符串保留相邻大价格；无来源、旧连接或混杂版本均不可用。账户与行情复用mysql-execution-source-evidence的授权/心跳/来源时效检查，原账户语义不变。
+
+ExecutionInstrumentReader在同事务锁定合约，核对sourceEvidence精确路由、观测时间和源版本，对raw重新规范化并逐项核对stored normalized值，防止tick/point与终端原文不一致。合约最长300秒、session最长60秒；close_only不误套用开仓方向限制。旧通用instrument reader未更改。
+
+bootstrap/position-protection-review组合实际账户/完整持仓/quote/instrument/policy/summary读口与SQL clock。目标只能按原ticket或稳定identifier匹配，未知SL/TP不冒充无保护，匹配但已改变的身份保留给风险域明确拒绝；账户/汇总时钟须一致。PositionProtectionRiskContext补accountObservedAt和合约observedAt/maxAgeMs，最终取SQL now时重新核对时效，避免早读事实在后续查询期间过期仍批准。只产生专用审核结果，尚未持久化审核/子命令。
+
+第一轮复核：trading负责来源与规范化，risk负责规则，bootstrap负责同一连接组装；不把DB/Redis读取藏进纯规则，不伪造AI或手工来源。第二轮：核对连接替换、跨账户/品种、版本/时间、未知保护、合约原文不一致、最终时效和SL不得放宽；SQL错误保留，权限/事实缺失不生成批准。
+
+91项定向测试、server类型/构建、边界和98操作合同/schema检查通过。strategy-write-reference-v103新增10项完整当前上下文联合验证：实际授权SQL及全部七类输入在同一MySQL事务读取后进入确定性审核，成功输出五个当前expectedState revision；旧quote epoch、混杂revision、合约tick不符、撤销权限、汇总clock不符均不可用，global kill、交易禁用、剩余量改变和止损放宽明确拒绝。目标/风险/账户/上下文检查累计59项。表为临时查询脚手架、事实显式构造，未证明真实终端采集、完整DDL或与父close/history进度的端到端链路。两个随机库清理，existingDatabaseWrites=0。
+
+现库保持205步，未新增迁移或运行启用。下一步把risk_review_required阶段的当前审核结果、唯一position_workflow来源保护子intent和outbox同事务落库，补未知提交恢复、并发唯一性、结果归并与恢复消费者；随后完成056及相关完整DDL/升级、业务回填/canonical/记忆剩余项。核心总目标仍进行中。
+
+
+## 419. 保护子指令来源模型与审核绑定（批次489，2026-09-10）
+
+新增execution公开positionProtectionRequest/preparePositionProtectionChild，使用锁定计划和已核验资格事件组装风险请求，精确复核剩余数量、身份、保护价格与新仓位版本。仅接受同workflow/revision/request摘要的专用批准结果；拒绝人工放行、附加动作、改价/改目标、旧版本、未来或过期审核。子operation/intent使用独立position_workflow来源，AI decision与user_command均为空，父operation明确关联。ID与幂等键仅依赖workflow及固定用途，重新审核不产生另一个子ID；内容变化产生不同request hash，持久层后续必须对同ID冲突拒绝。
+
+准备时限同时受原计划期限和审核起30秒限制。保留完整审核、context/policy摘要和五个状态版本；对象复制避免调用者修改输入污染产物。纯模型未执行任何数据库写入，不能据此声称并发持久唯一或子工作流完成。公共ExecutionIntent/Operation既有来源联合、HTTP合同及数据库CHECK尚未扩大；子类型独立，等待完整来源持久化和派发验证再接运行路径。
+
+第一轮复核：execution只消费冻结风险结果，不导入risk实现，不伪造AI或用户指令；新增精确剩余量函数复用固定18位整数运算。第二轮：复核重审核ID稳定、原仓位/价格/数量绑定、审核状态/人工放行、prepared期限与Bridge命令ID兼容；真实history证明及锁定父状态必须由持久适配器校验，模型不能自证来源真实性。
+
+76项定向测试、server类型与构建、模块边界及98操作合同/schema检查通过。strategy-write-reference-v104在随机隔离MySQL库中，将实际同连接七类上下文与SQL clock产生的风险审核接到子模型，验证批准动作保留、同输入重放和剩余量错配拒绝。测试表和事实仍为查询脚手架，新增检查没有写入子指令，也不替代真实终端或父历史到子结果完整链路。referenceDatabaseRemoved=true，existingDatabaseWrites=0。
+
+下一步实现审核/唯一子operation-intent-payload/outbox原子事务，追加position_workflow来源关系约束与审计表，验证并发/回滚/COMMIT未知恢复；随后派发前复核、归并/消费者、完整DDL与恢复演练及旧业务/canonical/记忆剩余项。开发库未升级、运行入口未启用，核心总目标未完成。
+
+
+## 420. 保护审核与唯一子指令原子持久化（批次490，2026-09-10）
+
+新增PositionProtectionPreparation端口和MySQL实现。事务前捕获reviewer工厂；事务内按账户→当前owner→父intent→父command→workflow顺序锁定，核对不可变计划、注册及资格审计，要求父intent/command均已succeeded。当前risk reviewer必须使用同一连接；批准时写operation、operation event、intent、payload、intent event、专用review回执、workflow CAS/event及ID-only outbox，拒绝时保存审核并停止工作流且不创建子指令。任何前提交失败回滚；沿用bridgeCommandTransaction处理COMMIT确认丢失，丢弃连接并返回bridge_command_commit_unknown，重试读取同一回执，不重新审核或创建指令。
+
+新增058候选：execution_intents.position_workflow_id唯一外键，source family三分支保留旧AI和user-command约束，新增workflow来源只允许modify_position且AI/user_command关联为空，source_id必须等于workflow。专用position_protection_reviews_v4每workflow一条、资格revision固定2；批准必须关联子intent与完整冻结child，拒绝不允许child。child_intent_id/workflow_id复合外键防止回执指向另一个工作流的指令。058仅在随机参考库执行，尚未形成当前开发库升级计划，056同样未应用现库。
+
+重试重新核对请求、审核、child摘要，按原创建时间重建子模型，并检查实际intent/payload/operation不可变字段、风险版本、幂等键、创建/到期UTC毫秒及父operation。运行派发入口新增position_workflow明确阻断，避免通用queued恢复绕过尚未实现的专用preflight。既有父after-close派发阻断保留；HTTP来源联合和运行启用尚未扩展。
+
+第一轮复核：来源/审计归execution、当前规则由注入的risk公共端口负责，infrastructure接收同连接工厂而不跨域导入实现；SQL写入拆为child writer与事务编排。第二轮：复核父未知状态、owner、审计摘要、唯一来源/复合FK、同事务失败、重复审核、COMMIT未知及已存payload/有效期篡改。当前只支持资格revision2到protecting/stopped revision3；后续结果状态和旧progress消费者的重放必须在下一阶段一起扩展，不能提前启用。
+
+94项定向测试、server类型/构建、边界与98操作合同/schema检查通过。strategy-write-reference-v109新增八组实际InnoDB验证：九处写入后确认故障全部回滚；三路并发只审核一次/生成一child和一outbox；COMMIT已成功后确认丢失通过原回执恢复；风险拒绝持久且不重新批准；父uncertain拒绝；真实source CHECK和复合review-child FK；子有效期延长与payload篡改重试拒绝。实际使用009 operation/intent/events/payload DDL、011 operations ALTER及既有修正source ALTER、056/058；users/account/ownership/Bridge/outbox为最小父表脚手架，risk reviewer注入。因此未证明完整父history/实际risk到子事务端到端，未替代完整DDL恢复演练。
+
+v105原始011重复FK名字在MySQL失败，v106/v107新参考连接未设UTC而被应用拒绝；参考装配改用既有011 corrections并显式初始化UTC，失败报告保留。v108初次通过，v109补不可变字段和复合FK/有效期验证后通过；所有随机库清理，existingDatabaseWrites=0。058摘要21fc81f3fd22fd5c8e17eb7fb3b4822690f7afaef51c8c59a58fc97f211b2e13。
+
+下一步将实际保护审核bootstrap工厂接到事务入口，完善progress与prepare在后续状态的重放、到期/缺失上下文恢复，接入消费者、派发前来源/事实复核和结果归并；随后完整父DDL/恢复副本升级、旧业务回填/canonical/记忆剩余项。现dev_vue未改变、应用未启用，整体核心重构仍未完成。
+
+
+## 421. 实际审核工厂与后续状态重放（批次491，2026-09-10）
+
+新增bootstrap/createPositionProtectionReviewCapture：事务前只读一次当前Redis route并复制scope/route/时效参数；事务内创建实际账户/仓位/行情/合约/风控策略/汇总/SQL时钟审核器。拒绝跨workflow/user/account复用；MT4、无route或scope错配返回可重试context_unavailable，不形成永久风险拒绝。工厂已可直接供prepare repository使用，但尚未接运行消费者。
+
+修复进度消息在审核生成child之后重投失败：progress支持protecting状态，revision3的protecting/stopped通过同连接只读prepare回执路径重新核验原资格事件、审核、实际child及operation/payload；不读取历史/仓位、不重新审核、不追加事件。assessment保留原始资格证据，当前阶段以status为准。不存在回执不能触发新审核；后续succeeded/expired阶段仍须随结果归并实现。
+
+Redis异常延迟到真正需要事实的reader/reviewer调用时抛出，错误对象原样保留；已完成审核的prepare/progress重投可以只依赖MySQL验证原回执。需要新审核时仍因原Redis错误回滚，不会猜测route或写入拒绝/指令。这不意味着Redis失效时可发起新交易或绕过授权；重放仍在SQL中检查当前owner及审计/child完整性。
+
+第一轮复核：route捕获归bootstrap，应用/执行域只接端口；同事务重放复用准备流程的完整验证，避免另一套弱化校验。第二轮：检查输入别名修改、错误route、跨workflow、参数上限、后续状态、缺失/损坏回执、Redis异常与新审核写入边界；保留原失败，不能将基础设施故障永久记成risk rejected。
+
+50项定向测试、server类型/构建、边界和98操作合同/schema检查通过。v110新增实际工厂捕获与后续进度重放通过；v111补Redis异常恢复后通过。实际MySQL上下文参考改由新的capture工厂在BEGIN前捕获一次，再在同连接执行原七类真实SQL和确定性审核。prepare隔离参考累计11组：新增旧progress消息重投、风险拒绝后重投、损坏child同时被progress/prepare拒绝、Redis异常下已存回执恢复，以及新审核保留原错误且零写入。prepare端到端的正常风险端口仍注入，尚未合并完整父历史/实际风险上下文/child持久化联合参考；不得据此宣称真实终端链路完成。
+
+所有随机库清理，existingDatabaseWrites=0；现库与056/058候选状态不变，运行和派发入口未启用。下一步优先补资格已就绪但上下文长期不可用时的到期恢复、幂等消费者与有界恢复扫描，再完成子指令派发前复核、结果归并、完整DDL/恢复副本、业务回填/canonical/记忆剩余项。核心总目标仍未完成。
+
+
+## 422. 待保护审核的离线到期恢复（批次492，2026-09-10）
+
+prepare新增独立到期分支：锁定原计划/资格和父执行结果后，在调用当前审核前读取MySQL UTC时间；父intent/command均成功且已过原计划deadline时，不依赖Redis/终端事实，确认没有review回执、workflow子intent或operation，再原子写workflow revision3 expired、含计划/请求摘要与精确到期UTC时间的审计事件、ID-only expired outbox。审核返回后再次检查原期限，防止长查询跨过截止点仍创建子指令。到期不伪造risk rejected，也不新增risk review记录。
+
+prepare与progress均可重放新的expired revision3，验证到期event摘要/原deadline/非未来时间、没有回执或已准备child；已有审核回执优先按原child路径恢复，不能用过期分支丢弃已存在的指令。父uncertain/reconciling等未确认结果仍拒绝到期写入，保留给对账。原awaiting_close阶段到期路径不变。
+
+第一轮复核：时间由SQL提供、到期只归execution流程，专用helper封装未准备检查与三项原子写入，不复制风险审核。第二轮：检查deadline边界、回执/child先于到期、父未知优先级、摘要篡改、并发CAS和COMMIT未知；没有根据终端停更或Redis错误推断交易完成。
+
+68项定向测试、server类型/构建、边界和98操作合同/schema检查通过。strategy-write-reference-v112通过，prepare参考累计14组；新增实际离线到期三处写入确认故障回滚、两路并发一次到期、无审核/child、progress到期重放、到期COMMIT确认丢失恢复，以及期限已过但父uncertain不写入。参考种子用真实UTC毫秒保存原到期/创建时间，避免列值与计划期限脱节。全部随机库清理，existingDatabaseWrites=0。
+
+本轮未追加或执行现库迁移，056/058仍为未启用候选，运行入口不变。下一步幂等工作流消费者与有界恢复扫描、对接outbox任务路由；当前outbox支持列表尚不包含partial-close事件，不得宣称这些事件已被消费。随后子指令派发前复核/结果归并、完整父历史/当前risk/child联合验收、完整DDL恢复副本、业务回填/canonical/记忆剩余项。核心总目标未完成。
+
+
+## 423. 幂等工作流编排与有界恢复扫描（批次493，2026-09-10）
+
+新增PartialCloseWorkflowWorker应用端口：先advance资格阶段，wait_close/reconcile_close/wait_history/wait_projection明确返回waiting，不误认完成也不触发风险准备；stopped/expired直接返回。risk_review_required与protecting调用prepare，后者核验原回执；只返回durable child ID和protection_prepared，不宣称终端执行。跨workflow、非法scope、版本回退、无效child或带风险拒绝的prepared结果被拒绝；事务未知/基础设施异常原样上抛，不在应用层偷偷重试。
+
+新增PartialCloseWorkflowRecovery MySQL实现：每批1..500，仅扫描awaiting_close/risk_review_required且updated_at至少1秒未更新的任务；按status/update/id排序、FOR UPDATE SKIP LOCKED，排除已有pending/dispatching requested或progressed outbox。补发ID-only execution.partial-close.requested与更新投递冷却时间同事务提交；不改变workflow revision或追加业务审计事件。保护已准备后的命令派发/结果对账不由这个扫描器接管。复用COMMIT未知处理，重投递身份与固定业务workflow身份分离。
+
+第一轮复核：编排只通过execution应用端口，幂等由MySQL原回执和唯一约束负责，扫描只修复交付；不引入第二套业务状态。第二轮：核对等待/对账、终态、并发重复、扫描数量、锁跳过、outbox抑制、冷却与事件原子性、未知提交、无业务版本漂移。尚未接outbox支持列表/BullMQ消息路由及运行消费者，不能声称后台已自动执行；运行能力仍未启用。
+
+33项定向测试（worker16、expiry12、transaction5）、类型/构建与边界/98合同/schema检查通过。strategy-write-reference-v115通过，prepare参考累计17组，新增实际worker→progress→prepare并发重放与离线expiry；恢复扫描两处故障回滚、每批限制、并发补投递、pending事件去重、workflow版本/审计数不变及COMMIT确认丢失恢复。v113对SKIP LOCKED误要求两个并发扫描必然同时覆盖两条，实际可因范围锁跳过；参考修正为并发不重复、下一有界批次补齐，v114通过，v115验证最终代码。失败报告保留，全部随机库清理且existingDatabaseWrites=0。
+
+下一步接partial-close outbox与队列消费者，明确waiting的延迟调度和已准备child的后续分发责任；然后派发前来源/当前事实复核、结果归并及完整父历史/实际risk/child联合验收。056/058未应用现库；完整DDL/恢复副本、旧业务回填/canonical/记忆剩余项仍待完成。整体核心重构未完成。
+
+
+## 424. Partial-close outbox/BullMQ投递与延迟消费（批次494，2026-09-10）
+
+新增独立partial-close工作流Queue与严格三字段job解析。四种requested/progressed/reviewed/expired事件通过专用outbox适配器转换为workflowId/userId/accountId，只以eventId作为BullMQ投递幂等键；事件中的revision/child仅作合同验证，不携带执行参数或直接派发。非法字段、数字字符串user、越界account、损坏workflow/child均拒绝。BullMqOutboxTaskPublisher支持显式传入专用队列，缺少队列时对新事件明确报错，避免静默确认。
+
+MysqlOutboxRepository新增默认关闭的partialCloseWorkflows能力选项，只有显式启用才领取和回收这四类事件；旧运行入口行为不变。消费者适配器先调用实际应用worker，waiting使用moveToDelayed和DelayedError保留为1秒后重试；stopped/expired结束。protection_prepared必须交给构造时必填的PreparedProtectionReceiver，接收失败原样抛出，不能先确认消费成功。当前生产级子派发接收器尚未实现，未在运行入口启用该能力。
+
+第一轮复核：队列只负责投递身份和调度，业务幂等/权限/审核仍由execution事务负责；MySQL支持列表引用纯事件常量，不依赖BullMQ实现。第二轮：复核严格字段、同事件去重、缺少能力不可吞事件、等待不消耗普通失败重试、后续接收确认丢失复用原child、终态无派发，以及专属队列关闭/清理。
+
+26项定向测试、server类型/构建和边界/98合同/schema检查通过。strategy-write-reference-v117新增五组实际MySQL/Redis队列证明：默认capability不领取partial-close、显式开启后实际claim，重复publish只一job，首次注入waiting后真实Worker延迟再调用实际SQL编排/prepare，模拟接收确认丢失后重试复用同child，完成job重发不再次执行。数据库事实/risk port沿用原查询脚手架与注入审核，首次waiting和后续receiver也明确注入，不代表真实Bridge/终端派发或完整端到端。
+
+Redis使用env的192.168.1.254 DB3，随机protection-reference前缀；queueRemoved=true，队列键清理为0，随机MySQL库清理，existingDatabaseWrites=0。v116首次以本机now立即claim新建VM事件未取到目标，参考改用同一数据库UTC clock作可用时间边界后v117通过，失败报告保留。类型检查发现测试moveToDelayed mock缺少参数签名，已修正并重新通过，不涉及运行代码变化。
+
+下一步实现PreparedProtectionReceiver：读取锁定workflow/review/child来源，按当前事实和权限做派发前复核，生成/恢复唯一Bridge命令并接结果归并；再完成HTTP来源合同、实际运行组装和056/058完整DDL/恢复副本入库门。旧业务回填/canonical/记忆等整体剩余项继续保留，核心总目标未完成。
+
+
+## 425. 保护命令的当前审核与来源锁定（批次495，2026-09-10）
+
+核对现有MysqlExecutionCommandSource按原intent expectedState.positionsRevision读取Bridge快照，不能直接用它承载保护任务的当前复核。新增独立PositionProtectionCommandReview：绑定原child ID、原请求摘要、原审核摘要和原deadline，当前risk结果必须对应同一冻结请求，仍为modify_position、同actionId/同参数，五类当前版本不得回退；拒绝改目标/价格、附加动作、manual release、风险拒绝、未来/旧审核或过期child。不覆盖原intent/原review，当前复核有独立reviewHash和expectedStateHash，允许更新事实版本但不延长期限。
+
+新增同连接MysqlPositionProtectionCommandReviewer：复用prepare重放验证计划/资格/审核/实际child不可变字段，再锁定child以及父intent/command当前状态。要求child仍prepared、父两项仍succeeded；父/子不确定状态只允许原有恢复，不可取得新的命令权限。随后调用同连接当前risk端口，读取最终SQL clock并形成命令复核结果。bootstrap新增CommandReviewCapture，把事务前route捕获、实际risk审核和SQL clock接到该读口。
+
+第一轮复核：原批准记录不可改，execution只消费当前确定性风险结果；新的权限结果独立于原子指令，命令创建器必须同事务持久绑定该结果，不得拿临时返回值直接发终端。第二轮：复核当前父/子状态、来源摘要、版本回退、旧/未来评估、精确参数和有效期。通用Bridge命令源/expected-state检查仍待适配新的来源，并需持久化复核审计；本轮没有放开position_workflow派发阻断。
+
+81项定向测试、类型/构建、模块边界和98合同/schema检查通过。v118初次SQL来源参考通过；v119补父当前状态复核后通过，新增六组实际SQL检查：锁定真实持久child后生成当前复核，错误child在risk前拒绝，改价/当前拒绝无权限，子uncertain不重准备，父状态重新不确定也不取得权限，原回执保持不变。当前risk端口为显式注入，不替代实际上下文与命令写入的完整联合证明。既有MySQL/Redis队列参考继续通过，随机库及队列清理，existingDatabaseWrites=0。
+
+下一步将这份复核与唯一Bridge命令在同事务持久绑定，使用复核后的当前Bridge expected-state而不改写原intent；补创建/重放/提交未知证明，再接发送前复核和结果归并。来源合同、运行启用、056/058及新增审计结构完整DDL/恢复副本、业务回填/canonical/记忆仍未完成。现库与运行入口不变，整体核心目标未完成。
+
+
+## 426. 保护复核与Bridge命令绑定写口（批次496，2026-09-10）
+
+新增059候选结构：Bridge command/id-intent复合唯一键，以及position_protection_commands_v4。每workflow、每child只能有一条绑定，复合FK同时保证Bridge命令属于该child、child属于该workflow；记录当前authority完整JSON及摘要、命令摘要、绑定摘要和UTC时间。059仅在随机参考库验证，未应用现dev_vue。
+
+新增bindPositionProtectionCommand：重新验证当前authority及原child/审核，要求sequence1、同用户/账户/终端实例/券商/login、精确修改保护参数，Bridge expected-state的ticket/symbol/direction/remaining volume匹配，命令期限不超过child且未过期。用createBridgeCommand重建确定性命令ID、载荷摘要和完整envelope，防止内部字段与实际请求不一致。
+
+writePositionProtectionCommandBinding供命令创建事务在command/payload写入后、event/outbox之前调用。它核验原prepare回执和实际command/payload；新绑定要求child prepared、父intent/command成功、command queued，并读取锁定的Bridge当前快照，要求snapshot revision等于当前复核positionsRevision、state hash等于命令expected-state，再按SQL当前时间复核期限并插入绑定。已有绑定重放按原issuedAt核验冻结authority/command，不依赖现在的快照、不覆盖记录。通用仓库尚无绑定提供器，因此新建position_workflow命令明确报binding_unavailable，发送阻断也保留。
+
+第一轮复核：绑定逻辑与SQL写口独立于现有大repository，当前复核不改写原intent；Bridge原命令模型仍为唯一wire校验源。第二轮：复核来源/父子状态、精确参数/剩余量、当前快照、摘要/重放、复合FK、一workflow一child一command及SQL最终期限。完整route/session权限仍依赖调用者同事务当前审核和通用命令创建器的route guard，不可把此写口单独当成完整派发服务。
+
+97项定向测试、类型/构建、边界及98操作合同/schema检查通过。v123新增五组实际MySQL绑定验证：command/payload/binding/event/outbox晚期故障全回滚，Bridge snapshot版本变化拒绝并回滚command，COMMIT已成功后确认丢失重放原绑定且无第二outbox，改变authority不能替换绑定，059复合FK拒绝不匹配child。外围command/event插入为fixture SQL而非通用repository调用，Bridge父表为查询脚手架；runtimeRepositoryWired=false。v120扩展Bridge表后旧seed整行INSERT失败，已改显式列；v121默认claim测试误排除合法bridge.command.queued事件，已改为仅断言未启用partial-close不会被领取，v122通过，v123补新建保护命令guard后通过。失败报告保留。
+
+059摘要a302b4a574e6f5c23039e4996ad6c94171c594530e04057297edd597e012a5e9。全部随机库和Redis测试队列清理，existingDatabaseWrites=0；现库和应用入口不变。下一步将复核/绑定提供器接入实际MysqlBridgeCommandRepository创建及已存在重放，当前expected-state校验用复核action，同时保留原intent不可变；随后发送前复核、结果归并、完整联合/DDL恢复与旧业务/canonical/记忆剩余项。核心目标未完成。

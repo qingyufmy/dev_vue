@@ -1,5 +1,11 @@
-import type { SubscriptionPreferencesReader } from '../../strategies/index.js'
-import type { AccountClockReader } from '../../trading/index.js'
+import { replayChanChart, type ChanCalculationArchive } from '../../market/index.js'
+import { analysisChart } from '../domain/analysis-chart.js'
+import { samePositionState, samePendingOrderState } from '../../trading/index.js'
+import { inferenceTransaction as transaction } from './mysql-inference-transaction.js'
+import { loadEntryEventClaims, entryEventsOccupied, reserveEntryEvents } from './mysql-entry-event-claims.js'
+import type { RiskRevisionReader } from '../application/trader-context-builder.js'
+import type { SubscriptionPreferencesReader, SubscriptionExecutionWindowReader, AnalysisSubscriberReader } from '../../strategies/index.js'
+import type { AccountClockReader, AccountInventorySummaryReader } from '../../trading/index.js'
 import { randomUUID } from 'node:crypto'
 import { traderWindowAllows } from './mysql-trader-window.js'
 import { readTraderWindowFingerprint } from './mysql-trader-window-guard.js'
@@ -9,6 +15,9 @@ import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql
 import type { CompleteAnalysisInput, CompleteTraderInput, InferenceRepository, QueueAnalysisInput, RequestTraderEvaluationInput } from '../application/inference-ports.js'
 import type { AnalysisRun, MarketAnalysisResult, MarketAnalysisSummary, TraderDecisionResult, TraderDecisionSummary, TraderInputSnapshot, TraderRun } from '../domain/inference.js'
 import { contentHash, InferenceError, traderTaskMode } from '../domain/inference.js'
+import type { RuntimeMemoryPreparationWriter } from '../../reviews/index.js'
+import { memoryPreparationForSnapshot } from '../application/memory-preparation-for-snapshot.js'
+import { inferenceSqlTime } from './inference-sql-time.js'
 
 interface AnalysisRunRow extends RowDataPacket {
   id: string; user_id: number; strategy_id: string; strategy_version_id: string; standard_symbol: string
@@ -21,11 +30,6 @@ interface MarketAnalysisRow extends RowDataPacket {
   id: string; owner_user_id: number; strategy_id: string; strategy_version_id: string; standard_symbol: string
   market_bias: MarketAnalysisSummary['marketBias']; opportunity: MarketAnalysisSummary['opportunity']; confidence: string
   summary: string; analyzed_at_utc: Date; valid_until_utc: Date; input_snapshot_hash: string; revision: number
-}
-interface WindowSubscriptionRow extends SubscriptionRow { receive_timezone: string; receive_window_json: unknown }
-interface SubscriptionRow extends RowDataPacket {
-  id: string; user_id: number; trading_account_id: string; revision: number; trader_strategy_id: string; trader_strategy_version_id: string
-  positions_revision: number; pending_orders_revision: number; has_positions: number; has_pending_orders: number
 }
 interface TraderRunRow extends RowDataPacket {
   id: string; user_id: number; trading_account_id: string; subscription_id: string; subscription_revision: number
@@ -42,25 +46,15 @@ interface TraderDecisionRow extends RowDataPacket {
 interface JsonPayloadRow extends RowDataPacket { payload_json: string | object }
 interface HashRow extends RowDataPacket { content_sha256: string }
 interface ModelTaskRow extends RowDataPacket { id: string; status: string; fencing_token: number; deadline_at_utc: Date }
-interface OpportunityRow extends RowDataPacket { id: string; opportunity: MarketAnalysisSummary['opportunity']; revision: number }
+interface OpportunityRow extends RowDataPacket { id: string; opportunity: MarketAnalysisSummary['opportunity']; revision: number; strategy_version_id: string; standard_symbol: string }
 interface SupersededAnalysisRow extends RowDataPacket { id: string; model_task_id: string | null }
-interface SupersededTraderRow extends RowDataPacket { id: string; model_task_id: string | null }
 interface RevisionRow extends RowDataPacket { revision: number }
 interface ActiveTraderTaskRow extends RowDataPacket { id: string; lease_expires_at_utc: Date }
-interface TraderContextRevisionRow extends RowDataPacket {
-  analysis_revision: number; valid_until_utc: Date; standard_symbol: string; content_sha256: string
-  subscription_revision: number | null; subscription_status: string | null
-  ownership_active: number
-  account_revision: number | null; quote_revision: number | null; contract_revision: number | null; risk_revision: number | null
-  positions_revision: number | null; pending_orders_revision: number | null
+interface TraderAnalysisRevisionRow extends RowDataPacket {
+  analysis_revision: number; valid_until_utc: Date; standard_symbol: string; content_sha256: string; strategy_version_id: string
 }
+type TraderRevisionReaders = { subscriptions: AnalysisSubscriberReader; trading: AccountInventorySummaryReader; risks: RiskRevisionReader }
 
-async function transaction<T>(pool: Pool, work: (connection: PoolConnection) => Promise<T>) {
-  const connection = await pool.getConnection()
-  try { await connection.beginTransaction(); const result = await work(connection); await connection.commit(); return result }
-  catch (error) { await connection.rollback(); throw error }
-  finally { connection.release() }
-}
 
 const iso = (value: Date | string) => new Date(value).toISOString()
 const analysisRun = (row: AnalysisRunRow): AnalysisRun => ({
@@ -102,32 +96,25 @@ async function outbox(connection: PoolConnection, aggregateType: string, aggrega
   await connection.execute(`INSERT INTO outbox_events (event_id,aggregate_type,aggregate_id,event_type,payload_json,status,attempts,available_at_utc,created_at_utc) VALUES (?,?,?,?,?,'pending',0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))`, [randomUUID(), aggregateType, aggregateId, eventType, JSON.stringify(payload)])
 }
 
-async function traderContextRevisions(connection: PoolConnection, row: TraderRunRow) {
-  const [rows] = await connection.execute<TraderContextRevisionRow[]>(
-    `SELECT a.revision analysis_revision,a.valid_until_utc,a.standard_symbol,a.content_sha256,
-      s.revision subscription_revision,s.status subscription_status,IF(o.user_id IS NULL,0,1) ownership_active,
-      ars.revision account_revision,q.revision quote_revision,i.revision contract_revision,risk.revision risk_revision,
-      pr.revision positions_revision,orr.revision pending_orders_revision
-     FROM market_analyses a
-     LEFT JOIN strategy_subscriptions s ON s.id=? AND s.user_id=? AND s.trading_account_id=?
-       AND s.trader_strategy_id=? AND s.trader_strategy_version_id=?
-     LEFT JOIN trading_account_ownerships o ON o.user_id=? AND o.trading_account_id=? AND o.role='owner' AND o.revoked_at_utc IS NULL
-     LEFT JOIN account_runtime_snapshots ars ON ars.trading_account_id=?
-     LEFT JOIN market_quotes q ON q.trading_account_id=? AND q.symbol=a.standard_symbol
-     LEFT JOIN market_instrument_snapshots i ON i.trading_account_id=? AND i.symbol=a.standard_symbol
-     LEFT JOIN account_risk_summaries risk ON risk.trading_account_id=?
-     LEFT JOIN trading_projection_revisions pr ON pr.trading_account_id=? AND pr.resource_kind='positions' AND pr.resource_id='open'
-     LEFT JOIN trading_projection_revisions orr ON orr.trading_account_id=? AND orr.resource_kind='pending_orders' AND orr.resource_id='open'
-     WHERE a.id=? LIMIT 1 FOR SHARE`,
-    [row.subscription_id, row.user_id, row.trading_account_id, row.strategy_id, row.strategy_version_id, row.user_id, row.trading_account_id,
-      row.trading_account_id, row.trading_account_id, row.trading_account_id, row.trading_account_id,
-      row.trading_account_id, row.trading_account_id, row.market_analysis_id],
-  )
-  return rows[0] ?? null
+async function traderContextRevisions(connection: PoolConnection, row: TraderRunRow, readers: TraderRevisionReaders) {
+  const [rows] = await connection.execute<TraderAnalysisRevisionRow[]>(
+    `SELECT a.revision analysis_revision,a.valid_until_utc,a.standard_symbol,a.content_sha256,CAST(a.strategy_version_id AS CHAR) strategy_version_id
+      FROM market_analyses a WHERE a.id=? LIMIT 1 FOR SHARE`, [row.market_analysis_id])
+  const analysis = rows[0]
+  if (!analysis) return null
+  const subscription = await readers.subscriptions.readContextVersion({ subscriptionId: row.subscription_id, userId: row.user_id,
+    accountId: row.trading_account_id, traderStrategyId: row.strategy_id, traderStrategyVersionId: row.strategy_version_id,
+    analysisStrategyVersionId: analysis.strategy_version_id, symbol: analysis.standard_symbol })
+  const trading = await readers.trading.readRevisions({ userId: row.user_id, accountId: row.trading_account_id, symbol: analysis.standard_symbol })
+  const risk = await readers.risks.readRevision(row.user_id, row.trading_account_id)
+  return { ...analysis, subscription_revision: subscription?.revision ?? null, subscription_status: subscription?.status ?? null,
+    ownership_active: trading ? 1 : 0, account_revision: trading?.accountRevision ?? null, quote_revision: trading?.quoteRevision ?? null,
+    contract_revision: trading?.contractRevision ?? null, positions_revision: trading?.positionsRevision ?? null,
+    pending_orders_revision: trading?.pendingOrdersRevision ?? null, risk_revision: risk }
 }
 
-async function assertTraderSnapshotCurrent(connection: PoolConnection, row: TraderRunRow, snapshot: TraderInputSnapshot) {
-  const current = await traderContextRevisions(connection, row)
+async function assertTraderSnapshotCurrent(connection: PoolConnection, row: TraderRunRow, snapshot: TraderInputSnapshot, readers: TraderRevisionReaders) {
+  const current = await traderContextRevisions(connection, row, readers)
   if (!current || current.valid_until_utc.getTime() <= Date.now()) throw new InferenceError('trader_analysis_expired', 409)
   if (Number(current.analysis_revision) !== snapshot.analysisRevision || current.content_sha256 !== snapshot.analysis.contentHash) throw new InferenceError('trader_analysis_revision_conflict', 409)
   if (!current.ownership_active) throw new InferenceError('trader_account_forbidden', 409)
@@ -139,19 +126,36 @@ async function assertTraderSnapshotCurrent(connection: PoolConnection, row: Trad
   if (Number(current.risk_revision) !== snapshot.riskRevision) throw new InferenceError('trader_risk_revision_conflict', 409)
 }
 
-async function traderStaleReason(connection: PoolConnection, row: TraderRunRow) {
-  const current = await traderContextRevisions(connection, row)
+async function traderStaleReason(connection: PoolConnection, row: TraderRunRow, readers: TraderRevisionReaders) {
+  const current = await traderContextRevisions(connection, row, readers)
   if (!current) return 'trader_context_missing'
   if (current.valid_until_utc.getTime() <= Date.now()) return 'analysis_expired'
   if (Number(current.analysis_revision) !== Number(row.analysis_revision)) return 'analysis_changed'
   if (!current.ownership_active) return 'account_ownership_changed'
   if (current.subscription_status !== 'active' || Number(current.subscription_revision) !== Number(row.subscription_revision)) return 'subscription_changed'
-  if (Number(current.account_revision) !== Number(row.account_revision)) return 'account_changed'
-  if (Number(current.positions_revision ?? 0) !== Number(row.positions_revision)) return 'positions_changed'
-  if (Number(current.pending_orders_revision ?? 0) !== Number(row.pending_orders_revision)) return 'pending_orders_changed'
-  if (Number(current.quote_revision) !== Number(row.quote_revision)) return 'quote_changed'
+  if (!Number.isSafeInteger(Number(current.account_revision)) || Number(current.account_revision) < 1 || Number(current.account_revision) < Number(row.account_revision)) return 'account_changed'
+  if (Number(current.positions_revision ?? 0) !== Number(row.positions_revision)) {
+    const revision = Number(current.positions_revision)
+    if (!Number.isSafeInteger(revision) || revision < 1 || revision < Number(row.positions_revision)
+      || !readers.trading.readPositions || !row.input_snapshot_id) return 'positions_changed'
+    const [frozen] = await connection.execute<JsonPayloadRow[]>('SELECT payload_json FROM inference_snapshot_payloads WHERE snapshot_id=? LIMIT 1', [row.input_snapshot_id])
+    const positions = await readers.trading.readPositions({ userId: row.user_id, accountId: row.trading_account_id })
+    if (!frozen[0] || positions.some(item => !item || typeof item !== 'object' || (item as { revision?: unknown }).revision !== revision)
+      || !samePositionState(parsePayload<TraderInputSnapshot>(frozen[0].payload_json).positions, positions, row.trading_account_id)) return 'positions_changed'
+  }
+  if (Number(current.pending_orders_revision ?? 0) !== Number(row.pending_orders_revision)) {
+    const revision = Number(current.pending_orders_revision)
+    if (!Number.isSafeInteger(revision) || revision < 1 || revision < Number(row.pending_orders_revision)
+      || !readers.trading.readPendingOrders || !row.input_snapshot_id) return 'pending_orders_changed'
+    const [frozen] = await connection.execute<JsonPayloadRow[]>('SELECT payload_json FROM inference_snapshot_payloads WHERE snapshot_id=? LIMIT 1', [row.input_snapshot_id])
+    const orders = await readers.trading.readPendingOrders({ userId: row.user_id, accountId: row.trading_account_id })
+    if (!frozen[0] || orders.some(item => !item || typeof item !== 'object' || (item as { revision?: unknown }).revision !== revision)
+      || !samePendingOrderState(parsePayload<TraderInputSnapshot>(frozen[0].payload_json).pendingOrders, orders, row.trading_account_id)) return 'pending_orders_changed'
+  }
+  // A newer quote is re-evaluated by risk; missing or regressed evidence is still stale.
+  if (!Number.isSafeInteger(Number(current.quote_revision)) || Number(current.quote_revision) < Number(row.quote_revision) || Number(current.quote_revision) < 1) return 'quote_changed'
   if (Number(current.contract_revision) !== Number(row.contract_revision)) return 'contract_changed'
-  if (Number(current.risk_revision) !== Number(row.risk_revision)) return 'risk_changed'
+  if (!Number.isSafeInteger(Number(current.risk_revision)) || Number(current.risk_revision) < 1 || Number(current.risk_revision) < Number(row.risk_revision)) return 'risk_changed'
   return null
 }
 
@@ -174,21 +178,10 @@ async function expireSupersededAnalyses(connection: PoolConnection, input: Queue
 }
 
 async function expireSupersededTraderRuns(connection: PoolConnection, subscriptionId: string, exceptRunId: string) {
-  const [runs] = await connection.execute<SupersededTraderRow[]>(
-    `SELECT id,model_task_id FROM ai_trader_runs WHERE subscription_id=? AND id<>? AND status IN ('queued','running') ORDER BY id FOR UPDATE`,
-    [subscriptionId, exceptRunId],
-  )
-  if (runs.length === 0) return
-  const runIds = runs.map(run => run.id)
-  await connection.execute(
-    `UPDATE ai_trader_runs SET status='expired',error_code='superseded_by_new_analysis',revision=revision+1,updated_at_utc=UTC_TIMESTAMP(3),completed_at_utc=UTC_TIMESTAMP(3) WHERE id IN (${runIds.map(() => '?').join(',')})`,
-    runIds,
-  )
-  for (const taskId of runs.map(run => run.model_task_id).filter((id): id is string => Boolean(id)).sort()) {
-    await connection.execute('SELECT id FROM ai_model_tasks WHERE id=? FOR UPDATE', [taskId])
-    await connection.execute(`UPDATE ai_model_tasks SET status='expired',lease_owner=NULL,lease_expires_at_utc=NULL,updated_at_utc=UTC_TIMESTAMP(3),completed_at_utc=UTC_TIMESTAMP(3) WHERE id=? AND status IN ('queued','running')`, [taskId])
-    await connection.execute(`UPDATE ai_model_attempts SET status='failed',error_code='superseded_by_new_analysis',completed_at_utc=UTC_TIMESTAMP(3) WHERE task_id=? AND status='running'`, [taskId])
-  }
+  // Keep the running evaluation intact; retain only the newest queued analysis per subscription.
+  await connection.execute(`UPDATE ai_trader_runs SET status='expired',error_code='superseded_by_new_analysis',
+    revision=revision+1,updated_at_utc=UTC_TIMESTAMP(3),completed_at_utc=UTC_TIMESTAMP(3)
+    WHERE subscription_id=? AND id<>? AND status='queued'`, [subscriptionId, exceptRunId])
 }
 
 function isDuplicateKey(error: unknown) {
@@ -196,7 +189,18 @@ function isDuplicateKey(error: unknown) {
 }
 
 export class MysqlInferenceRepository implements InferenceRepository {
-  constructor(private readonly pool: Pool, private readonly accountClock: (connection: PoolConnection) => AccountClockReader, private readonly preferences: (connection: PoolConnection) => SubscriptionPreferencesReader) {}
+  constructor(private readonly pool: Pool, private readonly accountClock: (connection: PoolConnection) => AccountClockReader,
+    private readonly preferences: (connection: PoolConnection) => SubscriptionPreferencesReader,
+    private readonly windows: (connection: PoolConnection) => SubscriptionExecutionWindowReader,
+    private readonly dispatch: { subscribers: (connection: PoolConnection) => AnalysisSubscriberReader; inventory: (connection: PoolConnection) => AccountInventorySummaryReader; risks: (connection: PoolConnection) => RiskRevisionReader },
+    private readonly memoryPreparation?: (connection: PoolConnection) => RuntimeMemoryPreparationWriter) {}
+
+  private async recordMemoryPreparation(connection: PoolConnection, input: Parameters<typeof memoryPreparationForSnapshot>[0]) {
+    const preparation = memoryPreparationForSnapshot(input)
+    if (!preparation) return
+    if (!this.memoryPreparation) throw new InferenceError('strategy_memory_audit_unavailable', 503)
+    await this.memoryPreparation(connection).record(preparation)
+  }
 
   async getAnalysisRun(runId: string) {
     const [rows] = await this.pool.execute<AnalysisRunRow[]>(`${analysisRunSelect} WHERE r.id=? LIMIT 1`, [runId])
@@ -225,7 +229,7 @@ export class MysqlInferenceRepository implements InferenceRepository {
         if (existing[0]) return analysisRun(existing[0])
       }
       try {
-        await connection.execute(`INSERT INTO ai_analysis_runs (id,user_id,strategy_id,strategy_version_id,standard_symbol,market_source_account_id,trigger_type,schedule_slot_utc,idempotency_key,status,revision,created_at_utc,updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?,'queued',1,?,?)`, [input.id, input.userId, input.strategyId, input.strategyVersionId, input.symbol, input.marketSourceAccountId, input.trigger, input.scheduleSlot, input.idempotencyKey, input.requestedAt, input.requestedAt])
+        await connection.execute(`INSERT INTO ai_analysis_runs (id,user_id,strategy_id,strategy_version_id,standard_symbol,market_source_account_id,trigger_type,schedule_slot_utc,idempotency_key,status,revision,created_at_utc,updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?,'queued',1,?,?)`, [input.id, input.userId, input.strategyId, input.strategyVersionId, input.symbol, input.marketSourceAccountId, input.trigger, input.scheduleSlot === null ? null : inferenceSqlTime(input.scheduleSlot), input.idempotencyKey, inferenceSqlTime(input.requestedAt), inferenceSqlTime(input.requestedAt)])
       } catch (error) {
         if (!isDuplicateKey(error)) throw error
         const [existing] = await connection.execute<AnalysisRunRow[]>(`${analysisRunSelect} WHERE r.user_id=? AND r.idempotency_key=? LIMIT 1`, [input.userId, input.idempotencyKey])
@@ -243,17 +247,27 @@ export class MysqlInferenceRepository implements InferenceRepository {
   }
 
   async beginAnalysis(input: Parameters<InferenceRepository['beginAnalysis']>[0]) {
+    input = structuredClone(input)
+    if (contentHash(input.snapshot) !== input.snapshotHash) throw new InferenceError('inference_snapshot_hash_mismatch', 409)
     return transaction(this.pool, async connection => {
       const [rows] = await connection.execute<AnalysisRunRow[]>(`${analysisRunSelect} WHERE r.id=? AND r.user_id=? FOR UPDATE`, [input.runId, input.userId])
       const row = rows[0]
       if (!row) throw new InferenceError('analysis_not_found', 404)
       if (Number(row.revision) !== input.expectedRevision || row.status !== 'queued') throw new InferenceError('analysis_revision_conflict', 409)
       if (input.snapshot.strategy.id !== row.strategy_id || input.snapshot.strategy.versionId !== row.strategy_version_id) throw new InferenceError('analysis_strategy_snapshot_mismatch', 409)
-      if (row.market_source_account_id && String(input.snapshot.market.source_account_id ?? '') !== row.market_source_account_id) throw new InferenceError('analysis_market_source_mismatch', 409)
+      // Managed market pools are authorized and generation-checked by AnalysisMarketSource.
+      // The requesting account is not necessarily the administrator's public-data source.
+      const market = input.snapshot.market
+      const managedSource = (market.source_mode === 'public' || market.source_mode === 'private')
+        && Number.isSafeInteger(market.source_generation) && Number(market.source_generation) > 0
+        && typeof market.source_connection_id === 'string' && market.source_connection_id.length > 0
+        && typeof market.source_account_id === 'string' && market.source_account_id.length > 0
+      if (!managedSource && row.market_source_account_id && String(market.source_account_id ?? '') !== row.market_source_account_id) throw new InferenceError('analysis_market_source_mismatch', 409)
       const payload = JSON.stringify(input.snapshot)
-      await connection.execute(`INSERT INTO inference_snapshots (id,purpose,user_id,trading_account_id,strategy_id,strategy_version_id,standard_symbol,payload_sha256,payload_bytes,captured_at_utc,created_at_utc) VALUES (?,'analysis',?,NULL,?,?,?,?,?,?,UTC_TIMESTAMP(3))`, [input.snapshotId, input.userId, row.strategy_id, row.strategy_version_id, row.standard_symbol, input.snapshotHash, Buffer.byteLength(payload), input.snapshot.capturedAt])
+      await connection.execute(`INSERT INTO inference_snapshots (id,purpose,user_id,trading_account_id,strategy_id,strategy_version_id,standard_symbol,payload_sha256,payload_bytes,captured_at_utc,created_at_utc) VALUES (?,'analysis',?,NULL,?,?,?,?,?,?,UTC_TIMESTAMP(3))`, [input.snapshotId, input.userId, row.strategy_id, row.strategy_version_id, row.standard_symbol, input.snapshotHash, Buffer.byteLength(payload), inferenceSqlTime(input.snapshot.capturedAt)])
       await connection.execute(`INSERT INTO inference_snapshot_payloads (snapshot_id,encoding,payload_json) VALUES (?,'json',?)`, [input.snapshotId, payload])
-      await connection.execute(`INSERT INTO ai_model_tasks (id,purpose,user_id,trading_account_id,input_snapshot_id,model_profile_id,status,deadline_at_utc,fencing_token,lease_owner,lease_expires_at_utc,created_at_utc,updated_at_utc) VALUES (?,'analysis',?,NULL,?,?,'running',?,1,?,?,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))`, [input.taskId, input.userId, input.snapshotId, input.modelProfileId, input.deadlineAt, input.workerId, input.deadlineAt])
+      await this.recordMemoryPreparation(connection, input)
+      await connection.execute(`INSERT INTO ai_model_tasks (id,purpose,user_id,trading_account_id,input_snapshot_id,model_profile_id,status,deadline_at_utc,fencing_token,lease_owner,lease_expires_at_utc,created_at_utc,updated_at_utc) VALUES (?,'analysis',?,NULL,?,?,'running',?,1,?,?,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))`, [input.taskId, input.userId, input.snapshotId, input.modelProfileId, inferenceSqlTime(input.deadlineAt), input.workerId, inferenceSqlTime(input.deadlineAt)])
       await connection.execute(`INSERT INTO ai_model_attempts (id,task_id,attempt_number,provider,model,status,started_at_utc) VALUES (?,?,1,?,?,'running',UTC_TIMESTAMP(3))`, [input.attemptId, input.taskId, input.provider, input.model])
       await connection.execute(`UPDATE ai_analysis_runs SET input_snapshot_id=?,model_task_id=?,status='running',revision=revision+1,updated_at_utc=UTC_TIMESTAMP(3) WHERE id=?`, [input.snapshotId, input.taskId, input.runId])
       await outbox(connection, 'analysis', input.runId, 'analysis.running', { analysis_id: input.runId })
@@ -275,7 +289,7 @@ export class MysqlInferenceRepository implements InferenceRepository {
       if (task.deadline_at_utc.getTime() <= Date.now()) throw new InferenceError('analysis_task_deadline_exceeded', 409)
       const payload = JSON.stringify(input.result)
       const payloadHash = contentHash(input.result)
-      await connection.execute(`INSERT INTO market_analyses (id,analysis_run_id,owner_scope,owner_user_id,strategy_id,strategy_version_id,standard_symbol,market_bias,opportunity,confidence,summary,input_snapshot_id,content_sha256,analyzed_at_utc,valid_until_utc,revision,created_at_utc) VALUES (?,?,'user',?,?,?,?,?,?,?,?,?,?,?,?,1,UTC_TIMESTAMP(3))`, [input.marketAnalysisId, input.runId, input.userId, row.strategy_id, row.strategy_version_id, row.standard_symbol, input.result.marketBias, input.result.opportunity, input.result.confidence, input.result.summary, row.input_snapshot_id, payloadHash, input.result.analyzedAt, input.result.validUntil])
+      await connection.execute(`INSERT INTO market_analyses (id,analysis_run_id,owner_scope,owner_user_id,strategy_id,strategy_version_id,standard_symbol,market_bias,opportunity,confidence,summary,input_snapshot_id,content_sha256,analyzed_at_utc,valid_until_utc,revision,created_at_utc) VALUES (?,?,'user',?,?,?,?,?,?,?,?,?,?,?,?,1,UTC_TIMESTAMP(3))`, [input.marketAnalysisId, input.runId, input.userId, row.strategy_id, row.strategy_version_id, row.standard_symbol, input.result.marketBias, input.result.opportunity, input.result.confidence, input.result.summary, row.input_snapshot_id, payloadHash, inferenceSqlTime(input.result.analyzedAt), inferenceSqlTime(input.result.validUntil)])
       await connection.execute('INSERT INTO market_analysis_payloads (market_analysis_id,payload_json,payload_sha256,payload_bytes) VALUES (?,?,?,?)', [input.marketAnalysisId, payload, payloadHash, Buffer.byteLength(payload)])
       const [attemptUpdated] = await connection.execute<ResultSetHeader>(`UPDATE ai_model_attempts SET status='succeeded',completed_at_utc=UTC_TIMESTAMP(3),usage_json=? WHERE id=? AND task_id=? AND status='running'`, [input.usage ? JSON.stringify(input.usage) : null, input.attemptId, input.taskId])
       if (attemptUpdated.affectedRows !== 1) throw new InferenceError('analysis_attempt_conflict', 409)
@@ -283,16 +297,21 @@ export class MysqlInferenceRepository implements InferenceRepository {
       await connection.execute(`UPDATE ai_analysis_runs SET status='succeeded',revision=revision+1,updated_at_utc=UTC_TIMESTAMP(3),completed_at_utc=UTC_TIMESTAMP(3) WHERE id=?`, [input.runId])
       const createdTraderRuns: TraderRun[] = []
       if (row.trigger_type !== 'manual') {
-        const [subscriptions] = await connection.execute<WindowSubscriptionRow[]>(`SELECT CAST(s.id AS CHAR) id,s.user_id,CAST(s.trading_account_id AS CHAR) trading_account_id,s.revision,CAST(s.trader_strategy_id AS CHAR) trader_strategy_id,CAST(s.trader_strategy_version_id AS CHAR) trader_strategy_version_id,sc.receive_timezone,sc.receive_window_json,COALESCE(pr.revision,0) positions_revision,COALESCE(orr.revision,0) pending_orders_revision,EXISTS(SELECT 1 FROM open_position_snapshots p WHERE p.trading_account_id=s.trading_account_id AND JSON_UNQUOTE(JSON_EXTRACT(p.payload_json,'$.symbol'))=s.standard_symbol) has_positions,EXISTS(SELECT 1 FROM pending_order_snapshots o WHERE o.trading_account_id=s.trading_account_id AND JSON_UNQUOTE(JSON_EXTRACT(o.payload_json,'$.symbol'))=s.standard_symbol) has_pending_orders FROM strategy_subscriptions s INNER JOIN subscription_schedules sc ON sc.subscription_id=s.id INNER JOIN trading_account_ownerships own ON own.trading_account_id=s.trading_account_id AND own.user_id=s.user_id AND own.role='owner' AND own.revoked_at_utc IS NULL LEFT JOIN trading_projection_revisions pr ON pr.trading_account_id=s.trading_account_id AND pr.resource_kind='positions' AND pr.resource_id='open' LEFT JOIN trading_projection_revisions orr ON orr.trading_account_id=s.trading_account_id AND orr.resource_kind='pending_orders' AND orr.resource_id='open' WHERE s.user_id=? AND s.analysis_strategy_version_id=? AND s.standard_symbol=? AND s.status='active' AND s.analysis_enabled=1 AND s.trader_enabled=1 AND s.trader_strategy_id IS NOT NULL AND s.trader_strategy_version_id IS NOT NULL ORDER BY s.trading_account_id,s.id FOR SHARE`, [input.userId, row.strategy_version_id, row.standard_symbol])
+        const subscriptions = await this.dispatch.subscribers(connection).list({ userId: input.userId,
+          analysisStrategyVersionId: row.strategy_version_id, symbol: row.standard_symbol })
         for (const subscription of subscriptions) {
-          const taskMode = traderTaskMode(input.result.opportunity, Boolean(subscription.has_positions), Boolean(subscription.has_pending_orders))
+          const inventory = await this.dispatch.inventory(connection).read({ userId: subscription.userId,
+            accountId: subscription.accountId, symbol: row.standard_symbol })
+          if (!inventory) throw new InferenceError('trader_account_forbidden', 409)
+          const taskMode = traderTaskMode(input.result.opportunity, inventory.hasPositions, inventory.hasPendingOrders)
           if (!taskMode) continue
-          if (!await traderWindowAllows(this.accountClock(connection), subscription, new Date())) continue
+          if (!await traderWindowAllows(this.accountClock(connection), { user_id: subscription.userId,
+            trading_account_id: subscription.accountId, receive_timezone: subscription.timezone, receive_window_json: subscription.window }, new Date())) continue
           const id = randomUUID()
           const idempotencyKey = `analysis:${input.marketAnalysisId}:subscription:${subscription.id}:revision:${subscription.revision}`
           await expireSupersededTraderRuns(connection, subscription.id, id)
-          await connection.execute(`INSERT INTO ai_trader_runs (id,user_id,trading_account_id,subscription_id,subscription_revision,market_analysis_id,strategy_id,strategy_version_id,task_mode,analysis_revision,positions_revision,pending_orders_revision,idempotency_key,status,revision,created_at_utc,updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?, 'queued',1,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))`, [id, subscription.user_id, subscription.trading_account_id, subscription.id, subscription.revision, input.marketAnalysisId, subscription.trader_strategy_id, subscription.trader_strategy_version_id, taskMode, subscription.positions_revision, subscription.pending_orders_revision, idempotencyKey])
-          await outbox(connection, 'trader', id, 'trader.requested', { trader_run_id: id, market_analysis_id: input.marketAnalysisId, trading_account_id: subscription.trading_account_id, task_mode: taskMode })
+          await connection.execute(`INSERT INTO ai_trader_runs (id,user_id,trading_account_id,subscription_id,subscription_revision,market_analysis_id,strategy_id,strategy_version_id,task_mode,analysis_revision,positions_revision,pending_orders_revision,idempotency_key,status,revision,created_at_utc,updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?,1,?,?,?, 'queued',1,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))`, [id, subscription.userId, subscription.accountId, subscription.id, subscription.revision, input.marketAnalysisId, subscription.traderStrategyId, subscription.traderStrategyVersionId, taskMode, inventory.positionsRevision, inventory.pendingOrdersRevision, idempotencyKey])
+          await outbox(connection, 'trader', id, 'trader.requested', { trader_run_id: id, market_analysis_id: input.marketAnalysisId, trading_account_id: subscription.accountId, task_mode: taskMode })
           const [created] = await connection.execute<TraderRunRow[]>(`${traderRunSelect} WHERE r.id=?`, [id])
           if (created[0]) createdTraderRuns.push(traderRun(created[0]))
         }
@@ -334,19 +353,25 @@ export class MysqlInferenceRepository implements InferenceRepository {
   }
 
   async requestTraderEvaluation(input: RequestTraderEvaluationInput) {
+    input = structuredClone(input)
+    const requestedAt = inferenceSqlTime(input.requestedAt)
     return transaction(this.pool, async connection => {
       const [existing] = await connection.execute<TraderRunRow[]>(`${traderRunSelect} WHERE r.user_id=? AND r.idempotency_key=? LIMIT 1`, [input.userId, input.idempotencyKey])
       if (existing[0]) return traderRun(existing[0])
-      const [analyses] = await connection.execute<OpportunityRow[]>(`SELECT id,opportunity,revision FROM market_analyses WHERE id=? AND owner_user_id=? AND valid_until_utc>? LIMIT 1 FOR SHARE`, [input.marketAnalysisId, input.userId, input.requestedAt])
+      const [analyses] = await connection.execute<OpportunityRow[]>(`SELECT id,opportunity,revision,CAST(strategy_version_id AS CHAR) strategy_version_id,standard_symbol FROM market_analyses WHERE id=? AND owner_user_id=? AND valid_until_utc>? LIMIT 1 FOR SHARE`, [input.marketAnalysisId, input.userId, requestedAt])
       const analysis = analyses[0]
       if (!analysis) throw new InferenceError('analysis_expired_or_forbidden', 409)
-      const [subscriptions] = await connection.execute<SubscriptionRow[]>(`SELECT CAST(s.id AS CHAR) id,s.user_id,CAST(s.trading_account_id AS CHAR) trading_account_id,s.revision,CAST(s.trader_strategy_id AS CHAR) trader_strategy_id,CAST(s.trader_strategy_version_id AS CHAR) trader_strategy_version_id,COALESCE(pr.revision,0) positions_revision,COALESCE(orr.revision,0) pending_orders_revision,EXISTS(SELECT 1 FROM open_position_snapshots p WHERE p.trading_account_id=s.trading_account_id AND JSON_UNQUOTE(JSON_EXTRACT(p.payload_json,'$.symbol'))=s.standard_symbol) has_positions,EXISTS(SELECT 1 FROM pending_order_snapshots o WHERE o.trading_account_id=s.trading_account_id AND JSON_UNQUOTE(JSON_EXTRACT(o.payload_json,'$.symbol'))=s.standard_symbol) has_pending_orders FROM strategy_subscriptions s LEFT JOIN trading_projection_revisions pr ON pr.trading_account_id=s.trading_account_id AND pr.resource_kind='positions' AND pr.resource_id='open' LEFT JOIN trading_projection_revisions orr ON orr.trading_account_id=s.trading_account_id AND orr.resource_kind='pending_orders' AND orr.resource_id='open' WHERE s.id=? AND s.user_id=? AND s.trading_account_id=? AND s.revision=? AND s.trader_strategy_id=? AND s.trader_strategy_version_id=? AND s.status='active' AND s.trader_enabled=1 LIMIT 1 FOR UPDATE`, [input.subscriptionId, input.userId, input.tradingAccountId, input.subscriptionRevision, input.strategyId, input.strategyVersionId])
-      const subscription = subscriptions[0]
+      const subscription = await this.dispatch.subscribers(connection).readForEvaluation({ subscriptionId: input.subscriptionId,
+        userId: input.userId, accountId: input.tradingAccountId, subscriptionRevision: input.subscriptionRevision,
+        traderStrategyId: input.strategyId, traderStrategyVersionId: input.strategyVersionId,
+        analysisStrategyVersionId: analysis.strategy_version_id, symbol: analysis.standard_symbol })
       if (!subscription) throw new InferenceError('subscription_revision_conflict', 409)
       const [concurrent] = await connection.execute<TraderRunRow[]>(`${traderRunSelect} WHERE r.user_id=? AND r.idempotency_key=? LIMIT 1`, [input.userId, input.idempotencyKey])
       if (concurrent[0]) return traderRun(concurrent[0])
-      const taskMode = traderTaskMode(analysis.opportunity, Boolean(subscription.has_positions), Boolean(subscription.has_pending_orders)) ?? 'entry'
-      await connection.execute(`INSERT INTO ai_trader_runs (id,user_id,trading_account_id,subscription_id,subscription_revision,market_analysis_id,strategy_id,strategy_version_id,task_mode,analysis_revision,positions_revision,pending_orders_revision,idempotency_key,status,revision,created_at_utc,updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'queued',1,?,?)`, [input.id, input.userId, input.tradingAccountId, input.subscriptionId, input.subscriptionRevision, input.marketAnalysisId, input.strategyId, input.strategyVersionId, taskMode, analysis.revision, subscription.positions_revision, subscription.pending_orders_revision, input.idempotencyKey, input.requestedAt, input.requestedAt])
+      const inventory = await this.dispatch.inventory(connection).read({ userId: input.userId, accountId: input.tradingAccountId, symbol: analysis.standard_symbol })
+      if (!inventory) throw new InferenceError('trader_account_forbidden', 409)
+      const taskMode = traderTaskMode(analysis.opportunity, inventory.hasPositions, inventory.hasPendingOrders) ?? 'entry'
+      await connection.execute(`INSERT INTO ai_trader_runs (id,user_id,trading_account_id,subscription_id,subscription_revision,market_analysis_id,strategy_id,strategy_version_id,task_mode,analysis_revision,positions_revision,pending_orders_revision,idempotency_key,status,revision,created_at_utc,updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'queued',1,?,?)`, [input.id, input.userId, input.tradingAccountId, input.subscriptionId, input.subscriptionRevision, input.marketAnalysisId, input.strategyId, input.strategyVersionId, taskMode, analysis.revision, inventory.positionsRevision, inventory.pendingOrdersRevision, input.idempotencyKey, requestedAt, requestedAt])
       await outbox(connection, 'trader', input.id, 'trader.requested', { trader_run_id: input.id, market_analysis_id: input.marketAnalysisId, trading_account_id: input.tradingAccountId, task_mode: taskMode })
       const [created] = await connection.execute<TraderRunRow[]>(`${traderRunSelect} WHERE r.id=?`, [input.id])
       return traderRun(created[0]!)
@@ -354,11 +379,13 @@ export class MysqlInferenceRepository implements InferenceRepository {
   }
 
   async beginTrader(input: Parameters<InferenceRepository['beginTrader']>[0]) {
+    input = structuredClone(input)
+    if (contentHash(input.snapshot) !== input.snapshotHash) throw new InferenceError('inference_snapshot_hash_mismatch', 409)
     return transaction(this.pool, async connection => {
       const [candidateRows] = await connection.execute<TraderRunRow[]>(`${traderRunSelect} WHERE r.id=? AND r.user_id=? LIMIT 1`, [input.runId, input.userId])
       const candidate = candidateRows[0]
       if (!candidate) throw new InferenceError('trader_run_not_found', 404)
-      await connection.execute('SELECT id FROM trading_accounts WHERE id=? FOR UPDATE', [candidate.trading_account_id])
+      await this.dispatch.inventory(connection).lockAccount(candidate.trading_account_id)
       const [rows] = await connection.execute<TraderRunRow[]>(`${traderRunSelect} WHERE r.id=? AND r.user_id=? FOR UPDATE`, [input.runId, input.userId])
       const row = rows[0]
       if (!row) throw new InferenceError('trader_run_not_found', 404)
@@ -366,11 +393,15 @@ export class MysqlInferenceRepository implements InferenceRepository {
       if (String(input.snapshot.account.id) !== row.trading_account_id) throw new InferenceError('trader_account_snapshot_mismatch', 409)
       if (input.snapshot.strategy.id !== row.strategy_id || input.snapshot.strategy.versionId !== row.strategy_version_id) throw new InferenceError('trader_strategy_snapshot_mismatch', 409)
       if (input.snapshot.subscriptionRevision !== Number(row.subscription_revision) || input.snapshot.analysis.id !== row.market_analysis_id) throw new InferenceError('trader_context_snapshot_mismatch', 409)
-      if (input.snapshot.taskMode !== row.task_mode || input.snapshot.analysisRevision !== Number(row.analysis_revision) || input.snapshot.positionsRevision !== Number(row.positions_revision) || input.snapshot.pendingOrdersRevision !== Number(row.pending_orders_revision)) throw new InferenceError('trader_projection_snapshot_mismatch', 409)
-      const [analysisRows] = await connection.execute<(HashRow & { revision: number })[]>('SELECT content_sha256,revision FROM market_analyses WHERE id=? AND valid_until_utc>UTC_TIMESTAMP(3) FOR SHARE', [row.market_analysis_id])
+      if (input.snapshot.analysisRevision !== Number(row.analysis_revision)) throw new InferenceError('trader_projection_snapshot_mismatch', 409)
+      const [analysisRows] = await connection.execute<(HashRow & { revision: number; opportunity: MarketAnalysisSummary['opportunity']; standard_symbol: string })[]>('SELECT content_sha256,revision,opportunity,standard_symbol FROM market_analyses WHERE id=? AND valid_until_utc>UTC_TIMESTAMP(3) FOR SHARE', [row.market_analysis_id])
       if (analysisRows[0]?.content_sha256 !== input.snapshot.analysis.contentHash || Number(analysisRows[0]?.revision) !== input.snapshot.analysisRevision) throw new InferenceError('trader_analysis_hash_mismatch', 409)
-      await assertTraderSnapshotCurrent(connection, row, input.snapshot)
-      if (input.snapshot.subscriptionWindowHash !== await readTraderWindowFingerprint(this.accountClock(connection), connection, traderRun(row), new Date())) throw new InferenceError('trader_schedule_changed', 409)
+      const analysis = analysisRows[0]!
+      const inventory = await this.dispatch.inventory(connection).read({ userId: input.userId, accountId: row.trading_account_id, symbol: analysis.standard_symbol })
+      if (!inventory) throw new InferenceError('trader_account_forbidden', 409)
+      if (input.snapshot.taskMode !== traderTaskMode(analysis.opportunity, inventory.hasPositions, inventory.hasPendingOrders)) throw new InferenceError('trader_projection_revision_conflict', 409)
+      await assertTraderSnapshotCurrent(connection, row, input.snapshot, { subscriptions: this.dispatch.subscribers(connection), trading: this.dispatch.inventory(connection), risks: this.dispatch.risks(connection) })
+      if (input.snapshot.subscriptionWindowHash !== await readTraderWindowFingerprint(this.accountClock(connection), this.windows(connection), traderRun(row), new Date())) throw new InferenceError('trader_schedule_changed', 409)
       await assertTraderPreferencesCurrent(connection, traderRun(row), input.snapshot.executionPreferences, this.preferences)
       const [activeTasks] = await connection.execute<ActiveTraderTaskRow[]>(`SELECT t.id,t.lease_expires_at_utc FROM ai_model_tasks t INNER JOIN ai_trader_runs r ON r.model_task_id=t.id WHERE t.purpose='trader' AND t.trading_account_id=? AND t.status='running' ORDER BY t.id FOR UPDATE`, [row.trading_account_id])
       for (const task of activeTasks.filter(task => task.lease_expires_at_utc.getTime() <= Date.now())) {
@@ -383,11 +414,12 @@ export class MysqlInferenceRepository implements InferenceRepository {
       const [fences] = await connection.execute<RevisionRow[]>(`SELECT COALESCE(MAX(fencing_token),0)+1 revision FROM ai_model_tasks WHERE purpose='trader' AND trading_account_id=?`, [row.trading_account_id])
       const fencingToken = Number(fences[0]?.revision ?? 1)
       const payload = JSON.stringify(input.snapshot)
-      await connection.execute(`INSERT INTO inference_snapshots (id,purpose,user_id,trading_account_id,strategy_id,strategy_version_id,standard_symbol,payload_sha256,payload_bytes,captured_at_utc,created_at_utc) SELECT ?,'trader',r.user_id,r.trading_account_id,r.strategy_id,r.strategy_version_id,a.standard_symbol,?,?,?,UTC_TIMESTAMP(3) FROM ai_trader_runs r INNER JOIN market_analyses a ON a.id=r.market_analysis_id WHERE r.id=?`, [input.snapshotId, input.snapshotHash, Buffer.byteLength(payload), input.snapshot.capturedAt, input.runId])
+      await connection.execute(`INSERT INTO inference_snapshots (id,purpose,user_id,trading_account_id,strategy_id,strategy_version_id,standard_symbol,payload_sha256,payload_bytes,captured_at_utc,created_at_utc) SELECT ?,'trader',r.user_id,r.trading_account_id,r.strategy_id,r.strategy_version_id,a.standard_symbol,?,?,?,UTC_TIMESTAMP(3) FROM ai_trader_runs r INNER JOIN market_analyses a ON a.id=r.market_analysis_id WHERE r.id=?`, [input.snapshotId, input.snapshotHash, Buffer.byteLength(payload), inferenceSqlTime(input.snapshot.capturedAt), input.runId])
       await connection.execute(`INSERT INTO inference_snapshot_payloads (snapshot_id,encoding,payload_json) VALUES (?,'json',?)`, [input.snapshotId, payload])
-      await connection.execute(`INSERT INTO ai_model_tasks (id,purpose,user_id,trading_account_id,input_snapshot_id,model_profile_id,status,deadline_at_utc,fencing_token,lease_owner,lease_expires_at_utc,created_at_utc,updated_at_utc) VALUES (?,'trader',?,?,?,?, 'running',?,?,?,?,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))`, [input.taskId, input.userId, row.trading_account_id, input.snapshotId, input.modelProfileId, input.deadlineAt, fencingToken, input.workerId, input.deadlineAt])
+      await this.recordMemoryPreparation(connection, input)
+      await connection.execute(`INSERT INTO ai_model_tasks (id,purpose,user_id,trading_account_id,input_snapshot_id,model_profile_id,status,deadline_at_utc,fencing_token,lease_owner,lease_expires_at_utc,created_at_utc,updated_at_utc) VALUES (?,'trader',?,?,?,?, 'running',?,?,?,?,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))`, [input.taskId, input.userId, row.trading_account_id, input.snapshotId, input.modelProfileId, inferenceSqlTime(input.deadlineAt), fencingToken, input.workerId, inferenceSqlTime(input.deadlineAt)])
       await connection.execute(`INSERT INTO ai_model_attempts (id,task_id,attempt_number,provider,model,status,started_at_utc) VALUES (?,?,1,?,?,'running',UTC_TIMESTAMP(3))`, [input.attemptId, input.taskId, input.provider, input.model])
-      await connection.execute(`UPDATE ai_trader_runs SET input_snapshot_id=?,model_task_id=?,account_revision=?,quote_revision=?,contract_revision=?,risk_revision=?,status='running',revision=revision+1,updated_at_utc=UTC_TIMESTAMP(3) WHERE id=?`, [input.snapshotId, input.taskId, input.snapshot.accountRevision, input.snapshot.quoteRevision, input.snapshot.contractRevision, input.snapshot.riskRevision, input.runId])
+      await connection.execute(`UPDATE ai_trader_runs SET input_snapshot_id=?,model_task_id=?,account_revision=?,quote_revision=?,contract_revision=?,risk_revision=?,task_mode=?,positions_revision=?,pending_orders_revision=?,status='running',revision=revision+1,updated_at_utc=UTC_TIMESTAMP(3) WHERE id=?`, [input.snapshotId, input.taskId, input.snapshot.accountRevision, input.snapshot.quoteRevision, input.snapshot.contractRevision, input.snapshot.riskRevision, input.snapshot.taskMode, input.snapshot.positionsRevision, input.snapshot.pendingOrdersRevision, input.runId])
       await outbox(connection, 'trader', input.runId, 'trader.running', { trader_run_id: input.runId })
       const [updated] = await connection.execute<TraderRunRow[]>(`${traderRunSelect} WHERE r.id=?`, [input.runId])
       return { run: traderRun(updated[0]!), taskId: input.taskId, attemptId: input.attemptId, attemptNumber: 1, fencingToken }
@@ -395,7 +427,11 @@ export class MysqlInferenceRepository implements InferenceRepository {
   }
 
   async completeTrader(input: CompleteTraderInput) {
+    input = structuredClone(input)
     return transaction(this.pool, async connection => {
+      const [candidates] = await connection.execute<TraderRunRow[]>(`${traderRunSelect} WHERE r.id=? AND r.user_id=? LIMIT 1`, [input.runId, input.userId])
+      if (!candidates[0]) throw new InferenceError('trader_run_not_found', 404)
+      await this.dispatch.inventory(connection).lockAccount(candidates[0].trading_account_id)
       const [rows] = await connection.execute<TraderRunRow[]>(`${traderRunSelect} WHERE r.id=? AND r.user_id=? FOR UPDATE`, [input.runId, input.userId])
       const row = rows[0]
       if (!row) throw new InferenceError('trader_run_not_found', 404)
@@ -404,17 +440,22 @@ export class MysqlInferenceRepository implements InferenceRepository {
       const task = tasks[0]
       if (!task || task.status !== 'running' || Number(task.fencing_token) !== input.fencingToken) throw new InferenceError('trader_task_fence_conflict', 409)
       if (task.deadline_at_utc.getTime() <= Date.now()) throw new InferenceError('trader_task_deadline_exceeded', 409)
-      const staleReason = await traderStaleReason(connection, row) ?? await traderWindowStaleReason(this.accountClock(connection), connection, traderRun(row), this.preferences)
-      const decisionStatus = staleReason ? 'stale' : 'proposed'
+      const staleReason = await traderStaleReason(connection, row, { subscriptions: this.dispatch.subscribers(connection), trading: this.dispatch.inventory(connection), risks: this.dispatch.risks(connection) }) ?? await traderWindowStaleReason(this.accountClock(connection), connection, traderRun(row), this.preferences, this.windows(connection))
+      const claimScope = { userId: input.userId, accountId: row.trading_account_id, strategyId: row.strategy_id }
+      const claims = staleReason ? [] : await loadEntryEventClaims(connection, { ...claimScope,
+        snapshotId: row.input_snapshot_id, strategyVersionId: row.strategy_version_id }, input.result)
+      const finalStaleReason = staleReason ?? (await entryEventsOccupied(connection, claimScope, claims) ? 'entry_event_already_used' : null)
+      const decisionStatus = finalStaleReason ? 'stale' : 'proposed'
       const payload = JSON.stringify(input.result)
       const payloadHash = contentHash(input.result)
-      await connection.execute(`INSERT INTO trade_decisions (id,trader_run_id,user_id,trading_account_id,market_analysis_id,strategy_id,strategy_version_id,action_kind,side,confidence,summary,input_snapshot_id,content_sha256,status,stale_reason,revision,created_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,UTC_TIMESTAMP(3))`, [input.decisionId, input.runId, input.userId, row.trading_account_id, row.market_analysis_id, row.strategy_id, row.strategy_version_id, input.result.action, input.result.side, input.result.confidence, input.result.summary, row.input_snapshot_id, payloadHash, decisionStatus, staleReason])
+      await connection.execute(`INSERT INTO trade_decisions (id,trader_run_id,user_id,trading_account_id,market_analysis_id,strategy_id,strategy_version_id,action_kind,side,confidence,summary,input_snapshot_id,content_sha256,status,stale_reason,revision,created_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,UTC_TIMESTAMP(3))`, [input.decisionId, input.runId, input.userId, row.trading_account_id, row.market_analysis_id, row.strategy_id, row.strategy_version_id, input.result.action, input.result.side, input.result.confidence, input.result.summary, row.input_snapshot_id, payloadHash, decisionStatus, finalStaleReason])
       await connection.execute('INSERT INTO trade_decision_payloads (trade_decision_id,payload_json,payload_sha256,payload_bytes) VALUES (?,?,?,?)', [input.decisionId, payload, payloadHash, Buffer.byteLength(payload)])
+      if (!finalStaleReason) await reserveEntryEvents(connection, claimScope, input.decisionId, claims)
       const [attemptUpdated] = await connection.execute<ResultSetHeader>(`UPDATE ai_model_attempts SET status='succeeded',completed_at_utc=UTC_TIMESTAMP(3),usage_json=? WHERE id=? AND task_id=? AND status='running'`, [input.usage ? JSON.stringify(input.usage) : null, input.attemptId, input.taskId])
       if (attemptUpdated.affectedRows !== 1) throw new InferenceError('trader_attempt_conflict', 409)
       await connection.execute(`UPDATE ai_model_tasks SET status='succeeded',lease_owner=NULL,lease_expires_at_utc=NULL,updated_at_utc=UTC_TIMESTAMP(3),completed_at_utc=UTC_TIMESTAMP(3) WHERE id=?`, [input.taskId])
       await connection.execute(`UPDATE ai_trader_runs SET status='succeeded',revision=revision+1,updated_at_utc=UTC_TIMESTAMP(3),completed_at_utc=UTC_TIMESTAMP(3) WHERE id=?`, [input.runId])
-      await outbox(connection, 'trade_decision', input.decisionId, 'trade_decision.created', { decision_id: input.decisionId, analysis_id: row.market_analysis_id, trading_account_id: row.trading_account_id, action: input.result.action, side: input.result.side, confidence: input.result.confidence, status: decisionStatus, stale_reason: staleReason })
+      await outbox(connection, 'trade_decision', input.decisionId, 'trade_decision.created', { decision_id: input.decisionId, analysis_id: row.market_analysis_id, trading_account_id: row.trading_account_id, action: input.result.action, side: input.result.side, confidence: input.result.confidence, status: decisionStatus, stale_reason: finalStaleReason })
       const [decisions] = await connection.execute<TraderDecisionRow[]>(`${traderDecisionSelect} WHERE d.id=?`, [input.decisionId])
       return traderDecision(decisions[0]!)
     })
@@ -456,9 +497,9 @@ export class MysqlInferenceRepository implements InferenceRepository {
     const [rows] = await this.pool.execute<JsonPayloadRow[]>('SELECT p.payload_json FROM market_analysis_payloads p INNER JOIN market_analyses a ON a.id=p.market_analysis_id WHERE p.market_analysis_id=? AND a.owner_user_id=? LIMIT 1', [analysisId, userId])
     const payload = rows[0]?.payload_json
     if (!payload) throw new InferenceError('analysis_payload_missing', 500)
-    return { summary, result: parsePayload<MarketAnalysisResult>(payload) }
+    const [snapshots] = await this.pool.execute<JsonPayloadRow[]>('SELECT p.payload_json FROM inference_snapshot_payloads p INNER JOIN market_analyses a ON a.input_snapshot_id=p.snapshot_id WHERE a.id=? AND a.owner_user_id=? LIMIT 1', [analysisId, userId])
+    return { summary, result: parsePayload<MarketAnalysisResult>(payload), chart: snapshots[0] ? analysisChart(parsePayload(snapshots[0].payload_json), archive => replayChanChart(archive as ChanCalculationArchive)) : [] }
   }
-  async listAnalyses(userId: number, limit: number) { const [rows] = await this.pool.execute<MarketAnalysisRow[]>(`${marketAnalysisSelect} WHERE a.owner_user_id=? ORDER BY a.created_at_utc DESC,a.id DESC LIMIT ?`, [userId, limit]); return rows.map(marketAnalysis) }
   async getTraderDecision(userId: number, decisionId: string) {
     const [rows] = await this.pool.execute<TraderDecisionRow[]>(`${traderDecisionSelect} WHERE d.id=? AND d.user_id=? LIMIT 1`, [decisionId, userId])
     if (!rows[0]) return null

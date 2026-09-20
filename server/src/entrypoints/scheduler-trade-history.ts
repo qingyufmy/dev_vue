@@ -1,8 +1,12 @@
+import { createPeriodReviewDiscovery } from '../bootstrap/period-review-discovery.js'
+import { assertMysqlExecutionWorkflowSchemaReady } from '../modules/execution/composition.js'
+import { createAccountInventorySummaryReader, assertMysqlInstrumentCollectionSchemaReady } from '../modules/trading/composition.js'
 import {
   assertV4RuntimeEnabled, AsyncPollLoop, closeHttpServer, createMysqlPool,
   installProcessLifecycle, loadServerEnvironment, loadV4RuntimeConfig, RoleHealth, startRoleHealthServer,
 } from '../bootstrap/index.js'
-import { createMysqlTradeHistoryScheduler } from '../modules/trade-history/composition.js'
+import { createMysqlTradeHistoryScheduler, createMysqlHistoryTaskRecovery, assertMysqlHistoryTaskSchemaReady } from '../modules/trade-history/composition.js'
+import { createMysqlInstrumentCollectionRecovery } from '../modules/trading/composition.js'
 
 loadServerEnvironment()
 
@@ -12,10 +16,19 @@ async function main() {
   const health = new RoleHealth('scheduler-trade-history')
   const pool = createMysqlPool(config.mysql)
   await pool.query('SELECT 1')
-  const scheduler = createMysqlTradeHistoryScheduler(pool)
+  await assertMysqlInstrumentCollectionSchemaReady(pool)
+  await assertMysqlHistoryTaskSchemaReady(pool)
+  await assertMysqlExecutionWorkflowSchemaReady(pool)
+  const periods = createPeriodReviewDiscovery(pool)
+  const scheduler = createMysqlTradeHistoryScheduler(pool, createAccountInventorySummaryReader)
+  const historyRecovery = createMysqlHistoryTaskRecovery(pool)
+  const instrumentRecovery = createMysqlInstrumentCollectionRecovery(pool)
   const loop = new AsyncPollLoop(async () => {
     try {
+      await periods.tick()
       await scheduler.schedule(config.historyScheduleBatchSize, new Date())
+      await historyRecovery.schedule(config.historyScheduleBatchSize)
+      await instrumentRecovery.schedule(config.historyScheduleBatchSize)
       health.workSucceeded()
     } catch (error) {
       health.workFailed(publicError(error))
@@ -33,7 +46,7 @@ async function main() {
   health.setAccepting(true)
   installProcessLifecycle('scheduler-trade-history', async () => {
     health.setAccepting(false); health.setReady(false)
-    await loop.stop(); await closeHttpServer(healthServer); await pool.end()
+    await loop.stop(); await periods.stop(); await closeHttpServer(healthServer); await pool.end()
   })
 }
 

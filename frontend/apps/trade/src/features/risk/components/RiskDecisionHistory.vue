@@ -17,7 +17,7 @@ const emit = defineEmits<{ inspect: [decisionId: string] }>()
 <template>
   <Card class="shadow-none">
     <CardHeader class="flex-row items-start justify-between gap-4 space-y-0 border-b">
-      <div><CardTitle>最近风控评审</CardTitle><CardDescription>每条 AI 交易决定在发送终端前的确定性风控结果</CardDescription></div>
+      <div><CardTitle>最近风控评审</CardTitle><CardDescription>查看交易获批或受限的原因</CardDescription></div>
       <Badge variant="outline">{{ items.length }} 条</Badge>
     </CardHeader>
     <CardContent class="p-0">
@@ -27,12 +27,12 @@ const emit = defineEmits<{ inspect: [decisionId: string] }>()
       <template v-else>
         <div class="hidden overflow-x-auto md:block">
           <Table>
-            <TableHeader><TableRow><TableHead>结果</TableHead><TableHead>主要结论</TableHead><TableHead>交易决定</TableHead><TableHead>时间</TableHead><TableHead class="text-right">详情</TableHead></TableRow></TableHeader>
+            <TableHeader><TableRow><TableHead>结果</TableHead><TableHead>主要结论</TableHead><TableHead>时间</TableHead><TableHead class="text-right">详情</TableHead></TableRow></TableHeader>
             <TableBody>
               <TableRow v-for="item in items" :key="item.riskDecisionId">
                 <TableCell><Badge :variant="item.status === 'approved' ? 'default' : 'destructive'"><CheckCircle2 v-if="item.status === 'approved'" /><ShieldX v-else />{{ item.status === 'approved' ? '通过' : '拒绝' }}</Badge></TableCell>
-                <TableCell class="max-w-80"><span class="block truncate text-sm font-medium">{{ rejectCodeLabel(item.rejectCode) }}</span><span class="mt-0.5 block text-xs text-muted-foreground">风险版本 {{ item.accountRiskRevision }}</span></TableCell>
-                <TableCell class="font-mono text-xs">{{ item.tradeDecisionId }}</TableCell>
+                <TableCell class="max-w-80"><span class="block truncate text-sm font-medium">{{ rejectCodeLabel(item.rejectCode) }}</span></TableCell>
+
                 <TableCell class="whitespace-nowrap text-xs text-muted-foreground">{{ formatDateTime(item.createdAt, timezoneOffsetMinutes) }}</TableCell>
                 <TableCell class="text-right"><Button variant="ghost" size="sm" class="min-h-11" @click="emit('inspect', item.riskDecisionId)">查看规则</Button></TableCell>
               </TableRow>

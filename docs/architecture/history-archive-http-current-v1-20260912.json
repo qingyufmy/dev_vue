@@ -1,0 +1,31 @@
+{
+  "kind": "history-archive-current-http/v1",
+  "passed": true,
+  "writes": 0,
+  "authentication": "injected-user-not-browser-session",
+  "checks": [
+    {
+      "kind": "signals",
+      "originalUser": 1,
+      "records": 455,
+      "allPagesMatchDatabaseCount": true,
+      "detailContractPassed": true,
+      "otherUserDenied": true,
+      "systemZeroDenied": true
+    },
+    {
+      "kind": "executions",
+      "originalUser": 1,
+      "records": 154,
+      "allPagesMatchDatabaseCount": true,
+      "detailContractPassed": true,
+      "otherUserDenied": true,
+      "systemZeroDenied": true
+    }
+  ],
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "observedAt": "2026-09-12T15:31:12.456Z"
+}

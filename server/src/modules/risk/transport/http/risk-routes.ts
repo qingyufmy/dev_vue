@@ -1,4 +1,7 @@
-import type { FastifyPluginAsync } from 'fastify'
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
+import { AuthError } from '../../../auth/index.js'
+import { createHttpContractValidator, HttpContractError } from '../../../../transport/http-contract.js'
+import { httpRuntimeContracts } from '../../../../transport/generated/http-contracts.js'
 import type { RiskService } from '../../application/risk-service.js'
 import type { RiskDecisionDetail, RiskDecisionSummary } from '../../application/risk-ports.js'
 import type { ManualReleaseState, ManualRiskRelease } from '../../domain/manual-risk-release.js'
@@ -30,12 +33,14 @@ function policyDto(value: EffectiveRiskPolicy) {
     manual_release_consecutive_loss_limit: policy.manualReleaseConsecutiveLossLimit,
     max_risk_per_trade_percent: decimal(policy.maxRiskPerTradePercent), max_daily_loss_percent: decimal(policy.maxDailyLossPercent),
     max_drawdown_percent: decimal(policy.maxDrawdownPercent), max_open_positions: policy.maxOpenPositions,
-    max_pending_orders: policy.maxPendingOrders, max_total_volume: decimal(policy.maxTotalVolume),
+    max_pending_orders: policy.maxPendingOrders, max_total_volume: decimal(policy.maxTotalVolume), ...(Object.hasOwn(policy, 'maxOrderVolume') ? { max_order_volume: decimal(policy.maxOrderVolume) } : {}),
     max_spread_points: decimal(policy.maxSpreadPoints), min_open_interval_seconds: policy.minOpenIntervalSeconds,
     max_daily_open_count: policy.maxDailyOpenCount, consecutive_loss_limit: policy.consecutiveLossLimit,
     loss_cooldown_minutes: policy.lossCooldownMinutes, pending_valid_minutes: policy.pendingValidMinutes,
+    pending_dedup_atr_multiplier: decimal(policy.pendingDedupAtrMultiplier),
     weekend_close_minutes: policy.weekendCloseMinutes, trade_send_enabled: policy.tradeSendEnabled,
     account_kill_switch: policy.accountKillSwitch, require_stop_loss: true,
+    numeric_controls: Object.fromEntries(Object.entries(value.numericControls ?? {}).map(([key, control]) => [snake(key), { allowed_min: decimal(control!.allowedMin), allowed_max: decimal(control!.allowedMax), locked_value: control!.lockedValue === null ? null : decimal(control!.lockedValue), user_editable: control!.userEditable }])),
     editable_fields: value.editableFields.map(field => snake(field)), revision: String(value.policySetRevision), updated_at: value.updatedAt,
   }
 }
@@ -103,7 +108,7 @@ function policyPatch(body: Record<string, unknown>): AccountRiskPolicyPatch {
   const map: Record<string, keyof AccountRiskPolicyPatch> = {
     max_risk_per_trade_percent: 'maxRiskPerTradePercent', max_daily_loss_percent: 'maxDailyLossPercent',
     max_drawdown_percent: 'maxDrawdownPercent', max_open_positions: 'maxOpenPositions', max_pending_orders: 'maxPendingOrders',
-    max_total_volume: 'maxTotalVolume', max_spread_points: 'maxSpreadPoints', min_open_interval_seconds: 'minOpenIntervalSeconds',
+    max_total_volume: 'maxTotalVolume', max_order_volume: 'maxOrderVolume', max_spread_points: 'maxSpreadPoints', min_open_interval_seconds: 'minOpenIntervalSeconds',
     max_daily_open_count: 'maxDailyOpenCount', consecutive_loss_limit: 'consecutiveLossLimit', loss_cooldown_minutes: 'lossCooldownMinutes',
     pending_valid_minutes: 'pendingValidMinutes', weekend_close_minutes: 'weekendCloseMinutes', trade_send_enabled: 'tradeSendEnabled',
     account_kill_switch: 'accountKillSwitch',
@@ -124,50 +129,84 @@ function expectedRevision(header: unknown) {
   return Number(value)
 }
 
-function problem(error: unknown, request: { id: string; url: string }, reply: { code(status: number): { send(body: unknown): unknown } }) {
-  const known = error instanceof RiskError ? error : new RiskError('risk_unavailable', 503)
-  return reply.code(known.status).send({ type: `urn:aurum:problem:${known.code}`, title: 'Risk request failed', status: known.status, code: known.code, detail: known.code, instance: request.url, correlation_id: request.id, retryable: known.status >= 500 })
-}
-
 export const riskRoutes: FastifyPluginAsync<RiskRoutesOptions> = async (fastify, options) => {
+  const contract = createHttpContractValidator(httpRuntimeContracts,
+    ['getRiskPolicy', 'getRiskPolicyReceipt', 'replaceRiskPolicy', 'getAccountRiskSummary', 'getManualRiskRelease', 'getManualRiskReleaseReceipt', 'createManualRiskRelease', 'listRiskDecisions', 'getRiskDecision'])
+  const contractProblem = (operation: string, error: unknown, request: FastifyRequest, reply: FastifyReply) => {
+    const known = error instanceof RiskError || error instanceof AuthError || error instanceof HttpContractError
+      ? error : new RiskError('risk_unavailable', 503)
+    const body = { type: `urn:aurum:problem:${known.code}`, title: 'Risk request failed', status: known.status,
+      code: known.code, detail: known.code, instance: request.url, correlation_id: request.id, retryable: known.status >= 500 }
+    return reply.type('application/problem+json').code(known.status)
+      .send(contract.response(operation, body, known.status, 'application/problem+json'))
+  }
+  const read = async (operation: string, request: FastifyRequest, reply: FastifyReply, load: (userId: number) => Promise<unknown>) => {
+    reply.header('Cache-Control', 'no-store')
+    try {
+      const { userId } = await options.auth.authenticate(request)
+      contract.request(operation, request)
+      return contract.response(operation, response(request.id, await load(userId)))
+    } catch (error) {
+      return contractProblem(operation, error, request, reply)
+    }
+  }
   fastify.get<{ Params: { account_id: string } }>('/risk-accounts/:account_id/policy', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); const policy = await options.service.policy(userId, request.params.account_id); return reply.header('ETag', `"${policy.policySetRevision}"`).send(response(request.id, policyDto(policy))) }
-    catch (error) { return problem(error, request, reply) }
+    return read('getRiskPolicy', request, reply, async userId => {
+      const policy = await options.service.policy(userId, request.params.account_id)
+      reply.header('ETag', `"${policy.policySetRevision}"`)
+      return policyDto(policy)
+    })
   })
   fastify.put<{ Params: { account_id: string }; Body: Record<string, unknown> & { reason?: string } }>('/risk-accounts/:account_id/policy', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
     try {
       const { userId } = await options.auth.assertWrite(request)
-      const policy = await options.service.replacePolicy(userId, request.params.account_id, expectedRevision(request.headers['if-match']), policyPatch(request.body), String(request.body.reason ?? ''))
-      return reply.header('ETag', `"${policy.policySetRevision}"`).send(response(request.id, policyDto(policy)))
-    } catch (error) { return problem(error, request, reply) }
+      const revision = expectedRevision(request.headers['if-match'])
+      contract.request('replaceRiskPolicy', request)
+      const policy = await options.service.replacePolicy(userId, request.params.account_id, revision, policyPatch(request.body), String(request.body.reason ?? ''), String(request.headers['idempotency-key'] ?? ''))
+      const result = contract.response('replaceRiskPolicy', response(request.id, policyDto(policy)))
+      return reply.header('ETag', `"${policy.policySetRevision}"`).send(result)
+    } catch (error) { return contractProblem('replaceRiskPolicy', error, request, reply) }
+  })
+  fastify.get<{ Params: { account_id: string }; Querystring: { idempotency_key: string } }>('/risk-accounts/:account_id/policy-receipt', async (request, reply) => {
+    return read('getRiskPolicyReceipt', request, reply, async userId => {
+      const receipt = await options.service.policyReceipt(userId, request.params.account_id, request.query.idempotency_key)
+      return { state: receipt.state, policy: receipt.policy ? policyDto(receipt.policy) : null }
+    })
   })
   fastify.get<{ Params: { account_id: string } }>('/risk-accounts/:account_id/summary', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); return response(request.id, summaryDto(await options.service.summary(userId, request.params.account_id))) }
-    catch (error) { return problem(error, request, reply) }
+    return read('getAccountRiskSummary', request, reply, async userId => summaryDto(await options.service.summary(userId, request.params.account_id)))
   })
   fastify.get<{ Params: { account_id: string } }>('/risk-accounts/:account_id/manual-release', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); return response(request.id, manualReleaseStateDto(await options.service.manualReleaseState(userId, request.params.account_id))) }
-    catch (error) { return problem(error, request, reply) }
+    return read('getManualRiskRelease', request, reply, async userId => manualReleaseStateDto(await options.service.manualReleaseState(userId, request.params.account_id)))
   })
   fastify.post<{ Params: { account_id: string }; Body: { acknowledge_risk?: boolean; reason?: string } }>('/risk-accounts/:account_id/manual-release', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
     try {
       const { userId } = await options.auth.assertWrite(request)
+      const revision = expectedRevision(request.headers['if-match'])
+      contract.request('createManualRiskRelease', request)
       const body = request.body ?? {}
       const release = await options.service.createManualRelease({
-        userId, accountId: request.params.account_id, expectedSummaryRevision: expectedRevision(request.headers['if-match']),
+        userId, accountId: request.params.account_id, expectedSummaryRevision: revision,
         idempotencyKey: String(request.headers['idempotency-key'] ?? ''), acknowledgeRisk: body.acknowledge_risk === true,
         reason: String(body.reason ?? ''),
       })
-      return reply.code(201).header('ETag', `"${release.revision}"`).send(response(request.id, manualReleaseDto(release)))
-    } catch (error) { return problem(error, request, reply) }
+      const result = contract.response('createManualRiskRelease', response(request.id, manualReleaseDto(release)), 201)
+      return reply.code(201).header('ETag', `"${release.revision}"`).send(result)
+    } catch (error) { return contractProblem('createManualRiskRelease', error, request, reply) }
+  })
+  fastify.get<{ Params: { account_id: string }; Querystring: { idempotency_key: string } }>('/risk-accounts/:account_id/manual-release-receipt', async (request, reply) => {
+    return read('getManualRiskReleaseReceipt', request, reply, async userId => {
+      const receipt = await options.service.manualReleaseReceipt(userId, request.params.account_id, request.query.idempotency_key)
+      return { state: receipt.state, release: manualReleaseDto(receipt.release) }
+    })
   })
   fastify.get<{ Querystring: { account_id: string; page_size?: string } }>('/risk-decisions', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); return response(request.id, { items: (await options.service.decisions(userId, request.query.account_id, Number(request.query.page_size ?? 50))).map(decisionDto) }) }
-    catch (error) { return problem(error, request, reply) }
+    return read('listRiskDecisions', request, reply, async userId => ({ items: (await options.service.decisions(userId, request.query.account_id, Number(request.query.page_size ?? 50))).map(decisionDto) }))
   })
   fastify.get<{ Params: { risk_decision_id: string } }>('/risk-decisions/:risk_decision_id', async (request, reply) => {
-    try { const { userId } = await options.auth.authenticate(request); return response(request.id, detailDto(await options.service.decision(userId, request.params.risk_decision_id))) }
-    catch (error) { return problem(error, request, reply) }
+    return read('getRiskDecision', request, reply, async userId => detailDto(await options.service.decision(userId, request.params.risk_decision_id)))
   })
 }
 

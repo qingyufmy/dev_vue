@@ -99,6 +99,17 @@ namespace Liangjian.BridgeV4.SmokeTests
                 using (ProfileRuntime runtime = Runtime(root))
                 using (FakeChannel channel = new FakeChannel(Request("terminal.info", new Dictionary<string, object>(), "request-pump", 1)))
                 {
+                    runtime.DataStore.UpsertCoverage(1, new CoverageRangeRecord {
+                        Resource = "history.orders", ScopeKey = "*", RangeStartUtcMsc = Now - 2000,
+                        RangeEndUtcMsc = Now - 1000, Completeness = "complete", SourceRevision = "empty-history", UpdatedAtUtcMsc = Now });
+                    var historyPayload = Object(Parse(new BridgeProfileSession(runtime, new FakeTerminalSource("{}"))
+                        .Handle(Request("history.orders", new Dictionary<string, object> {
+                            { "range_start_utc_msc", Now - 2000 }, { "range_end_utc_msc", Now - 1000 },
+                            { "limit", 10 }, { "cursor", null } }, "request-covered-history", 1), Now)), "payload");
+                    var coverage = Object(historyPayload, "history_coverage");
+                    Assert((string)coverage["status"] == "complete" && Convert.ToInt64(coverage["collected_at_utc_msc"]) == Now
+                        && Convert.ToInt64(coverage["range_end_utc_msc"]) == Now - 1000
+                        && Equals(coverage["source_revision"], historyPayload["source_revision"]), "history_coverage_not_frozen");
                     BridgeProfileConnection connection = new BridgeProfileConnection(
                         new BridgeProfileSession(runtime, new FakeTerminalSource("{\"platform\":\"mt4\"}")), channel);
                     Assert(connection.ProcessNext(Now) && channel.Sent.Count == 1, "connection_did_not_send_response");

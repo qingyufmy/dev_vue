@@ -1,0 +1,14 @@
+{
+  "kind": "clock-observation-schema-upgrade/v1",
+  "passed": false,
+  "target": "dev_vue_m1_source_20260910_02",
+  "planHash": "4c5054cdc007cf286eaa1811db78cddcfcaac60c5cc30511fce731e33185e192",
+  "ddlAttempted": 0,
+  "businessRowWrites": 0,
+  "errorCode": "ER_BAD_DB_ERROR",
+  "errorLocations": [
+    "    at file:///D:/dev_codex/dev_vue/scripts/apply-clock-observation-upgrade-local.mjs:33:20",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)"
+  ],
+  "observedAt": "2026-09-11T07:54:00.619Z"
+}

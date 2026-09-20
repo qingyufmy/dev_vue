@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Threading;
+using Liangjian.BridgeV4.Transport;
 using Liangjian.BridgeV4.Update;
 
 namespace Liangjian.BridgeV4.Runtime
@@ -31,7 +32,7 @@ namespace Liangjian.BridgeV4.Runtime
             int timeoutMillisecondsValue,
             Func<Uri, string, int, IBridgeMessageChannel> connectorValue)
         {
-            if (uriValue == null || uriValue.Scheme != "wss" || sessionTokenProviderValue == null
+            if (!WebSocketEndpointPolicy.IsAllowed(uriValue) || sessionTokenProviderValue == null
                 || connectorValue == null)
             {
                 throw new InvalidDataException("bridge_channel_configuration_invalid");
@@ -70,11 +71,13 @@ namespace Liangjian.BridgeV4.Runtime
         private readonly ProfileOutboxCoordinator outbox = new ProfileOutboxCoordinator();
         private readonly ReleaseActivationStatusStore releaseStatus;
         private readonly BridgeTerminalIdentityMonitor identityMonitor;
+        private readonly ITerminalProjectionSource projectionSource;
         private readonly ManualResetEvent stop = new ManualResetEvent(false);
         private Thread thread;
         private IBridgeMessageChannel activeChannel;
         private int activeOperations;
         private bool pausedForUpdate;
+        private bool capacityWaiting;
         private bool disposed;
         private bool stopping;
         private bool routeInvalidated;
@@ -96,6 +99,11 @@ namespace Liangjian.BridgeV4.Runtime
         public BridgeProfileWorker(ProfileRuntime runtimeValue, BridgeSessionController controllerValue,
             IBridgeMessageChannelFactory factoryValue, ReleaseActivationStatusStore statusStore,
             BridgeTerminalIdentityMonitor identityMonitorValue)
+            : this(runtimeValue, controllerValue, factoryValue, statusStore, identityMonitorValue, null) { }
+
+        public BridgeProfileWorker(ProfileRuntime runtimeValue, BridgeSessionController controllerValue,
+            IBridgeMessageChannelFactory factoryValue, ReleaseActivationStatusStore statusStore,
+            BridgeTerminalIdentityMonitor identityMonitorValue, ITerminalProjectionSource projectionSourceValue)
         {
             if (runtimeValue == null || controllerValue == null || factoryValue == null)
             {
@@ -106,6 +114,7 @@ namespace Liangjian.BridgeV4.Runtime
             factory = factoryValue;
             releaseStatus = statusStore;
             identityMonitor = identityMonitorValue;
+            projectionSource = projectionSourceValue;
         }
 
         public event EventHandler<BridgeWorkerErrorEventArgs> ConnectionError;
@@ -113,7 +122,18 @@ namespace Liangjian.BridgeV4.Runtime
 
         public string State
         {
-            get { lock (gate) return disposed ? "stopped" : stopping ? "stopping" : pausedForUpdate ? "update_wait" : routeInvalidated ? "disconnected" : controller.State; }
+            get { lock (gate) return disposed ? "stopped" : stopping ? "stopping" : pausedForUpdate ? "update_wait" : capacityWaiting ? "capacity_wait" : routeInvalidated ? "disconnected" : controller.State; }
+        }
+
+        public bool ResumeForAvailableCapacity()
+        {
+            lock (gate)
+            {
+                if (disposed || stopping || !capacityWaiting) return false;
+                capacityWaiting = false;
+            }
+            RaiseStateChanged();
+            return true;
         }
 
         public string ConnectionId
@@ -242,6 +262,9 @@ namespace Liangjian.BridgeV4.Runtime
                     stop.WaitOne(100);
                     continue;
                 }
+                bool waiting;
+                lock (gate) waiting = capacityWaiting;
+                if (waiting) { stop.WaitOne(250); continue; }
                 long now = UtcNowMsc();
                 if (!controller.CanConnect(now))
                 {
@@ -251,8 +274,12 @@ namespace Liangjian.BridgeV4.Runtime
                 }
                 IBridgeMessageChannel channel = null;
                 ManualResetEvent connectionStop = new ManualResetEvent(false);
+                Thread projectionSync = null;
                 Thread heartbeat = null;
                 Thread identity = null;
+                Thread tradeStreams = null;
+                Thread marketStreams = null;
+                Thread marketQuotes = null;
                 try
                 {
                     lock (gate) routeInvalidated = false;
@@ -287,6 +314,25 @@ namespace Liangjian.BridgeV4.Runtime
                         identity.IsBackground = true;
                         identity.Start();
                     }
+                    tradeStreams = new Thread(new ThreadStart(delegate { TradeStreamsLoop(channel, connectionStop); }));
+                    tradeStreams.Name = "LiangjianBridgeV4.Trades." + runtime.Configuration.ProfileId;
+                    tradeStreams.IsBackground = true;
+                    tradeStreams.Start();
+                    marketStreams = new Thread(new ThreadStart(delegate { MarketStreamsLoop(channel, connectionStop, false); }));
+                    marketStreams.Name = "LiangjianBridgeV4.Market." + runtime.Configuration.ProfileId;
+                    marketStreams.IsBackground = true;
+                    marketStreams.Start();
+                    marketQuotes = new Thread(new ThreadStart(delegate { MarketStreamsLoop(channel, connectionStop, true); }));
+                    marketQuotes.IsBackground = true;
+                    marketQuotes.Name = "LiangjianBridgeV4.Quotes." + runtime.Configuration.ProfileId;
+                    marketQuotes.Start();
+                    if (projectionSource != null)
+                    {
+                        projectionSync = new Thread(new ThreadStart(delegate { ProjectionSyncLoop(connectionStop); }));
+                        projectionSync.Name = "LiangjianBridgeV4.History." + runtime.Configuration.ProfileId;
+                        projectionSync.IsBackground = true;
+                        projectionSync.Start();
+                    }
                     while (!stop.WaitOne(0) && !connectionStop.WaitOne(0))
                     {
                         string incoming = channel.Receive();
@@ -318,6 +364,10 @@ namespace Liangjian.BridgeV4.Runtime
                 }
                 catch (Exception error)
                 {
+                    if (error.Message == "bridge_capacity_exceeded")
+                    {
+                        lock (gate) capacityWaiting = true;
+                    }
                     if (!stop.WaitOne(0) && !IsPausedForUpdate()) RaiseConnectionError(error);
                 }
                 finally
@@ -338,6 +388,10 @@ namespace Liangjian.BridgeV4.Runtime
                     // Keep both wait handles and runtime alive until heartbeat work has exited.
                     if (heartbeat != null && heartbeat != Thread.CurrentThread) heartbeat.Join();
                     if (identity != null && identity != Thread.CurrentThread) identity.Join();
+                    if (tradeStreams != null && tradeStreams != Thread.CurrentThread) tradeStreams.Join();
+                    if (marketStreams != null && marketStreams != Thread.CurrentThread) marketStreams.Join();
+                    if (marketQuotes != null && marketQuotes != Thread.CurrentThread) marketQuotes.Join();
+                    if (projectionSync != null && projectionSync != Thread.CurrentThread) projectionSync.Join();
                     connectionStop.Dispose();
                     if (!stop.WaitOne(0))
                     {
@@ -379,6 +433,9 @@ namespace Liangjian.BridgeV4.Runtime
                         try
                         {
                             if (heartbeat != null) channel.Send(heartbeat);
+                            string accountStream;
+                            lock (controllerGate) accountStream = controller.CreateAccountStream(UtcNowMsc());
+                            if (accountStream != null) channel.Send(accountStream);
                             TrySendReleaseStatus(channel, UtcNowMsc());
                             outbox.FlushOne(runtime, channel, UtcNowMsc());
                         }
@@ -393,6 +450,81 @@ namespace Liangjian.BridgeV4.Runtime
             {
                 if (!stop.WaitOne(0) && !connectionStop.WaitOne(0) && !IsPausedForUpdate()) RaiseConnectionError(error);
                 try { channel.Dispose(); } catch (Exception) { }
+            }
+        }
+
+        private void TradeStreamsLoop(IBridgeMessageChannel channel, ManualResetEvent connectionStop)
+        {
+            while (!stop.WaitOne(0) && !connectionStop.WaitOne(0))
+            {
+                long cycleStarted = UtcNowMsc();
+                bool active;
+                lock (controllerGate) active = controller.State == "active";
+                if (!active) { connectionStop.WaitOne(250); continue; }
+                if (!TryBeginOperation()) return;
+                try
+                {
+                    string[] messages = controller.ReadTradeStreams(UtcNowMsc());
+                    if (stop.WaitOne(0) || connectionStop.WaitOne(0)) return;
+                    foreach (string message in messages) channel.Send(message);
+                }
+                catch (Exception error)
+                {
+                    // A failed/incomplete read never becomes an empty authoritative collection.
+                    if (!stop.WaitOne(0) && !connectionStop.WaitOne(0)) RaiseConnectionError(error);
+                }
+                finally { EndOperation(); }
+                connectionStop.WaitOne((int)Math.Max(25, 1000 - (UtcNowMsc() - cycleStarted)));
+            }
+        }
+
+        private void MarketStreamsLoop(IBridgeMessageChannel channel, ManualResetEvent connectionStop, bool quotes)
+        {
+            while (!stop.WaitOne(0) && !connectionStop.WaitOne(0))
+            {
+                long cycleStarted = UtcNowMsc();
+                bool active;
+                lock (controllerGate) active = controller.State == "active";
+                if (!active) { connectionStop.WaitOne(250); continue; }
+                if (!TryBeginOperation()) return;
+                try
+                {
+                    string[] messages = quotes ? controller.ReadMarketQuotes(UtcNowMsc()) : controller.ReadMarketStreams(UtcNowMsc());
+                    if (stop.WaitOne(0) || connectionStop.WaitOne(0)) return;
+                    foreach (string message in messages) channel.Send(message);
+                }
+                catch (Exception error)
+                {
+                    // Failed market reads never produce fabricated prices.
+                    if (!stop.WaitOne(0) && !connectionStop.WaitOne(0)) RaiseConnectionError(error);
+                }
+                finally { EndOperation(); }
+                connectionStop.WaitOne((int)Math.Max(25, (quotes ? 1000 : 5000) - (UtcNowMsc() - cycleStarted)));
+            }
+        }
+
+        private void ProjectionSyncLoop(ManualResetEvent connectionStop)
+        {
+            var coordinator = new ProjectionSyncCoordinator();
+            string leaseOwner = "projection-" + Guid.NewGuid().ToString("N");
+            int delay = 250;
+            while (!stop.WaitOne(0) && !connectionStop.WaitOne(delay))
+            {
+                bool active;
+                lock (controllerGate) active = controller.State == "active";
+                if (!active) continue;
+                if (!TryBeginOperation()) return;
+                try
+                {
+                    ProjectionSyncRunResult result = coordinator.RunOne(runtime, projectionSource, leaseOwner, UtcNowMsc());
+                    delay = result.Status == "idle" || result.Status == "retry_wait" ? 1000 : 100;
+                }
+                catch (Exception error)
+                {
+                    delay = 1000;
+                    if (!stop.WaitOne(0) && !connectionStop.WaitOne(0)) RaiseConnectionError(error);
+                }
+                finally { EndOperation(); }
             }
         }
 

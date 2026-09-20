@@ -5,7 +5,7 @@ import {
 } from '../domain/account-access.js'
 import { EvidenceAccountAccessPolicy } from '../application/account-access-policy.js'
 import {
-  OBSERVER_AUTHORIZATION_TTL_MS, type ObserverAccessReader, type ObserverAuthorization,
+  OBSERVER_AUTHORIZATION_TTL_MS, type ObserverAccessReader, type ObserverAuthorization, type StrategyObserverAccessReader,
 } from '../application/observer-ports.js'
 import type { ObserverChannelSummary } from '../domain/trading.js'
 
@@ -19,6 +19,7 @@ interface ObserverAccessRow extends RowDataPacket {
   source_id: string | number | null
   source_trading_account_id: string | number | null
   source_account_id: string | number | null
+  analysis_strategy_id?: string | number | null
   ownership_revision: string | number | null
   channel_active: number | boolean
   channel_revision: string | number | null
@@ -46,6 +47,7 @@ const OBSERVER_SELECT = `
          CAST(c.source_trading_account_id AS CHAR) AS source_trading_account_id,
          c.slug AS channel_slug,
          CAST(s.trading_account_id AS CHAR) AS source_account_id,
+         CAST(s.analysis_strategy_id AS CHAR) AS analysis_strategy_id,
          CAST(a.ownership_revision AS CHAR) AS ownership_revision,
          c.active AS channel_active,c.audience,CAST(c.revision AS CHAR) AS channel_revision,
          CAST(s.revision AS CHAR) AS source_revision,s.status AS source_status,
@@ -140,6 +142,32 @@ export class MysqlObserverAccessReader implements ObserverAccessReader {
 
   async authorize(userId: number, channelId: string, accountId?: string): Promise<ObserverAuthorization | null> {
     return this.authorizeWithExecutor(this.executor, userId, channelId, accountId, false)
+  }
+
+  async authorizeStrategySource(input: Parameters<StrategyObserverAccessReader['read']>[0]) {
+    const scope = { ...input }
+    if (!isValidUserId(scope.userId) || !isPositiveDatabaseId(scope.sourceAccountId)
+      || !isPositiveDatabaseId(scope.analysisStrategyId)) return null
+    const observedAt = this.requestNow()
+    if (!observedAt) return null
+    let cursor = '0'
+    while (true) {
+      const [rawRows] = await this.executor.execute<ObserverAccessRow[]>(`${OBSERVER_SELECT}
+        AND s.trading_account_id=? AND s.analysis_strategy_id=? AND c.id>?
+        ORDER BY c.id LIMIT 100`, [scope.userId, observedAt.toISOString(), scope.sourceAccountId, scope.analysisStrategyId, cursor])
+      const rows = await this.withPrincipals(rawRows, scope.userId, 'none')
+      const completedAt = this.requestNow()
+      if (!completedAt || completedAt.getTime() >= observedAt.getTime() + OBSERVER_AUTHORIZATION_TTL_MS) return null
+      for (const row of rows) {
+        if (String(row.analysis_strategy_id) !== scope.analysisStrategyId || String(row.source_account_id) !== scope.sourceAccountId) continue
+        const authorization = this.authorizationFromRow(row, scope.userId, observedAt)
+        if (authorization && isExpiryAfter(authorization.expiresAtUtc, completedAt)) return { analysisStrategyId: scope.analysisStrategyId, authorization }
+      }
+      if (rawRows.length < 100) return null
+      const next = String(rawRows[rawRows.length - 1]?.channel_id ?? '')
+      if (!isPositiveDatabaseId(next) || BigInt(next) <= BigInt(cursor)) return null
+      cursor = next
+    }
   }
 
   /** Used by context writes so authorization is checked on the transaction connection. */

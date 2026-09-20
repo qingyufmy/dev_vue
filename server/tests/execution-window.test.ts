@@ -16,6 +16,30 @@ const distributionEvidence = (timezone = 'UTC') => {
 }
 
 describe('execution subscription window', () => {
+  it('rechecks frozen strategy configuration in the existing execution window gate', async () => {
+    const config = { risk_budget: { version: 1, max_risk_per_trade_percent: '0.5' } }, promptHash = 'a'.repeat(64)
+    const base = evidence({ enabled: false }, 'UTC')
+    const frozen = { ...JSON.parse(base.snapshot_json), strategyConfigHash: sha256Canonical(config), subscriptionRevision: 3,
+      strategy: { id: '20', versionId: '21', promptHash } }
+    const row = { ...base, receive_timezone: 'UTC', receive_window_json: { enabled: false },
+      subscription_id: '8', subscription_revision: 3, strategy_id: '20', strategy_version_id: '21',
+      snapshot_json: JSON.stringify(frozen), snapshot_sha256: sha256Canonical(frozen) }
+    const db = { execute: async () => [[row]] } as unknown as PoolConnection
+    const current = { strategyId: '20', versionId: '21', promptHash, configHash: sha256Canonical(config), config }
+    let available = true
+    const reader = { async read(scope: unknown) {
+      expect(scope).toEqual({ subscriptionId: '8', subscriptionRevision: 3, userId: 42, accountId: '7',
+        traderStrategyId: '20', traderStrategyVersionId: '21', promptHash, configHash: sha256Canonical(config) })
+      return available ? current : null
+    } }
+    const check = () => assertRiskDecisionWindow(createTransactionAccountClock(db), db, 'risk', 42, '7', new Date(), reader)
+    await expect(check()).resolves.toBeUndefined()
+    available = false
+    await expect(check()).rejects.toThrow('execution_strategy_config_changed')
+    await expect(assertRiskDecisionWindow(createTransactionAccountClock(db), db, 'risk', 42, '7', new Date())).rejects.toThrow('execution_strategy_config_unproven')
+    row.snapshot_json = base.snapshot_json; row.snapshot_sha256 = base.snapshot_sha256
+    await expect(check()).rejects.toThrow('execution_strategy_config_unproven')
+  })
   it('refuses changed preference content, changed revision, and missing current settings', async () => {
     const base = { receive_timezone: 'UTC', receive_window_json: { enabled: false }, ...evidence({ enabled: false }, 'UTC') }
     for (const changes of [{ preference_mode: 'trend' }, { preference_revision: '2' }, { preference_version: null }, { preference_revision: null }]) {

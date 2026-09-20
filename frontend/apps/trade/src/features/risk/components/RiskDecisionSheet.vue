@@ -7,7 +7,7 @@ import { ScrollArea } from '@aurum/ui/scroll-area'
 import { Separator } from '@aurum/ui/separator'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@aurum/ui/sheet'
 import { Skeleton } from '@aurum/ui/skeleton'
-import { formatDateTime, rejectCodeLabel } from '../model/risk-presentation'
+import { formatDateTime, rejectCodeLabel, riskActionLabel, riskDetailFields } from '../model/risk-presentation'
 
 withDefaults(defineProps<{ open: boolean; detail: RiskDecisionDetail | null; loading?: boolean; error?: string; timezoneOffsetMinutes?: number | null }>(), { loading: false, error: '', timezoneOffsetMinutes: null })
 const emit = defineEmits<{ 'update:open': [value: boolean] }>()
@@ -34,14 +34,14 @@ function outcomeVariant(outcome: string) {
         <div v-else-if="detail" class="grid gap-5 p-5 sm:p-6">
           <Card class="shadow-none">
             <CardHeader class="flex-row items-start justify-between space-y-0"><div><p class="text-xs text-muted-foreground">最终结论</p><CardTitle class="mt-1">{{ rejectCodeLabel(detail.summary.rejectCode) }}</CardTitle></div><Badge :variant="detail.summary.status === 'approved' ? 'default' : 'destructive'"><CheckCircle2 v-if="detail.summary.status === 'approved'" /><ShieldX v-else />{{ detail.summary.status === 'approved' ? '通过' : '拒绝' }}</Badge></CardHeader>
-            <CardContent class="grid gap-2 text-xs text-muted-foreground"><p>交易决定 {{ detail.summary.tradeDecisionId }}</p><p>评审时间 {{ formatDateTime(detail.evaluatedAt, timezoneOffsetMinutes) }}</p><p class="break-all">策略哈希 {{ detail.policyHash }}</p></CardContent>
+            <CardContent class="grid gap-2 text-xs text-muted-foreground"><p>评审时间 {{ formatDateTime(detail.evaluatedAt, timezoneOffsetMinutes) }}</p></CardContent>
           </Card>
 
           <section aria-labelledby="rules-title"><h3 id="rules-title" class="font-semibold">规则明细</h3><p class="mt-1 text-xs text-muted-foreground">规则按服务端确定性顺序评估</p>
             <div class="mt-3 grid gap-2">
               <div v-for="rule in detail.rules" :key="`${rule.code}-${rule.actionId ?? ''}`" class="rounded-xl border p-4">
-                <div class="flex items-start justify-between gap-3"><div class="min-w-0"><strong class="block break-words text-sm">{{ rejectCodeLabel(rule.code) }}</strong><p v-if="rule.actionId" class="mt-1 font-mono text-xs text-muted-foreground">动作 {{ rule.actionId }}</p></div><Badge :variant="outcomeVariant(rule.outcome)">{{ outcomeLabel(rule.outcome) }}</Badge></div>
-                <pre v-if="rule.details && Object.keys(rule.details).length" class="mt-3 overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-muted p-3 text-xs text-muted-foreground">{{ JSON.stringify(rule.details, null, 2) }}</pre>
+                <div class="flex items-start justify-between gap-3"><div class="min-w-0"><strong class="block break-words text-sm">{{ rejectCodeLabel(rule.code) }}</strong></div><Badge :variant="outcomeVariant(rule.outcome)">{{ outcomeLabel(rule.outcome) }}</Badge></div>
+                <dl v-if="rule.details" class="mt-3 grid gap-2 text-sm"><div v-for="field in riskDetailFields(rule.details)" :key="field.label" class="flex justify-between gap-4"><dt class="text-muted-foreground">{{ field.label }}</dt><dd>{{ field.value }}</dd></div></dl>
               </div>
             </div>
           </section>
@@ -49,7 +49,7 @@ function outcomeVariant(outcome: string) {
           <Separator />
           <section aria-labelledby="approved-actions-title"><h3 id="approved-actions-title" class="font-semibold">获批动作</h3><p class="mt-1 text-xs text-muted-foreground">通过风控并允许进入后续执行链的动作</p>
             <p v-if="!detail.approvedActions.length" class="mt-3 rounded-xl border border-dashed p-4 text-sm text-muted-foreground">本次没有获批动作。</p>
-            <div v-else class="mt-3 grid gap-2"><div v-for="action in detail.approvedActions" :key="action.actionId" class="rounded-xl border p-4"><div class="flex items-center justify-between gap-3"><strong class="text-sm">{{ action.kind }}</strong><span class="font-mono text-xs text-muted-foreground">{{ action.actionId }}</span></div><pre class="mt-3 overflow-x-auto whitespace-pre-wrap break-words rounded-lg bg-muted p-3 text-xs text-muted-foreground">{{ JSON.stringify(action.parameters, null, 2) }}</pre></div></div>
+            <div v-else class="mt-3 grid gap-2"><div v-for="action in detail.approvedActions" :key="action.actionId" class="rounded-xl border p-4"><div class="flex items-center justify-between gap-3"><strong class="text-sm">{{ riskActionLabel(action.kind) }}</strong></div><dl class="mt-3 grid gap-2 text-sm"><div v-for="field in riskDetailFields(action.parameters)" :key="field.label" class="flex justify-between gap-4"><dt class="text-muted-foreground">{{ field.label }}</dt><dd>{{ field.value }}</dd></div></dl></div></div>
           </section>
         </div>
         <p v-else class="p-5 text-sm text-muted-foreground">选择一条风控记录查看详情。</p>

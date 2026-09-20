@@ -1,4 +1,6 @@
-import type { FastifyPluginAsync } from 'fastify'
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
+import { createHttpContractValidator, HttpContractError } from '../../../../transport/http-contract.js'
+import { httpRuntimeContracts } from '../../../../transport/generated/http-contracts.js'
 import { AuthError } from '../../../auth/index.js'
 import {
   ObserverManagementError,
@@ -31,25 +33,40 @@ const response = (requestId: string, data: unknown) => ({
  * not contain the admin host hook, which belongs to the application entrypoint.
  */
 export const observerManagementRoutes: FastifyPluginAsync<ObserverManagementRoutesOptions> = async (fastify, options) => {
+  const contract = createHttpContractValidator(httpRuntimeContracts, ['listObserverSourcesForAdmin', 'listObserverChannelsForAdmin', 'listObserverChannelAccesses', 'listObserverManagementOperations', 'createObserverSource', 'updateObserverSource', 'createObserverChannel', 'updateObserverChannel', 'setObserverChannelAccess', 'setObserverDefaultChannel'])
+  const writeResponse = (operation: string, result: ObserverManagementResult, request: FastifyRequest, reply: FastifyReply, status: number) => {
+    try {
+      const body = contract.response(operation, response(request.id, resultDto(result)), status)
+      return reply.header('Cache-Control', 'no-store').code(status).send(body)
+    } catch {
+      // The service already returned a committed result. Preserve the request key for recovery.
+      throw new ObserverManagementError('observer_management_commit_unknown', 503)
+    }
+  }
   fastify.get<{ Querystring: Querystring }>('/sources', async (request, reply) => {
     try {
       const actor = await options.auth.authenticate(request)
-      return response(request.id, pageDto(await options.service.list(actor.userId, actor.role, listInput('sources', request.query)), 'sources'))
-    } catch (error) { return problem(error, request, reply) }
+      contract.request('listObserverSourcesForAdmin', request)
+      return reply.header('Cache-Control', 'no-store').send(contract.response('listObserverSourcesForAdmin', response(request.id, pageDto(await options.service.list(actor.userId, actor.role, listInput('sources', request.query)), 'sources'))))
+    } catch (error) { return contractProblem(error, request, reply, contract, 'listObserverSourcesForAdmin') }
   })
 
   fastify.post<{ Body: unknown }>('/sources', async (request, reply) => {
     try {
       const actor = await options.auth.assertWrite(request)
+      exactQueryKeys(request.query as Querystring, [])
+      contract.request('createObserverSource', request)
       const command: ObserverManagementCommand = { kind: 'source.create', config: sourceConfig(request.body, false) }
       const result = await options.service.write(actor.userId, actor.role, idempotencyKey(request), command)
-      return reply.code(201).send(response(request.id, resultDto(result)))
-    } catch (error) { return problem(error, request, reply) }
+      return writeResponse('createObserverSource', result, request, reply, 201)
+    } catch (error) { return contractProblem(error, request, reply, contract, 'createObserverSource') }
   })
 
   fastify.put<{ Params: Params; Body: unknown }>('/sources/:source_id', async (request, reply) => {
     try {
       const actor = await options.auth.assertWrite(request)
+      exactQueryKeys(request.query as Querystring, [])
+      contract.request('updateObserverSource', request)
       const body = object(request.body, 'observer_source_body_invalid')
       const command: ObserverManagementCommand = {
         kind: 'source.update',
@@ -58,29 +75,34 @@ export const observerManagementRoutes: FastifyPluginAsync<ObserverManagementRout
         config: sourceConfig(body, true),
       }
       const result = await options.service.write(actor.userId, actor.role, idempotencyKey(request), command)
-      return response(request.id, resultDto(result))
-    } catch (error) { return problem(error, request, reply) }
+      return writeResponse('updateObserverSource', result, request, reply, 200)
+    } catch (error) { return contractProblem(error, request, reply, contract, 'updateObserverSource') }
   })
 
   fastify.get<{ Querystring: Querystring }>('/channels', async (request, reply) => {
     try {
       const actor = await options.auth.authenticate(request)
-      return response(request.id, pageDto(await options.service.list(actor.userId, actor.role, listInput('channels', request.query)), 'channels'))
-    } catch (error) { return problem(error, request, reply) }
+      contract.request('listObserverChannelsForAdmin', request)
+      return reply.header('Cache-Control', 'no-store').send(contract.response('listObserverChannelsForAdmin', response(request.id, pageDto(await options.service.list(actor.userId, actor.role, listInput('channels', request.query)), 'channels'))))
+    } catch (error) { return contractProblem(error, request, reply, contract, 'listObserverChannelsForAdmin') }
   })
 
   fastify.post<{ Body: unknown }>('/channels', async (request, reply) => {
     try {
       const actor = await options.auth.assertWrite(request)
+      exactQueryKeys(request.query as Querystring, [])
+      contract.request('createObserverChannel', request)
       const command: ObserverManagementCommand = { kind: 'channel.create', config: channelConfig(request.body, false) }
       const result = await options.service.write(actor.userId, actor.role, idempotencyKey(request), command)
-      return reply.code(201).send(response(request.id, resultDto(result)))
-    } catch (error) { return problem(error, request, reply) }
+      return writeResponse('createObserverChannel', result, request, reply, 201)
+    } catch (error) { return contractProblem(error, request, reply, contract, 'createObserverChannel') }
   })
 
   fastify.put<{ Params: Params; Body: unknown }>('/channels/:channel_id', async (request, reply) => {
     try {
       const actor = await options.auth.assertWrite(request)
+      exactQueryKeys(request.query as Querystring, [])
+      contract.request('updateObserverChannel', request)
       const body = object(request.body, 'observer_channel_body_invalid')
       const command: ObserverManagementCommand = {
         kind: 'channel.update',
@@ -89,21 +111,24 @@ export const observerManagementRoutes: FastifyPluginAsync<ObserverManagementRout
         config: channelConfig(body, true),
       }
       const result = await options.service.write(actor.userId, actor.role, idempotencyKey(request), command)
-      return response(request.id, resultDto(result))
-    } catch (error) { return problem(error, request, reply) }
+      return writeResponse('updateObserverChannel', result, request, reply, 200)
+    } catch (error) { return contractProblem(error, request, reply, contract, 'updateObserverChannel') }
   })
 
   fastify.get<{ Params: Params; Querystring: Querystring }>('/channels/:channel_id/accesses', async (request, reply) => {
     try {
       const actor = await options.auth.authenticate(request)
+      contract.request('listObserverChannelAccesses', request)
       const channelId = pathId(bodyValue(request.params, 'channel_id'), 'observer_channel_id_invalid')
-      return response(request.id, pageDto(await options.service.list(actor.userId, actor.role, listInput('accesses', request.query, channelId)), 'accesses'))
-    } catch (error) { return problem(error, request, reply) }
+      return reply.header('Cache-Control', 'no-store').send(contract.response('listObserverChannelAccesses', response(request.id, pageDto(await options.service.list(actor.userId, actor.role, listInput('accesses', request.query, channelId)), 'accesses'))))
+    } catch (error) { return contractProblem(error, request, reply, contract, 'listObserverChannelAccesses') }
   })
 
   fastify.put<{ Params: Params; Body: unknown }>('/channels/:channel_id/accesses/:user_id', async (request, reply) => {
     try {
       const actor = await options.auth.assertWrite(request)
+      exactQueryKeys(request.query as Querystring, [])
+      contract.request('setObserverChannelAccess', request)
       const body = object(request.body, 'observer_access_body_invalid')
       exactBodyKeys(body, ['expected_revision', 'granted'])
       const command: ObserverManagementCommand = {
@@ -114,13 +139,15 @@ export const observerManagementRoutes: FastifyPluginAsync<ObserverManagementRout
         expectedRevision: revisionField(body, false),
       }
       const result = await options.service.write(actor.userId, actor.role, idempotencyKey(request), command)
-      return response(request.id, resultDto(result))
-    } catch (error) { return problem(error, request, reply) }
+      return writeResponse('setObserverChannelAccess', result, request, reply, 200)
+    } catch (error) { return contractProblem(error, request, reply, contract, 'setObserverChannelAccess') }
   })
 
   fastify.put<{ Body: unknown }>('/default-channel', async (request, reply) => {
     try {
       const actor = await options.auth.assertWrite(request)
+      exactQueryKeys(request.query as Querystring, [])
+      contract.request('setObserverDefaultChannel', request)
       const body = object(request.body, 'observer_default_channel_body_invalid')
       exactBodyKeys(body, ['channel_id', 'expected_revision'])
       const channelId = body.channel_id === null ? null : pathId(body.channel_id, 'observer_channel_id_invalid')
@@ -130,15 +157,16 @@ export const observerManagementRoutes: FastifyPluginAsync<ObserverManagementRout
         expectedRevision: revisionField(body, false),
       }
       const result = await options.service.write(actor.userId, actor.role, idempotencyKey(request), command)
-      return response(request.id, resultDto(result))
-    } catch (error) { return problem(error, request, reply) }
+      return writeResponse('setObserverDefaultChannel', result, request, reply, 200)
+    } catch (error) { return contractProblem(error, request, reply, contract, 'setObserverDefaultChannel') }
   })
 
   fastify.get<{ Querystring: Querystring }>('/operations', async (request, reply) => {
     try {
       const actor = await options.auth.authenticate(request)
-      return response(request.id, pageDto(await options.service.list(actor.userId, actor.role, listInput('operations', request.query)), 'operations'))
-    } catch (error) { return problem(error, request, reply) }
+      contract.request('listObserverManagementOperations', request)
+      return reply.header('Cache-Control', 'no-store').send(contract.response('listObserverManagementOperations', response(request.id, pageDto(await options.service.list(actor.userId, actor.role, listInput('operations', request.query)), 'operations'))))
+    } catch (error) { return contractProblem(error, request, reply, contract, 'listObserverManagementOperations') }
   })
 }
 
@@ -374,18 +402,11 @@ function isResultRecord(value: unknown): value is ObserverManagementResult {
     && Number.isSafeInteger(value.revision) && Number.isSafeInteger(value.registry_revision)
 }
 
-function problem(error: unknown, request: { id: string; url: string }, reply: { code(status: number): { send(body: unknown): unknown } }) {
-  const known = error instanceof ObserverManagementError || error instanceof AuthError
-    ? error
-    : new ObserverManagementError('observer_management_unavailable', 503)
-  return reply.code(known.status).send({
-    type: `urn:aurum:problem:${known.code}`,
-    title: 'Observer management request failed',
-    status: known.status,
-    code: known.code,
-    detail: known.code,
-    instance: request.url,
-    correlation_id: request.id,
-    retryable: known.status >= 500,
-  })
+function contractProblem(error: unknown, request: { id: string; url: string }, reply: FastifyReply, contract: ReturnType<typeof createHttpContractValidator>, operation: string) {
+  const known = error instanceof ObserverManagementError || error instanceof AuthError || error instanceof HttpContractError
+    ? error : new ObserverManagementError('observer_management_unavailable', 503)
+  const body = { type: `urn:aurum:problem:${known.code}`, title: 'Observer management request failed', status: known.status,
+    code: known.code, detail: known.code, instance: request.url, correlation_id: request.id, retryable: known.status >= 500 && known.code !== 'observer_management_commit_unknown' }
+  return reply.header('Cache-Control', 'no-store').type('application/problem+json').code(known.status)
+    .send(contract.response(operation, body, known.status, 'application/problem+json'))
 }

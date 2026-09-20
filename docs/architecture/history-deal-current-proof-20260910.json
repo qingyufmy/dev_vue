@@ -1,0 +1,22 @@
+{
+  "kind": "history-deal-current-upgrade-proof/v1",
+  "passed": true,
+  "target": "dev_vue",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "priorSteps": 189,
+  "completedSteps": 190,
+  "originalTables": 256,
+  "finalTables": 257,
+  "originalRows": 338746,
+  "protectedTableCount": 255,
+  "protectedSnapshotHash": "90387044460a2722fcb18372ce83a6ac8d4584f6fb29ed95b7a35051bc5f00ee",
+  "oldJournalUnchanged": true,
+  "ddlCount": 1,
+  "replayDdlCount": 0,
+  "newTableRows": 0,
+  "businessWritesPerformed": false,
+  "collectorSchemaReady": true,
+  "evidenceHash": "d631877eb1bd02e34674e877d957569176012f39af6c2ab3008d9c854ec62ada",
+  "planHash": "17b3a62ca38be9031d992078492632a495adb30441c08340b4a727302746e21c",
+  "observedAt": "2026-09-10T05:00:14.915Z"
+}

@@ -17,3 +17,13 @@ HTTP：GET /api/v4/market/calendar-events 与 /api/v4/market/calendar-events/:ev
 测试入口：server/tests/calendar-http.test.ts；实际SQL探针scripts/verify-calendar-reader-mysql.mjs。探针报告明确区分正式空表查询和会话临时夹具，不能替代真实来源发布验收。
 
 快照由 MacroSnapshotService 和 MysqlPublicMacroSnapshotReader 提供，单条 SQL 核对平台发布及全部关联来源的 display/derived 权利，应用核对 display 哈希与精确因子映射。列表游标固定 asOf，许可和过期投影按当前 accessAt；latest 缺失404，overview允许空快照并聚合未来七天最多20条高影响事件。两次查询不宣称跨资源一致快照。详情/latest的ETag按最终DTO计算，过期状态改变会更新。测试入口 macro-snapshot-http/service/projection/lineage.test.ts；实际MySQL回执 macro-snapshot-reader-mysql-20260909.json。历史payload的display约定见docs/architecture/macro-snapshot-display-v1.md。
+
+缠论 v8：`domain/chan-v8/` 按行情包含、笔、线段、中枢、背驰、多窗口一致性、结果选择和能力保护拆分纯计算。`application/chan-market-evidence.ts` 经公开 index 接入 inference 的实际 AnalysisWorker；不导入旧路由或 Bridge 运行代码。
+
+策略声明 `chan_evidence: {version: 1, enabled: true}` 后，M5/H1 内部读取 1800、M15 2000、H4 1000 根。模型可见窗口保持策略配置；关闭时不扩大读取、不注入指标。M1 等无窗口策略的周期明确返回不可用。
+
+完整引擎新旧冻结输入对比见 `docs/architecture/chan-v8-engine-parity-v1-20260912.json`。分析源行为测试：`server/tests/chan-analysis-source.test.ts`；SQL/Redis 实际 Worker 开发参考链见 `docs/architecture/chan-analysis-worker-weekend-v1-20260912.json`。周末拒绝是风控的正常结果。
+
+完整计算输入通过 `captureChanCalculation` 随推理快照归档，`replayChanCalculation` 使用冻结时间和 SHA-256 校验独立重放。归档不进入模型请求，详见 `docs/architecture/chan-durable-archive-worker-v1-20260913.json`。
+
+当前连续性仅接受可证明的连续 K 线；跨休市缺口仍须可信闭市/区间完整性证据。旧策略提示词语义和订阅启用不由 market 决定。详细边界见 `docs/backend-packages-1-2-progress-20260912.md`。

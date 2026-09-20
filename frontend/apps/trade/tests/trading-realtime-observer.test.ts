@@ -1,7 +1,7 @@
 import { applyAccountSnapshot, applyRealtimeState } from '~/features/trading-context'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AccountSnapshot, SessionSummary } from '@aurum/contracts'
-import { accountSnapshot, clearAccountRuntime, realtimeState } from '../src/features/home/home-runtime'
+import { accountSnapshot, clearAccountRuntime, realtimeState, resourceRevisions, openPositions } from '../src/features/home/home-runtime'
 
 const mocks = vi.hoisted(() => ({
   createRealtimeTicket: vi.fn(),
@@ -53,6 +53,47 @@ describe('trade home observer realtime adapter', () => {
   let socket: { send: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> }
 
   afterEach(() => { stopTradingRealtime(); vi.useRealTimers() })
+
+  it('subscribes without a racing snapshot cursor and reads authority after subscription is ready', async () => {
+    resourceRevisions.value.account = 123
+    resourceRevisions.value.positions = 456
+    const resync = vi.fn(async () => undefined)
+    await startTradingRealtime(session, '7', 'XAUUSD', 'M5', null, resync)
+    options.onOpen(socket)
+    const targets = JSON.parse(socket.send.mock.calls[0]![0]).targets
+    expect(targets.filter((target: any) => target.kind === 'account').every((target: any) => target.after_revision === null)).toBe(true)
+    expect(resync).not.toHaveBeenCalled()
+    await options.onMessage({ type: 'subscription.ready' })
+    expect(resync).toHaveBeenCalledOnce()
+    expect(realtimeState.value).toBe('live')
+  })
+
+  it('rejects cross-account rows and older position snapshots', async () => {
+    await startTradingRealtime(session, '7', 'XAUUSD', 'M5', null, async () => undefined)
+    const item = { ticket: '101', account_id: '7', symbol: 'XAUUSD', side: 'buy', volume: '0.01', open_price: '2300', current_price: '2301', stop_loss: null, take_profit: null, floating_profit: '1', opened_at: '2026-09-05T07:00:00.000Z', source: 'unknown', signal_id: null, revision: '12' }
+    const event = (sequence: number, revision: string, row: typeof item) => sourceEvent({ type: 'positions.changed', sequence, revision,
+      scope: { user_id: '99', trading_account_id: '7', terminal_instance_id: 'terminal-1', observer_channel_id: null },
+      resource: { kind: 'positions', id: 'open' }, data: { items: [row] } })
+    await options.onMessage(event(1, '12', item))
+    expect(openPositions.value).toHaveLength(1)
+    await options.onMessage(event(2, '11', { ...item, current_price: '1' }))
+    expect(openPositions.value[0]?.currentPrice).toBe('2301')
+    await options.onMessage(event(3, '13', { ...item, account_id: '8' }))
+    expect(openPositions.value[0]?.accountId).toBe('7')
+    expect(resourceRevisions.value.positions).toBe(12)
+  })
+
+  it('does not use a historical candle row revision as a live subscription cursor', async () => {
+    resourceRevisions.value.candle = 1788000000000
+    await startTradingRealtime(session, '7', 'XAUUSD', 'M5', null, async () => undefined)
+    options.onOpen(socket as never)
+    const { targets } = JSON.parse(socket.send.mock.calls[0]![0])
+    expect(targets.find((target: any) => target.resource_id === 'public_candle').after_revision).toBeNull()
+    expect(targets.filter((target: any) => target.kind === 'market').every((target: any) => target.trading_account_id === null)).toBe(true)
+    await options.onMessage({ type: 'subscription.ready' })
+    expect(realtimeState.value).toBe('live')
+    expect(socket.close).not.toHaveBeenCalled()
+  })
 
   it('keeps analysis refresh notifications after ticket failure and reconnect', async () => {
     vi.useFakeTimers()

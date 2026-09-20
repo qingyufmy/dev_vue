@@ -1,0 +1,374 @@
+{
+  "kind": "risk-policy-mapping-preview/v2",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "tz": "+00:00"
+  },
+  "observedAt": "2026-09-09T02:00:50.740Z",
+  "versions": [
+    {
+      "id": "1",
+      "scope": "platform",
+      "activeVersion": false,
+      "sourceSha256": "17a9ecf55c84c9164455dbe99229cb2bdf8679bd2722770c4caad65ebd932d69",
+      "valid": true,
+      "activationReady": false,
+      "candidateFields": [
+        "allowedSymbols",
+        "requireStopLoss",
+        "pendingValidMinutes",
+        "maxOrderVolume",
+        "maxRiskPerTradePercent",
+        "maxDecisionAgeSeconds",
+        "maxQuoteAgeSeconds",
+        "maxSpreadPoints",
+        "maxPriceDeviationPercent",
+        "weekendCloseMinutes",
+        "minOpenIntervalSeconds",
+        "maxDailyOpenCount",
+        "maxDailyLossPercent",
+        "consecutiveLossLimit",
+        "lossCooldownMinutes",
+        "maxDrawdownPercent"
+      ],
+      "controlCandidateFields": [],
+      "issues": [
+        {
+          "field": "dedup_window_seconds",
+          "code": "execution_dedup_window_unmapped"
+        },
+        {
+          "field": "dedup_price_atr",
+          "code": "execution_dedup_distance_unmapped"
+        }
+      ],
+      "platformCandidateCheck": "accepted",
+      "manualReleaseMigration": "disabled_no_legacy_authorization"
+    },
+    {
+      "id": "2",
+      "scope": "platform",
+      "activeVersion": false,
+      "sourceSha256": "3d5eb2cfce2ac11e03ddf31ff1dcb04d50e1dad71b79d4ea52c228126e49eb45",
+      "valid": true,
+      "activationReady": false,
+      "candidateFields": [
+        "allowedSymbols",
+        "requireStopLoss",
+        "pendingValidMinutes",
+        "maxOrderVolume",
+        "maxRiskPerTradePercent",
+        "maxDecisionAgeSeconds",
+        "maxQuoteAgeSeconds",
+        "maxSpreadPoints",
+        "maxPriceDeviationPercent",
+        "weekendCloseMinutes",
+        "minOpenIntervalSeconds",
+        "maxDailyOpenCount",
+        "maxDailyLossPercent",
+        "consecutiveLossLimit",
+        "lossCooldownMinutes",
+        "maxDrawdownPercent"
+      ],
+      "controlCandidateFields": [
+        "pendingValidMinutes",
+        "maxOrderVolume",
+        "maxRiskPerTradePercent",
+        "maxSpreadPoints",
+        "maxPriceDeviationPercent",
+        "weekendCloseMinutes",
+        "minOpenIntervalSeconds",
+        "maxDailyOpenCount",
+        "maxDailyLossPercent",
+        "consecutiveLossLimit",
+        "lossCooldownMinutes",
+        "maxDrawdownPercent"
+      ],
+      "issues": [
+        {
+          "field": "dedup_window_seconds",
+          "code": "execution_dedup_window_unmapped"
+        },
+        {
+          "field": "dedup_price_atr",
+          "code": "execution_dedup_distance_unmapped"
+        }
+      ],
+      "platformCandidateCheck": "accepted",
+      "manualReleaseMigration": "disabled_no_legacy_authorization"
+    },
+    {
+      "id": "3",
+      "scope": "account",
+      "activeVersion": false,
+      "sourceSha256": "48007121ee77405ce7f00b3aa135d3905bcbc5ea2df707b4f57a201aaa36c0ad",
+      "valid": true,
+      "activationReady": false,
+      "candidateFields": [
+        "maxOrderVolume"
+      ],
+      "controlCandidateFields": [],
+      "issues": [],
+      "platformCandidateCheck": null,
+      "manualReleaseMigration": null
+    },
+    {
+      "id": "4",
+      "scope": "account",
+      "activeVersion": true,
+      "sourceSha256": "48007121ee77405ce7f00b3aa135d3905bcbc5ea2df707b4f57a201aaa36c0ad",
+      "valid": true,
+      "activationReady": false,
+      "candidateFields": [
+        "maxOrderVolume"
+      ],
+      "controlCandidateFields": [],
+      "issues": [],
+      "platformCandidateCheck": null,
+      "manualReleaseMigration": null
+    },
+    {
+      "id": "5",
+      "scope": "platform",
+      "activeVersion": false,
+      "sourceSha256": "4e6286fc5d9f3832ce8b7e362fd84266687693888a7c319f49d13fc717b06179",
+      "valid": true,
+      "activationReady": false,
+      "candidateFields": [
+        "allowedSymbols",
+        "requireStopLoss",
+        "pendingValidMinutes",
+        "maxOrderVolume",
+        "maxRiskPerTradePercent",
+        "maxDecisionAgeSeconds",
+        "maxQuoteAgeSeconds",
+        "maxSpreadPoints",
+        "maxPriceDeviationPercent",
+        "weekendCloseMinutes",
+        "minOpenIntervalSeconds",
+        "maxDailyOpenCount",
+        "maxDailyLossPercent",
+        "consecutiveLossLimit",
+        "lossCooldownMinutes",
+        "maxDrawdownPercent"
+      ],
+      "controlCandidateFields": [
+        "pendingValidMinutes",
+        "maxOrderVolume",
+        "maxRiskPerTradePercent",
+        "maxSpreadPoints",
+        "maxPriceDeviationPercent",
+        "weekendCloseMinutes",
+        "minOpenIntervalSeconds",
+        "maxDailyOpenCount",
+        "maxDailyLossPercent",
+        "consecutiveLossLimit",
+        "lossCooldownMinutes",
+        "maxDrawdownPercent"
+      ],
+      "issues": [
+        {
+          "field": "dedup_window_seconds",
+          "code": "execution_dedup_window_unmapped"
+        },
+        {
+          "field": "dedup_price_atr",
+          "code": "execution_dedup_distance_unmapped"
+        }
+      ],
+      "platformCandidateCheck": "accepted",
+      "manualReleaseMigration": "disabled_no_legacy_authorization"
+    },
+    {
+      "id": "6",
+      "scope": "account",
+      "activeVersion": false,
+      "sourceSha256": "faafb87030e0774952e24bb46d078ed573030bee4db7b8708b4d1612f28bf3ae",
+      "valid": true,
+      "activationReady": false,
+      "candidateFields": [
+        "maxOrderVolume",
+        "maxDailyLossPercent"
+      ],
+      "controlCandidateFields": [],
+      "issues": [],
+      "platformCandidateCheck": null,
+      "manualReleaseMigration": null
+    },
+    {
+      "id": "7",
+      "scope": "platform",
+      "activeVersion": false,
+      "sourceSha256": "0e7146623885e07dfac6aac90110aac9943571702a985635789a80648fea8804",
+      "valid": true,
+      "activationReady": false,
+      "candidateFields": [
+        "allowedSymbols",
+        "requireStopLoss",
+        "pendingValidMinutes",
+        "maxOrderVolume",
+        "maxRiskPerTradePercent",
+        "maxDecisionAgeSeconds",
+        "maxQuoteAgeSeconds",
+        "maxSpreadPoints",
+        "maxPriceDeviationPercent",
+        "weekendCloseMinutes",
+        "minOpenIntervalSeconds",
+        "maxDailyOpenCount",
+        "maxDailyLossPercent",
+        "consecutiveLossLimit",
+        "lossCooldownMinutes",
+        "maxDrawdownPercent"
+      ],
+      "controlCandidateFields": [
+        "pendingValidMinutes",
+        "maxOrderVolume",
+        "maxRiskPerTradePercent",
+        "maxSpreadPoints",
+        "maxPriceDeviationPercent",
+        "weekendCloseMinutes",
+        "minOpenIntervalSeconds",
+        "maxDailyOpenCount",
+        "maxDailyLossPercent",
+        "consecutiveLossLimit",
+        "lossCooldownMinutes",
+        "maxDrawdownPercent"
+      ],
+      "issues": [
+        {
+          "field": "dedup_window_seconds",
+          "code": "execution_dedup_window_unmapped"
+        },
+        {
+          "field": "dedup_price_atr",
+          "code": "execution_dedup_distance_unmapped"
+        }
+      ],
+      "platformCandidateCheck": "accepted",
+      "manualReleaseMigration": "disabled_no_legacy_authorization"
+    },
+    {
+      "id": "8",
+      "scope": "account",
+      "activeVersion": false,
+      "sourceSha256": "6067469b3d10a17095d4efdadf2096dbf4e99c57092dbd99c15ae01740e348d6",
+      "valid": true,
+      "activationReady": false,
+      "candidateFields": [
+        "maxOrderVolume",
+        "maxDailyLossPercent",
+        "maxDrawdownPercent"
+      ],
+      "controlCandidateFields": [],
+      "issues": [],
+      "platformCandidateCheck": null,
+      "manualReleaseMigration": null
+    },
+    {
+      "id": "9",
+      "scope": "platform",
+      "activeVersion": true,
+      "sourceSha256": "18a7fcfd7b171d10838358cfb8246a26fda188754ee5a7b854809e2ae480cae0",
+      "valid": true,
+      "activationReady": false,
+      "candidateFields": [
+        "allowedSymbols",
+        "requireStopLoss",
+        "pendingValidMinutes",
+        "maxOrderVolume",
+        "maxRiskPerTradePercent",
+        "maxDecisionAgeSeconds",
+        "maxQuoteAgeSeconds",
+        "maxSpreadPoints",
+        "maxPriceDeviationPercent",
+        "weekendCloseMinutes",
+        "minOpenIntervalSeconds",
+        "maxDailyOpenCount",
+        "maxDailyLossPercent",
+        "consecutiveLossLimit",
+        "lossCooldownMinutes",
+        "maxDrawdownPercent"
+      ],
+      "controlCandidateFields": [
+        "pendingValidMinutes",
+        "maxOrderVolume",
+        "maxRiskPerTradePercent",
+        "maxSpreadPoints",
+        "maxPriceDeviationPercent",
+        "weekendCloseMinutes",
+        "minOpenIntervalSeconds",
+        "maxDailyOpenCount",
+        "maxDailyLossPercent",
+        "consecutiveLossLimit",
+        "lossCooldownMinutes",
+        "maxDrawdownPercent"
+      ],
+      "issues": [
+        {
+          "field": "dedup_window_seconds",
+          "code": "execution_dedup_window_unmapped"
+        },
+        {
+          "field": "dedup_price_atr",
+          "code": "execution_dedup_distance_unmapped"
+        }
+      ],
+      "platformCandidateCheck": "accepted",
+      "manualReleaseMigration": "disabled_no_legacy_authorization"
+    },
+    {
+      "id": "10",
+      "scope": "account",
+      "activeVersion": true,
+      "sourceSha256": "708246dccade8c3306af8e7002ce79b13ada238b46641788b7aefec322667ed3",
+      "valid": true,
+      "activationReady": false,
+      "candidateFields": [
+        "maxOrderVolume",
+        "maxDailyLossPercent",
+        "maxDrawdownPercent",
+        "consecutiveLossLimit"
+      ],
+      "controlCandidateFields": [],
+      "issues": [],
+      "platformCandidateCheck": null,
+      "manualReleaseMigration": null
+    }
+  ],
+  "sourceVersions": 10,
+  "controlCandidates": 48,
+  "issueCounts": {
+    "execution_dedup_window_unmapped": 5,
+    "execution_dedup_distance_unmapped": 5
+  },
+  "accountChecks": [
+    {
+      "versionId": "4",
+      "policySetId": "3",
+      "currentOwner": false,
+      "result": "historical_revoked_owner_preserve_without_activation"
+    },
+    {
+      "versionId": "10",
+      "policySetId": "1",
+      "currentOwner": true,
+      "result": "accepted",
+      "platformVersionId": "9",
+      "mappedFields": [
+        "maxOrderVolume",
+        "maxDailyLossPercent",
+        "maxDrawdownPercent",
+        "consecutiveLossLimit"
+      ],
+      "effectiveFields": [
+        "maxOrderVolume",
+        "maxDailyLossPercent",
+        "maxDrawdownPercent",
+        "consecutiveLossLimit"
+      ]
+    }
+  ],
+  "writes": 0,
+  "scope": "Platform candidates and current active account selection/ownership checked; historical version lineage, semantic equivalence and activation remain unverified."
+}

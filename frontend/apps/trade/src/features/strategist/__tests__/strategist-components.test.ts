@@ -13,21 +13,12 @@ describe('strategist workspace components', () => {
     expect(view).toContain('<SubscriptionWorkspace')
   })
 
-  it('uses shadcn-vue form primitives and requires a fresh compile before saving', () => {
-    const source = featureFile('components/StrategyEditorSheet.vue')
-    expect(source).toContain('<Sheet :open="open"')
-    expect(source).toContain('<Textarea id="strategy-prompt"')
-    expect(source).toContain('<FieldGroup')
-    expect(source).toContain('compiledSignature.value !== signature(draft.value)')
-    expect(source).toContain('策略与平台安全边界彼此独立')
-  })
-
   it('shows account-specific trader and trade-send controls without moving risk logic to the browser', () => {
     const source = featureFile('components/SubscriptionEditorSheet.vue')
     expect(source).toContain('启用 AI 交易员')
     expect(source).toContain('允许发送交易')
     expect(source).toContain('仍必须通过账户风控与执行校验')
-    expect(source).toContain('自动分析固定每 5 分钟调度')
+    expect(source).toContain('自动分析按策略运行间隔调度')
   })
 
   it('keeps platform strategies read-only and uses immutable versions', () => {

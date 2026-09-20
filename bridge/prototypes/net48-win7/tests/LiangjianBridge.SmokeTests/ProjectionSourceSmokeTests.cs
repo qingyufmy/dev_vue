@@ -10,6 +10,12 @@ namespace Liangjian.BridgeV4.SmokeTests
     {
         public static void TestCursorAndWindowAreBounded()
         {
+            var dense = new ProjectionSourceCursor { WindowStartUtcMsc = 1000, WindowEndUtcMsc = 9000, NativeTimeUtcMsc = 1000, NativeTicket = "0" };
+            Assert(ProjectionSourceSupport.ShrinkFreshHistoryWindow(dense) && dense.WindowEndUtcMsc == 5000, "dense_window_not_split");
+            dense.NativeTicket = "9";
+            Assert(!ProjectionSourceSupport.ShrinkFreshHistoryWindow(dense) && dense.WindowEndUtcMsc == 5000, "dense_cursor_group_skipped");
+            dense.NativeTicket = "0"; dense.WindowEndUtcMsc = 2000;
+            Assert(!ProjectionSourceSupport.ShrinkFreshHistoryWindow(dense), "dense_window_unbounded_split");
             ProjectionSyncRequest request = Request("mt5", "history.deals", "*",
                 1000, 1000 + (35L * 24L * 60L * 60L * 1000L));
             ProjectionSourceCursor first = ProjectionSourceSupport.ResolveWindow(

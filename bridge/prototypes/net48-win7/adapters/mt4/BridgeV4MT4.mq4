@@ -4,7 +4,7 @@
 
 #include "..\\common\\BridgeV4Pipe.mqh"
 
-input int InpPollMilliseconds = 250;
+input int InpPollMilliseconds = 100;
 
 int  g_pipe = INVALID_HANDLE;
 bool g_welcomed = false;
@@ -18,6 +18,7 @@ string g_bound_broker_server = "";
 int g_bound_login = 0;
 datetime g_next_connect_time = 0;
 int g_connect_failures = 0;
+uint g_last_bridge_activity = 0;
 
 long B4MT4Hash(const string value)
   {
@@ -198,6 +199,24 @@ string B4MT4AccountJson()
       + ",\"profit\":" + B4JsonString(DoubleToString(AccountProfit(), 8))
       + ",\"connected\":" + B4MT4Bool(IsConnected())
       + ",\"trade_allowed\":" + B4MT4Bool(IsTradeAllowed()) + "}");
+  }
+
+string B4MT4ResolveMarketSymbol(const string requested)
+  {
+   // Standard-symbol queries and new orders resolve broker suffixes; existing tickets stay exact.
+   if(StringLen(requested) < 1 || StringLen(requested) > 64) return("");
+   string selected = "";
+   int matches = 0;
+   for(int index = 0; index < SymbolsTotal(false); index++)
+     {
+      string name = SymbolName(index, false);
+      if(StringCompare(name, requested, false) == 0) return(name);
+      if(StringLen(name) <= StringLen(requested) || StringLen(name) > 64
+         || StringCompare(StringSubstr(name, 0, StringLen(requested)), requested, false) != 0) continue;
+      matches++;
+      selected = name;
+     }
+   return(matches == 1 ? selected : "");
   }
 
 string B4MT4SymbolDescription(const string symbol)
@@ -975,7 +994,7 @@ bool B4MT4CommandTargetShape(const B4MT4Command &command)
   }
 
 void B4MT4ExecutePlace(const string request_id, const string command_id,
-   const string symbol, const int direction, const int order_type,
+   const string requested_symbol, const int direction, const int order_type,
    const string volume_text, const bool price_specified, const string price_text,
    const bool stop_loss_specified, const string stop_loss_text,
    const bool take_profit_specified, const string take_profit_text,
@@ -983,6 +1002,7 @@ void B4MT4ExecutePlace(const string request_id, const string command_id,
    const int deviation, const int magic, const string idempotency_key)
   {
    if(!B4MT4TradePermission(request_id, command_id, B4_ACTION_ORDER_PLACE)) return;
+   string symbol = B4MT4ResolveMarketSymbol(requested_symbol);
    int operation = B4MT4Operation(direction, order_type);
    if(operation < 0 || symbol == "" || !SymbolSelect(symbol, true)
       || !B4MT4ValidVolume(symbol, volume_text))
@@ -1488,6 +1508,14 @@ void B4MT4ExecuteLookup(const B4MT4Command &command)
      }
    if(command.lookup_reference != "")
      {
+      string symbol = B4MT4ResolveMarketSymbol(command.symbol);
+      if(symbol == "")
+        {
+         B4MT4SendCommandSimple(command.request_id, command.command_id, command.action,
+            B4_COMMAND_REJECTED, 0, 0, B4_STATE_UNKNOWN, 0,
+            "symbol_unavailable", "execution symbol could not be resolved uniquely");
+         return;
+        }
       string reference = command.lookup_reference;
       if(StringFind(reference, "B4:") != 0)
          reference = B4MT4CommandReference(reference);
@@ -1495,7 +1523,7 @@ void B4MT4ExecuteLookup(const B4MT4Command &command)
       for(int index = 0; index < total; index++)
         {
          if(!OrderSelect(index, SELECT_BY_POS, MODE_TRADES)) continue;
-         if(OrderSymbol() != command.symbol || OrderMagicNumber() != command.magic
+         if(OrderSymbol() != symbol || OrderMagicNumber() != command.magic
             || StringFind(OrderComment(), reference) != 0) continue;
          int state = B4MT4IsPendingType(OrderType()) ? B4_STATE_PENDING : B4_STATE_POSITION;
          B4MT4SendSelectedCommandResult(command.request_id, command.command_id, command.action,
@@ -1506,7 +1534,7 @@ void B4MT4ExecuteLookup(const B4MT4Command &command)
       for(int history_index = history_total - 1; history_index >= 0; history_index--)
         {
          if(!OrderSelect(history_index, SELECT_BY_POS, MODE_HISTORY)) continue;
-         if(OrderSymbol() != command.symbol || OrderMagicNumber() != command.magic
+         if(OrderSymbol() != symbol || OrderMagicNumber() != command.magic
             || StringFind(OrderComment(), reference) != 0) continue;
          int state = B4MT4IsPendingType(OrderType()) ? B4_STATE_ABSENT
             : (OrderCloseTime() > 0 ? B4_STATE_CLOSED : B4_STATE_UNKNOWN);
@@ -1701,7 +1729,8 @@ void B4MT4HandleQuery(uchar &payload[])
          B4MT4SendError(request_id, resource_code, "params_invalid", "instrument symbol is invalid");
          return;
         }
-      if(!SymbolSelect(symbol, true))
+      symbol = B4MT4ResolveMarketSymbol(symbol);
+      if(symbol == "" || !SymbolSelect(symbol, true))
         {
          B4MT4SendError(request_id, resource_code, "symbol_unavailable", "instrument is not available");
          return;
@@ -1732,6 +1761,15 @@ void B4MT4HandleQuery(uchar &payload[])
          B4MT4SendError(request_id, resource_code, "params_invalid", "unexpected trailing bytes");
          return;
         }
+      for(int symbol_index = 0; symbol_index < count; symbol_index++)
+        {
+         symbols[symbol_index] = B4MT4ResolveMarketSymbol(symbols[symbol_index]);
+         if(symbols[symbol_index] == "" || !SymbolSelect(symbols[symbol_index], true))
+           {
+            B4MT4SendError(request_id, resource_code, "symbol_unavailable", "quote symbol is not available");
+            return;
+           }
+        }
       B4MT4SendResponse(request_id, resource_code, now, B4MT4QuotesJson(symbols), "", false);
       return;
      }
@@ -1754,7 +1792,8 @@ void B4MT4HandleQuery(uchar &payload[])
          return;
         }
       if(!B4MT4RequireClock(request_id, resource_code)) return;
-      if(!SymbolSelect(symbol, true))
+      symbol = B4MT4ResolveMarketSymbol(symbol);
+      if(symbol == "" || !SymbolSelect(symbol, true))
         {
          B4MT4SendError(request_id, resource_code, "symbol_unavailable", "candle symbol is not available");
          return;
@@ -1853,6 +1892,7 @@ bool B4MT4Connect()
    g_bound_broker_server = AccountServer();
    g_bound_login = AccountNumber();
    g_connect_failures = 0;
+   g_last_bridge_activity = GetTickCount();
    g_next_connect_time = 0;
    return(true);
   }
@@ -1895,6 +1935,12 @@ void B4MT4HandleFrame(uchar &payload[])
       int size = 0;
       B4AppendInt32(response, size, B4_MSG_PONG);
       B4AppendInt64(response, size, B4UtcNowMsc());
+      B4AppendInt32(response, size, IsConnected() ? 1 : 0);
+      B4AppendInt32(response, size, IsTradeAllowed() ? 1 : 0);
+      B4AppendInt32(response, size, (int)TerminalInfoInteger(TERMINAL_TRADE_ALLOWED));
+      B4AppendInt32(response, size, (int)MQLInfoInteger(MQL_TRADE_ALLOWED));
+      B4AppendInt32(response, size, (int)AccountInfoInteger(ACCOUNT_TRADE_EXPERT));
+      B4AppendInt32(response, size, (int)AccountInfoInteger(ACCOUNT_TRADE_ALLOWED));
       if(!B4WriteFrame(g_pipe, response, size)) B4MT4Disconnect();
      }
   }
@@ -1940,6 +1986,15 @@ void OnTimer()
       g_next_connect_time = TimeLocal() + 1;
       return;
      }
+   // A closed pipe can look just like an idle pipe to the MQL file API.
+   // Bridge sends a heartbeat every 3 seconds, even without an account connection.
+   if((uint)(GetTickCount() - g_last_bridge_activity) >= 30000)
+     {
+      Print("Liangjian Bridge V4 heartbeat expired; reconnecting");
+      B4MT4Disconnect();
+      g_next_connect_time = TimeLocal() + 1;
+      return;
+     }
    if(!B4PipeHasData(g_pipe)) return;
    uchar payload[];
    if(!B4ReadFrame(g_pipe, payload))
@@ -1948,6 +2003,7 @@ void OnTimer()
       return;
      }
    B4MT4HandleFrame(payload);
+   g_last_bridge_activity = GetTickCount();
   }
 
 void OnDeinit(const int reason)

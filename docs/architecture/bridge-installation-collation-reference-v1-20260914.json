@@ -1,0 +1,18 @@
+{
+  "passed": true,
+  "kind": "bridge-installation-collation-reference/v1",
+  "originalStepId": "inplace_080_01_bridge_installation",
+  "originalStepChecksum": "324beea7c8c5abfce29bc3e3846b883bdabe13871c3de96ee52b5d617c16534b",
+  "correctionFileSha256": "160eea0253e4281bd16c2972b874f26578f691affe0f837ca22622b494445f00",
+  "correctionSqlSha256": "b367d8a4ac6a8daadc014eb4fbc319be246985c9a1d9a328f18d684a2a706221",
+  "sql": "ALTER TABLE bridge_installation_request_limits DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci",
+  "actualBeforeTableHash": "5f6db53e3af331826e8351c39d052a65fa465b4b1b88dcde5dd3fdc30e50162d",
+  "expectedAfterTableHash": "6da63196c53d533c7b15b29b1277760c724dc81339a4de882c705a5c70d99ab9",
+  "ddlAckLossRecovered": true,
+  "replayNoDDL": true,
+  "asciiColumnPreserved": true,
+  "sourceSchemaAndJournalUnchanged": true,
+  "existingDatabaseWrites": 0,
+  "referenceDatabaseRemoved": true,
+  "observedAt": "2026-09-14T02:52:53.222Z"
+}

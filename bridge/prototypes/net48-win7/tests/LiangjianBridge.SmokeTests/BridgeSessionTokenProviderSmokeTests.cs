@@ -78,6 +78,14 @@ namespace Liangjian.BridgeV4.SmokeTests
             Assert(client.Endpoint.AbsoluteUri ==
                 "http://127.0.0.1:3000/api/v4/bridge/session-tokens",
                 "local_ws_session_endpoint_mapping_wrong");
+            provider = new HttpBridgeSessionTokenProvider("install-01", client, 1000, "http://127.0.0.1:3010");
+            provider.Acquire(Profile("profile-local", "ws://127.0.0.1:3012/bridge/v4/ws"), RefreshToken);
+            Assert(client.Endpoint.AbsoluteUri == "http://127.0.0.1:3010/api/v4/bridge/session-tokens", "configured_api_port_ignored");
+            Uri previous = client.Endpoint;
+            Assert(Capture(delegate { provider.Acquire(Profile("profile-local", "ws://localhost:3012/bridge/v4/ws"), RefreshToken); }) != null
+                && client.Endpoint == previous, "configured_api_host_mismatch_sent_secret");
+            Assert(Capture(delegate { provider.Acquire(Profile("profile-local", "wss://127.0.0.1:3012/bridge/v4/ws"), RefreshToken); }) != null,
+                "configured_api_https_downgrade_accepted");
         }
 
         private static void TestFactoryUsesFreshSessionTokenPerConnection()

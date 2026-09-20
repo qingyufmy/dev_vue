@@ -1,5 +1,7 @@
 # 数据库逐表迁移矩阵
 
+> 2026-09-11 最新既有升级证据：dev_vue 为 314 表、266 条 completed 迁移，078 升级旧列数据与原 checksum 保持，见 [升级报告](architecture/memory-completion-current-v1-20260911.json)。[旧目录快照](architecture/current-database-catalog-20260911.json) 的 4418 列、265 步属于升级前记录，不能当作最新列目录。119 个已识别写入目标在该快照均存在；全域读写语义与功能覆盖仍见 [核心剩余范围](backend-core-remaining-scope-20260911.md) 和 [业务域对账](backend-domain-reconciliation-20260911.md)。以下早期数字保留为历史记录。
+
 > 当前验收（2026-09-08）：本次开发库可独立实施的结构升级已收口，dev_vue累计147步、222表、271337行业务数据保持；344项迁移相关测试与现有106FK/117CHECK全库检查通过。业务配合项按用户许可延期，完整V4规范化/读写切换/公网就绪仍未完成。[范围验收与接续清单](database-independent-upgrade-acceptance-20260908.md)、[阶段199](migration/dev-vue-inplace-stage199-20260908.md)。以下各阶段“当前/继续”文字为历史记录。
 
 > 最新状态：阶段198完成用量策略引用容量，当前145步、271337行业务数据保持，现有104FK/117CHECK全库复查无违规。目标外键完整签名核对发现订阅2组关系尚可继续独立核验。详见[阶段198](migration/dev-vue-inplace-stage198-20260908.md)与[目录v9](migration/dev-vue-structure-remaining-work-20260908-v9.json)。

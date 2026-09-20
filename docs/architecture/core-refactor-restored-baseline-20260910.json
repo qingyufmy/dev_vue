@@ -1,0 +1,415 @@
+{
+  "kind": "core-refactor-restored-baseline/v1",
+  "verifiedAt": "2026-09-10T03:12:40.795Z",
+  "source": "dev_vue",
+  "target": "dev_vue_m1_source_20260910_01",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "archiveDirectory": "D:\\dev_codex\\.backup-core-20260910-01",
+  "receiptSha256": "3b29735c9d033a5695974e31b8a52222c1096709b61678401ce6b23a9215b6de",
+  "sourceSnapshotHash": "22c64cc797f2e894d38ffdf66de94f2931b28c38865bb9e41ec847db0c05d333",
+  "tableCount": 255,
+  "rows": "338745",
+  "dataParity": true,
+  "columnMetadataParity": true,
+  "semanticDdlParity": true,
+  "ddlNormalizationDifferences": [
+    {
+      "table": "account_risk_states",
+      "differences": [
+        {
+          "column": "clock_status",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "account_runtime_snapshots",
+      "differences": [
+        {
+          "column": "clock_status",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "account_trade_attributions_v4",
+      "differences": [
+        {
+          "column": "source_kind",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "relation_kind",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "proof_kind",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "account_trade_record_deals_v4",
+      "differences": [
+        {
+          "column": "role",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "account_trade_records_v4",
+      "differences": [
+        {
+          "column": "platform",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "side",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "status",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "source_classification",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "attribution_status",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "evidence_status",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "currency_evidence",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "global_risk_controls",
+      "differences": [
+        {
+          "column": "reason",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "instrument_collection_requests_v4",
+      "differences": [
+        {
+          "column": "status",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "legacy_candle_backfill_v4",
+      "differences": [
+        {
+          "column": "status",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "legacy_candle_mappings_v4",
+      "differences": [
+        {
+          "column": "timeframe",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "market_candles",
+      "differences": [
+        {
+          "column": "timeframe",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "market_quotes",
+      "differences": [
+        {
+          "column": "trade_mode",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "observer_channels",
+      "differences": [
+        {
+          "column": "display_name",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "description",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "audience",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "observer_sources",
+      "differences": [
+        {
+          "column": "display_name",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "notes",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "status",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "configuration_status",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "outbox_events",
+      "differences": [
+        {
+          "column": "status",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "risk_manual_releases",
+      "differences": [
+        {
+          "column": "reason",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "status",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "risk_policy_change_items_v4",
+      "differences": [
+        {
+          "column": "change_class",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "reason",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "risk_policy_sets_v4",
+      "differences": [
+        {
+          "column": "scope",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "name",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "status",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "risk_policy_versions_v4",
+      "differences": [
+        {
+          "column": "change_reason",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "strategy_memory_injection_logs_v4",
+      "differences": [
+        {
+          "column": "runtime_kind",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "strategy_memory_libraries_v4",
+      "differences": [
+        {
+          "column": "mode",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "status",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "strategy_memory_library_revisions_v4",
+      "differences": [
+        {
+          "column": "content_text",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "source_kind",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "terminal_history_deals_v4",
+      "differences": [
+        {
+          "column": "platform",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "deal_kind",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "entry_kind",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "side",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "terminal_comment",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "currency_evidence",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "terminal_history_order_provenance_v4",
+      "differences": [
+        {
+          "column": "platform",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "source_kind",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "terminal_history_orders_v4",
+      "differences": [
+        {
+          "column": "platform",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "side",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "terminal_comment",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "trade_history_migration_checkpoints_v4",
+      "differences": [
+        {
+          "column": "status",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "trade_history_sync_states_v4",
+      "differences": [
+        {
+          "column": "status",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "trading_context_changes_v4",
+      "differences": [
+        {
+          "column": "action",
+          "change": "explicit_redundant_utf8mb4_charset"
+        },
+        {
+          "column": "result_mode",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    },
+    {
+      "table": "trading_contexts",
+      "differences": [
+        {
+          "column": "mode",
+          "change": "explicit_redundant_utf8mb4_charset"
+        }
+      ]
+    }
+  ],
+  "currentDevVueWrites": 0,
+  "sourceUnchanged": true,
+  "plaintextAndClientConfigRemoved": true,
+  "restoredDatabaseRetained": true,
+  "strategySchemaReady": true,
+  "upgradedSteps": 188,
+  "preflightReport": "docs/architecture/strategy-restored-baseline-preflight-20260910.json",
+  "preflightSha256": "2f30e190297c88eb387276080ba282094e13e3dd31ebc1978a0bf9d1bbae3b13",
+  "tools": [
+    {
+      "path": "scripts/inspect-strategy-restored-baseline-local.mjs",
+      "sha256": "e23ff91c8fd08ade2bb8fa8c9b42254eaceb42f56b25a49e3a0fb4b43ae0a807"
+    },
+    {
+      "path": "scripts/lib/strategy-backfill-schema-preflight.mjs",
+      "sha256": "433ec5109e8346c1ae2046347aa7252804e217a84a7fe3250f6484db78ebe586"
+    },
+    {
+      "path": "scripts/backup-risk-dev-vue-local.mjs",
+      "sha256": "f9f7b624e87ce1b53685f66f26668921d5793c404db4f5762efe5fc5f6c0b89b"
+    },
+    {
+      "path": "scripts/run-risk-backup-local.py",
+      "sha256": "1046d4d850b4e924d865068930068d9fd7dc79bab79f9a968db3dae62319cd14"
+    }
+  ],
+  "completeUpgradeVerified": false,
+  "remaining": [
+    "strategy_role_conversion",
+    "restored_strategy_subscription_backfill",
+    "subscription_promotion",
+    "remaining_runtime_schema",
+    "full_core_acceptance"
+  ]
+}

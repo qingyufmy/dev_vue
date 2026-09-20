@@ -1,0 +1,37 @@
+{
+  "kind": "chan-v8-divergence-parity/v1",
+  "passed": true,
+  "checks": 252,
+  "outcomes": {
+    "unavailable": 78,
+    "forming": 100,
+    "confirmed": 12,
+    "evaluated": 14
+  },
+  "referenceSha256": "b945ae29ab5df61648d5d8da86af27835ef7874be60bc7f43aa441820780b796",
+  "pureRangeSha256": "a055649b0fbd91553babdc24b1d9a067251f5bbced0e1e884789ff72231ef59d",
+  "targetHashes": [
+    {
+      "path": "server/src/modules/market/domain/chan-v8/divergence.ts",
+      "sha256": "e8da6dcb681851053f5b163a785c47eb609126b5f75f59fbd4ada6a15fd19b75"
+    },
+    {
+      "path": "server/src/modules/market/domain/chan-v8/divergence-result.ts",
+      "sha256": "6323b35a2994be8fd0ba6e2fd6c6c96d4a48ef69e5b47161f23e3d09e922e666"
+    },
+    {
+      "path": "server/src/modules/market/domain/chan-v8/forming-divergence.ts",
+      "sha256": "66498c640f664392723b29632e6464dc39d0f15446f95cb93820c1029513b0a8"
+    },
+    {
+      "path": "server/src/modules/market/domain/chan-v8/segment-location.ts",
+      "sha256": "b1a47cfcd704e54afb8977cc0f9d708a28f3c8086bd3d705bf8bc9cd4b8ca5ec"
+    },
+    {
+      "path": "server/src/modules/market/domain/chan-v8/rounding.ts",
+      "sha256": "103d25dd8ffd671e1bb697523d0425d703869a0590d077c89949e9dae4902bc3"
+    }
+  ],
+  "scope": "synthetic divergence results and lifecycle parity; complete v8/Worker not covered",
+  "observedAt": "2026-09-11T10:10:47.698Z"
+}

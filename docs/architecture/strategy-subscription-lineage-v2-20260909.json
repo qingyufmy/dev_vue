@@ -1,0 +1,180 @@
+{
+  "kind": "strategy-subscription-lineage-plan/v1",
+  "sourceInputHash": "300e13163c650ef74c0eeaaa6a48e3abad52b66565a11d6d7de8ee0f2961878e",
+  "accountMappingHash": "f1d79cc87486e5b8a91d79508351b114dd9b6be81062abae1c295e0cf69127dc",
+  "strategyRows": [
+    {
+      "sourceId": "1",
+      "sourceHash": "f021d377dd4027a7848ff1f6dd397de88b654830d23dc149ded83328c19a2232",
+      "sourceVersion": "44",
+      "originalPromptHash": "da031ebc31df27668c37bbf96beb7b907a786117f577ef4c4702a62e2a41d509",
+      "lifecycle": "active",
+      "disposition": "role_mapping",
+      "roles": null,
+      "archive": null,
+      "problems": [
+        "explicit_analysis_and_trader_mapping_required"
+      ]
+    },
+    {
+      "sourceId": "2",
+      "sourceHash": "6188d7ae3349483b4e925b1746508e07c37ac55375078908f0d2cc65f16cb6aa",
+      "sourceVersion": "1",
+      "originalPromptHash": "f6e0a1e2ac41945a9aa7ff8a8aaa0cebc12a3bcc981a929ad5cf810a090e11ae",
+      "lifecycle": "retired",
+      "disposition": "archive_only",
+      "roles": null,
+      "archive": {
+        "table": "auto_prompt_types",
+        "sourceId": "2",
+        "sourceHash": "6188d7ae3349483b4e925b1746508e07c37ac55375078908f0d2cc65f16cb6aa"
+      },
+      "problems": []
+    },
+    {
+      "sourceId": "3",
+      "sourceHash": "551f24f510d6e45474721481b330ddfb911cb7d60e6ca57fd75b7e85e609a927",
+      "sourceVersion": "11",
+      "originalPromptHash": "11b5e0dc40438592a56a39d001712812ad1c1624a1a1282ed5928badb71e8ed7",
+      "lifecycle": "active",
+      "disposition": "role_mapping",
+      "roles": null,
+      "archive": null,
+      "problems": [
+        "explicit_analysis_and_trader_mapping_required"
+      ]
+    }
+  ],
+  "subscriptionRows": [
+    {
+      "sourceId": "1",
+      "sourceHash": "b5b4d5c669e7be4d7e958163d9185b4e9c7148203106438f835097443ef492ec",
+      "strategySourceId": "1",
+      "ownershipDisposition": "current_owner",
+      "historicalOwnershipEvidenceHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "symbolRows": [
+        {
+          "sourceSubscriptionId": "1",
+          "standardSymbol": "XAUUSD",
+          "targetAccountId": "1",
+          "analysisStrategyId": null,
+          "analysisVersionId": null,
+          "traderStrategyId": null,
+          "traderVersionId": null,
+          "historicalOnly": false,
+          "sourceDeleted": false,
+          "sourceExecutionEnabled": true
+        }
+      ],
+      "problems": [
+        "strategy_role_mapping_missing"
+      ]
+    },
+    {
+      "sourceId": "2",
+      "sourceHash": "633090efec9bb02391af9ed7c81ed9d5cbe98445760f5e360e8a7c762cdf4dbc",
+      "strategySourceId": "3",
+      "ownershipDisposition": "historical_only",
+      "historicalOwnershipEvidenceHash": "ca02aa7893db2284d9d13516ce9a1929d0e45caee15a31e7abeaee083bd427b6",
+      "symbolRows": [
+        {
+          "sourceSubscriptionId": "2",
+          "standardSymbol": "XAUUSD",
+          "targetAccountId": "2",
+          "analysisStrategyId": null,
+          "analysisVersionId": null,
+          "traderStrategyId": null,
+          "traderVersionId": null,
+          "historicalOnly": true,
+          "sourceDeleted": false,
+          "sourceExecutionEnabled": false
+        }
+      ],
+      "problems": [
+        "strategy_role_mapping_missing"
+      ]
+    },
+    {
+      "sourceId": "3",
+      "sourceHash": "6008e13722929cc87769c2e1fe3495ed094f51aaf805546588c30b17d477c8c3",
+      "strategySourceId": "3",
+      "ownershipDisposition": "current_owner",
+      "historicalOwnershipEvidenceHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "symbolRows": [
+        {
+          "sourceSubscriptionId": "3",
+          "standardSymbol": "XAUUSD",
+          "targetAccountId": "1",
+          "analysisStrategyId": null,
+          "analysisVersionId": null,
+          "traderStrategyId": null,
+          "traderVersionId": null,
+          "historicalOnly": false,
+          "sourceDeleted": false,
+          "sourceExecutionEnabled": false
+        }
+      ],
+      "problems": [
+        "strategy_role_mapping_missing"
+      ]
+    },
+    {
+      "sourceId": "4",
+      "sourceHash": "1296a9c4ca7fdf9f82f1bb75aa65c94483a2d83b8d5463a5487d8054a9440210",
+      "strategySourceId": "1",
+      "ownershipDisposition": "historical_only",
+      "historicalOwnershipEvidenceHash": "ca02aa7893db2284d9d13516ce9a1929d0e45caee15a31e7abeaee083bd427b6",
+      "symbolRows": [
+        {
+          "sourceSubscriptionId": "4",
+          "standardSymbol": "XAUUSD",
+          "targetAccountId": "2",
+          "analysisStrategyId": null,
+          "analysisVersionId": null,
+          "traderStrategyId": null,
+          "traderVersionId": null,
+          "historicalOnly": true,
+          "sourceDeleted": false,
+          "sourceExecutionEnabled": false
+        }
+      ],
+      "problems": [
+        "strategy_role_mapping_missing"
+      ]
+    },
+    {
+      "sourceId": "5",
+      "sourceHash": "ab16f2f8c1404b3b621e2a8266e3b3f56ea72b7b3882257c7b53f623acd62fee",
+      "strategySourceId": "1",
+      "ownershipDisposition": "current_owner",
+      "historicalOwnershipEvidenceHash": "3783bd9892ee83ec2a6fa96a1a4cb045eca9922a1b3eda718d0e21016af859be",
+      "symbolRows": [
+        {
+          "sourceSubscriptionId": "5",
+          "standardSymbol": "XAUUSD",
+          "targetAccountId": "2",
+          "analysisStrategyId": null,
+          "analysisVersionId": null,
+          "traderStrategyId": null,
+          "traderVersionId": null,
+          "historicalOnly": false,
+          "sourceDeleted": false,
+          "sourceExecutionEnabled": true
+        }
+      ],
+      "problems": [
+        "strategy_role_mapping_missing"
+      ]
+    }
+  ],
+  "mappingComplete": false,
+  "executable": false,
+  "remainingChecks": [
+    "prompt_and_config_role_conversion",
+    "target_foreign_keys_and_history",
+    "risk_memory_execution_preferences",
+    "restored_backfill_reconciliation",
+    "namespace_promotion"
+  ],
+  "planHash": "ce9d69100026dd245045514ac4fe93b99f3cf2045328fe51e777d33498c2cbf3"
+}

@@ -1,4 +1,22 @@
+export { MarketHistoryBackfill } from './application/market-history-backfill.js'
 export { CalendarService } from './application/calendar-service.js'
+export { MarketSourceSelector } from './application/market-source-selector.js'
+export { parseBridgeMarketState } from './domain/market-source.js'
+export { PublicMarketCatalog } from './application/public-market-catalog.js'
+export { PublicMarketCollector } from './application/public-market-collector.js'
+export { StrategyMarketSourceAccess } from './application/market-source-access.js'
+export type { MarketStrategyAccess, SelectedMarketSource } from './application/market-source-access.js'
+export type { MarketSourceCandidates, MarketSourceStore, MarketSourceProbe } from './application/market-source-ports.js'
+export type { MarketPool, MarketSourceScope, MarketSourceCandidate, MarketSourceState } from './domain/market-source.js'
 export type { CalendarReader, CalendarPageQuery } from './application/calendar-reader.js'
 export type { CalendarEvent, CalendarImportance } from './domain/calendar.js'
 export { MarketReadError } from './domain/calendar.js'
+
+export { projectChanStructureForModel, projectStrategyContextChanForModel } from './domain/chan-model-projection.js'
+
+export { calculateChanMarketEvidence, chanHistoryTarget } from './application/chan-market-evidence.js'
+export { captureChanCalculation, replayChanCalculation, replayChanChart, type ChanCalculationArchive } from './application/chan-calculation-archive.js'
+
+export { capturePriceActionEvidence, replayPriceActionEvidence } from './application/price-action-evidence.js'
+
+export { unresolvedMarketGap, type ConfirmedMarketGap } from './application/confirmed-market-gaps.js'

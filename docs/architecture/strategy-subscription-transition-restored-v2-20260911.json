@@ -1,0 +1,82 @@
+{
+  "kind": "strategy-subscription-data-transition/v1",
+  "mode": "--restored-only",
+  "target": "dev_vue_m1_source_20260910_02",
+  "passed": false,
+  "currentDevVueWrites": 0,
+  "runtimeEnabled": false,
+  "stage": "freeze_inputs",
+  "baselineDifferences": [
+    {
+      "table": "data_migration_batches",
+      "rows": 17,
+      "previousRows": 17,
+      "ddlChanged": false
+    },
+    {
+      "table": "data_migration_checkpoints",
+      "rows": 7,
+      "previousRows": 7,
+      "ddlChanged": false
+    },
+    {
+      "table": "data_migration_id_maps",
+      "rows": 353,
+      "previousRows": 353,
+      "ddlChanged": false
+    },
+    {
+      "table": "data_migration_row_receipts",
+      "rows": 342,
+      "previousRows": 342,
+      "ddlChanged": false
+    },
+    {
+      "table": "data_migration_runs",
+      "rows": 7,
+      "previousRows": 7,
+      "ddlChanged": false
+    },
+    {
+      "table": "data_migration_source_rows",
+      "rows": 342,
+      "previousRows": 342,
+      "ddlChanged": false
+    },
+    {
+      "table": "observer_management_operations",
+      "rows": 12,
+      "previousRows": 12,
+      "ddlChanged": false
+    },
+    {
+      "table": "outbox_events",
+      "rows": 12,
+      "previousRows": 12,
+      "ddlChanged": false
+    },
+    {
+      "table": "period_review_job_events",
+      "rows": 7208,
+      "previousRows": 7208,
+      "ddlChanged": false
+    },
+    {
+      "table": "platform_model_usage_policy",
+      "rows": 1,
+      "previousRows": 1,
+      "ddlChanged": false
+    },
+    {
+      "table": "platform_strategy_experience_logs",
+      "rows": 6093,
+      "previousRows": 6093,
+      "ddlChanged": false
+    }
+  ],
+  "errorCode": "ERR_ASSERTION",
+  "errorLocations": [
+    "    at file:///D:/dev_codex/dev_vue/scripts/strategy-subscription-transition-local.mjs:106:12"
+  ],
+  "observedAt": "2026-09-11T01:36:34.086Z"
+}

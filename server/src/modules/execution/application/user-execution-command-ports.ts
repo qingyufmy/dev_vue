@@ -5,15 +5,15 @@ import type {
   RiskEvaluationResult,
   RiskInstrumentSnapshot,
   RiskQuoteSnapshot,
-} from '../../risk/domain/risk.js'
-import type { JsonObject, TraderAction } from '../../inference/domain/inference.js'
+} from '../../risk/index.js'
+import type { JsonObject, TraderAction } from '../../inference/index.js'
 import type {
   NormalizedUserExecutionCommand,
   UserExecutionCommandResult,
   UserExecutionOperation,
   UserExecutionExpectedRevisions,
 } from '../domain/user-execution-command.js'
-import type { ManualRiskRelease } from '../../risk/domain/manual-risk-release.js'
+import type { ManualRiskRelease } from '../../risk/index.js'
 
 /**
  * The six revisions captured for a non-AI user command.  Analysis and
@@ -77,6 +77,7 @@ export interface UserExecutionIdempotencyMatch {
  * is allowed while that transaction is open.
  */
 export interface UserExecutionCommandRepository {
+  withAccountTransaction?: ((scope: { userId: number; accountId: string }, work: (repository: UserExecutionCommandRepository) => Promise<UserExecutionCommandResult>) => Promise<UserExecutionCommandResult>) | undefined
   loadContext(input: LoadUserExecutionCommandContextInput): Promise<UserExecutionCommandContext | null>
   findByIdempotency(input: UserExecutionIdempotencyLookupInput): Promise<UserExecutionIdempotencyMatch | null>
   persistCommand(input: PersistUserExecutionCommandInput): Promise<UserExecutionCommandResult>

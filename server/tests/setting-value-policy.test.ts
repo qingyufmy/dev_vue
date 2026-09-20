@@ -4,7 +4,10 @@ import { inspectSettingUpdate,settingValueRules,validateSettingValueForWrite } f
 import { settingsValueContracts } from '../../scripts/lib/v4-settings-value-contract.mjs'
 const input={namespace:'smtp',key:'port',expectedType:'integer' as const,value:'465'}
 it('covers all 59 frozen source contracts without changing import rules',()=>{
- expect(settingValueRules()).toEqual(settingsValueContracts());expect(settingValueRules()).toHaveLength(59)
+ expect(settingValueRules().filter(rule=>rule.namespace!=='market_data')).toEqual(settingsValueContracts())
+ expect(settingValueRules().filter(rule=>rule.namespace==='market_data')).toEqual([
+  {namespace:'market_data',key:'symbols',type:'json_array',exposure:'restricted',maximumCharacters:2048},
+ ])
  const copy=settingValueRules();copy[0]!.key='modified';expect(settingValueRules()[0]!.key).not.toBe('modified')
 })
 it('rejects unknown, mismatched, service-owned and secret writes',()=>{

@@ -209,3 +209,43 @@ describe('Stage 12B analysis scheduling and worker', () => {
     expect(sql).not.toMatch(/DROP TABLE|TRUNCATE TABLE|DELETE FROM/i)
   })
 })
+
+it('records deterministic begin failure without calling the model', async () => {
+  const failures: string[] = []
+  let calls = 0
+  const repo = repository({ getAnalysisRun: async () => run('failed-prepare'), beginAnalysis: async () => { throw new InferenceError('analysis_market_source_mismatch', 409) }, failQueuedAnalysis: async (_id, code) => { failures.push(code) } })
+  const strategies = new StrategyService(new Strategies())
+  const contexts = new AnalysisContextBuilder({ read: async () => ({ source_account_id: '7' }) }, { latest: async () => null })
+  const worker = new AnalysisWorker(repo, new InferenceService(repo, strategies), strategies, contexts,
+    { profileId: null, provider: 'test', model: 'test', timeoutMs: 5000, maxAttempts: 1, analyze: async () => { calls++; return { result, usage: null } } }, 'test', { assertAllowed: async () => {} })
+  expect(await worker.process('failed-prepare')).toEqual({ status: 'failed', code: 'analysis_market_source_mismatch' })
+  expect(failures).toEqual(['analysis_market_source_mismatch'])
+  expect(calls).toBe(0)
+})
+
+it.each([false, true])('bounds the wait for a real close update (recovered=%s)', async recovered => {
+  let reads = 0, waits = 0, begins = 0
+  const failures: string[] = [], times: string[] = []
+  const repo = repository({ getAnalysisRun: async () => run('close-pending'),
+    beginAnalysis: async () => { begins++; throw new InferenceError('analysis_revision_conflict', 409) },
+    failQueuedAnalysis: async (_id, code) => { failures.push(code) } })
+  const strategies = new StrategyService(new Strategies())
+  const contexts = new AnalysisContextBuilder({ read: async input => {
+    times.push(input.referenceTime!); reads++
+    if (!recovered || reads === 1) throw new InferenceError('market_candle_close_pending', 409)
+    return { source_account_id: '7' }
+  } }, { latest: async () => null })
+  const start = Date.parse('2026-09-03T08:00:00.000Z')
+  const worker = new AnalysisWorker(repo, new InferenceService(repo, strategies), strategies, contexts,
+    { profileId: null, provider: 'test', model: 'test', timeoutMs: 5000, maxAttempts: 1,
+      analyze: async () => { throw new Error('model must not run') } }, 'test', { assertAllowed: async () => {} },
+    () => new Date(start + waits * 5000), async () => { waits++ })
+  if (recovered) {
+    await expect(worker.process('close-pending', new Date(start))).rejects.toThrow('analysis_revision_conflict')
+    expect(waits).toBe(1); expect(begins).toBe(1)
+    expect(times).toEqual(['2026-09-03T08:00:00.000Z', '2026-09-03T08:00:05.000Z'])
+  } else {
+    expect(await worker.process('close-pending', new Date(start))).toEqual({ status: 'failed', code: 'market_candle_close_pending' })
+    expect(waits).toBe(3); expect(reads).toBe(4); expect(begins).toBe(0)
+  }
+})

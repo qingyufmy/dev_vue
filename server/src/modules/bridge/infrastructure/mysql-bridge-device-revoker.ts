@@ -8,6 +8,8 @@ export class MysqlBridgeDeviceRevoker {
     try {
       await connection.beginTransaction()
       await connection.execute('SELECT id FROM users WHERE id=? FOR UPDATE', [userId])
+      await connection.execute(`UPDATE bridge_installation_authorizations SET revoked_at_utc=COALESCE(revoked_at_utc,?) WHERE user_id=?`, [now, userId])
+      await connection.execute(`UPDATE bridge_installation_requests SET status='revoked',revision=revision+1 WHERE user_id=? AND status<>'revoked'`, [userId])
       await connection.execute(`UPDATE bridge_v4_pairing_requests
         SET revoked_at_utc=? WHERE user_id=? AND revoked_at_utc IS NULL`, [now, userId])
       await connection.execute(`UPDATE bridge_refresh_sessions

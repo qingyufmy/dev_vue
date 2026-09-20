@@ -19,14 +19,16 @@ namespace Liangjian.BridgeV4.Runtime
     {
         private readonly string installationId;
         private readonly IBridgeSessionTokenHttpClient http;
-        public HttpBridgeCredentialRevoker(string installationIdValue)
-            : this(installationIdValue, new HttpWebRequestSessionTokenClient(200)) { }
+        private readonly string trustedControlBase;
+        public HttpBridgeCredentialRevoker(string installationIdValue, string trustedControlBase = null)
+            : this(installationIdValue, new HttpWebRequestSessionTokenClient(200), trustedControlBase) { }
 
-        public HttpBridgeCredentialRevoker(string installationIdValue, IBridgeSessionTokenHttpClient transport)
+        public HttpBridgeCredentialRevoker(string installationIdValue, IBridgeSessionTokenHttpClient transport, string trustedControlBase = null)
         {
             if (transport == null || !Identifier(installationIdValue)) throw new ArgumentException("bridge_revocation_configuration_invalid");
             installationId = installationIdValue;
             http = transport;
+            this.trustedControlBase = TrustedBridgeControlOrigin.Validate(trustedControlBase);
         }
 
         public void Revoke(BridgeProfileSettings profile, string refreshToken)
@@ -37,7 +39,7 @@ namespace Liangjian.BridgeV4.Runtime
                 if (profile == null || !Identifier(profile.ProfileId) || refreshToken == null
                     || refreshToken.Length < 40 || refreshToken.Length > 512 || Regex.IsMatch(refreshToken, "\\s")) throw Failed();
                 Uri realtime = BridgeV4EndpointPolicy.ValidateRealtimeUri(profile.ServerUri);
-                Uri control = BridgeV4EndpointPolicy.ValidateControlUri("https://" + realtime.Authority);
+                Uri control = TrustedBridgeControlOrigin.Resolve(realtime, trustedControlBase, true);
                 Uri endpoint = BridgeV4EndpointPolicy.BuildControlPath(control, "/api/v4/bridge/credential-revocations");
                 JavaScriptSerializer serializer = new JavaScriptSerializer { MaxJsonLength = 256 * 1024, RecursionLimit = 16 };
                 bytes = Encoding.UTF8.GetBytes(serializer.Serialize(new Dictionary<string, object>

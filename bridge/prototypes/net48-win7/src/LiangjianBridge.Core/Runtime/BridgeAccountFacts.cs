@@ -13,6 +13,12 @@ namespace Liangjian.BridgeV4.Runtime
     {
         public static IDictionary<string, object> Read(ProfileRuntime runtime, ITerminalQuerySource source, long nowUtcMsc)
         {
+            return Read(runtime, source, nowUtcMsc, null);
+        }
+
+        public static IDictionary<string, object> Read(ProfileRuntime runtime, ITerminalQuerySource source, long nowUtcMsc,
+            Action<IDictionary<string, object>, long> observation)
+        {
             if (runtime == null || source == null || nowUtcMsc < 1)
                 throw new ArgumentException("bridge_account_facts_configuration_invalid");
             ProfileRuntimeConfiguration route = runtime.Configuration;
@@ -58,6 +64,7 @@ namespace Liangjian.BridgeV4.Runtime
             if (!data.TryGetValue(route.Platform == "mt5" ? "terminal_connected" : "connected", out connected)
                 || !(connected is bool) || !(bool)connected)
                 throw new InvalidDataException("bridge_account_facts_terminal_offline");
+            if (observation != null) observation(data, result.ObservedAtUtcMsc);
             return new Dictionary<string, object>
             {
                 { "currency", currency }, { "login", login }, { "broker_server", server },

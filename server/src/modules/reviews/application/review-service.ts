@@ -1,5 +1,6 @@
+import { createReviewWriteCommand } from './review-write-command.js'
 import { createHash } from 'node:crypto'
-import { assertGenerationMode, assertReviewContent, ReviewError, type ReviewKind } from '../domain/review.js'
+import { assertGenerationMode, assertReviewContent, reviewContentFromWire, ReviewError, type ReviewKind } from '../domain/review.js'
 import type { ReviewRepository } from './review-ports.js'
 
 const opaque = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,190}$/
@@ -26,34 +27,43 @@ export class ReviewService {
   createManualCase(userId: number, input: { candidateIds: string[]; selectionTokens: string[]; strategyId: string; userThesis?: string | null; idempotencyKey: string }) {
     if (!Array.isArray(input.candidateIds) || input.candidateIds.length < 1 || input.candidateIds.length > 20 || new Set(input.candidateIds).size !== input.candidateIds.length) throw new ReviewError('manual_review_candidates_invalid', 422)
     if (!Array.isArray(input.selectionTokens) || input.selectionTokens.length !== input.candidateIds.length) throw new ReviewError('manual_review_selection_tokens_invalid', 422)
+    const command = createReviewWriteCommand({ actorUserId: userId, action: 'create_manual_case', targetId: null, expectedRevision: null, idempotencyKey: input.idempotencyKey }, {
+      candidate_ids: input.candidateIds, selection_tokens: input.selectionTokens, strategy_id: input.strategyId,
+      ...(input.userThesis === undefined ? {} : { user_thesis: input.userThesis }),
+    })
     const candidateIds = input.candidateIds.map(value => id(value, 'candidate_id'))
     const selectionTokens = input.selectionTokens.map(value => token(value))
     const thesis = input.userThesis?.trim() || null
     if (thesis && thesis.length > 2000) throw new ReviewError('manual_review_thesis_too_long', 422)
-    if (!/^[A-Za-z0-9._:-]{8,128}$/.test(input.idempotencyKey)) throw new ReviewError('idempotency_key_invalid', 422)
-    return this.repository.createManualCase({ userId, candidateIds, selectionTokens, strategyId: id(input.strategyId, 'strategy_id'), userThesis: thesis, idempotencyKey: input.idempotencyKey, now: this.now().toISOString() })
+    return this.repository.createManualCase({ command, userId, candidateIds, selectionTokens, strategyId: id(input.strategyId, 'strategy_id'), userThesis: thesis, idempotencyKey: input.idempotencyKey, now: this.now().toISOString() })
   }
 
-  requestGeneration(userId: number, caseId: string, expectedRevision: number, mode: string) {
+  requestGeneration(userId: number, caseId: string, expectedRevision: number, mode: string, idempotencyKey: string) {
     assertRevision(expectedRevision); assertGenerationMode(mode)
-    return this.repository.requestGeneration({ userId, caseId: id(caseId, 'review_case_id'), expectedRevision, mode, now: this.now().toISOString() })
+    const command = createReviewWriteCommand({ actorUserId: userId, action: 'request_generation', targetId: caseId, expectedRevision, idempotencyKey }, { mode })
+    return this.repository.requestGeneration({ userId, caseId: id(caseId, 'review_case_id'), expectedRevision, mode, command, now: this.now().toISOString() })
   }
 
-  createVersion(userId: number, caseId: string, expectedRevision: number, content: unknown) {
-    assertRevision(expectedRevision); assertReviewContent(content)
-    return this.repository.createUserVersion({ userId, caseId: id(caseId, 'review_case_id'), expectedRevision, content: structuredClone(content), now: this.now().toISOString() })
-  }
-
-  confirm(userId: number, caseId: string, versionId: string, expectedRevision: number) {
+  createVersion(userId: number, caseId: string, expectedRevision: number, originalContent: unknown, idempotencyKey: string) {
     assertRevision(expectedRevision)
-    return this.repository.confirmVersion({ userId, caseId: id(caseId, 'review_case_id'), versionId: id(versionId, 'review_version_id'), expectedRevision, now: this.now().toISOString() })
+    const command = createReviewWriteCommand({ actorUserId: userId, action: 'create_version', targetId: caseId, expectedRevision, idempotencyKey }, { content: originalContent })
+    const content = reviewContentFromWire(originalContent)
+    assertReviewContent(content)
+    return this.repository.createUserVersion({ userId, caseId: id(caseId, 'review_case_id'), expectedRevision, content: structuredClone(content), command, now: this.now().toISOString() })
   }
 
-  returnForChanges(userId: number, caseId: string, expectedRevision: number, reason: string) {
+  confirm(userId: number, caseId: string, versionId: string, expectedRevision: number, idempotencyKey: string) {
     assertRevision(expectedRevision)
+    const command = createReviewWriteCommand({ actorUserId: userId, action: 'confirm_version', targetId: caseId, expectedRevision, idempotencyKey }, { version_id: versionId })
+    return this.repository.confirmVersion({ userId, caseId: id(caseId, 'review_case_id'), versionId: id(versionId, 'review_version_id'), expectedRevision, command, now: this.now().toISOString() })
+  }
+
+  returnForChanges(userId: number, caseId: string, expectedRevision: number, reason: string, idempotencyKey: string) {
+    assertRevision(expectedRevision)
+    const command = createReviewWriteCommand({ actorUserId: userId, action: 'return_case', targetId: caseId, expectedRevision, idempotencyKey }, { reason })
     const normalized = reason.trim()
     if (normalized.length < 3 || normalized.length > 1000) throw new ReviewError('review_return_reason_invalid', 422)
-    return this.repository.returnCase({ userId, caseId: id(caseId, 'review_case_id'), expectedRevision, reason: normalized, now: this.now().toISOString() })
+    return this.repository.returnCase({ userId, caseId: id(caseId, 'review_case_id'), expectedRevision, reason: normalized, command, now: this.now().toISOString() })
   }
 
   memories(userId: number) { return this.repository.listMemories(userId) }
@@ -63,10 +73,11 @@ export class ReviewService {
     return result
   }
   memoryUpdates(userId: number, memoryId: string) { return this.repository.listMemoryUpdates(userId, id(memoryId, 'memory_id')) }
-  decideMemoryUpdate(userId: number, updateId: string, expectedRevision: number, decision: string) {
+  decideMemoryUpdate(userId: number, updateId: string, expectedRevision: number, decision: string, idempotencyKey: string) {
     assertRevision(expectedRevision)
     if (decision !== 'accept' && decision !== 'reject' && decision !== 'revoke') throw new ReviewError('strategy_memory_decision_invalid', 422)
-    return this.repository.decideMemoryUpdate({ userId, updateId: id(updateId, 'memory_update_id'), expectedRevision, decision, now: this.now().toISOString() })
+    const command = createReviewWriteCommand({ actorUserId: userId, action: 'decide_memory_update', targetId: updateId, expectedRevision, idempotencyKey }, { decision })
+    return this.repository.decideMemoryUpdate({ userId, updateId: id(updateId, 'memory_update_id'), expectedRevision, decision, command, now: this.now().toISOString() })
   }
 }
 
@@ -81,7 +92,7 @@ function token(value: string) {
   return createHash('sha256').update(result).digest('hex')
 }
 function reviewKind(value: string): ReviewKind {
-  if (value !== 'daily' && value !== 'monthly' && value !== 'manual') throw new ReviewError('review_kind_invalid', 422)
+  if (value !== 'daily' && value !== 'monthly' && value !== 'manual' && value !== 'trade') throw new ReviewError('review_kind_invalid', 422)
   return value
 }
 function clamp(value?: number) { return Math.min(Math.max(Number.isFinite(value) ? Math.trunc(value!) : 50, 1), 100) }

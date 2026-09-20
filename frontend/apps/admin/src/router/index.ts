@@ -1,3 +1,4 @@
+import { loadStrategiesView } from '~/features/strategies'
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAdminSession, loadLoginView } from '~/features/auth'
 import { loadOverviewView } from '~/features/overview'
@@ -35,7 +36,7 @@ export const router = createRouter({
     },
     ...moduleRoutes.map((route) => ({
       path: route.path,
-      component: route.path === '/system' ? loadSystemSettingsView : loadModulePlaceholderView,
+      component: route.path === '/system' ? loadSystemSettingsView : route.path === '/strategies' ? loadStrategiesView : loadModulePlaceholderView,
       meta: { title: route.title, description: route.description },
     })),
   ],

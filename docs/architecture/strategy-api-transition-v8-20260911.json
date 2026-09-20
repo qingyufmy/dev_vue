@@ -1,0 +1,25 @@
+{
+  "kind": "strategy-api-migrated-data/v1",
+  "passed": true,
+  "target": "dev_vue_m1_source_20260910_02",
+  "currentDevVueWrites": 0,
+  "realAuthenticationVerified": false,
+  "realCommitVerified": false,
+  "transactionMode": "outer-rollback-with-per-request-savepoints",
+  "checks": [
+    "migrated-role-details-and-original-version-hashes",
+    "deleted-roles-hidden",
+    "platform-strategies-read-only",
+    "subscriptions-isolated-by-user",
+    "historical-owner-cannot-mutate",
+    "draft-activation-rejected",
+    "paused-edit-and-end-retain-window",
+    "create-publish-subscribe-activate-through-real-API-SQL",
+    "activation-receipt-replay",
+    "retired-strategy-rejected-with-end-still-available"
+  ],
+  "requests": 36,
+  "originalDataUnchanged": true,
+  "tableCount": 295,
+  "observedAt": "2026-09-11T01:54:05.642Z"
+}

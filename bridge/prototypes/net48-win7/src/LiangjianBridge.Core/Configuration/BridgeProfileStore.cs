@@ -104,6 +104,8 @@ namespace Liangjian.BridgeV4.Configuration
         public string PythonExecutablePath { get; set; }
         public string WorkerScriptPath { get; set; }
         public string TerminalPath { get; set; }
+        public bool Mt5Portable { get; set; }
+        public string Mt5DataPath { get; set; }
         public string ProtectedRefreshToken { get; set; }
 
         public BridgeProfileSettings Clone()
@@ -118,6 +120,17 @@ namespace Liangjian.BridgeV4.Configuration
                 && string.Equals(TerminalInstanceId, other.TerminalInstanceId, StringComparison.Ordinal)
                 && string.Equals(BrokerServer, other.BrokerServer, StringComparison.Ordinal)
                 && string.Equals(Login, other.Login, StringComparison.Ordinal);
+        }
+
+        public bool SameConnectionSettings(BridgeProfileSettings other)
+        {
+            return SameRoute(other)
+                && string.Equals(ServerUri, other.ServerUri, StringComparison.Ordinal)
+                && string.Equals(PythonExecutablePath, other.PythonExecutablePath, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(WorkerScriptPath, other.WorkerScriptPath, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(TerminalPath, other.TerminalPath, StringComparison.OrdinalIgnoreCase)
+                && Mt5Portable == other.Mt5Portable
+                && string.Equals(Mt5DataPath ?? string.Empty, other.Mt5DataPath ?? string.Empty, StringComparison.OrdinalIgnoreCase);
         }
     }
 
@@ -193,6 +206,8 @@ namespace Liangjian.BridgeV4.Configuration
                 {
                     IDictionary<string, object> profile = (IDictionary<string, object>)value;
                     if (!(bool)profile["RemovalPending"]) profile.Remove("RemovalPending");
+                    if (!(bool)profile["Mt5Portable"]) profile.Remove("Mt5Portable");
+                    if (string.IsNullOrEmpty(profile["Mt5DataPath"] as string)) profile.Remove("Mt5DataPath");
                 }
                 File.WriteAllText(temporary, serializer.Serialize(encoded), new UTF8Encoding(false));
                 using (FileStream stream = new FileStream(temporary, FileMode.Open, FileAccess.Read, FileShare.Read))
@@ -279,6 +294,8 @@ namespace Liangjian.BridgeV4.Configuration
             {
                 throw new InvalidDataException("bridge_profile_mt5_path_invalid");
             }
+            if (!string.IsNullOrEmpty(profile.Mt5DataPath) && !ValidPath(profile.Mt5DataPath))
+                throw new InvalidDataException("bridge_profile_mt5_path_invalid");
         }
 
         private void ValidateJsonShape(string json)
@@ -298,6 +315,16 @@ namespace Liangjian.BridgeV4.Configuration
             foreach (object value in profiles)
             {
                 IDictionary<string, object> profile = value as IDictionary<string, object>;
+                if (profile != null && profile.ContainsKey("Mt5Portable"))
+                {
+                    if (!(profile["Mt5Portable"] is bool)) throw new InvalidDataException("bridge_profile_catalog_invalid");
+                    profile.Remove("Mt5Portable");
+                }
+                if (profile != null && profile.ContainsKey("Mt5DataPath"))
+                {
+                    if (!(profile["Mt5DataPath"] is string)) throw new InvalidDataException("bridge_profile_catalog_invalid");
+                    profile.Remove("Mt5DataPath");
+                }
                 if (profile != null && profile.ContainsKey("RemovalPending"))
                 {
                     if (!(profile["RemovalPending"] is bool)) throw new InvalidDataException("bridge_profile_catalog_invalid");

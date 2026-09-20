@@ -78,16 +78,27 @@ export class MysqlBridgePairingRepository implements BridgePairingRepository {
 
   private async transaction<T>(work: (connection: PoolConnection) => Promise<T>): Promise<T> {
     const connection = await this.pool.getConnection()
+    let committing = false
+    let destroyed = false
     try {
       await connection.beginTransaction()
       const result = await work(connection)
+      committing = true
       await connection.commit()
       return result
     } catch (error) {
-      await connection.rollback()
+      if (committing) {
+        destroyed = true
+        connection.destroy()
+        throw new BridgePairingError('bridge_pairing_commit_unknown', 503)
+      }
+      try { await connection.rollback() } catch {
+        destroyed = true
+        connection.destroy()
+      }
       if (error instanceof BridgePairingError) throw error
       throw new BridgePairingError('bridge_pairing_storage_failed', 503)
-    } finally { connection.release() }
+    } finally { if (!destroyed) connection.release() }
   }
 }
 
@@ -98,7 +109,7 @@ const PAIR_SELECT = `SELECT id,user_id,code_hash,profile_id,installation_id,refr
 async function lockEligibleUser(connection: PoolConnection, userId: number) {
   const [users] = await connection.execute<RowDataPacket[]>(`SELECT id FROM users WHERE id=?
     AND deletion_status='active' AND deleted_at IS NULL
-    AND (role='admin' OR (plan='pro' AND (plan_expires_at IS NULL OR plan_expires_at > UTC_TIMESTAMP(3)))) FOR UPDATE`, [userId])
+     FOR UPDATE`, [userId])
   if (!users[0]) throw new BridgePairingError('bridge_pairing_not_eligible', 403)
 }
 

@@ -52,7 +52,8 @@ class MemoryStrategyRepository implements StrategyCatalog, StrategyManagementRep
     return userId === 42 ? detail ?? null : null
   }
 
-  async create(input: CreateStrategyInput & { compiled: StrategyCompileResult }) {
+  async create(raw: CreateStrategyInput, prepare: () => import('../src/modules/strategies/application/strategy-service.js').PreparedStrategyDraft) {
+    const input = { ...raw, ...prepare() }
     const id = 'strategy-created'
     const version = { id: 'version-created-1', strategyId: id, kind: input.kind, version: 1, promptText: input.promptText, promptHash: input.compiled.promptHash, config: input.compiled.normalizedConfig, inputContractVersion: input.compiled.inputContractVersion, outputContractVersion: input.compiled.outputContractVersion, createdByUserId: input.userId, createdAt: '2026-09-04T04:00:00.000Z' }
     const detail: StrategyDetail = { summary: { id, kind: input.kind, scope: 'user', ownerUserId: input.userId, name: input.name, description: input.description, status: 'draft', activeVersionId: null, revision: 1 }, versions: [version] }
@@ -60,7 +61,8 @@ class MemoryStrategyRepository implements StrategyCatalog, StrategyManagementRep
     return detail
   }
 
-  async updateMetadata(input: UpdateStrategyMetadataInput) {
+  async updateMetadata(raw: UpdateStrategyMetadataInput, prepare: () => Pick<UpdateStrategyMetadataInput, 'name' | 'description'>) {
+    const input = { ...raw, ...prepare() }
     const detail = this.details.get(input.strategyId)
     if (!detail) throw new Error('not found')
     const updated: StrategyDetail = { ...detail, summary: { ...detail.summary, name: input.name, description: input.description, revision: input.expectedRevision + 1 } }
@@ -74,7 +76,8 @@ class MemoryStrategyRepository implements StrategyCatalog, StrategyManagementRep
   async findSubscription(_userId: number, subscriptionId: string) { return this.subscriptions.find(item => item.id === subscriptionId) ?? null }
   async listSubscriptions(_userId: number, _tradingAccountId?: string) { return this.subscriptions }
 
-  async createSubscription(input: CreateStrategySubscriptionInput) {
+  async createSubscription(raw: CreateStrategySubscriptionInput, prepare: () => import('../src/modules/strategies/application/strategy-service.js').PreparedSubscriptionCreate) {
+    const input = { ...raw, ...prepare() }
     const item: StrategySubscription = {
       id: 'subscription-1', userId: input.userId, tradingAccountId: input.tradingAccountId, standardSymbol: input.standardSymbol,
       analysisStrategyId: input.analysisStrategyId, analysisStrategyVersionId: analysisVersion.id, traderStrategyId: input.traderStrategyId,
@@ -86,8 +89,8 @@ class MemoryStrategyRepository implements StrategyCatalog, StrategyManagementRep
     return item
   }
 
-  async updateSubscription(input: UpdateStrategySubscriptionInput) {
-    this.updatedSubscriptionInput = input
+  async updateSubscription(input: UpdateStrategySubscriptionInput, prepare: (current: StrategySubscription) => import('../src/modules/strategies/application/strategy-service.js').PreparedSubscriptionUpdate) {
+    this.updatedSubscriptionInput = { ...input, ...prepare(this.subscriptions[0]!) }
     return this.subscriptions[0]!
   }
 }
@@ -126,7 +129,7 @@ describe('Stage 12Q strategy management', () => {
     const app = Fastify({ logger: false })
     await app.register(createStrategyHttp(new StrategyService(repository), auth))
 
-    const compiled = await app.inject({ method: 'POST', url: '/api/v4/strategies/compile', headers: { 'x-csrf-token': 'csrf-token' }, payload: { kind: 'analysis', prompt_text: '分析', config: {} } })
+    const compiled = await app.inject({ method: 'POST', url: '/api/v4/strategies/compile', headers: { 'x-csrf-token': 'csrf-token-123456789' }, payload: { kind: 'analysis', prompt_text: '分析', config: {} } })
     expect(compiled.statusCode).toBe(200)
     expect(compiled.json().data).toMatchObject({ valid: true, input_contract_version: 'market-analysis-input/v1' })
 
@@ -135,22 +138,31 @@ describe('Stage 12Q strategy management', () => {
     expect(detail.headers.etag).toBe('"1"')
     expect(detail.json().data.versions).toHaveLength(1)
 
-    const missingCas = await app.inject({ method: 'PATCH', url: '/api/v4/strategies/strategy-analysis-1', headers: { 'x-csrf-token': 'csrf-token' }, payload: { name: '新名字', description: '说明' } })
+    const missingCas = await app.inject({ method: 'PATCH', url: '/api/v4/strategies/strategy-analysis-1', headers: { 'x-csrf-token': 'csrf-token-123456789' }, payload: { name: '新名字', description: '说明' } })
     expect(missingCas.statusCode).toBe(428)
 
-    const created = await app.inject({ method: 'POST', url: '/api/v4/strategies', headers: { 'x-csrf-token': 'csrf-token' }, payload: { kind: 'analysis', name: '新增', description: '', prompt_text: '分析', config: {} } })
+    const created = await app.inject({ method: 'POST', url: '/api/v4/strategies', headers: { 'x-csrf-token': 'csrf-token-123456789', 'idempotency-key': 'strategy-create-001' }, payload: { kind: 'analysis', name: '新增', description: '', prompt_text: '分析', config: {} } })
     expect(created.statusCode).toBe(201)
     expect(created.json().data.versions[0]).not.toHaveProperty('compiled')
+    await app.close()
+  })
+
+  it('stores send permission independently without enabling a trader', async () => {
+    const app = Fastify({ logger: false })
+    await app.register(createStrategyHttp(new StrategyService(new MemoryStrategyRepository()), auth))
+    const response = await app.inject({ method: 'POST', url: '/api/v4/strategy-subscriptions', headers: { 'x-csrf-token': 'csrf-token-123456789', 'idempotency-key': 'send-preference-001' }, payload: { trading_account_id: 'account-1', symbol: 'XAUUSD', analysis_strategy_id: 'strategy-analysis-1', trader_enabled: false, trade_send_enabled: true } })
+    expect(response.statusCode).toBe(201)
+    expect(response.json().data).toMatchObject({ trader_enabled: false, trade_send_enabled: true })
     await app.close()
   })
 
   it('rejects an executable subscription without a trader strategy', async () => {
     const app = Fastify({ logger: false })
     await app.register(createStrategyHttp(new StrategyService(new MemoryStrategyRepository()), auth))
-    const response = await app.inject({ method: 'POST', url: '/api/v4/strategy-subscriptions', headers: { 'x-csrf-token': 'csrf-token' }, payload: { trading_account_id: 'account-1', symbol: 'XAUUSD', analysis_strategy_id: 'strategy-analysis-1', trader_enabled: true } })
+    const response = await app.inject({ method: 'POST', url: '/api/v4/strategy-subscriptions', headers: { 'x-csrf-token': 'csrf-token-123456789', 'idempotency-key': 'subscription-create-001' }, payload: { trading_account_id: 'account-1', symbol: 'XAUUSD', analysis_strategy_id: 'strategy-analysis-1', trader_enabled: true } })
     expect(response.statusCode).toBe(422)
     expect(response.json()).toMatchObject({ code: 'subscription_trader_required' })
-    const ended = await app.inject({ method: 'POST', url: '/api/v4/strategy-subscriptions', headers: { 'x-csrf-token': 'csrf-token' }, payload: { trading_account_id: 'account-1', symbol: 'XAUUSD', analysis_strategy_id: 'strategy-analysis-1', status: 'ended' } })
+    const ended = await app.inject({ method: 'POST', url: '/api/v4/strategy-subscriptions', headers: { 'x-csrf-token': 'csrf-token-123456789', 'idempotency-key': 'subscription-create-001' }, payload: { trading_account_id: 'account-1', symbol: 'XAUUSD', analysis_strategy_id: 'strategy-analysis-1', status: 'ended' } })
     expect(ended.statusCode).toBe(422)
     await app.close()
   })
@@ -166,20 +178,24 @@ describe('Stage 12Q strategy management', () => {
       schedule: { cadenceSeconds: 300, receiveTimezone: 'UTC', receiveWindow: { enabled: false }, nextDueAt: null, revision: 1 },
     }]
     const service = new StrategyService(repository)
-    await service.updateSubscription({ userId: 42, subscriptionId: 'subscription-1', expectedRevision: 4, traderEnabled: false })
+    const receiveWindow = { enabled: true, version: 1, timezone: 'terminal_server', weekdays: [1, 2, 3, 4, 5], windows: [{ start: '09:00', end: '18:00' }], outsideBehavior: 'pause_all' }
+    repository.subscriptions[0]!.schedule = { cadenceSeconds: 300, receiveTimezone: 'terminal_server', receiveWindow, nextDueAt: '2026-09-14T10:15:00.000Z', revision: 1 }
+    await service.updateSubscription({ userId: 42, idempotencyKey: 'subscription-trade-001', subscriptionId: 'subscription-1', expectedRevision: 4, tradeSendEnabled: true })
+    expect(repository.updatedSubscriptionInput).toMatchObject({ tradeSendEnabled: true, analysisEnabled: true, traderEnabled: true, receiveWindow, nextDueAt: '2026-09-14T10:15:00.000Z' })
+    await service.updateSubscription({ userId: 42, idempotencyKey: 'subscription-update-001', subscriptionId: 'subscription-1', expectedRevision: 4, traderEnabled: false })
     expect(repository.updatedSubscriptionInput).toMatchObject({ analysisStrategyId: analysisVersion.strategyId, traderStrategyId: traderVersion.strategyId, traderEnabled: false })
     expect(repository.updatedSubscriptionInput).not.toHaveProperty('analysisStrategyVersionId')
     expect(repository.updatedSubscriptionInput).not.toHaveProperty('traderStrategyVersionId')
 
     repository.subscriptions[0] = { ...repository.subscriptions[0]!, status: 'active', traderEnabled: false }
     await service.updateSubscription({
-      userId: 42, subscriptionId: 'subscription-1', expectedRevision: 4,
+      userId: 42, idempotencyKey: 'subscription-update-001', subscriptionId: 'subscription-1', expectedRevision: 4,
       analysisStrategyId: analysisVersion.strategyId, traderStrategyId: traderVersion.strategyId,
     })
     expect(repository.updatedSubscriptionInput).not.toHaveProperty('analysisStrategyVersionId')
     expect(repository.updatedSubscriptionInput).not.toHaveProperty('traderStrategyVersionId')
 
     repository.subscriptions[0] = { ...repository.subscriptions[0]!, status: 'ended' }
-    await expect(service.updateSubscription({ userId: 42, subscriptionId: 'subscription-1', expectedRevision: 4, status: 'active' })).rejects.toMatchObject({ code: 'strategy_subscription_ended', status: 409 })
+    await expect(service.updateSubscription({ userId: 42, idempotencyKey: 'subscription-update-001', subscriptionId: 'subscription-1', expectedRevision: 4, status: 'active' })).rejects.toMatchObject({ code: 'strategy_subscription_ended', status: 409 })
   })
 })

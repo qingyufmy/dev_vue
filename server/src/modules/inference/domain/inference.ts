@@ -1,4 +1,7 @@
+import { InferenceError } from './inference-error.js'
+import { resolveEntryEventClaims } from './entry-event-claims.js'
 import { createHash } from 'node:crypto'
+import { positivePercent } from '../../../shared/positive-percent.js'
 import type { SubscriptionExecutionPreferences } from '../../strategies/index.js'
 import { parseStrategyEntryMethods, entryMethodForAction, type StrategyEntryMethod } from '../../strategies/index.js'
 
@@ -50,6 +53,8 @@ export interface MarketAnalysisSummary {
 }
 
 export interface MarketAnalysisResult {
+  bullishScore?: number | null
+  bearishScore?: number | null
   marketBias: MarketBias
   opportunity: MarketOpportunity
   confidence: number
@@ -66,6 +71,7 @@ export interface MarketAnalysisResult {
 }
 
 export interface MarketAnalysisDetail {
+  chart?: ReturnType<typeof import('./analysis-chart.js').analysisChart>
   summary: MarketAnalysisSummary
   result: MarketAnalysisResult
 }
@@ -99,6 +105,8 @@ export interface TraderDecisionResult {
 
 export interface AnalysisInputSnapshot {
   kind: 'analysis'
+  /** Historical absence is not a request to read today's memory. */
+  strategyMemory?: JsonObject
   strategy: { id: string; versionId: string; promptHash: string; promptText: string }
   market: JsonObject
   macro: JsonObject | null
@@ -106,11 +114,23 @@ export interface AnalysisInputSnapshot {
 }
 
 export interface TraderInputSnapshot {
+  entryEventUsage?: JsonObject
+  entryEventPolicy?: { version: 1; mode: 'required'; timeframe: string }
+  /** Objective event identities from the original analysis snapshot, not model-authored keys. */
+  marketEntryEvents?: JsonObject
+  /** Exact current-account creation evidence; absent in historical snapshots. */
+  accountPositionEntryEvidence?: JsonObject
+  /** Strategy reference observations are never the executable account inventory. */
+  strategyReferencePortfolio?: JsonObject
+  /** Current immutable memory evidence captured before model invocation. */
+  strategyMemory?: JsonObject
   entryMethods?: StrategyEntryMethod[]
   /** Explicitly frozen preferences only; historical absence is not a default. */
   executionPreferences?: SubscriptionExecutionPreferences
   /** Missing only in historical snapshots, never inferred from today's settings. */
   subscriptionWindowHash?: string
+  /** Frozen current configuration; historical absence must not be filled from today's version. */
+  strategyConfigHash?: string
   kind: 'trader'
   taskMode: TraderTaskMode
   strategy: { id: string; versionId: string; promptHash: string; promptText: string }
@@ -199,11 +219,7 @@ export interface TraderWorkClaim {
   fencingToken: number
 }
 
-export class InferenceError extends Error {
-  constructor(public readonly code: string, public readonly status: number, public readonly retryAfterMs?: number) {
-    super(code)
-  }
-}
+export { InferenceError } from './inference-error.js'
 
 export function normalizeSymbol(value: string) {
   const symbol = value.trim().toUpperCase()
@@ -216,6 +232,8 @@ export function assertConfidence(value: number) {
 }
 
 export function assertMarketAnalysisResult(value: MarketAnalysisResult) {
+  const scores = [value.bullishScore, value.bearishScore]
+  if (!scores.every(score => score == null) && (!scores.every(score => typeof score === 'number' && Number.isFinite(score) && score >= 0 && score <= 100) || Number(value.bullishScore) + Number(value.bearishScore) <= 0)) throw new InferenceError('analysis_direction_scores_invalid', 422)
   if (!['bullish', 'bearish', 'neutral', 'uncertain'].includes(value.marketBias)) throw new InferenceError('market_bias_invalid', 422)
   if (!['none', 'long_setup', 'short_setup'].includes(value.opportunity)) throw new InferenceError('market_opportunity_invalid', 422)
   if (![value.summary, value.marketRegime, value.analysisBody].every(item => typeof item === 'string')) throw new InferenceError('analysis_text_invalid', 422)
@@ -252,6 +270,10 @@ export function assertTraderDecisionResult(value: TraderDecisionResult, snapshot
     actionIds.add(action.actionId)
     if (!traderExecutableActionKinds.has(action.kind) || !isJsonObject(action.parameters) || !isJsonObject(action.expectedState)) throw new InferenceError('trader_action_structure_invalid', 422)
     assertTraderActionParameters(action.kind, action.parameters)
+    if (Object.hasOwn(action.parameters, 'after_close_protection') && value.actions.filter(other =>
+      ['close_position', 'modify_position'].includes(other.kind) && other.parameters.ticket === action.parameters.ticket).length !== 1) {
+      throw new InferenceError('trader_after_close_target_conflict', 422)
+    }
     if (entryMethods !== undefined) {
       const method = entryMethodForAction(action.kind, action.parameters.type)
       if (method && !entryMethods.includes(method)) throw new InferenceError('trader_entry_method_forbidden', 422)
@@ -260,19 +282,52 @@ export function assertTraderDecisionResult(value: TraderDecisionResult, snapshot
       if (action.expectedState[key] !== expected[key]) throw new InferenceError('trader_expected_state_mismatch', 422)
     }
   }
+  resolveEntryEventClaims(value, snapshot)
 }
 
 function assertTraderActionParameters(kind: TraderExecutableActionKind, parameters: JsonObject) {
   const required = (keys: string[]) => {
     if (keys.some(key => typeof parameters[key] !== 'string' || String(parameters[key]).trim().length === 0)) throw new InferenceError('trader_action_parameters_invalid', 422)
   }
+  if (Object.hasOwn(parameters, 'after_close_target')) throw new InferenceError('trader_after_close_target_reserved', 422)
+  if (Object.hasOwn(parameters, 'after_close_protection')) {
+    const protection = parameters.after_close_protection
+    const positiveDecimal = (value: unknown) => typeof value === 'string' && /^(0|[1-9][0-9]{0,28})(\.[0-9]{1,18})?$/.test(value) && /[1-9]/.test(value)
+    if (kind !== 'close_position' || (!Object.hasOwn(parameters, 'close_percent') && !Object.hasOwn(parameters, 'volume'))
+      || (Object.hasOwn(parameters, 'volume') && !positiveDecimal(parameters.volume))
+      || !isJsonObject(protection) || Object.keys(protection).length === 0 || Object.keys(protection).length > 2
+      || Object.keys(protection).some(key => !['stop_loss', 'take_profit'].includes(key))
+      || Object.values(protection).some(value => !positiveDecimal(value))) {
+      throw new InferenceError('trader_after_close_protection_invalid', 422)
+    }
+  }
+  const hasTier = Object.hasOwn(parameters, 'position_size_tier')
+  if (Object.hasOwn(parameters, 'risk_ceiling_percent')) {
+    if (kind !== 'market_order' && kind !== 'pending_order') throw new InferenceError('trader_action_risk_ceiling_kind_invalid', 422)
+    try { positivePercent(parameters.risk_ceiling_percent) }
+    catch { throw new InferenceError('trader_action_risk_ceiling_invalid', 422) }
+  }
+  if (Object.hasOwn(parameters, 'close_percent')) {
+    if (kind !== 'close_position' || Object.hasOwn(parameters, 'volume')) throw new InferenceError('trader_partial_close_mode_conflict', 422)
+    const percent = parameters.close_percent
+    if (typeof percent !== 'string' || !/^(?:0|[1-9]\d?)(?:\.\d{1,18})?$/.test(percent) || Number(percent) <= 0) {
+      throw new InferenceError('trader_partial_close_percent_invalid', 422)
+    }
+  }
+  if (hasTier) {
+    if (kind !== 'market_order' && kind !== 'pending_order') throw new InferenceError('trader_position_tier_action_invalid', 422)
+    if (Object.hasOwn(parameters, 'volume') || Object.hasOwn(parameters, 'position_size_factor')) throw new InferenceError('trader_position_size_mode_conflict', 422)
+    if (typeof parameters.position_size_tier !== 'string' || !['probe', 'light', 'standard'].includes(parameters.position_size_tier)) throw new InferenceError('trader_position_size_tier_invalid', 422)
+    const stop = parameters.stop_loss ?? parameters.sl
+    if (typeof stop !== 'string' || !/^(?:0|[1-9]\d{0,29})(?:\.\d{1,18})?$/.test(stop) || Number(stop) <= 0) throw new InferenceError('trader_position_size_stop_required', 422)
+  }
   switch (kind) {
     case 'market_order':
-      required(['symbol', 'side', 'volume'])
+      required(['symbol', 'side', ...(hasTier ? [] : ['volume'])])
       if (parameters.side !== 'buy' && parameters.side !== 'sell') throw new InferenceError('trader_action_side_invalid', 422)
       break
     case 'pending_order':
-      required(['symbol', 'type', 'volume', 'price'])
+      required(['symbol', 'type', ...(hasTier ? [] : ['volume']), 'price'])
       if (!['buy_limit', 'sell_limit', 'buy_stop', 'sell_stop', 'buy_stop_limit', 'sell_stop_limit'].includes(String(parameters.type))) throw new InferenceError('trader_pending_type_invalid', 422)
       break
     case 'modify_position': required(['ticket']); break

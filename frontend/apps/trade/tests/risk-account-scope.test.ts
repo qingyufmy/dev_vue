@@ -24,6 +24,8 @@ function open() {
 }
 beforeEach(() => {
   vi.resetAllMocks()
+  localStorage.clear()
+  vi.stubGlobal('navigator', { locks: { request: async (_name: string, work: () => Promise<unknown>) => work() } })
   accountSession.value = { user: { id: '7' }, csrf_token: 'csrf', authenticated_at: '2026-09-08T12:00:00.000Z' }
   api.getContext.mockResolvedValue({ data: context('a') })
   api.listAccounts.mockResolvedValue({ data: { items: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] } })
@@ -32,7 +34,7 @@ beforeEach(() => {
   api.getManualRelease.mockResolvedValue({ data: null })
   api.listDecisions.mockResolvedValue({ data: { items: [] } })
 })
-afterEach(() => { wrapper?.unmount(); wrapper = undefined; applyTradingContext(null) })
+afterEach(() => { wrapper?.unmount(); wrapper = undefined; applyTradingContext(null); vi.unstubAllGlobals() })
 
 describe('risk account response scope', () => {
   it('does not let the older selection overwrite the newest accepted context', async () => {
@@ -100,8 +102,9 @@ describe('risk account response scope', () => {
     const input = { patch: { maxDailyLossPercent: '2' }, reason: 'test' }
     const pending = workspace.savePolicy(input)
     expect(await workspace.savePolicy(input)).toBe(false)
-    expect(api.replacePolicy).toHaveBeenCalledTimes(1)
-    expect(api.replacePolicy).toHaveBeenCalledWith('csrf', 'a', { reason: 'test', max_daily_loss_percent: '2' }, 1)
+    await vi.waitFor(() => expect(api.replacePolicy).toHaveBeenCalledTimes(1))
+    expect(api.replacePolicy).toHaveBeenCalledWith('csrf', 'a', { reason: 'test', max_daily_loss_percent: '2' }, 1, expect.any(String))
+    api.getPolicy.mockResolvedValueOnce({ data: { revision: 2 } })
     result.resolve({ data: { revision: 2 } })
     expect(await pending).toBe(true)
     expect(workspace.policy.value?.revision).toBe(2)

@@ -36,7 +36,7 @@ function reset() {
   const policy = props.policy
   if (!policy) return
   const editable: Pick<RiskPolicy, NumericPolicyKey> = policy
-  for (const field of policyFields) values[field.key] = String(editable[field.key])
+  for (const field of policyFields) values[field.key] = String(editable[field.key] ?? '')
   tradeSendEnabled.value = policy.tradeSendEnabled
   accountKillSwitch.value = policy.accountKillSwitch
   reason.value = ''
@@ -52,6 +52,9 @@ function submit() {
   for (const field of policyFields) {
     if (!editables.has(field.wire) || values[field.key] === String(original[field.key])) continue
     if (!values[field.key].trim() || !Number.isFinite(Number(values[field.key])) || Number(values[field.key]) < 0) return fail(`${field.label}必须是有效的非负数`)
+    if (field.step === '1' && !Number.isSafeInteger(Number(values[field.key]))) return fail(`${field.label}必须填写整数`)
+    const control = policy.numericControls[field.wire]
+    if (control && (Number(values[field.key]) < Number(control.allowed_min) || Number(values[field.key]) > Number(control.allowed_max))) return fail(`${field.label}必须在 ${control.allowed_min} 至 ${control.allowed_max} 之间`)
     patch[field.key] = values[field.key]
   }
   if (editables.has('trade_send_enabled') && tradeSendEnabled.value !== policy.tradeSendEnabled) patch.tradeSendEnabled = tradeSendEnabled.value
@@ -64,6 +67,7 @@ function submit() {
 
 function fail(message: string) { localError.value = message }
 watch(() => props.open, (open) => { if (open) reset() }, { immediate: true })
+watch(() => props.policy, (value, previous) => { if (props.open && value && !previous) reset() })
 </script>
 
 <template>
@@ -102,10 +106,16 @@ watch(() => props.open, (open) => { if (open) reset() }, { immediate: true })
                 <Field v-for="field in policyFields.filter((item) => item.group === group.id)" :key="field.key">
                   <FieldLabel :for="`risk-${field.key}`">{{ field.label }}</FieldLabel>
                   <div class="relative">
-                    <Input :id="`risk-${field.key}`" v-model="values[field.key]" type="number" inputmode="decimal" min="0" :step="field.step" :disabled="!editableFields.has(field.wire)" class="pr-16" />
+                    <Input :id="`risk-${field.key}`" v-model="values[field.key]" type="number" inputmode="decimal" :min="policy?.numericControls[field.wire]?.allowed_min ?? 0" :max="policy?.numericControls[field.wire]?.allowed_max" :aria-describedby="`risk-${field.key}-hint`" :step="field.step" :disabled="!editableFields.has(field.wire)" class="pr-16" />
                     <span class="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">{{ field.suffix }}</span>
                   </div>
-                  <FieldDescription>{{ editableFields.has(field.wire) ? field.description : '此项由平台统一管理。' }}</FieldDescription>
+                  <FieldDescription :id="`risk-${field.key}-hint`">
+                    {{ editableFields.has(field.wire) ? field.description : '此项由平台统一管理。' }}
+                    <span v-if="policy?.numericControls[field.wire]" class="block">
+                      <template v-if="policy.numericControls[field.wire]!.locked_value !== null">平台锁定为 {{ policy.numericControls[field.wire]!.locked_value }} {{ field.suffix }}</template>
+                      <template v-else>允许范围 {{ policy.numericControls[field.wire]!.allowed_min }} 至 {{ policy.numericControls[field.wire]!.allowed_max }} {{ field.suffix }}</template>
+                    </span>
+                  </FieldDescription>
                 </Field>
               </FieldGroup>
             </TabsContent>

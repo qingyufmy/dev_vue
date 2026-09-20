@@ -1,0 +1,64 @@
+{
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "syntheticPorts": [
+    "model-result"
+  ],
+  "omittedTraderContextPorts": [],
+  "remainingEvidenceLimits": [
+    "synthetic-market-data-and-model-responses",
+    "synthetic-terminal-route-and-result",
+    "synthetic-bridge-command-transport",
+    "stub-http-authentication",
+    "empty-reference-inventory",
+    "review-case-job-and-evidence-seeded-before-worker",
+    "analysis-memory-bootstrap",
+    "resolver-wrapper-uses-injected-fetch"
+  ],
+  "foreignKeysVerified": false,
+  "checks": [
+    "actual-instrument-reader-requires-current-owner-binding-and-connection-epoch",
+    "actual-review-worker-generates-one-version-before-confirmation",
+    "review-confirmation-replay-creates-one-pending-memory",
+    "unaccepted-memory-does-not-change-runtime-input",
+    "accepted-memory-new-revision-reaches-runtime-reader",
+    "actual-model-catalog-decrypts-synthetic-credential-and-rejects-capability-or-owner-mismatch",
+    "scheduler-replay-keeps-one-run-one-outbox-and-exact-UTC-milliseconds",
+    "actual-analysis-outbox-queue-worker-and-context-complete-once",
+    "analysis-result-and-trader-task-commit-with-UTC-and-outbox",
+    "duplicate-completion-rejected",
+    "disabled-reference-channel-rejects-context-before-model-and-restoration-recovers",
+    "actual-reference-portfolio-freezes-authorized-analysis-source-and-confirmed-empty-inventory",
+    "actual-trader-context-freezes-account-provenance-instrument-preferences-and-memory-state",
+    "real-outbox-to-BullMQ-consumer-preserves-run-and-analysis-identity",
+    "replayed-publication-does-not-deliver-a-second-job",
+    "real-TraderWorker-commits-nonempty-decision-once",
+    "persisted-decision-published-to-real-risk-queue"
+  ],
+  "memorySchemaClonedFromCurrentDatabase": true,
+  "scheduleFailures": [],
+  "chanWorkerInputVerified": true,
+  "analysisResult": {
+    "status": "succeeded"
+  },
+  "traderResult": {
+    "status": "succeeded"
+  },
+  "riskResult": {
+    "status": "rejected",
+    "rejectCode": "RISK_WEEKEND_PROTECTION"
+  },
+  "errorCode": "Error",
+  "locations": [
+    "    at QueueEvents.onFailed (D:\\dev_codex\\dev_vue\\node_modules\\.pnpm\\bullmq@6.3.4_ioredis@5.11.1_supports-color@10.2.2_\\node_modules\\bullmq\\dist\\cjs\\classes\\job.js:749:24)",
+    "    at QueueEvents.emit (node:events:519:28)",
+    "    at QueueEvents.emit (D:\\dev_codex\\dev_vue\\node_modules\\.pnpm\\bullmq@6.3.4_ioredis@5.11.1_supports-color@10.2.2_\\node_modules\\bullmq\\dist\\cjs\\classes\\queue-base.js:89:26)"
+  ],
+  "referenceAnalysisQueueRemoved": true,
+  "referenceQueueRemoved": true,
+  "referenceRiskQueueRemoved": true,
+  "referenceExecutionQueueRemoved": true,
+  "referenceGatewayRouteRemoved": true,
+  "referenceLeaseRemoved": true,
+  "referenceDatabaseRemoved": true
+}

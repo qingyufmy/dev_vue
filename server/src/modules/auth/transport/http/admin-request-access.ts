@@ -1,3 +1,4 @@
+import { transportSessionCookieName } from '../../domain/auth.js'
 import type { AuthService } from '../../application/auth-service.js'
 import type { BrowserRequestAccess } from '../../application/browser-request-access.js'
 
@@ -28,11 +29,11 @@ function cookieValue(header: unknown, names: readonly string[]) {
  * must never grant access to configuration writes.
  */
 export class AuthObserverAdminAdapter implements BrowserRequestAccess {
-  constructor(private readonly service: AuthService) {}
+  constructor(private readonly service: AuthService, private readonly secureCookies = true) {}
 
   async authenticate(request: { headers: Record<string, unknown> }) {
     const rawSession = cookieValue(request.headers.cookie, [
-      this.service.cookieName('admin-web'),
+      transportSessionCookieName('admin-web', this.secureCookies, this.service.cookieName('admin-web')),
     ])
     const { user } = await this.service.resolveSession(rawSession, 'admin-web')
     return { userId: user.id, role: user.role }
@@ -40,7 +41,7 @@ export class AuthObserverAdminAdapter implements BrowserRequestAccess {
 
   async assertWrite(request: { headers: Record<string, unknown> }) {
     const rawSession = cookieValue(request.headers.cookie, [
-      this.service.cookieName('admin-web'),
+      transportSessionCookieName('admin-web', this.secureCookies, this.service.cookieName('admin-web')),
     ])
     const { session, user } = await this.service.resolveSession(rawSession, 'admin-web')
     this.service.assertCsrf(

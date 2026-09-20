@@ -2,7 +2,8 @@
 import { computed } from 'vue'
 import type { AccountSnapshot, TradingAccount } from '@aurum/contracts'
 import { Alert, AlertDescription, AlertTitle } from '@aurum/ui/alert'
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@aurum/ui/alert-dialog'
+import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@aurum/ui/alert-dialog'
+import { Button } from '@aurum/ui/button'
 import { Badge } from '@aurum/ui/badge'
 import { CircleAlert, ShieldAlert } from '@lucide/vue'
 
@@ -22,6 +23,7 @@ const props = withDefaults(defineProps<{
   detail?: string | null
   destructive?: boolean
   submitting?: boolean
+  error?: string
   confirmLabel?: string
 }>(), {
   account: null,
@@ -37,6 +39,7 @@ const props = withDefaults(defineProps<{
   destructive: undefined,
   submitting: false,
   confirmLabel: '',
+  error: '',
 })
 
 const emit = defineEmits<{
@@ -72,7 +75,7 @@ function display(value: string | number | null | undefined) {
         </div>
         <AlertDialogTitle>{{ title }}</AlertDialogTitle>
         <AlertDialogDescription>
-          请核对以下参数。提交后操作会进入服务端异步执行流程，页面不会假定终端已经成交。
+          请核对账户、订单及本次参数，确认后将发送至交易终端。
         </AlertDialogDescription>
       </AlertDialogHeader>
 
@@ -82,8 +85,8 @@ function display(value: string | number | null | undefined) {
           <div><p class="text-xs text-muted-foreground">指令</p><p class="mt-1 font-medium">{{ commandText }}</p></div>
           <div><p class="text-xs text-muted-foreground">品种</p><p class="mt-1 font-mono tabular-nums">{{ display(symbol) }}</p></div>
           <div><p class="text-xs text-muted-foreground">订单号 / Ticket</p><p class="mt-1 font-mono tabular-nums">{{ display(ticket) }}</p></div>
-          <div><p class="text-xs text-muted-foreground">手数</p><p class="mt-1 font-mono tabular-nums">{{ display(volume) }}</p></div>
-          <div><p class="text-xs text-muted-foreground">价格</p><p class="mt-1 font-mono tabular-nums">{{ display(price) }}</p></div>
+          <div v-if="volume !== null && volume !== undefined && volume !== ''"><p class="text-xs text-muted-foreground">手数</p><p class="mt-1 font-mono tabular-nums">{{ display(volume) }}</p></div>
+          <div v-if="price !== null && price !== undefined && price !== ''"><p class="text-xs text-muted-foreground">价格</p><p class="mt-1 font-mono tabular-nums">{{ display(price) }}</p></div>
           <div><p class="text-xs text-muted-foreground">止损 / SL</p><p class="mt-1 font-mono tabular-nums">{{ display(stopLoss) }}</p></div>
           <div><p class="text-xs text-muted-foreground">止盈 / TP</p><p class="mt-1 font-mono tabular-nums">{{ display(takeProfit) }}</p></div>
         </div>
@@ -97,14 +100,20 @@ function display(value: string | number | null | undefined) {
         <CircleAlert aria-hidden="true" />
         <AlertTitle>{{ isDestructive ? '这是不可逆或有资金影响的操作' : '请确认交易参数' }}</AlertTitle>
         <AlertDescription>
-          {{ detail || 'HTTP 接受不等于终端成交。最终结果必须等待 operation 状态，并通过账户持仓、挂单或成交记录精确复核。' }}
+          {{ detail || '提交后请在执行记录中查看处理结果，并以终端成交及持仓更新为准。' }}
           <Badge v-if="isDestructive" variant="destructive" class="ml-1 align-middle">需要确认</Badge>
         </AlertDescription>
       </Alert>
 
+      <Alert v-if="error" variant="destructive" role="alert">
+        <CircleAlert aria-hidden="true" />
+        <AlertTitle>提交未完成</AlertTitle>
+        <AlertDescription>{{ error }}</AlertDescription>
+      </Alert>
+
       <AlertDialogFooter>
         <AlertDialogCancel class="min-h-11" :disabled="submitting">取消</AlertDialogCancel>
-        <AlertDialogAction class="min-h-11" :destructive="isDestructive" :disabled="submitting" @click="emit('confirm')">{{ confirmText }}</AlertDialogAction>
+        <Button type="button" class="min-h-11" :variant="isDestructive ? 'destructive' : 'default'" :disabled="submitting" :aria-busy="submitting" @click="emit('confirm')">{{ confirmText }}</Button>
       </AlertDialogFooter>
     </AlertDialogContent>
   </AlertDialog>

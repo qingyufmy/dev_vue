@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AURUM V4 — K 线工作台 Premium</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#080a0f;--bg2:#0d1017;--bg3:#12161f;--bg4:#181d28;--bg5:#1e2433;
+  --bdr:rgba(255,255,255,.06);--bdr2:rgba(255,255,255,.1);
+  --t1:rgba(255,255,255,.92);--t2:rgba(255,255,255,.55);--t3:rgba(255,255,255,.3);
+  --grn:#00e676;--grn2:rgba(0,230,118,.08);--grn3:rgba(0,230,118,.15);
+  --red:#ff1744;--red2:rgba(255,23,68,.08);
+  --blu:#2979ff;--blu2:rgba(41,121,255,.1);
+  --yel:#ffc400;--yel2:rgba(255,196,0,.08);
+  --pur:#b388ff;--pur2:rgba(179,136,255,.08);
+  --glow:rgba(0,230,118,.15);
+  --font:'Inter',system-ui,-apple-system,sans-serif;
+  --mono:'JetBrains Mono',monospace;
+  --top-h:34px;--bottom-h:160px;
+}
+body{font-family:var(--font);background:var(--bg);color:var(--t1);height:100vh;overflow:hidden;font-size:12px;-webkit-font-smoothing:antialiased}
+
+/* ═══ TOPBAR ═══ */
+.topbar{height:var(--top-h);background:linear-gradient(180deg,rgba(13,16,23,.98),rgba(13,16,23,.92));border-bottom:1px solid var(--bdr);display:flex;align-items:center;padding:0 16px;gap:14px;backdrop-filter:blur(12px)}
+.logo{font-size:14px;font-weight:700;background:linear-gradient(135deg,#ffc400,#ff9100);-webkit-background-clip:text;-webkit-text-fill-color:transparent;letter-spacing:-.3px}
+.logo-sub{font-size:10px;color:var(--t3);margin-left:6px;font-weight:400;-webkit-text-fill-color:var(--t3)}
+.acc-pill{background:var(--bg4);border:1px solid var(--bdr);border-radius:20px;padding:3px 12px;color:var(--t2);font-size:10px;cursor:pointer;display:flex;align-items:center;gap:6px;transition:all .15s}
+.acc-pill:hover{border-color:var(--bdr2);color:var(--t1)}
+.acc-pill .dot{width:6px;height:6px;border-radius:50%;background:var(--grn);box-shadow:0 0 6px var(--grn)}
+.tb-metrics{display:flex;gap:18px;margin-left:auto;font-variant-numeric:tabular-nums;font-size:11px}
+.tb-m{display:flex;gap:4px;align-items:baseline}
+.tb-ml{color:var(--t3);font-size:9px;text-transform:uppercase;letter-spacing:.5px}
+.tb-mv{font-weight:500}
+.pos{color:var(--grn)}.neg{color:var(--red)}
+/* Menu dropdowns */
+.menus{display:flex;gap:1px;margin-left:16px}
+.menu{position:relative}
+.menu-btn{padding:4px 10px;border-radius:6px;font-size:10px;cursor:pointer;color:var(--t2);display:flex;align-items:center;gap:4px;transition:all .12s;letter-spacing:.2px}
+.menu-btn:hover{background:rgba(255,255,255,.04);color:var(--t1)}
+.menu-dd{display:none;position:absolute;top:calc(100% + 4px);right:0;background:rgba(18,22,31,.98);border:1px solid var(--bdr2);border-radius:10px;padding:4px;min-width:200px;box-shadow:0 12px 40px rgba(0,0,0,.6);backdrop-filter:blur(16px);z-index:100}
+.menu:hover .menu-dd{display:block}
+.dd-head{padding:6px 12px 3px;font-size:8px;color:var(--t3);text-transform:uppercase;letter-spacing:1px;font-weight:600}
+.dd-item{padding:6px 12px;border-radius:6px;font-size:11px;cursor:pointer;color:var(--t2);display:flex;align-items:center;gap:8px;transition:background .1s}
+.dd-item:hover{background:rgba(255,255,255,.05);color:var(--t1)}
+.dd-sep{height:1px;background:var(--bdr);margin:3px 8px}
+.clock{color:var(--t3);font-family:var(--mono);font-size:10px;font-variant-numeric:tabular-nums;letter-spacing:.5px}
+
+/* ═══ MAIN ═══ */
+.main{display:flex;height:calc(100vh - var(--top-h) - var(--bottom-h))}
+.center{flex:1;display:flex;flex-direction:column;min-width:0}
+
+/* Chart tabs */
+.tabs{display:flex;background:var(--bg2);border-bottom:1px solid var(--bdr)}
+.tab{padding:0 14px;height:28px;display:flex;align-items:center;gap:6px;font-size:11px;cursor:pointer;color:var(--t3);border-right:1px solid var(--bdr);position:relative;transition:all .12s}
+.tab.on{color:var(--t1);background:rgba(0,230,118,.03)}
+.tab.on::after{content:'';position:absolute;bottom:0;left:0;right:0;height:2px;background:var(--grn);border-radius:1px 1px 0 0}
+.tab .x{font-size:8px;opacity:0;transition:opacity .1s}.tab:hover .x{opacity:.5}.tab .x:hover{opacity:1;color:var(--red)}
+.tab-add{padding:0 10px;height:28px;display:flex;align-items:center;color:var(--t3);cursor:pointer;font-size:16px;transition:color .1s}.tab-add:hover{color:var(--grn)}
+
+/* Chart toolbar */
+.ctbar{height:32px;background:var(--bg2);border-bottom:1px solid var(--bdr);display:flex;align-items:center;padding:0 10px;gap:6px}
+.ctbar .sym{font-weight:600;font-size:13px;letter-spacing:-.2px}
+.ctbar .sep{width:1px;height:14px;background:var(--bdr);margin:0 2px}
+.tfg{display:flex;gap:2px}
+.tf{padding:2px 6px;border-radius:4px;font-size:10px;cursor:pointer;color:var(--t3);transition:all .1s;font-family:var(--mono);letter-spacing:.3px}
+.tf:hover{background:rgba(255,255,255,.05);color:var(--t2)}
+.tf.on{background:var(--grn);color:#000;font-weight:600}
+.ind{padding:2px 8px;border-radius:4px;font-size:10px;cursor:pointer;color:var(--t3);border:1px solid transparent;transition:all .12s;font-weight:500}
+.ind:hover{border-color:var(--bdr);color:var(--t2)}
+.ind.on{border-color:rgba(0,230,118,.3);color:var(--grn);background:var(--grn2)}
+.ctbar .qt{margin-left:auto;display:flex;gap:14px;font-family:var(--mono);font-size:11px;font-variant-numeric:tabular-nums;letter-spacing:.3px}
+.qb{color:var(--grn);font-weight:500}.qa{color:var(--red);font-weight:500}.qs{color:var(--t3)}
+
+/* ═══ CHART ═══ */
+.chart{flex:1;position:relative;background:var(--bg);overflow:hidden}
+.chart svg{width:100%;height:100%}
+.ohlc{position:absolute;top:8px;left:60px;display:flex;gap:12px;font-family:var(--mono);font-size:10px;font-variant-numeric:tabular-nums;z-index:2}
+.ohlc .l{color:var(--t3);margin-right:3px}
+.ohlc .u{color:var(--grn)}.ohlc .d{color:var(--red)}
+
+/* Tooltip */
+.tip{position:absolute;background:rgba(12,15,20,.95);border:1px solid var(--bdr2);border-radius:12px;padding:12px 14px;box-shadow:0 12px 40px rgba(0,0,0,.6);backdrop-filter:blur(16px);z-index:10;min-width:200px}
+.tip .th{font-weight:600;font-size:12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center}
+.tip .tr{display:flex;justify-content:space-between;font-size:10px;padding:2px 0;font-family:var(--mono)}
+.tip .tl{color:var(--t3)}
+.tip .tb{display:flex;gap:4px;margin-top:8px}
+.tip .tb button{padding:4px 10px;border-radius:6px;font-size:10px;border:1px solid var(--bdr);background:transparent;color:var(--t2);cursor:pointer;transition:all .12s;font-weight:500}
+.tip .tb button:hover{border-color:var(--blu);color:var(--t1);background:var(--blu2)}
+.tip .tb .rb{color:var(--red);border-color:rgba(255,23,68,.2)}.tip .tb .rb:hover{border-color:var(--red);background:var(--red2)}
+
+/* Context menu */
+.ctx{position:absolute;background:rgba(12,15,20,.96);border:1px solid var(--bdr2);border-radius:10px;padding:4px;box-shadow:0 12px 40px rgba(0,0,0,.6);backdrop-filter:blur(16px);z-index:20;min-width:190px}
+.ctx-i{padding:6px 12px;border-radius:6px;font-size:11px;cursor:pointer;color:var(--t2);display:flex;align-items:center;gap:8px;transition:all .1s}
+.ctx-i:hover{background:rgba(255,255,255,.05);color:var(--t1)}
+.ctx-d{height:1px;background:var(--bdr);margin:3px 8px}
+
+/* ═══ RIGHT PANEL ═══ */
+.rp{width:260px;background:var(--bg2);border-left:1px solid var(--bdr);display:flex;flex-direction:column;flex-shrink:0}
+.rpt{display:flex;border-bottom:1px solid var(--bdr)}
+.rp-tab{flex:1;padding:6px 0;text-align:center;font-size:10px;cursor:pointer;color:var(--t3);border-bottom:2px solid transparent;transition:all .12s;font-weight:500;letter-spacing:.3px}
+.rp-tab.on{color:var(--t1);border-bottom-color:var(--grn)}
+.rpb{flex:1;overflow-y:auto;padding:8px}
+.rpb::-webkit-scrollbar{width:4px}.rpb::-webkit-scrollbar-thumb{background:var(--bdr);border-radius:2px}
+
+/* Signal card */
+.sig{background:var(--bg3);border-radius:10px;padding:10px;margin-bottom:6px;border:1px solid var(--bdr);transition:border-color .15s}
+.sig:hover{border-color:var(--bdr2)}
+.sig-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.sig-badge{padding:2px 8px;border-radius:4px;font-size:9px;font-weight:600;letter-spacing:.3px}
+.sig-badge.bull{background:var(--grn2);color:var(--grn)}
+.sig-conf{font-size:24px;font-weight:700;font-family:var(--mono)}
+.sig-bar{height:3px;border-radius:2px;background:rgba(255,255,255,.04);overflow:hidden;display:flex;margin:6px 0}
+.sig-bar .bf{height:100%;border-radius:2px;transition:width .3s}
+.sig-txt{font-size:10px;color:var(--t2);line-height:1.5;font-weight:400}
+.sig-meta{font-size:9px;color:var(--t3);margin-top:6px;font-weight:500}
+
+/* Chan card */
+.chan{background:var(--bg3);border-radius:10px;padding:8px 10px;margin-bottom:6px;border:1px solid var(--bdr);font-size:10px}
+.chan-t{color:var(--t3);font-weight:600;margin-bottom:4px;font-size:9px;letter-spacing:.5px;text-transform:uppercase}
+.chan-r{display:flex;justify-content:space-between;padding:2px 0}
+.chan-r .k{color:var(--t3)}.chan-r .v{font-weight:500}
+
+/* Position cards */
+.ph{font-size:10px;color:var(--t3);font-weight:600;margin:8px 0 4px;display:flex;justify-content:space-between;letter-spacing:.3px}
+.pc{background:var(--bg3);border-radius:10px;padding:8px 10px;margin-bottom:4px;border:1px solid var(--bdr);cursor:pointer;transition:all .15s}
+.pc:hover{border-color:var(--bdr2);transform:translateY(-1px);box-shadow:0 4px 12px rgba(0,0,0,.2)}
+.pc.sel{border-color:rgba(0,230,118,.3);background:rgba(0,230,118,.03);box-shadow:0 0 20px rgba(0,230,118,.05)}
+.pc-top{display:flex;justify-content:space-between;align-items:center}
+.pc-sym{font-weight:600;font-size:11px}.pc-tk{font-size:9px;color:var(--t3);font-family:var(--mono)}
+.pc-pnl{font-weight:600;font-size:13px;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.pc-pnl.p{color:var(--grn)}.pc-pnl.n{color:var(--red)}
+.pc-info{display:flex;gap:8px;font-size:10px;color:var(--t2);margin-top:3px;font-family:var(--mono)}
+.pc-acts{display:flex;gap:3px;margin-top:4px}
+.pc-acts button{flex:1;padding:3px;border-radius:4px;font-size:9px;border:1px solid var(--bdr);background:transparent;color:var(--t3);cursor:pointer;transition:all .12s;font-weight:500}
+.pc-acts button:hover{border-color:var(--bdr2);color:var(--t2)}
+.pc-acts .cl{color:var(--red)}.pc-acts .cl:hover{border-color:rgba(255,23,68,.3);background:var(--red2)}
+
+/* Risk mini */
+.rmini{background:var(--bg3);border-radius:10px;padding:8px 10px;border:1px solid var(--bdr);margin-top:8px}
+.rmini .rt{font-size:9px;color:var(--t3);font-weight:600;margin-bottom:4px;letter-spacing:.5px;text-transform:uppercase}
+.rmini-g{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;text-align:center;font-size:10px}
+.rmini-g .rl{font-size:8px;color:var(--t3);margin-bottom:1px}.rmini-g .rv{font-weight:600;font-family:var(--mono)}
+
+/* ═══ BOTTOM ═══ */
+.bottom{height:var(--bottom-h);background:var(--bg2);border-top:1px solid var(--bdr);display:flex;flex-direction:column;flex-shrink:0}
+.bt-bar{display:flex;border-bottom:1px solid var(--bdr);padding:0 10px}
+.bt{padding:6px 14px;font-size:10px;cursor:pointer;color:var(--t3);border-bottom:2px solid transparent;transition:all .12s;font-weight:500;letter-spacing:.2px}
+.bt.on{color:var(--t1);border-bottom-color:var(--grn)}
+.bt .c{background:var(--bg4);padding:0 5px;border-radius:8px;font-size:9px;margin-left:4px;font-family:var(--mono)}
+.bt-body{flex:1;overflow-y:auto}
+.bt-tbl{width:100%;border-collapse:collapse;font-size:11px}
+.bt-tbl th{padding:4px 10px;text-align:left;font-weight:600;color:var(--t3);font-size:9px;border-bottom:1px solid var(--bdr);position:sticky;top:0;background:var(--bg2);text-transform:uppercase;letter-spacing:.5px}
+.bt-tbl td{padding:4px 10px;border-bottom:1px solid rgba(255,255,255,.03);font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:10px}
+.bt-tbl tr{transition:background .1s}.bt-tbl tr:hover td{background:rgba(255,255,255,.02)}
+.g{color:var(--grn)}.r{color:var(--red)}.b{color:var(--blu)}.dm{color:var(--t3)}
+
+/* Status bar */
+.sbar{height:18px;background:rgba(13,16,23,.8);border-top:1px solid var(--bdr);display:flex;align-items:center;padding:0 12px;gap:10px;font-size:9px;color:var(--t3);backdrop-filter:blur(8px)}
+.sbar .dot{width:4px;height:4px;border-radius:50%;background:var(--grn);box-shadow:0 0 4px var(--grn)}
+.sbar .sp{width:1px;height:8px;background:var(--bdr)}
+.sbar .ri{margin-left:auto;display:flex;gap:10px}
+
+/* ═══ MODAL ═══ */
+.modal-mask{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;justify-content:center;align-items:center;backdrop-filter:blur(4px)}
+.modal-mask.show{display:flex}
+.modal{background:var(--bg3);border:1px solid var(--bdr2);border-radius:16px;width:min(680px,92vw);max-height:82vh;display:flex;flex-direction:column;box-shadow:0 24px 64px rgba(0,0,0,.7)}
+.modal-head{display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid var(--bdr)}
+.modal-head h3{font-size:14px;font-weight:600;flex:1;letter-spacing:-.2px}
+.modal-head .close{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--t3);font-size:14px;transition:all .12s}
+.modal-head .close:hover{background:rgba(255,255,255,.06);color:var(--t1)}
+.modal-body{flex:1;overflow-y:auto;padding:16px 18px}
+.modal-body .section{margin-bottom:16px}
+.modal-body .stitle{font-size:9px;color:var(--t3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px;font-weight:600}
+.modal-body .card{background:var(--bg4);border:1px solid var(--bdr);border-radius:10px;padding:10px 12px;margin-bottom:6px}
+.modal-body .cr{display:flex;justify-content:space-between;font-size:11px;padding:3px 0;font-family:var(--mono)}
+.modal-body .cl{color:var(--t3)}
+/* Risk metric cards in modal */
+.rm-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.rm-card{background:var(--bg4);border:1px solid var(--bdr);border-radius:10px;padding:12px;text-align:center}
+.rm-card .rv{font-size:20px;font-weight:700;font-family:var(--mono);letter-spacing:-.5px}
+.rm-card .rl{font-size:9px;color:var(--t3);margin-top:3px;font-weight:500}
+.rm-card .rb{height:3px;background:rgba(255,255,255,.04);border-radius:2px;margin-top:6px;overflow:hidden}
+.rm-card .rf{height:100%;border-radius:2px;transition:width .3s}
+/* Strategy card */
+.st-card{background:var(--bg4);border:1px solid var(--bdr);border-radius:10px;padding:10px 12px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;transition:border-color .12s}
+.st-card:hover{border-color:var(--bdr2)}
+.st-card .st-name{font-weight:600;font-size:12px}
+.st-card .st-meta{font-size:10px;color:var(--t3)}
+.st-card .st-status{padding:2px 8px;border-radius:4px;font-size:9px;font-weight:600;letter-spacing:.3px}
+.st-card .st-status.active{background:var(--grn2);color:var(--grn)}
+.st-card .st-status.paused{background:var(--yel2);color:var(--yel)}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="logo">AURUM<span class="logo-sub">AI Trading</span></span>
+  <div class="acc-pill"><span class="dot"></span> MT5 · 860058 · DooTechnology-Demo</div>
+  <div class="tb-metrics">
+    <div class="tb-m"><span class="tb-ml">Equity</span><span class="tb-mv">18,483.48</span></div>
+    <div class="tb-m"><span class="tb-ml">P&L</span><span class="tb-mv pos">+589.44</span></div>
+    <div class="tb-m"><span class="tb-ml">Free</span><span class="tb-mv">17,627.67</span></div>
+  </div>
+  <div class="menus">
+    <div class="menu"><div class="menu-btn">📊 策略</div><div class="menu-dd"><div class="dd-head">Strategy</div><div class="dd-item" onclick="openModal('strategy')">📈 管理策略版本</div><div class="dd-item" onclick="openModal('subscription')">🔗 订阅管理</div><div class="dd-sep"></div><div class="dd-item">道诚 v2.1 <span style="color:var(--grn);font-size:9px;margin-left:auto">RUNNING</span></div></div></div>
+    <div class="menu"><div class="menu-btn">🛡️ 风控</div><div class="menu-dd"><div class="dd-head">Risk Control</div><div class="dd-item" onclick="openModal('risk')">📊 风控面板</div><div class="dd-item" onclick="openModal('risk-release')">🔓 手动解除限制</div><div class="dd-sep"></div><div class="dd-item">日亏 <span style="margin-left:auto;color:var(--grn);font-family:var(--mono)">0.00%</span></div><div class="dd-item">回撤 <span style="margin-left:auto;color:var(--yel);font-family:var(--mono)">6.71%</span></div></div></div>
+    <div class="menu"><div class="menu-btn">🧠 分析</div><div class="menu-dd"><div class="dd-head">AI Analysis</div><div class="dd-item" onclick="openModal('analysis')">📋 分析历史</div><div class="dd-item">🔄 立即分析 XAUUSD</div><div class="dd-sep"></div><div class="dd-item">最新: 偏多 60% <span style="font-size:9px;color:var(--t3);margin-left:auto">11:45</span></div></div></div>
+    <div class="menu"><div class="menu-btn">🔍 复盘</div><div class="menu-dd"><div class="dd-head">Review</div><div class="dd-item" onclick="openModal('review')">📋 复盘记录</div><div class="dd-item">🧠 策略记忆</div></div></div>
+    <div class="menu"><div class="menu-btn">🌍 市场</div><div class="menu-dd"><div class="dd-head">Market</div><div class="dd-item" onclick="openModal('calendar')">📅 经济日历</div><div class="dd-item">📊 宏观研报</div><div class="dd-sep"></div><div class="dd-item">🔴 20:30 🇺🇸 CPI</div></div></div>
+    <div class="menu"><div class="menu-btn">⚙️</div><div class="menu-dd"><div class="dd-head">System</div><div class="dd-item">🔗 量见智桥</div><div class="dd-item">👤 个人设置</div><div class="dd-item">🤖 模型配置</div><div class="dd-item">📝 系统审计</div><div class="dd-sep"></div><div class="dd-item" style="color:var(--red)">🚪 退出</div></div></div>
+  </div>
+  <span class="clock">11:58:30 MT5</span>
+</div>
+
+<div class="main">
+  <div class="center">
+    <div class="tabs">
+      <div class="tab on"><span>XAUUSD · M15</span><span class="x">✕</span></div>
+      <div class="tab"><span>EURUSD · H1</span><span class="x">✕</span></div>
+      <div class="tab"><span>BTCUSD · D1</span><span class="x">✕</span></div>
+      <div class="tab-add">+</div>
+    </div>
+    <div class="ctbar">
+      <span class="sym">XAUUSD.s</span><span class="sep"></span>
+      <div class="tfg"><span class="tf">M1</span><span class="tf">M5</span><span class="tf on">M15</span><span class="tf">M30</span><span class="tf">H1</span><span class="tf">H4</span><span class="tf">D1</span><span class="tf">W1</span></div>
+      <span class="sep"></span>
+      <span class="ind on">MA 5</span><span class="ind on">MA 20</span><span class="ind">MA 60</span><span class="ind">BOLL</span><span class="ind">MACD</span><span class="ind">RSI</span>
+      <span class="sep"></span>
+      <span class="ind on">缠论</span><span class="ind on">Fib</span>
+      <span class="sep"></span>
+      <span class="ind on">持仓</span><span class="ind on">信号</span><span class="ind">历史</span>
+      <div class="qt"><span class="qb">Bid 4324.50</span><span class="qa">Ask 4324.80</span><span class="qs">30</span></div>
+    </div>
+    <div class="chart">
+      <svg preserveAspectRatio="none" viewBox="0 0 1200 600">
+        <defs>
+          <pattern id="grid" width="80" height="50" patternUnits="userSpaceOnUse"><path d="M80 0L0 0 0 50" fill="none" stroke="rgba(255,255,255,.03)" stroke-width=".5"/></pattern>
+          <linearGradient id="volGreen" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="rgba(0,230,118,.4)"/><stop offset="100%" stop-color="rgba(0,230,118,.05)"/></linearGradient>
+          <linearGradient id="volRed" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="rgba(255,23,68,.4)"/><stop offset="100%" stop-color="rgba(255,23,68,.05)"/></linearGradient>
+          <filter id="glow"><feGaussianBlur stdDeviation="2" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        </defs>
+        <rect width="1200" height="600" fill="url(#grid)"/>
+        <!-- Price labels -->
+        <text x="1175" y="80" fill="rgba(255,255,255,.2)" font-size="9" text-anchor="end" font-family="JetBrains Mono">4350</text>
+        <text x="1175" y="155" fill="rgba(255,255,255,.2)" font-size="9" text-anchor="end" font-family="JetBrains Mono">4340</text>
+        <text x="1175" y="230" fill="rgba(255,255,255,.2)" font-size="9" text-anchor="end" font-family="JetBrains Mono">4330</text>
+        <text x="1175" y="305" fill="rgba(255,255,255,.2)" font-size="9" text-anchor="end" font-family="JetBrains Mono">4320</text>
+        <text x="1175" y="380" fill="rgba(255,255,255,.2)" font-size="9" text-anchor="end" font-family="JetBrains Mono">4310</text>
+        <text x="1175" y="455" fill="rgba(255,255,255,.2)" font-size="9" text-anchor="end" font-family="JetBrains Mono">4300</text>
+        <text x="1175" y="530" fill="rgba(255,255,255,.2)" font-size="9" text-anchor="end" font-family="JetBrains Mono">4290</text>
+        <!-- Time labels -->
+        <text x="100" y="585" fill="rgba(255,255,255,.15)" font-size="8" text-anchor="middle" font-family="JetBrains Mono">09:45</text>
+        <text x="250" y="585" fill="rgba(255,255,255,.15)" font-size="8" text-anchor="middle" font-family="JetBrains Mono">10:15</text>
+        <text x="400" y="585" fill="rgba(255,255,255,.15)" font-size="8" text-anchor="middle" font-family="JetBrains Mono">10:45</text>
+        <text x="550" y="585" fill="rgba(255,255,255,.15)" font-size="8" text-anchor="middle" font-family="JetBrains Mono">11:15</text>
+        <text x="700" y="585" fill="rgba(255,255,255,.15)" font-size="8" text-anchor="middle" font-family="JetBrains Mono">11:45</text>
+        <text x="850" y="585" fill="rgba(255,255,255,.15)" font-size="8" text-anchor="middle" font-family="JetBrains Mono">12:15</text>
+        <text x="1000" y="585" fill="rgba(255,255,255,.15)" font-size="8" text-anchor="middle" font-family="JetBrains Mono">12:45</text>
+        <!-- Volume -->
+        <g opacity=".35"><rect x="80" y="512" width="5" height="36" fill="url(#volGreen)" rx="1"/><rect x="96" y="504" width="5" height="44" fill="url(#volRed)" rx="1"/><rect x="112" y="508" width="5" height="40" fill="url(#volGreen)" rx="1"/><rect x="128" y="498" width="5" height="50" fill="url(#volGreen)" rx="1"/><rect x="144" y="512" width="5" height="36" fill="url(#volRed)" rx="1"/><rect x="160" y="494" width="5" height="54" fill="url(#volGreen)" rx="1"/><rect x="176" y="502" width="5" height="46" fill="url(#volGreen)" rx="1"/><rect x="192" y="492" width="5" height="56" fill="url(#volRed)" rx="1"/><rect x="208" y="500" width="5" height="48" fill="url(#volGreen)" rx="1"/><rect x="224" y="506" width="5" height="42" fill="url(#volGreen)" rx="1"/><rect x="240" y="494" width="5" height="54" fill="url(#volRed)" rx="1"/><rect x="256" y="500" width="5" height="48" fill="url(#volGreen)" rx="1"/><rect x="272" y="490" width="5" height="58" fill="url(#volGreen)" rx="1"/><rect x="288" y="498" width="5" height="50" fill="url(#volRed)" rx="1"/><rect x="304" y="506" width="5" height="42" fill="url(#volGreen)" rx="1"/><rect x="320" y="494" width="5" height="54" fill="url(#volGreen)" rx="1"/><rect x="336" y="500" width="5" height="48" fill="url(#volRed)" rx="1"/><rect x="352" y="492" width="5" height="56" fill="url(#volGreen)" rx="1"/><rect x="368" y="498" width="5" height="50" fill="url(#volGreen)" rx="1"/><rect x="384" y="504" width="5" height="44" fill="url(#volRed)" rx="1"/><rect x="400" y="496" width="5" height="52" fill="url(#volGreen)" rx="1"/><rect x="416" y="490" width="5" height="58" fill="url(#volGreen)" rx="1"/><rect x="432" y="497" width="5" height="51" fill="url(#volRed)" rx="1"/><rect x="448" y="502" width="5" height="46" fill="url(#volGreen)" rx="1"/><rect x="464" y="495" width="5" height="53" fill="url(#volGreen)" rx="1"/><rect x="480" y="500" width="5" height="48" fill="url(#volRed)" rx="1"/><rect x="496" y="492" width="5" height="56" fill="url(#volGreen)" rx="1"/><rect x="512" y="500" width="5" height="48" fill="url(#volGreen)" rx="1"/><rect x="528" y="506" width="5" height="42" fill="url(#volRed)" rx="1"/><rect x="544" y="494" width="5" height="54" fill="url(#volGreen)" rx="1"/><rect x="560" y="499" width="5" height="49" fill="url(#volGreen)" rx="1"/><rect x="576" y="504" width="5" height="44" fill="url(#volRed)" rx="1"/><rect x="592" y="496" width="5" height="52" fill="url(#volGreen)" rx="1"/><rect x="608" y="501" width="5" height="47" fill="url(#volGreen)" rx="1"/><rect x="624" y="506" width="5" height="42" fill="url(#volRed)" rx="1"/><rect x="640" y="494" width="5" height="54" fill="url(#volGreen)" rx="1"/><rect x="656" y="500" width="5" height="48" fill="url(#volGreen)" rx="1"/><rect x="672" y="505" width="5" height="43" fill="url(#volRed)" rx="1"/><rect x="688" y="493" width="5" height="55" fill="url(#volGreen)" rx="1"/><rect x="704" y="499" width="5" height="49" fill="url(#volGreen)" rx="1"/><rect x="720" y="504" width="5" height="44" fill="url(#volRed)" rx="1"/><rect x="736" y="496" width="5" height="52" fill="url(#volGreen)" rx="1"/><rect x="752" y="502" width="5" height="46" fill="url(#volGreen)" rx="1"/><rect x="768" y="506" width="5" height="42" fill="url(#volRed)" rx="1"/><rect x="784" y="494" width="5" height="54" fill="url(#volGreen)" rx="1"/><rect x="800" y="500" width="5" height="48" fill="url(#volGreen)" rx="1"/><rect x="816" y="505" width="5" height="43" fill="url(#volRed)" rx="1"/><rect x="832" y="493" width="5" height="55" fill="url(#volGreen)" rx="1"/><rect x="848" y="499" width="5" height="49" fill="url(#volGreen)" rx="1"/><rect x="864" y="504" width="5" height="44" fill="url(#volRed)" rx="1"/><rect x="880" y="496" width="5" height="52" fill="url(#volGreen)" rx="1"/><rect x="896" y="502" width="5" height="46" fill="url(#volGreen)" rx="1"/><rect x="912" y="506" width="5" height="42" fill="url(#volRed)" rx="1"/><rect x="928" y="494" width="5" height="54" fill="url(#volGreen)" rx="1"/><rect x="944" y="500" width="5" height="48" fill="url(#volGreen)" rx="1"/><rect x="960" y="505" width="5" height="43" fill="url(#volRed)" rx="1"/><rect x="976" y="493" width="5" height="55" fill="url(#volGreen)" rx="1"/><rect x="992" y="499" width="5" height="49" fill="url(#volGreen)" rx="1"/><rect x="1008" y="504" width="5" height="44" fill="url(#volRed)" rx="1"/><rect x="1024" y="496" width="5" height="52" fill="url(#volGreen)" rx="1"/><rect x="1040" y="500" width="5" height="48" fill="url(#volGreen)" rx="1"/><rect x="1056" y="505" width="5" height="43" fill="url(#volRed)" rx="1"/><rect x="1072" y="493" width="5" height="55" fill="url(#volGreen)" rx="1"/></g>
+        <!-- Candles with rounded bodies -->
+        <g>
+          <line x1="83" y1="395" x2="83" y2="430" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="78" y="400" width="10" height="22" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="98" y1="405" x2="98" y2="440" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="93" y="410" width="10" height="20" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="113" y1="415" x2="113" y2="445" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="108" y="418" width="10" height="18" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="128" y1="390" x2="128" y2="425" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="123" y="395" width="10" height="25" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="143" y1="370" x2="143" y2="400" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="138" y="375" width="10" height="20" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="158" y1="350" x2="158" y2="385" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="153" y="355" width="10" height="25" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="173" y1="340" x2="173" y2="370" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="168" y="345" width="10" height="20" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="188" y1="330" x2="188" y2="355" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="183" y="335" width="10" height="15" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="203" y1="335" x2="203" y2="365" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="198" y="340" width="10" height="18" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="218" y1="345" x2="218" y2="370" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="213" y="348" width="10" height="15" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="233" y1="315" x2="233" y2="350" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="228" y="320" width="10" height="25" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="248" y1="300" x2="248" y2="330" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="243" y="305" width="10" height="20" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="263" y1="285" x2="263" y2="315" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="258" y="290" width="10" height="18" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="278" y1="275" x2="278" y2="305" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="273" y="280" width="10" height="18" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="293" y1="280" x2="293" y2="310" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="288" y="285" width="10" height="18" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="308" y1="290" x2="308" y2="315" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="303" y="293" width="10" height="15" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="323" y1="285" x2="323" y2="308" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="318" y="288" width="10" height="14" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="338" y1="280" x2="338" y2="300" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="333" y="283" width="10" height="12" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="353" y1="270" x2="353" y2="295" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="348" y="274" width="10" height="16" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="368" y1="260" x2="368" y2="285" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="363" y="264" width="10" height="16" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="383" y1="245" x2="383" y2="275" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="378" y="250" width="10" height="18" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="398" y1="235" x2="398" y2="260" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="393" y="240" width="10" height="15" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="413" y1="230" x2="413" y2="255" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="408" y="234" width="10" height="16" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="428" y1="238" x2="428" y2="262" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="423" y="242" width="10" height="14" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="443" y1="248" x2="443" y2="270" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="438" y="250" width="10" height="12" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="458" y1="242" x2="458" y2="265" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="453" y="246" width="10" height="14" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="473" y1="235" x2="473" y2="258" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="468" y="239" width="10" height="14" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="488" y1="230" x2="488" y2="250" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="483" y="233" width="10" height="12" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="503" y1="235" x2="503" y2="258" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="498" y="238" width="10" height="14" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="518" y1="242" x2="518" y2="262" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="513" y="245" width="10" height="12" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="533" y1="245" x2="533" y2="265" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="528" y="248" width="10" height="12" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="548" y1="240" x2="548" y2="258" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="543" y="243" width="10" height="10" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="563" y1="235" x2="563" y2="252" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="558" y="238" width="10" height="10" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="578" y1="240" x2="578" y2="258" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="573" y="242" width="10" height="12" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="593" y1="245" x2="593" y2="262" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="588" y="248" width="10" height="10" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="608" y1="248" x2="608" y2="265" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="603" y="250" width="10" height="10" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="623" y1="242" x2="623" y2="258" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="618" y="245" width="10" height="10" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="638" y1="238" x2="638" y2="252" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="633" y="240" width="10" height="9" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="653" y1="242" x2="653" y2="258" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="648" y="244" width="10" height="10" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="668" y1="248" x2="668" y2="265" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="663" y="250" width="10" height="10" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="683" y1="252" x2="683" y2="268" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="678" y="254" width="10" height="9" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="698" y1="248" x2="698" y2="262" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="693" y="250" width="10" height="9" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="713" y1="244" x2="713" y2="258" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="708" y="246" width="10" height="8" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="728" y1="248" x2="728" y2="264" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="723" y="250" width="10" height="10" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="743" y1="255" x2="743" y2="272" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="738" y="258" width="10" height="9" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="758" y1="258" x2="758" y2="275" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="753" y="260" width="10" height="10" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="773" y1="252" x2="773" y2="268" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="768" y="255" width="10" height="8" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="788" y1="248" x2="788" y2="262" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="783" y="250" width="10" height="8" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="803" y1="252" x2="803" y2="268" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="798" y="254" width="10" height="10" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="818" y1="258" x2="818" y2="275" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="813" y="260" width="10" height="10" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="833" y1="262" x2="833" y2="278" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="828" y="264" width="10" height="9" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="848" y1="258" x2="848" y2="272" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="843" y="260" width="10" height="8" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="863" y1="254" x2="863" y2="268" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="858" y="256" width="10" height="8" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="878" y1="258" x2="878" y2="274" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="873" y="260" width="10" height="10" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="893" y1="265" x2="893" y2="282" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="888" y="268" width="10" height="9" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="908" y1="268" x2="908" y2="285" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="903" y="270" width="10" height="10" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="923" y1="262" x2="923" y2="278" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="918" y="265" width="10" height="8" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="938" y1="258" x2="938" y2="272" stroke="#00e676" stroke-width=".8" opacity=".6"/><rect x="933" y="260" width="10" height="8" fill="#00e676" rx="1.5" opacity=".85"/>
+          <line x1="953" y1="262" x2="953" y2="278" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="948" y="264" width="10" height="10" fill="#ff1744" rx="1.5" opacity=".85"/>
+          <line x1="968" y1="268" x2="968" y2="285" stroke="#ff1744" stroke-width=".8" opacity=".6"/><rect x="963" y="270" width="10" height="10" fill="#ff1744" rx="1.5" opacity=".85"/>
+        </g>
+        <!-- MA lines with glow -->
+        <polyline points="83,420 98,425 113,430 128,410 143,387 158,365 173,355 188,343 203,350 218,358 233,335 248,318 263,300 278,290 293,295 308,300 323,295 338,290 353,282 368,272 383,260 398,248 413,242 428,250 443,258 458,253 473,245 488,240 503,245 518,250 533,253 548,248 563,244 578,248 593,252 608,255 623,250 638,245 653,248 668,255 683,260 698,256 713,250 728,255 743,262 758,265 773,260 788,255 803,258 818,265 833,270 848,266 863,260 878,265 893,272 908,275 923,268 938,262 953,268 968,275" fill="none" stroke="#ffc400" stroke-width="1" opacity=".5" filter="url(#glow)"/>
+        <polyline points="83,428 98,426 113,423 128,415 143,400 158,382 173,368 188,355 203,348 218,344 233,335 248,325 263,315 278,305 293,298 308,295 323,293 338,290 353,285 368,278 383,270 398,262 413,255 428,252 443,253 458,252 473,248 488,245 503,244 518,246 533,248 548,248 563,246 578,246 593,248 608,250 623,250 638,249 653,250 668,253 683,257 698,257 713,254 728,255 743,258 758,260 773,258 788,256 803,258 818,261 833,265 848,265 863,262 878,265 893,268 908,270 923,268 938,265 953,268 968,271" fill="none" stroke="#2979ff" stroke-width="1" opacity=".4"/>
+        <!-- Chan segment -->
+        <polyline points="98,425 158,365 218,358 278,290 338,290 398,248 443,258 503,245 563,244 623,250 698,256 758,265 833,270 908,275 968,275" fill="none" stroke="#b388ff" stroke-width="1.2" opacity=".35" stroke-dasharray="6,3"/>
+        <!-- Center box -->
+        <rect x="290" y="280" width="80" height="20" fill="rgba(179,136,255,.04)" stroke="rgba(179,136,255,.2)" stroke-width=".7" stroke-dasharray="3,2" rx="3"/>
+        <!-- Position line -->
+        <line x1="0" y1="310" x2="1110" y2="310" stroke="#00e676" stroke-width="1" filter="url(#glow)" opacity=".7"/>
+        <rect x="1110" y="302" width="80" height="14" rx="4" fill="rgba(0,230,118,.1)" stroke="rgba(0,230,118,.25)" stroke-width=".5"/>
+        <text x="1115" y="312" fill="#00e676" font-size="8" font-weight="500" font-family="JetBrains Mono">MULTI 1.00</text>
+        <!-- SL -->
+        <line x1="0" y1="430" x2="1110" y2="430" stroke="#ff1744" stroke-width="1" stroke-dasharray="4,3" opacity=".5"/>
+        <rect x="1110" y="423" width="50" height="13" rx="4" fill="rgba(255,23,68,.08)" stroke="rgba(255,23,68,.2)" stroke-width=".5"/>
+        <text x="1115" y="432" fill="#ff1744" font-size="8" font-weight="500" font-family="JetBrains Mono">SL 4307</text>
+        <!-- TP -->
+        <line x1="0" y1="30" x2="1110" y2="30" stroke="#00e676" stroke-width="1" stroke-dasharray="4,3" opacity=".5"/>
+        <rect x="1110" y="23" width="50" height="13" rx="4" fill="rgba(0,230,118,.08)" stroke="rgba(0,230,118,.2)" stroke-width=".5"/>
+        <text x="1115" y="32" fill="#00e676" font-size="8" font-weight="500" font-family="JetBrains Mono">TP 4380</text>
+        <!-- Fib -->
+        <line x1="0" y1="310" x2="850" y2="310" stroke="#ffc400" stroke-width=".5" stroke-dasharray="2,2" opacity=".15"/><text x="855" y="313" fill="#ffc400" font-size="7" opacity=".3" font-family="JetBrains Mono">0%</text>
+        <line x1="0" y1="275" x2="850" y2="275" stroke="#ffc400" stroke-width=".5" stroke-dasharray="2,2" opacity=".2"/><text x="855" y="278" fill="#ffc400" font-size="7" opacity=".35" font-family="JetBrains Mono">23.6%</text>
+        <line x1="0" y1="253" x2="850" y2="253" stroke="#ffc400" stroke-width=".5" stroke-dasharray="2,2" opacity=".25"/><text x="855" y="256" fill="#ffc400" font-size="7" opacity=".4" font-family="JetBrains Mono">38.2%</text>
+        <line x1="0" y1="237" x2="850" y2="237" stroke="#ffc400" stroke-width=".7" stroke-dasharray="2,2" opacity=".3"/><text x="855" y="240" fill="#ffc400" font-size="7" opacity=".5" font-family="JetBrains Mono">50%</text>
+        <line x1="0" y1="220" x2="850" y2="220" stroke="#ffc400" stroke-width=".5" stroke-dasharray="2,2" opacity=".25"/><text x="855" y="223" fill="#ffc400" font-size="7" opacity=".4" font-family="JetBrains Mono">61.8%</text>
+        <line x1="0" y1="195" x2="850" y2="195" stroke="#ffc400" stroke-width=".5" stroke-dasharray="2,2" opacity=".2"/><text x="855" y="198" fill="#ffc400" font-size="7" opacity=".35" font-family="JetBrains Mono">78.6%</text>
+        <!-- Pending -->
+        <line x1="0" y1="28" x2="700" y2="28" stroke="#2979ff" stroke-width="1" stroke-dasharray="2,3" opacity=".5"/>
+        <rect x="700" y="19" width="90" height="12" rx="4" fill="rgba(41,121,255,.08)" stroke="rgba(41,121,255,.2)" stroke-width=".5"/>
+        <text x="705" y="28" fill="#2979ff" font-size="7" font-weight="500" font-family="JetBrains Mono">SELL LIMIT 4380</text>
+        <!-- Signals -->
+        <g filter="url(#glow)"><polygon points="188,342 183,329 193,329" fill="#00e676" opacity=".9"/></g>
+        <text x="197" y="326" fill="#00e676" font-size="9" font-weight="700" font-family="JetBrains Mono" opacity=".8">92%</text>
+        <g filter="url(#glow)"><polygon points="353,277 348,264 358,264" fill="#00e676" opacity=".9"/></g>
+        <text x="362" y="261" fill="#00e676" font-size="9" font-weight="700" font-family="JetBrains Mono" opacity=".8">78%</text>
+      </svg>
+      <div class="ohlc"><span><span class="l">O</span><span class="d">4326.12</span></span><span><span class="l">H</span><span class="d">4328.45</span></span><span><span class="l">L</span><span class="u">4322.80</span></span><span><span class="l">C</span><span class="d">4324.50</span></span><span><span class="l">Vol</span>1,247</span></div>
+      <!-- Tooltip -->
+      <div class="tip" style="left:14%;top:26%">
+        <div class="th"><span style="color:var(--grn)">LONG POSITION</span><span style="font-size:9px;color:var(--t3);font-family:var(--mono)">#833191449</span></div>
+        <div class="tr"><span class="tl">Entry</span><span>4,322.29</span></div>
+        <div class="tr"><span class="tl">Current</span><span style="color:var(--grn)">4,324.50</span></div>
+        <div class="tr"><span class="tl">Volume</span><span>1.00 lot</span></div>
+        <div class="tr"><span class="tl">Stop Loss</span><span style="color:var(--red)">4,307.00 <span style="font-size:8px;color:var(--t3)">(-15.3)</span></span></div>
+        <div class="tr"><span class="tl">Take Profit</span><span style="color:var(--grn)">4,380.00 <span style="font-size:8px;color:var(--t3)">(+57.7)</span></span></div>
+        <div class="tr"><span class="tl">R:R Ratio</span><span style="color:var(--yel)">1 : 3.78</span></div>
+        <div class="tr"><span class="tl">Unrealized</span><span style="color:var(--grn);font-weight:600">+$589.44</span></div>
+        <div class="tb"><button>Modify SL/TP</button><button>Set on Chart</button><button class="rb">Close</button></div>
+      </div>
+      <!-- Context menu -->
+      <div class="ctx" style="right:280px;top:50%">
+        <div class="ctx-i">📊 Analyze Price</div><div class="ctx-d"></div>
+        <div class="ctx-i" style="color:var(--grn)">🟢 Buy Limit Here</div>
+        <div class="ctx-i" style="color:var(--red)">🔴 Sell Limit Here</div><div class="ctx-d"></div>
+        <div class="ctx-i">📐 Draw Fibonacci</div><div class="ctx-i">✏️ Draw Horizontal</div><div class="ctx-d"></div>
+        <div class="ctx-i">📍 Load Trade History</div><div class="ctx-d"></div>
+        <div class="ctx-i">⚙ Chart Settings</div>
+      </div>
+    </div>
+  </div>
+  <!-- Right Panel -->
+  <div class="rp">
+    <div class="rpt"><div class="rp-tab on">AI Signal</div><div class="rp-tab">Positions</div><div class="rp-tab">Orders</div></div>
+    <div class="rpb">
+      <div class="sig">
+        <div class="sig-top"><span class="sig-badge bull">BULLISH</span><span class="sig-conf" style="color:var(--grn)">60%</span></div>
+        <div class="sig-bar"><div class="bf" style="width:60%;background:var(--grn)"></div><div class="bf" style="width:40%;background:var(--red)"></div></div>
+        <div class="sig-txt">No new entry opportunity. Existing positions and orders show no structural mismatch or hard risk triggers. Maintain current protection.</div>
+        <div class="sig-meta">DaoCheng Strategy · 11:45:48</div>
+      </div>
+      <div class="chan">
+        <div class="chan-t">Chan Theory · M15</div>
+        <div class="chan-r"><span class="k">Trend</span><span class="v" style="color:var(--grn)">↑ Bullish</span></div>
+        <div class="chan-r"><span class="k">Bi</span><span class="v">Rising in progress</span></div>
+        <div class="chan-r"><span class="k">Segment</span><span class="v">3rd (upward)</span></div>
+        <div class="chan-r"><span class="k">Center</span><span class="v">4327-4332</span></div>
+      </div>
+      <div class="ph"><span>Positions (2)</span><span style="color:var(--grn);font-family:var(--mono)">+$589.90</span></div>
+      <div class="pc sel">
+        <div class="pc-top"><span class="pc-sym">XAUUSD.s <span class="pc-tk">#833191449</span></span><span class="pc-pnl p">+$589.44</span></div>
+        <div class="pc-info"><span style="color:var(--grn)">LONG 1.00</span><span>@ 4322.29</span></div>
+        <div class="pc-acts"><button>SL/TP</button><button>Chart</button><button>Detail</button><button class="cl">Close</button></div>
+      </div>
+      <div class="pc">
+        <div class="pc-top"><span class="pc-sym">XAUUSD.s <span class="pc-tk">#824050887</span></span><span class="pc-pnl p">+$0.46</span></div>
+        <div class="pc-info"><span style="color:var(--red)">SHORT 0.01</span><span>@ 4328.79</span></div>
+        <div class="pc-acts"><button>SL/TP</button><button>Chart</button><button>Detail</button><button class="cl">Close</button></div>
+      </div>
+      <div class="rmini">
+        <div class="rt">Risk Summary</div>
+        <div class="rmini-g">
+          <div><div class="rl">Daily Loss</div><div class="rv">0.00%</div></div>
+          <div><div class="rl">Drawdown</div><div class="rv" style="color:var(--yel)">6.71%</div></div>
+          <div><div class="rl">Positions</div><div class="rv">2</div></div>
+          <div><div class="rl">Volume</div><div class="rv">1.01</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Bottom -->
+<div class="bottom">
+  <div class="bt-bar">
+    <div class="bt on">Execution Log <span class="c">5</span></div>
+    <div class="bt">AI Decisions <span class="c">50</span></div>
+    <div class="bt">Trade History</div>
+    <div class="bt">Pending Orders</div>
+    <div class="bt">Strategy Status</div>
+  </div>
+  <div class="bt-body">
+    <table class="bt-tbl">
+      <thead><tr><th>Time</th><th>Action</th><th>Symbol</th><th>Side</th><th>Volume</th><th>Price</th><th>SL</th><th>TP</th><th>Status</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td style="color:var(--t3)">11:41:33</td><td>Modify</td><td>XAUUSD</td><td class="dm">--</td><td class="dm">--</td><td class="dm">--</td><td style="color:var(--red)">4307</td><td style="color:var(--grn)">4380</td><td class="g">Success</td><td class="dm">SL/TP updated</td></tr>
+        <tr><td style="color:var(--t3)">10:52:15</td><td>Open</td><td style="font-weight:600">XAUUSD</td><td class="g">Buy</td><td>1.00</td><td>4322.29</td><td class="dm">--</td><td class="dm">--</td><td class="g">Filled</td><td class="dm">#833191449</td></tr>
+        <tr><td style="color:var(--t3)">10:30:00</td><td>Pending</td><td style="font-weight:600">XAUUSD</td><td class="b">Sell Limit</td><td>1.00</td><td>4380.00</td><td class="dm">--</td><td class="dm">--</td><td style="color:var(--yel)">Pending</td><td class="dm">#833454485</td></tr>
+        <tr><td style="color:var(--t3)">09:45:22</td><td>Open</td><td style="font-weight:600">XAUUSD</td><td class="r">Sell</td><td>0.01</td><td>4328.79</td><td class="dm">--</td><td class="dm">--</td><td class="g">Filled</td><td class="dm">#824050887</td></tr>
+        <tr><td style="color:var(--t3)">09:30:10</td><td>AI Decision</td><td style="font-weight:600">XAUUSD</td><td class="dm">Hold</td><td class="dm">--</td><td class="dm">--</td><td class="dm">--</td><td class="dm">--</td><td class="dm">Logged</td><td class="dm">62% · No entry</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<div class="sbar">
+  <span class="dot"></span><span>DooTechnology-Demo · Connected</span><span class="sp"></span><span>Latency 12ms</span><span class="sp"></span><span>Account 860058 · 1:500</span>
+  <div class="ri"><span>AI Next 02:37</span><span class="sp"></span><span class="g">✓ SL updated</span><span class="sp"></span><span style="color:var(--yel)">⏳ Pending 4380</span></div>
+</div>
+
+<!-- MODALS -->
+<div class="modal-mask" id="modal-risk"><div class="modal"><div class="modal-head"><h3>🛡️ Risk Control</h3><div class="close" onclick="closeModal('risk')">✕</div></div><div class="modal-body"><div class="rm-grid"><div class="rm-card"><div class="rv" style="color:var(--grn)">0.00%</div><div class="rl">Daily Loss</div><div class="rb"><div class="rf" style="width:0%;background:var(--grn)"></div></div></div><div class="rm-card"><div class="rv" style="color:var(--yel)">6.71%</div><div class="rl">Drawdown</div><div class="rb"><div class="rf" style="width:67%;background:var(--yel)"></div></div></div><div class="rm-card"><div class="rv">2 / 10</div><div class="rl">Positions</div><div class="rb"><div class="rf" style="width:20%;background:var(--grn)"></div></div></div><div class="rm-card"><div class="rv">1.01 / 5</div><div class="rl">Total Volume</div><div class="rb"><div class="rf" style="width:20%;background:var(--grn)"></div></div></div><div class="rm-card"><div class="rv">1 / 20</div><div class="rl">Pending</div><div class="rb"><div class="rf" style="width:5%;background:var(--grn)"></div></div></div><div class="rm-card"><div class="rv">1 / 20</div><div class="rl">Daily Opens</div><div class="rb"><div class="rf" style="width:5%;background:var(--grn)"></div></div></div></div><div class="section"><div class="stitle">Risk Policy</div><div class="card"><div class="cr"><span class="cl">Max Risk / Trade</span><span>1%</span></div><div class="cr"><span class="cl">Max Drawdown</span><span>8%</span></div><div class="cr"><span class="cl">Max Positions</span><span>10</span></div><div class="cr"><span class="cl">Max Volume</span><span>5 lots</span></div><div class="cr"><span class="cl">Max Order Volume</span><span>0.5 lots</span></div><div class="cr"><span class="cl">Cooldown</span><span>60 min</span></div><div class="cr"><span class="cl">Consecutive Loss</span><span>3</span></div><div class="cr"><span class="cl">Trade Send</span><span style="color:var(--grn)">Enabled</span></div></div></div></div></div></div>
+<div class="modal-mask" id="modal-strategy"><div class="modal"><div class="modal-head"><h3>📊 Strategy Management</h3><div class="close" onclick="closeModal('strategy')">✕</div></div><div class="modal-body"><div class="section"><div class="stitle">Strategy Library</div><div class="st-card"><div><div class="st-name">DaoCheng Trading</div><div class="st-meta">v2.1 · Analysis + Trader · Updated 09/14</div></div><span class="st-status active">Active</span></div><div class="st-card"><div><div class="st-name">DaoCheng Trading</div><div class="st-meta">v2.0 · Analysis + Trader · Updated 09/10</div></div><span class="st-status paused">Retired</span></div></div><div class="section"><div class="stitle">Subscriptions</div><div class="card"><div class="cr"><span class="cl">Account</span><span>MT5 · 860058</span></div><div class="cr"><span class="cl">Symbol</span><span>XAUUSD.s</span></div><div class="cr"><span class="cl">Strategy</span><span>DaoCheng v2.1</span></div><div class="cr"><span class="cl">AI Analysis</span><span style="color:var(--grn)">Enabled</span></div><div class="cr"><span class="cl">AI Trader</span><span style="color:var(--grn)">Enabled</span></div><div class="cr"><span class="cl">Auto Send</span><span style="color:var(--grn)">Enabled</span></div><div class="cr"><span class="cl">Analysis Cycle</span><span>Every 5 min</span></div></div></div></div></div></div>
+<div class="modal-mask" id="modal-analysis"><div class="modal"><div class="modal-head"><h3>🧠 AI Analysis History</h3><div class="close" onclick="closeModal('analysis')">✕</div></div><div class="modal-body"><div class="card" style="border-left:3px solid var(--grn)"><div class="cr"><span style="font-weight:600">XAUUSD · Bullish</span><span class="g" style="font-weight:700">60%</span></div><div class="cr"><span class="cl">Strategy</span><span>DaoCheng v2.1</span></div><div class="cr"><span class="cl">Time</span><span>09/16 11:45:48</span></div><div style="font-size:11px;color:var(--t2);margin-top:6px;line-height:1.5">No new entry opportunity. Positions and orders show no structural mismatch.</div></div><div class="card" style="border-left:3px solid var(--grn)"><div class="cr"><span style="font-weight:600">XAUUSD · Hold</span><span class="g" style="font-weight:700">62%</span></div><div class="cr"><span class="cl">Time</span><span>09/16 11:41:00</span></div><div style="font-size:11px;color:var(--t2);margin-top:6px;line-height:1.5">Both positions maintain current protection. No exit triggers.</div></div></div></div></div>
+<div class="modal-mask" id="modal-calendar"><div class="modal"><div class="modal-head"><h3>📅 Economic Calendar</h3><div class="close" onclick="closeModal('calendar')">✕</div></div><div class="modal-body"><div class="card" style="border-left:3px solid var(--red)"><div class="cr"><span style="font-weight:600">🇺🇸 US CPI YoY</span><span class="r" style="font-weight:600">High Impact</span></div><div class="cr"><span class="cl">Time</span><span>Today 20:30</span></div><div class="cr"><span class="cl">Previous</span><span>2.9%</span></div><div class="cr"><span class="cl">Forecast</span><span>2.8%</span></div></div><div class="card" style="border-left:3px solid var(--red)"><div class="cr"><span style="font-weight:600">🇺🇸 Michigan Consumer Sentiment</span><span class="r" style="font-weight:600">High Impact</span></div><div class="cr"><span class="cl">Time</span><span>Today 22:00</span></div><div class="cr"><span class="cl">Previous</span><span>58.2</span></div><div class="cr"><span class="cl">Forecast</span><span>58.0</span></div></div></div></div></div>
+<div class="modal-mask" id="modal-review"><div class="modal"><div class="modal-head"><h3>🔍 AI Review</h3><div class="close" onclick="closeModal('review')">✕</div></div><div class="modal-body"><div class="card"><div class="cr"><span style="font-weight:600">09/16 Period Review</span><span style="color:var(--yel)">Pending Review</span></div><div class="cr"><span class="cl">Trades</span><span>3</span></div><div class="cr"><span class="cl">P&L</span><span class="g">+$589.90</span></div><div class="cr"><span class="cl">Win Rate</span><span>100%</span></div><div style="font-size:11px;color:var(--t2);margin-top:6px;line-height:1.5">Long position profitable. Small short probe. Pending order not triggered. Overall strategy execution good.</div></div></div></div></div>
+<div class="modal-mask" id="modal-risk-release"><div class="modal"><div class="modal-head"><h3>🔓 Manual Risk Release</h3><div class="close" onclick="closeModal('risk-release')">✕</div></div><div class="modal-body"><div class="section"><div class="stitle">Current Status</div><div class="card" style="border-left:3px solid var(--yel)"><div class="cr"><span style="font-weight:600">Drawdown Near Limit</span><span class="r">6.71% / 8%</span></div><div class="cr"><span class="cl">Rule</span><span>Max Drawdown 8%</span></div><div class="cr"><span class="cl">Status</span><span style="color:var(--yel)">Approaching but not triggered</span></div></div></div><div class="section"><div class="stitle">Release Action</div><div style="display:flex;gap:8px;align-items:center;margin-bottom:10px"><span style="min-width:70px;font-size:11px;color:var(--t3)">Reason</span><input style="flex:1;background:var(--bg4);border:1px solid var(--bdr);border-radius:6px;padding:6px 10px;color:var(--t1);font-size:12px" placeholder="Explain the reason for release"></div><div style="display:flex;gap:8px;align-items:center;margin-bottom:10px"><span style="min-width:70px;font-size:11px;color:var(--t3)">Confirm</span><label style="font-size:11px;color:var(--t2)"><input type="checkbox" style="margin-right:4px"> I understand the risk</label></div><div style="display:flex;gap:8px"><span style="min-width:70px"></span><button style="flex:1;padding:8px;border-radius:6px;font-size:11px;cursor:pointer;border:1px solid rgba(255,23,68,.3);background:transparent;color:var(--red);font-weight:500">Confirm Release</button></div></div></div></div></div>
+
+<script>
+function openModal(id){document.getElementById('modal-'+id).classList.add('show')}
+function closeModal(id){document.getElementById('modal-'+id).classList.remove('show')}
+document.querySelectorAll('.modal-mask').forEach(m=>{m.addEventListener('click',e=>{if(e.target===m)m.classList.remove('show')})});
+</script>
+</body>
+</html>

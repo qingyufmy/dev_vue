@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { assessManualRelease, manualReleaseStillValid, type ManualReleaseState } from '../domain/manual-risk-release.js'
 import { assertAccountPolicyPatch, buildAccountRiskSummary, riskPolicyHash, RiskError, type AccountRiskPolicyPatch, type AccountRiskSummary } from '../domain/risk.js'
 import type { RiskRepository } from './risk-ports.js'
+import { assertRiskPolicyReceiptKey } from '../domain/risk-policy-receipt.js'
 
 export class RiskService {
   constructor(private readonly repository: RiskRepository) {}
@@ -12,11 +13,20 @@ export class RiskService {
     return policy
   }
 
-  async replacePolicy(userId: number, accountId: string, expectedRevision: number, patch: AccountRiskPolicyPatch, reason: string, now = new Date()) {
+  async policyReceipt(userId: number, accountId: string, idempotencyKey: string) {
+    assertRiskPolicyReceiptKey(idempotencyKey)
+    const receipt = await this.repository.getPolicyReceipt(userId, accountId, idempotencyKey)
+    if (!receipt) return { state: 'unconfirmed' as const, policy: null }
+    if (receipt.policy.userId !== userId || receipt.policy.accountId !== accountId) throw new RiskError('risk_account_forbidden', 403)
+    return { state: 'confirmed' as const, policy: receipt.policy }
+  }
+
+  async replacePolicy(userId: number, accountId: string, expectedRevision: number, patch: AccountRiskPolicyPatch, reason: string, idempotencyKey: string, now = new Date()) {
+    assertRiskPolicyReceiptKey(idempotencyKey)
     if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) throw new RiskError('risk_policy_revision_invalid', 422)
     if (reason.trim().length < 3 || reason.trim().length > 500) throw new RiskError('risk_policy_reason_invalid', 422)
     assertAccountPolicyPatch(patch)
-    return this.repository.replaceAccountPolicy({ userId, accountId, expectedRevision, patch, actorUserId: userId, reason: reason.trim(), changedAt: now.toISOString() })
+    return this.repository.replaceAccountPolicy({ userId, accountId, expectedRevision, patch, idempotencyKey, actorUserId: userId, reason: reason.trim(), changedAt: now.toISOString() })
   }
 
   async summary(userId: number, accountId: string) {
@@ -95,6 +105,14 @@ export class RiskService {
     }
   }
 
+  async manualReleaseReceipt(userId: number, accountId: string, idempotencyKey: string) {
+    if (!/^[A-Za-z0-9._:-]{8,128}$/.test(idempotencyKey)) throw new RiskError('idempotency_key_invalid', 422)
+    const receipt = await this.repository.getManualReleaseByIdempotency(userId, accountId, idempotencyKey)
+    if (!receipt) return { state: 'unconfirmed' as const, release: null }
+    if (receipt.release.userId !== userId || receipt.release.accountId !== accountId) throw new RiskError('risk_account_forbidden', 403)
+    return { state: 'confirmed' as const, release: receipt.release }
+  }
+
   async createManualRelease(input: { userId: number; accountId: string; expectedSummaryRevision: number; idempotencyKey: string; acknowledgeRisk: boolean; reason: string }, now = new Date()) {
     if (!Number.isSafeInteger(input.expectedSummaryRevision) || input.expectedSummaryRevision < 1) throw new RiskError('risk_manual_release_revision_invalid', 422)
     if (!/^[A-Za-z0-9._:-]{8,128}$/.test(input.idempotencyKey)) throw new RiskError('idempotency_key_invalid', 422)
@@ -105,6 +123,7 @@ export class RiskService {
     const requestHash = createHash('sha256').update(JSON.stringify(request)).digest('hex')
     const existing = await this.repository.getManualReleaseByIdempotency(input.userId, input.accountId, input.idempotencyKey)
     if (existing) {
+      if (existing.release.userId !== input.userId || existing.release.accountId !== input.accountId) throw new RiskError('risk_account_forbidden', 403)
       if (existing.requestHash !== requestHash) throw new RiskError('idempotency_conflict', 409)
       return existing.release
     }

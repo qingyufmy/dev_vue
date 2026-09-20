@@ -1,0 +1,17 @@
+{
+  "kind": "history-order-provenance-reference/v1",
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "referenceDatabaseRemoved": true,
+  "checks": [
+    "real_writer_insert_replay_and_conflict",
+    "three_real_foreign_keys",
+    "revision_and_hash_check_constraints",
+    "transaction_rollback_preserves_prior_receipt"
+  ],
+  "migrationSha256": "d794d24368c2904bcaeabcea8d88263363548042320a3e8536f8479157558113",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "serverVersion": "8.4.8",
+  "canonicalDdl": "CREATE TABLE `terminal_history_order_provenance_v4` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `terminal_history_order_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `user_id` int NOT NULL,\n  `platform` enum('mt4','mt5') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `terminal_instance_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `terminal_profile_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `broker_server` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `account_login` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `connection_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `connection_epoch` bigint unsigned NOT NULL,\n  `ownership_revision` bigint unsigned NOT NULL,\n  `request_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `query_message_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `response_message_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_revision` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_kind` enum('terminal','local_projection') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `fact_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `provenance_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `observed_at_utc` datetime(3) NOT NULL,\n  `received_at_utc` datetime(3) NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_history_order_provenance_response` (`terminal_history_order_id`,`response_message_id`),\n  KEY `idx_history_order_provenance_identity` (`trading_account_id`,`terminal_instance_id`,`terminal_history_order_id`),\n  KEY `fk_history_order_provenance_user` (`user_id`),\n  CONSTRAINT `fk_history_order_provenance_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_history_order_provenance_order` FOREIGN KEY (`terminal_history_order_id`) REFERENCES `terminal_history_orders_v4` (`id`),\n  CONSTRAINT `fk_history_order_provenance_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_history_order_provenance_hashes` CHECK ((regexp_like(`fact_sha256`,_utf8mb4'^[0-9a-f]{64}$') and regexp_like(`provenance_sha256`,_utf8mb4'^[0-9a-f]{64}$'))),\n  CONSTRAINT `chk_history_order_provenance_revisions` CHECK (((`connection_epoch` > 0) and (`ownership_revision` > 0)))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+  "finishedAt": "2026-09-09T05:02:52.313Z"
+}

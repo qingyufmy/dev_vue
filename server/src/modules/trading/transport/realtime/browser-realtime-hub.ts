@@ -1,3 +1,4 @@
+import type { MarketDemandPublisher, MarketDemandLease } from '../../application/market-demand-port.js'
 import { createHash } from 'node:crypto'
 import { observerInvalidation, type ObserverInvalidation } from '../../application/observer-invalidation.js'
 import {
@@ -35,6 +36,7 @@ interface ObserverPendingPublication {
 }
 
 interface Subscription {
+  marketLease?: MarketDemandLease
   userId: number
   requestId: string
   targets: AuthorizedTarget[]
@@ -48,7 +50,7 @@ interface Subscription {
 
 type ObserverPublicationResource = 'account.metrics' | 'market.quote' | 'market.candle' | 'positions' | 'pending_orders'
 
-const PLATFORM_RESOURCES = new Set(['macro_snapshot', 'calendar_event'])
+const PLATFORM_RESOURCES = new Set(['macro_snapshot', 'calendar_event', 'public_market'])
 const USER_RESOURCES = new Set(['analysis.job', 'market_analysis', 'review_case', 'strategy_memory', 'operation', 'audit', ...PLATFORM_RESOURCES])
 const DOMAIN_RESOURCES = new Set([
   ...USER_RESOURCES, 'trader.job', 'trade_decision', 'risk.policy', 'risk.summary',
@@ -92,6 +94,7 @@ export class BrowserRealtimeHub {
     private readonly repository: TradingReadRepository,
     private readonly observers?: ObserverAccessReader,
     private readonly now: () => number = Date.now,
+    private readonly marketDemands?: MarketDemandPublisher,
   ) {}
 
   async subscribe(input: {
@@ -131,7 +134,7 @@ export class BrowserRealtimeHub {
       const observer = target.observerChannelId !== null
       let observerAuthorization: ObserverAuthorization | undefined
       if (target.accountId === null) {
-        if (observer || target.resources.some(resource => !USER_RESOURCES.has(resource))) {
+        if (observer || target.resources.some(resource => !USER_RESOURCES.has(resource.split(':')[0]!))) {
           input.sink.close(4403, 'realtime_scope_forbidden')
           return null
         }
@@ -186,7 +189,7 @@ export class BrowserRealtimeHub {
           revisions[resource] = 0
           continue
         }
-        if (DOMAIN_RESOURCES.has(resource)) {
+        if (DOMAIN_RESOURCES.has(resource.split(':')[0]!)) {
           if (after !== null && after !== undefined) {
             input.sink.send({
               v: 4, type: 'subscription.resync_required', request_id: input.requestId ?? 'subscribe',
@@ -243,13 +246,25 @@ export class BrowserRealtimeHub {
     }
     this.subscriptions.add(subscription)
     try {
+      const marketTargets = authorized.filter(target => target.accountId && !target.observerChannelId)
+        .flatMap(target => target.resources.flatMap(resource => {
+          const [kind, symbol, timeframe] = resource.split(':')
+          return (kind === 'market.quote' || kind === 'market.candle') && symbol
+            ? [{ accountId: target.accountId!, symbol, timeframe: kind === 'market.candle' ? timeframe! : null }] : []
+        }))
+      if (marketTargets.length && this.marketDemands) {
+        subscription.marketLease = this.marketDemands.create(input.userId, marketTargets)
+        await subscription.marketLease.renew()
+      }
+
+      if (subscription.closed) return null
       input.sink.send({
         v: 4,
         type: 'subscription.ready',
         request_id: subscription.requestId,
         subscriptions: authorized.flatMap((target, targetIndex) => target.resources.map((resource, resourceIndex) => ({
           subscription_id: `${targetIndex + 1}:${resourceIndex + 1}:${resource}`,
-          target: { ...target.publicTarget, after_revision: target.observerAuthorization || DOMAIN_RESOURCES.has(resource) ? null : String(target.revisions[resource] ?? 0) },
+          target: { ...target.publicTarget, after_revision: target.observerAuthorization || DOMAIN_RESOURCES.has(resource.split(':')[0]!) ? null : String(target.revisions[resource] ?? 0) },
           revision: String(target.revisions[resource] ?? 0),
         }))),
       })
@@ -257,7 +272,7 @@ export class BrowserRealtimeHub {
       this.closeSubscription(subscription)
       throw new Error('browser_realtime_sink_failed')
     }
-    return () => this.closeSubscription(subscription)
+    return Object.assign(() => this.closeSubscription(subscription), { renew: async () => { if (!subscription.closed) await subscription.marketLease?.renew() } })
   }
 
   publish(event: BrowserRealtimeEvent) {
@@ -386,6 +401,7 @@ export class BrowserRealtimeHub {
   private invalidateObserver(subscription: Subscription) {
     if (subscription.closed) return
     subscription.closed = true
+    subscription.marketLease?.close()
     subscription.observerQueue.clear()
     if (subscription.observerTimer !== null) clearTimeout(subscription.observerTimer)
     subscription.observerTimer = null
@@ -405,6 +421,7 @@ export class BrowserRealtimeHub {
   private closeSubscription(subscription: Subscription) {
     if (subscription.closed) return
     subscription.closed = true
+    subscription.marketLease?.close()
     subscription.observerQueue.clear()
     if (subscription.observerTimer !== null) clearTimeout(subscription.observerTimer)
     subscription.observerTimer = null

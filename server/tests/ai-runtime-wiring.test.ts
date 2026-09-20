@@ -1,3 +1,5 @@
+import { createRuntimeStrategyAccess } from '../src/modules/strategies/composition.js'
+import { createAccountPrincipalReader, createActivePrincipalAccess } from '../src/modules/auth/composition.js'
 import type { Pool } from 'mysql2/promise'
 import type { ReviewJobClaim } from '../src/modules/reviews/index.js'
 import { createMysqlAnalysisModelResolver, createMysqlTraderModelResolver, createMysqlReviewModelResolver } from '../src/modules/inference/composition.js'
@@ -12,9 +14,38 @@ import { BullMqOutboxTaskPublisher } from '../src/outbox/index.js'
 import type { ClaimedOutboxEvent } from '../src/outbox/application/outbox-ports.js'
 import type { RuntimeTaskQueues } from '../src/queue/task-queues.js'
 
+const access = { strategies: createRuntimeStrategyAccess, principals: createAccountPrincipalReader, active: createActivePrincipalAccess }
+
 describe('AI runtime wiring', () => {
+  it('resolves strategy and principal facts through ports before permitting shared models', async () => {
+    for (const condition of ['missing_principal', 'wrong_plan', 'sharing_disabled'] as const) {
+      const sqlReads: string[] = []
+      const pool = { async execute(sql: string) {
+        expect(sql).not.toContain('FROM users'); expect(sql).not.toContain('FROM strategies')
+        sqlReads.push(sql)
+        if (sql.includes('FROM user_model_defaults') || sql.includes('FROM user_model_assignments_v4')) return [[]]
+        if (sql.includes('FROM ai_model_profiles')) return [[{ scope: 'platform' }]]
+        if (sql.includes('FROM platform_model_usage_policy')) return [[{ share_for_manual: condition === 'sharing_disabled' ? 0 : 1,
+          share_for_auto: 1, allowed_plans: ['pro'] }]]
+        throw Error('unexpected query')
+      } } as unknown as Pool
+      const resolver = createMysqlAnalysisModelResolver(pool, new Map(), { allowPrivateEndpoints: false, maxAttempts: 1, defaultTimeoutMs: 30000 }, {
+        strategies: () => ({ async canUseCurrent(user, strategy, version) { expect([user, strategy, version]).toEqual([42, '17', '19']); return true },
+          async canUseFrozenReview() { throw Error('unexpected review') } }),
+        principals: () => ({ async readMany(ids, lock) {
+          expect(ids).toEqual([42]); expect(lock).toBe('none')
+          return condition === 'missing_principal' ? new Map() : new Map([[42, { userId: 42, plan: condition === 'wrong_plan' ? 'free' : 'pro',
+            planExpiresAtUtc: null, tokenVersion: 0 }]])
+        } }),
+        active: () => { throw Error('resolver must not reserve usage') },
+      })
+      await expect(resolver.resolve({ userId: 42, strategyId: '17', strategyVersionId: '19', trigger: 'manual' })).rejects.toThrow('platform_model_sharing_unavailable')
+      expect(sqlReads).toHaveLength(condition === 'missing_principal' ? 2 : 3)
+    }
+  })
   it('rejects inactive strategies for live work while allowing frozen reviews to resolve their model', async () => {
     const execute = vi.fn(async (sql: string) => {
+      if (sql.includes('FROM user_model_defaults')) return [[{id:'1'}],[]]
       if (sql.includes('FROM strategies')) {
         return [sql.includes("status='active'") ? [] : [{ id: '17', scope: 'user', owner_user_id: 42 }], []]
       }
@@ -24,12 +55,12 @@ describe('AI runtime wiring', () => {
     const options = { allowPrivateEndpoints: false, maxAttempts: 1, defaultTimeoutMs: 30_000 }
     const keyring = new Map<string, Buffer>()
     const input = { userId: 42, strategyId: '17', strategyVersionId: '19', trigger: 'manual' as const }
-    await expect(createMysqlAnalysisModelResolver(pool, keyring, options).resolve(input)).rejects.toThrow('model_strategy_unavailable')
-    await expect(createMysqlTraderModelResolver(pool, keyring, options).resolve(input)).rejects.toThrow('model_strategy_unavailable')
+    await expect(createMysqlAnalysisModelResolver(pool, keyring, options, access).resolve(input)).rejects.toThrow('model_strategy_unavailable')
+    await expect(createMysqlTraderModelResolver(pool, keyring, options, access).resolve(input)).rejects.toThrow('model_strategy_unavailable')
     expect(execute).toHaveBeenCalledTimes(2)
     const claim = { userId: 42, strategyId: '17', kind: 'manual' } as ReviewJobClaim
-    await expect(createMysqlReviewModelResolver(pool, keyring, options).resolve(claim)).rejects.toThrow('model_profile_unavailable')
-    expect(execute).toHaveBeenCalledTimes(4)
+    await expect(createMysqlReviewModelResolver(pool, keyring, options, access).resolve(claim)).rejects.toThrow('model_profile_unavailable')
+    expect(execute.mock.calls.some(([sql]) => sql.includes('FROM user_model_defaults'))).toBe(true)
     expect(execute.mock.calls.every(([sql]) => sql.trimStart().startsWith('SELECT'))).toBe(true)
   })
 
@@ -70,6 +101,8 @@ describe('AI runtime wiring', () => {
     expect(output.result).toMatchObject({ marketBias: 'neutral', opportunity: 'none' })
     expect(output.usage).toEqual({ total_tokens: 12 })
     expect(requests[0]).toMatchObject({ stream: false, response_format: { type: 'json_object' } })
+    expect(JSON.stringify(requests)).not.toContain('calculation_archive')
+    expect(JSON.stringify(requests)).not.toContain('audit-only-history')
 
     const custom = new HttpJsonAnalysisModelGateway(profile({ provider: 'custom', structuredOutput: true }), usageLedger(), request)
     await custom.analyze({ taskId: 'task-2', attemptId: 'attempt-2', snapshot: analysisSnapshot(), signal: new AbortController().signal })
@@ -123,15 +156,17 @@ describe('AI runtime wiring', () => {
     expect(failures).toEqual(['database_unavailable'])
   })
 
-  it('serializes platform quota admission on the user row before inserting a reservation', async () => {
+  it('checks platform access and records usage without daily quota admission', async () => {
     const statements: string[] = []
     const connection = {
       async beginTransaction() { statements.push('BEGIN') },
       async execute(sql: string) {
         statements.push(sql.replace(/\s+/g, ' ').trim())
-        if (sql.includes('SELECT u.plan')) return [[{
+        if (sql.startsWith('SELECT id FROM users')) return [[{ id: 42 }], []]
+        if (sql.startsWith('SELECT id,plan')) return [[{ id: 42, plan: 'pro', plan_expires_at_utc: null, token_version: '0' }], []]
+        if (sql.includes('FROM platform_model_usage_policy')) return [[{
           plan: 'pro', share_for_manual: 1, share_for_auto: 1, allowed_plans: '["pro"]',
-          daily_requests_per_user: 100, daily_tokens_per_user: 500_000,
+          daily_requests_per_user: 0, daily_tokens_per_user: 0,
         }], []]
         if (sql.includes('SELECT COUNT(*)')) return [[{ requests: 4, tokens: 2_000 }], []]
         return [{ insertId: 99 }, []]
@@ -139,13 +174,15 @@ describe('AI runtime wiring', () => {
       async commit() { statements.push('COMMIT') }, async rollback() {}, release() {},
     }
     const pool = { async getConnection() { return connection } }
-    const ledger = createMysqlModelUsageLedger(pool as never)
+    const ledger = createMysqlModelUsageLedger(pool as never, access)
     await expect(ledger.begin({
       userId: 42, profileId: '7', strategyId: '9', credentialSource: 'platform_shared', usage: 'auto',
     })).resolves.toBe('99')
     expect(statements[1]).toContain('FOR UPDATE')
-    expect(statements[2]).toContain("credential_source='platform_shared'")
-    expect(statements[3]).toContain('INSERT INTO ai_model_usage_logs')
+    expect(statements[2]).toContain('FOR SHARE')
+    expect(statements[3]).toContain('FROM platform_model_usage_policy WHERE id=1 FOR UPDATE')
+    expect(statements.some(sql => sql.includes('SELECT COUNT(*)'))).toBe(false)
+    expect(statements[4]).toContain('INSERT INTO ai_model_usage_logs')
     expect(statements.at(-1)).toBe('COMMIT')
   })
 
@@ -156,7 +193,7 @@ describe('AI runtime wiring', () => {
       return [{ affectedRows: 3 }, []]
     } }
     const before = new Date('2026-09-04T00:00:00.000Z')
-    await expect(createMysqlModelUsageLedger(pool as never).recoverAbandoned(before, 50)).resolves.toBe(3)
+    await expect(createMysqlModelUsageLedger(pool as never, access).recoverAbandoned(before, 50)).resolves.toBe(3)
     expect(statements[0]?.sql).toContain("request_status='reserved'")
     expect(statements[0]?.sql).toContain("accounting_status='usage_unknown'")
     expect(statements[0]?.sql).toContain('ORDER BY id LIMIT 50')
@@ -222,7 +259,7 @@ function analysisSnapshot() {
   return {
     kind: 'analysis' as const,
     strategy: { id: '1', versionId: '2', promptHash: 'hash', promptText: '只分析客观行情' },
-    market: { symbol: 'XAUUSD' }, macro: null, capturedAt: '2026-09-04T00:00:00.000Z',
+    market: { symbol: 'XAUUSD',calculation_archive:{marker:'audit-only-history'} }, macro: null, capturedAt: '2026-09-04T00:00:00.000Z',
   }
 }
 

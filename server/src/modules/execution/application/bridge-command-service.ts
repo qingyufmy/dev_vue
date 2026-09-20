@@ -13,7 +13,7 @@ export class BridgeCommandService implements BridgeCommandReceiver {
     const existing = await this.repository.get(bridgeCommandId(input.executionIntentId, input.commandSequence))
     if (existing) {
       if (!bridgeCommandInputMatches(existing, input)) throw new BridgeCommandError('bridge_command_idempotency_conflict', 409)
-      return existing
+      return this.repository.create(existing)
     }
     const candidate = createBridgeCommand(input, now)
     return this.repository.create(candidate)
@@ -38,6 +38,13 @@ export class BridgeCommandService implements BridgeCommandReceiver {
     return { command: await this.dispatch(command.id, transport, now), dispatched: true as const }
   }
 
+  /** Stale reconciliation jobs must never dispatch a queued command or reopen a terminal command. */
+  async reconcileQueued(commandId: string, transport: BridgeCommandTransport, now = new Date()) {
+    const command = await this.required(commandId)
+    if (!['dispatched', 'accepted', 'uncertain', 'reconciling'].includes(command.status)) return command
+    return this.reconcile(command.id, transport, null, now)
+  }
+
   /** Persist dispatched before attempting a socket write; a thrown write is possibly sent. */
   async dispatch(commandId: string, transport: BridgeCommandTransport, now = new Date()) {
     const command = await this.required(commandId)
@@ -54,7 +61,7 @@ export class BridgeCommandService implements BridgeCommandReceiver {
     let dispatched
     try { dispatched = await this.repository.markDispatched(command.id, command.revision, now.toISOString()) }
     catch (error) {
-      if (error instanceof BridgeCommandError && ['execution_subscription_changed', 'execution_schedule_invalid', 'execution_schedule_closed', 'execution_schedule_unproven', 'execution_schedule_changed', 'execution_preferences_changed'].includes(error.code)) {
+      if (error instanceof BridgeCommandError && (error.code.startsWith('execution_dedup_') || ['execution_pending_review_unavailable', 'execution_duplicate_live_pending', 'execution_duplicate_pending_dispatch', 'execution_order_volume_exceeded', 'execution_dispatch_policy_unavailable', 'execution_dispatch_policy_halted', 'execution_subscription_changed', 'execution_schedule_invalid', 'execution_schedule_closed', 'execution_schedule_unproven', 'execution_schedule_changed', 'execution_preferences_changed'].includes(error.code))) {
         return this.repository.markPreDispatchFailed(command.id, command.revision, error.code, new Date().toISOString())
       }
       throw error

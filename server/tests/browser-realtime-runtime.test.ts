@@ -154,13 +154,15 @@ describe('V4 browser realtime runtime', () => {
     services.authHttp = createAuthHttp(services.auth, false)
     const registrationOnly = new Proxy({}, { get: () => () => { throw new Error('registration_only') } })
     services.riskHttp = createRiskHttp(...([registrationOnly, registrationOnly] as Parameters<typeof createRiskHttp>))
+    services.referralRulesHttp = createReferralRuleHttp(...([registrationOnly, registrationOnly] as Parameters<typeof createReferralRuleHttp>))
+    services.executionHttp = createExecutionHttp(...([registrationOnly, registrationOnly, registrationOnly, registrationOnly, registrationOnly] as unknown as Parameters<typeof createExecutionHttp>))
     services.marketHttp = createMarketHttp(...([registrationOnly, registrationOnly, registrationOnly, registrationOnly] as Parameters<typeof createMarketHttp>))
     services.bridgeHttp = createBridgeHttp(...([registrationOnly, registrationOnly, registrationOnly] as Parameters<typeof createBridgeHttp>))
     services.tradingHttp = createTradingHttp(...([registrationOnly, registrationOnly, registrationOnly, registrationOnly] as Parameters<typeof createTradingHttp>))
-    services.inferenceHttp = createInferenceHttp(...([registrationOnly, registrationOnly, registrationOnly] as Parameters<typeof createInferenceHttp>))
+    services.inferenceHttp = createInferenceHttp(...([registrationOnly, registrationOnly, registrationOnly, registrationOnly] as unknown as Parameters<typeof createInferenceHttp>))
     services.strategiesHttp = createStrategyHttp(...([registrationOnly, registrationOnly] as Parameters<typeof createStrategyHttp>))
     services.reviewsHttp = createReviewHttp(...([registrationOnly, registrationOnly] as Parameters<typeof createReviewHttp>))
-    services.tradeHistoryHttp = createTradeHistoryHttp(...([registrationOnly, registrationOnly] as Parameters<typeof createTradeHistoryHttp>))
+    services.tradeHistoryHttp = createTradeHistoryHttp(...([registrationOnly, registrationOnly, registrationOnly] as unknown as Parameters<typeof createTradeHistoryHttp>))
     services.observerManagementHttp = createObserverManagementHttp(...([registrationOnly, registrationOnly] as Parameters<typeof createObserverManagementHttp>))
     services.settingsHttp = createSettingsHttp({} as Parameters<typeof createSettingsHttp>[0], {
       authenticate: async () => { throw new Error('registration_only') }, assertWrite: async () => { throw new Error('registration_only') },
@@ -261,3 +263,5 @@ async function eventually(assertion: () => boolean) {
     await new Promise(resolve => setTimeout(resolve, 10))
   }
 }
+import { createExecutionHttp } from '../src/modules/execution/composition.js'
+import { createReferralRuleHttp } from '../src/modules/commerce/composition.js'

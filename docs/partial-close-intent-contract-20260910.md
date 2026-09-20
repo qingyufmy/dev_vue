@@ -1,0 +1,31 @@
+# 部分平仓后保护意图合同
+
+状态：开发实现，未启用运行能力。显式后续意图必须完整保留，不能被Bridge参数白名单静默丢弃。
+
+## 提议与编译
+
+模型的close_position.parameters可包含after_close_protection对象，仅允许stop_loss、take_profit两个正十进制字符串，至少一个。该动作必须明确close_percent或volume，禁止同ticket的其它close/modify并行动作。价格表示未来希望修改的保护，不是当前已批准的保护命令。全平不允许附带续作。
+
+模型不得提供after_close_target。风控核对当前合约/revision和唯一目标，将比例转换为具体volume，或验证显式partial volume的步进和剩余最小量；从当前仓位写入after_close_target={position_identifier,initial_volume,positions_revision}。稳定identifier缺失或重复拒绝。after_close_protection原文与target编译结果连同整个action hash进入执行意图，审计标记保护需要后续重新审核。
+
+## 父命令事务
+
+Bridge request保持原position.close合同，只携带ticket、volume和既有deviation。execution从锁定的完整action构造确定性workflow ID和冻结计划，绑定父intent/command，期限沿用父intent。当前仓位端口再次核对原target/revision/volume。命令和payload写入之后、command事件与outbox写入之前登记workflow及审计，任一失败必须回滚全部写入。
+
+组装层先在事务外捕获完整gateway route，再把只访问当前SQL事务的注册回调交给repository。未配置完整工作流能力时，包含after_close_protection的原意图必须报partial_close_workflow_unavailable，不能仅删去该字段执行平仓。此开发阶段不向模型系统合同宣传可用，也不为现有worker开启回调。
+
+## 两轮复核与后续验收
+
+第一轮：inference只验证提议结构，risk拥有确定性编译，execution拥有父命令/工作流事务，bootstrap连接route事实，Bridge不执行策略或串行调度。机器字段的额外值、服务端保留字段和并行动作冲突明确拒绝。
+
+第二轮：复核重放原命令是否同时保存工作流、COMMIT确认丢失、callback失败导致孤立父命令、过期注册、目标变更和不完整能力启用。原prepared intent的相同source hash应重放同一workflow；不同保护计划必须冲突。后续仍需当前风险审核、唯一子intent/outbox、任务恢复、保护结果归并和完整DDL恢复演练，才能启用入口。不得把本阶段注册接线表述为全流程完成。
+
+
+## 本轮实现与证据（2026-09-10）
+
+已实现提议校验、风控编译、execution纯计划构造与父repository注册回调。服务层现有命令重放重新进入repository；已排队的续作父命令在markDispatched阶段仍以partial_close_workflow_dispatch_unavailable拒绝。回调工厂约束为先捕获route再开始SQL事务，实际bootstrap捕获工厂与运行入口尚未连接。217项相关测试及类型/构建通过；父事务失败与重放是模拟连接证据。真实父事务、COMMIT确认丢失、持久状态推进、风险审核/保护子intent/outbox与完整DDL恢复演练未完成。候选056未执行。
+
+
+## 真实父事务验证补充（2026-09-10）
+
+v84完成真实InnoDB父命令、计划、审计和outbox原子性及COMMIT确认丢失恢复，精确证据范围见主计划408。实际route捕获bootstrap工厂也已补齐，但运行入口不启用。当前风险审核和保护子workflow仍未完成，完整父DDL/权限/目标读取联调仍需验收。真实库暴露并修复父命令创建ISO绑定DATETIME问题，其余生命周期同类绑定待后续检查。

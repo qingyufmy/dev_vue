@@ -53,10 +53,10 @@ const frozenAnalysis = { market_bias: 'bullish', confidence: 76 }
 const traderSnapshot: TraderInputSnapshot = { kind: 'trader', taskMode: 'entry', strategy: { id: '20', versionId: '21', promptHash: 'b'.repeat(64), promptText: '结合账户给出动作' }, analysis: { id: 'a1', contentHash: contentHash(frozenAnalysis), result: frozenAnalysis }, account: { id: '7' }, positions: [], pendingOrders: [], quote: { bid: '3530' }, contract: { symbol: 'XAUUSD' }, risk: { enabled: true }, analysisRevision: 1, subscriptionRevision: 4, accountRevision: 8, positionsRevision: 0, pendingOrdersRevision: 0, quoteRevision: 9, contractRevision: 3, riskRevision: 5, capturedAt: '2026-09-03T08:00:01.000Z' }
 
 describe('Stage 12A analyst and account-trader pipeline', () => {
-  it('queues manual analysis only against an active analysis strategy and applies the 3-minute server cooldown contract', async () => {
+  it('queues manual analysis only against an active analysis strategy and applies the 5-minute server cooldown contract', async () => {
     const repository = new MemoryInference(); const service = new InferenceService(repository, new StrategyService(new MemoryStrategies()))
     await expect(service.requestManualAnalysis(42, '10', ' xauusd ', 'manual-request-0001', new Date('2026-09-03T08:00:00.000Z'))).resolves.toMatchObject({ symbol: 'XAUUSD', trigger: 'manual' })
-    expect(repository.queueInput).toMatchObject({ strategyVersionId: '11', manualCooldownSeconds: 180, idempotencyKey: 'manual-request-0001' })
+    expect(repository.queueInput).toMatchObject({ strategyVersionId: '11', manualCooldownSeconds: 300, idempotencyKey: 'manual-request-0001' })
     await expect(service.requestManualAnalysis(42, '20', 'XAUUSD', 'manual-request-0002')).rejects.toMatchObject({ code: 'strategy_kind_mismatch' })
   })
 
@@ -92,12 +92,12 @@ describe('Stage 12A analyst and account-trader pipeline', () => {
   it('serves normalized HTTP summaries and keeps full payloads on HTTP rather than realtime', async () => {
     const repository = new MemoryInference(); const service = new InferenceService(repository, new StrategyService(new MemoryStrategies()))
     const app = Fastify({ logger: false })
-    await app.register(createInferenceHttp(service, new StrategyService(new MemoryStrategies()), { async authenticate() { return { userId: 42 } }, async assertWrite() { return { userId: 42 } } }))
-    const accepted = await app.inject({ method: 'POST', url: '/api/v4/analysis-jobs', headers: { 'idempotency-key': 'manual-request-0001' }, payload: { strategy_id: '10', symbol: 'XAUUSD', mode: 'manual' } })
+    await app.register(createInferenceHttp(service, { async authenticate() { return { userId: 42 } }, async assertWrite() { return { userId: 42 } } }, { async list() { return { items: [], nextCursor: null } } }))
+    const accepted = await app.inject({ method: 'POST', url: '/api/v4/analysis-jobs', headers: { 'x-csrf-token': 'csrf-token-1234567890', 'idempotency-key': 'manual-request-0001' }, payload: { strategy_id: '10', symbol: 'XAUUSD', mode: 'manual' } })
     expect(accepted.statusCode).toBe(202)
     expect(accepted.json().data).toMatchObject({ strategy_version_id: '11', trigger: 'manual', status: 'queued' })
     expect(JSON.stringify(accepted.json())).not.toContain('auto_execute')
-    const rejected = await app.inject({ method: 'POST', url: '/api/v4/analysis-jobs', headers: { 'idempotency-key': 'manual-request-0002' }, payload: { strategy_id: '10', symbol: 'XAUUSD', mode: 'manual', auto_execute: true } })
+    const rejected = await app.inject({ method: 'POST', url: '/api/v4/analysis-jobs', headers: { 'x-csrf-token': 'csrf-token-1234567890', 'idempotency-key': 'manual-request-0002' }, payload: { strategy_id: '10', symbol: 'XAUUSD', mode: 'manual', auto_execute: true } })
     expect(rejected.statusCode).toBe(422)
     const detail = await app.inject({ method: 'GET', url: '/api/v4/market-analyses/a1' })
     expect(detail.json().data).toMatchObject({ market_regime: 'trend', analysis_body: '完整分析正文' })
@@ -123,7 +123,7 @@ describe('Stage 12A analyst and account-trader pipeline', () => {
     expect(openapi).toContain('/market-analyses')
     expect(openapi).toContain('/trade-decisions')
     expect(openapi).not.toContain('auto_execute')
-    expect(openapi).not.toContain('SignalSummary')
+    expect(JSON.parse(openapi).components.schemas).not.toHaveProperty('SignalSummary')
     expect(realtime).toContain('market_analysis.created')
     expect(realtime).toContain('trade_decision.created')
     expect(realtime).not.toContain('signal.execution.changed')

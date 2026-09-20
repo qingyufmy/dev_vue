@@ -37,6 +37,7 @@ function Assert-NativeReleaseLayout(
     (Join-Path $CoreDirectory 'compliance\native-dependency-audit.json'),
     (Join-Path $Mt5Directory 'worker.py'),
     (Join-Path $Mt5Directory 'trade.py'),
+    (Join-Path $Mt5Directory 'order_completion.py'),
     (Join-Path $Mt4Directory 'AURUMBridgeEA.ex4'),
     $LauncherPath
   )
@@ -182,6 +183,8 @@ try {
     -Destination (Join-Path $moduleRoot 'adapter.mt5.python\worker.py')
   Copy-Item -LiteralPath (Join-Path $nativeMt5Worker 'trade.py') `
     -Destination (Join-Path $moduleRoot 'adapter.mt5.python\trade.py')
+  Copy-Item -LiteralPath (Join-Path $nativeMt5Worker 'order_completion.py') `
+    -Destination (Join-Path $moduleRoot 'adapter.mt5.python\order_completion.py')
   $mt4Target = Join-Path $moduleRoot 'adapter.mt4'
   if ($MetaEditorExe -and (Test-Path -LiteralPath $MetaEditorExe -PathType Leaf)) {
     $mq4 = Join-Path $mt4Target 'AURUMBridgeEA.mq4'

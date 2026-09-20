@@ -1,0 +1,118 @@
+{
+  "kind": "strategy-role-section-review/v1",
+  "sourceId": "3",
+  "sourceVersion": "11",
+  "sourceHash": "551f24f510d6e45474721481b330ddfb911cb7d60e6ca57fd75b7e85e609a927",
+  "promptHash": "11b5e0dc40438592a56a39d001712812ad1c1624a1a1282ed5928badb71e8ed7",
+  "introductions": {
+    "analysis": "你是V4行情分析师，只根据冻结的market行情输入执行下列市场分析规则，返回平台market-analysis合同。下列共享章节中的持仓、平仓或挂单动作描述，在本角色中仅用于识别行情条件、目标价位和失效证据；不要推断参考组合或账户状态，不输出交易动作。指标计算、市场分类、加速周期、场景锚点和止损/目标依据须可追溯到输入周期及已收盘K线。在keyLevels中保留entryCandidates、indicatorReadings和accelerationByTimeframe，在invalidation中保留marketConditions，缺失事实写入dataGaps。旧文中的交易信号在本角色映射为opportunity和市场证据，hold映射为opportunity=none；不猜绝对手数。自检中的账户管理项由交易员承担。平台另行提供的JSON合同为实际输出格式。",
+    "trader": "你是V4账户交易员，消费冻结analysis.result及当前账户、持仓、挂单、风控和合约证据，返回平台trade-decision合同。下列入场和管理规则的行情计算与周期判断必须来自该分析结果，不能重建缺失K线或假定缺失证据成立。strategyReferencePortfolio只供策略参考，其中referenceId不是执行ticket；实际动作只能指向当前账户冻结持仓/挂单。仓位档位映射为position_size_tier，绝对数量由服务端风险规则计算；80%部分平仓意图映射为close_percent字符串80，不得改为全平。原策略需要的入场周期证据、参考组合或后续保护动作缺失时必须明确记录缺口，不得声称这些管理步骤已完成。新开仓、持仓管理、挂单管理分别判断；最终使用平台给出的JSON合同，不复用旧输出字段。"
+  },
+  "sections": [
+    {
+      "index": 0,
+      "heading": "# XAUUSD ATR 策略 v8",
+      "roles": [
+        "analysis",
+        "trader"
+      ]
+    },
+    {
+      "index": 1,
+      "heading": "## 一、最高优先级规则",
+      "roles": [
+        "analysis",
+        "trader"
+      ]
+    },
+    {
+      "index": 2,
+      "heading": "## 二、行情数据要求",
+      "roles": [
+        "analysis"
+      ]
+    },
+    {
+      "index": 3,
+      "heading": "## 三、指标计算",
+      "roles": [
+        "analysis"
+      ]
+    },
+    {
+      "index": 4,
+      "heading": "## 四、市场分类",
+      "roles": [
+        "analysis"
+      ]
+    },
+    {
+      "index": 5,
+      "heading": "## 五、趋势加速",
+      "roles": [
+        "analysis"
+      ]
+    },
+    {
+      "index": 6,
+      "heading": "## 六、进场场景",
+      "roles": [
+        "analysis",
+        "trader"
+      ]
+    },
+    {
+      "index": 7,
+      "heading": "## 七、止损",
+      "roles": [
+        "analysis",
+        "trader"
+      ]
+    },
+    {
+      "index": 8,
+      "heading": "## 八、仓位档位",
+      "roles": [
+        "trader"
+      ]
+    },
+    {
+      "index": 9,
+      "heading": "## 九、止盈与持仓管理",
+      "roles": [
+        "analysis",
+        "trader"
+      ]
+    },
+    {
+      "index": 10,
+      "heading": "## 十、挂单处理",
+      "roles": [
+        "trader"
+      ]
+    },
+    {
+      "index": 11,
+      "heading": "## 十一、最终判断",
+      "roles": [
+        "analysis",
+        "trader"
+      ]
+    },
+    {
+      "index": 12,
+      "heading": "## 十二、输出前自检",
+      "roles": [
+        "analysis",
+        "trader"
+      ]
+    }
+  ],
+  "runtimeBlockers": [
+    "platform_reference_portfolio_not_wired",
+    "entry_acceleration_timeframes_not_bound_to_position",
+    "partial_close_then_remaining_stop_workflow_not_supported"
+  ],
+  "semanticAcceptance": "pending",
+  "executable": false
+}

@@ -1,0 +1,22 @@
+{
+  "kind": "risk-policy-data-transition/v1",
+  "passed": true,
+  "target": "dev_vue",
+  "currentBusinessRowsInserted": 13,
+  "runtimeEnabled": false,
+  "candidateHash": "2c6810bd766d957c212a1d8beb550f858212360f835590e9e4a1dedccd683d56",
+  "runId": "2f115999-ab79-768a-f7fc-d0c29d332d64",
+  "stage": "transaction",
+  "writeAttempted": true,
+  "effectivePolicyVerified": true,
+  "policySets": 3,
+  "policyVersions": 10,
+  "activePolicySets": 2,
+  "retiredHistoricalOwnerSets": 1,
+  "replayNoAdditionalRows": true,
+  "oldDataAndLedgerUnchanged": true,
+  "beforeHash": "f5db175ecbc9ad3e1a5365bb4f64141aa7c85d37ea8ca52c66a9cd5800110278",
+  "afterHash": "9058d47bbc235a36523a14bf57027afcfc197dee4ea2fd8c82d3915bb53a39d7",
+  "resumed": false,
+  "observedAt": "2026-09-11T02:26:21.370Z"
+}

@@ -1,0 +1,24 @@
+{
+  "kind": "risk-control-current-backfill/v1",
+  "passed": true,
+  "identity": {
+    "database": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "mode": "--apply-current-control",
+  "runId": "42b7d2b9-862f-48be-ada9-dc4e5b88a217",
+  "sourceSha256": "b30da55c2659905a9a4f834992d8440953a0aedd17fbec50d3c560d0d15013b7",
+  "result": {
+    "status": "committed",
+    "replay": false,
+    "rows": 1
+  },
+  "replay": {
+    "status": "committed",
+    "replay": true,
+    "rows": 1
+  },
+  "historyCount": 175,
+  "referenceHash": "64e19d9195f628bbb015fb9276df8294d0c7547a5623ab74e4d92467e6ebbe00",
+  "ddlCount": 0
+}

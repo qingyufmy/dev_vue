@@ -23,6 +23,14 @@ export interface ObserverAccessReader {
   authorize(userId: number, channelId: string, accountId?: string): Promise<ObserverAuthorization | null>
 }
 
+/** Current publication access for the exact market source frozen by an analysis. */
+export interface StrategyObserverAccessReader {
+  read(scope: { userId: number; sourceAccountId: string; analysisStrategyId: string }): Promise<{
+    analysisStrategyId: string
+    authorization: ObserverAuthorization
+  } | null>
+}
+
 export function sameObserverAuthorization(left: ObserverAuthorization, right: ObserverAuthorization): boolean {
   return left.userId === right.userId && left.channelId === right.channelId
     && left.sourceId === right.sourceId && left.sourceRevision === right.sourceRevision

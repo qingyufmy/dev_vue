@@ -1,0 +1,125 @@
+{
+  "kind": "strategy-budget-mysql-reference/v1",
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "dataCopied": false,
+  "foreignKeysVerified": false,
+  "referenceDatabaseRemoved": true,
+  "checks": [
+    "actual-current-column-DDL-and-joined-frozen-current-context",
+    "SQL-budget-consumed-by-actual-tier-and-explicit-volume-core",
+    "subscription-revision-rejected-and-rollback-restored",
+    "subscription-paused-rejected-and-rollback-restored",
+    "send-disabled-rejected-and-rollback-restored",
+    "owner-revoked-rejected-and-rollback-restored",
+    "strategy-retired-rejected-and-rollback-restored",
+    "strategy-owner-rejected-and-rollback-restored",
+    "active-version-rejected-and-rollback-restored",
+    "config-raised-rejected-and-rollback-restored",
+    "prompt-tampered-rejected-and-rollback-restored",
+    "run-failed-rejected-and-rollback-restored",
+    "decision-tampered-rejected-and-rollback-restored",
+    "real-FOR-SHARE-blocks-competing-subscription-write-until-commit-then-stale",
+    "real-FOR-SHARE-blocks-competing-config-write"
+  ],
+  "identity": {
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8",
+    "recovery": "0"
+  },
+  "sourceSteps": 240,
+  "tables": [
+    {
+      "table": "strategies",
+      "originalHash": "ba5c894df0c3baa3e2f959d46d7b2fd0bc90bfa1436b0c62e10c2f952608de97"
+    },
+    {
+      "table": "strategy_versions",
+      "originalHash": "0c782ff0ece02954afe419dce006545a1dc12fd1bd0978a5e4e535c38c6c7e62"
+    },
+    {
+      "table": "strategy_subscriptions",
+      "originalHash": "9a004c16177d58c99423a8c269fed599f2707851f5b3ee38a05bed308fe3637e"
+    },
+    {
+      "table": "trading_account_ownerships",
+      "originalHash": "59e43f0f9dc090f9cd61bf3d2bfe558f475354d7d0df5c36342a7961c490cb46"
+    },
+    {
+      "table": "trade_decisions",
+      "originalHash": "dd881046c64abcecc0d304113c916b931806861aeb6e4f0559ba236ebceaa215"
+    },
+    {
+      "table": "trade_decision_payloads",
+      "originalHash": "cbf760edb98f9d4a4e1f0284eed95f8d4579b490f5afc56ff761354f554a806f"
+    },
+    {
+      "table": "ai_trader_runs",
+      "originalHash": "a4f89e43581083efdf429a541653abfbfc7ab5e43c169f168136acbfcefd19a4"
+    },
+    {
+      "table": "inference_snapshots",
+      "originalHash": "bf79a919f883f9ce64e8fb968a192dab49c699c17984faedf15c2effa2cc4ef4"
+    },
+    {
+      "table": "inference_snapshot_payloads",
+      "originalHash": "a865321ec4edc9504e0842c3906969df061f248ad070245d6bf1000255ea1a8d"
+    }
+  ],
+  "executionWindow": {
+    "passed": true,
+    "tablesCopiedWithoutForeignKeys": [
+      "trading_accounts",
+      "subscription_schedules",
+      "subscription_execution_preferences",
+      "risk_decisions_v4"
+    ],
+    "preferencesSource": "subscription_execution_preferences",
+    "checks": [
+      "canonical-preferences-initialize-read-and-duplicate-rejection",
+      "accepted-decision-current-config",
+      "same-version-config-change-rejected",
+      "missing-frozen-config-rejected",
+      "active-version-change-rejected"
+    ]
+  },
+  "artifacts": [
+    {
+      "file": "scripts/verify-strategy-budget-reference-local.mjs",
+      "sha256": "2eae80f2c796ce8676af2870a52e18cb410cdbb45dcf60191f83cf53e77bbfa3"
+    },
+    {
+      "file": "scripts/run-strategy-budget-reference-local.py",
+      "sha256": "182f2801336fc3621e14405ff2968bc9872286dee5e46d47cccf63f0f718db35"
+    },
+    {
+      "file": "scripts/lib/budget-execution-window-reference.mjs",
+      "sha256": "91d40c243e6e1b11b5a975fdf6b5bb4765568a66ed3c3f5937426073dc29d901"
+    },
+    {
+      "file": "server/dist-v4/modules/execution/infrastructure/mysql-execution-window.js",
+      "sha256": "82cb6a7694b80959f24474b31125ec71bf45858d0eda01fefb5f8761f8b4316f"
+    },
+    {
+      "file": "server/dist-v4/modules/strategies/infrastructure/mysql-subscription-execution-preferences.js",
+      "sha256": "c6041878c516e30b7ea4d2a4cee016a409c1bc3d321d21ad0435885650a5a74e"
+    },
+    {
+      "file": "server/dist-v4/modules/inference/infrastructure/mysql-decision-strategy-evidence-reader.js",
+      "sha256": "34f63bb2f6627d374af8e5b207ce2591ecdee8b745cb02aecfa180ca2cfa3e5c"
+    },
+    {
+      "file": "server/dist-v4/modules/strategies/infrastructure/mysql-strategy-execution-config-reader.js",
+      "sha256": "1fd1cb393d9b9d794cd1701eccee39c7afd710979bee08d6a0f0d7cea4ca1270"
+    },
+    {
+      "file": "server/dist-v4/modules/risk/application/strategy-budget-context.js",
+      "sha256": "563a0b1cea068896c624239031013ae89b5696058f6e68d739ba1610c1502e29"
+    },
+    {
+      "file": "server/dist-v4/modules/risk/domain/position-tier-sizing.js",
+      "sha256": "836a72ccbfe5a0eb4a19912d2279043c9b0a59bd4127faae94348e160883e70b"
+    }
+  ],
+  "observedAt": "2026-09-11T01:08:53.185Z"
+}

@@ -24,7 +24,7 @@ export async function createLocalObserverAccessControl(fixture, observer, source
   assert.equal(intent.slug, `local-observer-${intent.runId}`)
   assert.equal(observer.viewerUserId, fixture.userId); assert.notEqual(observer.actorUserId, fixture.userId)
   const env = parse(await readFile(new URL('../../server/.env', import.meta.url)))
-  assert.equal(env.MYSQL_HOST, '192.168.31.254'); assert.equal(env.MYSQL_DATABASE, 'dev_vue')
+  assert.equal(env.MYSQL_HOST, '192.168.1.254'); assert.equal(env.MYSQL_DATABASE, 'dev_vue')
   const pool = createMysqlPool({ host: env.MYSQL_HOST, port: Number(env.MYSQL_PORT || 3306), user: env.MYSQL_USER,
     password: env.MYSQL_PASSWORD, database: env.MYSQL_DATABASE, poolSize: 1 })
   let journal, redis, phase = 0, initialRevision, inFlight = false

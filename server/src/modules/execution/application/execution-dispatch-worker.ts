@@ -15,6 +15,7 @@ export class ExecutionDispatchWorker {
   async run(intentId: string) {
     const first = await this.source.loadPrepared(intentId, this.now().toISOString())
     if (!first) return { kind: 'no_work' as const }
+    if ('blocked' in first) return { kind: 'busy' as const, accountId: first.accountId }
     const owner = `execution:${randomUUID()}`
     if (!await this.leases.acquire(first.accountId, owner, 15)) return { kind: 'busy' as const, accountId: first.accountId }
     try {
@@ -24,6 +25,7 @@ export class ExecutionDispatchWorker {
       if (resumed) return { kind: resumed.dispatched ? 'dispatched' as const : 'existing' as const, command: resumed.command }
       const candidate = await this.source.loadPrepared(intentId, this.now().toISOString())
       if (!candidate || candidate.accountId !== first.accountId) return { kind: 'no_work' as const }
+      if ('blocked' in candidate) return { kind: 'busy' as const, accountId: candidate.accountId }
       const command = await this.commands.create(candidate.command, this.now())
       if (command.status !== 'queued') return { kind: 'existing' as const, command }
       return { kind: 'dispatched' as const, command: await this.commands.dispatch(command.id, this.transport, this.now()) }

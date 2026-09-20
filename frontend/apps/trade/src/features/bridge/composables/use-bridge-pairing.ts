@@ -5,7 +5,7 @@ import { ApiClientError } from '@aurum/api-client'
 import { bridgeApi } from '../api/bridge-api'
 import { createPairingCode } from '../model/pairing-code'
 
-export function useBridgePairing(session: Readonly<Ref<TradeSessionSnapshot | null>>, api = bridgeApi) {
+export function useBridgePairing(session: Readonly<Ref<TradeSessionSnapshot | null>>, api: Pick<typeof bridgeApi, 'createPairing'> = bridgeApi) {
   const code = ref('')
   const error = ref('')
   const busy = ref(false)

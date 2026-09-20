@@ -2,6 +2,8 @@
 
 负责账户身份/归属、账户与观摩上下文、连接额度查询及交易数据投影。实际交易执行与风险决策不归本模块。
 
+AccountInventorySummaryReader提供账户品种的库存存在性和集合revision，以及readRevisions账户/报价/合约/集合版本查询；两者限定当前owner并复用调用方事务。lockAccount仅提供原账户行锁，不授予权限。库存摘要不是完整或新鲜终端快照，版本查询中缺失投影保留null。公开index只导出类型，composition提供MySQL工厂供运行入口注入。验证入口subscription-execution-window-reference.mjs及trader-risk-revision-port测试。
+
 ## 入口与组装
 
 `index.ts`公开业务类型、应用服务与协议。MySQL账户/观摩repository、Redis发布订阅/连接租约和认证适配器已不通过业务入口导出。`composition.ts`仅供bootstrap/entrypoints使用：
@@ -83,3 +85,11 @@ mysql-context-receipts 中原有 EXISTS users 条件仍保留，使回执与有�
 
 
 观摩主体事实已注入：MysqlObserverAccessReader只查询频道/来源/归属/grant，用户事实来自auth AccountPrincipalReader。普通list/authorize共享快照，authorizeOn复用同一连接并使用share；不允许跨executor复核。整页被主体过滤仍按原SQL页推进。createTradingReader需要显式principal工厂；已有事务的工具使用createTransactionTradingReader，当前库脚本入口verify-current-trading-reads-v2-local.mjs。正向临时表验证入口verify-observer-principal-composition-mysql.mjs；实际观摩频道与浏览器验收仍未完成。
+
+
+StrategyObserverAccessReader读取具体分析策略与冻结源账户对应的当前发布授权，复用既有观察频道的主体、套餐/显式授权、owner区间和TTL规则。createTransactionStrategyObserverAccessReader由composition提供，调用方负责与后续库存读取共用一致快照；不读取或修改浏览器当前账户上下文。无符合授权返回null，不代表策略无需参考组合。测试入口mysql-observer-access-reader.test.ts，真实SQL验证scripts/lib/strategy-observer-access-reference.mjs；完整持仓及执行归属仍由后续组合用例承担。
+
+
+StrategyObserverInventoryReader为参考组合读取当前完整投影。经策略观察授权取得operator，通过owned账户读取检查绑定/暂停，再匹配Redis路由与MySQL会话、投影ownership/profile/instance/epoch和采集时间；读取前后路由必须相同。全部集合行都检查revision和ticket/account/symbol，超过1000项整组拒绝，避免过滤旧revision后误报完整。调用方提供一致快照连接；返回原始终端ticket仅供execution归属，业务数值和模型字段仍由参考组合冻结器校验。该端口不是执行授权，不将source/signalId字段当成策略归属。测试入口strategy-observer-inventory.test.ts，真实SQL验证scripts/lib/strategy-observer-inventory-reference.mjs；参考路由为注入夹具，未证明真实Redis或终端状态。
+
+历史时钟观察由本模块维护，账户投影同事务追加。`HistoricalClockBoundaryReader` 是历史边界读取业务端口；运行组装经 composition 获取 MySQL 实现。调用者必须先授权现有与历史所有权。策略、限制与实际验证见 `docs/architecture/terminal-clock-history-design-20260911.md`。

@@ -21,6 +21,13 @@ namespace Liangjian.BridgeV4.SmokeTests
             if (first != http.Body || result.ProfileId != Profile || result.InstallationId != "install-1"
                 || !http.Body.Contains(secret) || !http.Body.Contains(code)
                 || http.Endpoint != "https://trade.example.test/api/v4/bridge/pairing-redemptions") throw new Exception("pairing_binding_invalid");
+            BridgePairingClient configured = new BridgePairingClient(http, "http://localhost:3010");
+            configured.Redeem("ws://localhost:3012/bridge/v4/ws", "install-1", code, secret);
+            if (http.Endpoint != "http://localhost:3010/api/v4/bridge/pairing-redemptions") throw new Exception("pairing_configured_api_port_ignored");
+            try { configured.Redeem("wss://localhost:3012/bridge/v4/ws", "install-1", code, secret); throw new Exception("pairing_control_downgrade_accepted"); }
+            catch (InvalidDataException) { }
+            try { configured.Redeem("ws://127.0.0.1:3012/bridge/v4/ws", "install-1", code, secret); throw new Exception("pairing_control_host_mismatch_accepted"); }
+            catch (InvalidDataException) { }
             foreach (string response in new[] { "{}", http.Response.Replace("install-1", "install-2"),
                 http.Response.Replace("/bridge/v4/ws", "https://other.test/ws"),
                 http.Response.Replace("\"generation\":1", "\"generation\":1,\"refresh_token\":\"leak\"") })

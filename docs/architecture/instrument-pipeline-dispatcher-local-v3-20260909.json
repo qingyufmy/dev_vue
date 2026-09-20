@@ -1,0 +1,39 @@
+{
+  "passed": false,
+  "scope": "temporary_table_real_transaction_semantics",
+  "persistentWrites": 0,
+  "checks": [
+    "commit_and_identical_replay_without_revision_growth",
+    "collection_lease_checked_even_for_identical_replay",
+    "version_conflict_and_stale_observation_rollback",
+    "revoked_replay_and_account_identity_rejected",
+    "exact_decimal_raw_evidence_and_utc_preserved",
+    "current_read_rejects_epoch_ownership_and_age_but_refresh_keeps_cas_version"
+  ],
+  "sources": {},
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "tz": "+00:00",
+    "version": "8.4.8"
+  },
+  "failureLocations": [
+    "    at verifyInstrumentPipelineFixture (file:///D:/dev_codex/dev_vue/scripts/lib/verify-instrument-pipeline-fixture.mjs:61:12)",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)",
+    "    at async file:///D:/dev_codex/dev_vue/scripts/verify-instrument-write-mysql-local.mjs:96:22"
+  ],
+  "assertion": {
+    "actual": {
+      "claimed": 0,
+      "dispatched": 0,
+      "failed": 0
+    },
+    "expected": {
+      "claimed": 1,
+      "dispatched": 0,
+      "failed": 1
+    }
+  },
+  "errorCode": "ERR_ASSERTION",
+  "finishedAt": "2026-09-09T03:59:39.667Z"
+}

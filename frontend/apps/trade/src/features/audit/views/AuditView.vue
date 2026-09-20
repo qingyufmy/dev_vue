@@ -19,7 +19,7 @@ const text = (value: unknown) => typeof value === 'string' ? value : ''
 const accountId = ref(text(route.query.account_id))
 const filters = ref<AuditFilters>({
   category: validFilter(text(route.query.category), ['analysis', 'trading', 'risk', 'execution', 'terminal', 'configuration'] as const),
-  status: validFilter(text(route.query.status), ['queued', 'running', 'succeeded', 'rejected', 'failed', 'uncertain', 'cancelled', 'info'] as const),
+  status: validFilter(text(route.query.status), ['queued', 'running', 'succeeded', 'partially_succeeded', 'rejected', 'failed', 'uncertain', 'cancelled', 'info'] as const),
   actor: validFilter(text(route.query.actor), ['ai', 'user', 'system', 'bridge'] as const),
   from: text(route.query.from),
   to: text(route.query.to),

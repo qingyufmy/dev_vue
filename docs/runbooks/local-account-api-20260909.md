@@ -6,7 +6,7 @@
 
 - API：127.0.0.1:3010，启动源码为`scripts/run-local-account-api.mjs`，运行已构建的api-v4入口。
 - Redis：127.0.0.1:16379，Redis 8.2.6，使用密码，128 MB、noeviction，不启用磁盘持久化；仅存本地联调短期状态。
-- MySQL：读取server/.env，保留192.168.31.254/dev_vue及原应用账号。没有将Redis继续指向旧VM网段，也没有修改server/.env。
+- MySQL：读取server/.env，保留192.168.1.254/dev_vue及原应用账号。没有将Redis继续指向旧VM网段，也没有修改server/.env。
 - Origin：www localhost:3100、trade localhost:4174、admin localhost:4175、auth localhost:4176。HTTP开发Cookie关闭Secure；正式环境不能复用此配置。
 - 私有配置：`D:/dev_codex/.local-runtime/dev-vue/account-api.env`；包含新生成的本地Redis密码、CSRF/BFF密钥、ES256 PKCS8私钥，不入库、不写入聊天。目录ACL只授予当前Windows账号和SYSTEM。
 

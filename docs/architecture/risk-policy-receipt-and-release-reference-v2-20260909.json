@@ -1,0 +1,24 @@
+{
+  "kind": "risk-policy-receipt-reference/v1",
+  "passed": true,
+  "observedAt": "2026-09-09T00:51:15.438Z",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "serverVersion": "8.4.8",
+  "migrationSha256": "8fa254048bd98d24a2984f652962edcab214d5a6d7d15f56aef0c31cd25b9ba2",
+  "canonicalDdl": "CREATE TABLE `risk_policy_write_receipts` (\n  `user_id` int NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `idempotency_key` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `request_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `result_json` json NOT NULL,\n  `result_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`user_id`,`trading_account_id`,`idempotency_key`),\n  KEY `fk_risk_policy_receipt_account` (`trading_account_id`),\n  CONSTRAINT `fk_risk_policy_receipt_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_risk_policy_receipt_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+  "checks": [
+    "concurrent-same-request-one-result",
+    "single-version-audit-outbox-receipt",
+    "changed-body-conflicts",
+    "lost-commit-ack-recovered-without-new-writes",
+    "receipt-failure-rolls-back-policy-audit-outbox",
+    "database-enforces-request-uniqueness",
+    "summary-and-manual-release-utc-roundtrip",
+    "deteriorated-summary-invalidates-release-with-utc-time",
+    "receipt-read-rechecks-owner-and-scope",
+    "utc-milliseconds-preserved"
+  ],
+  "referenceDatabaseRemoved": true,
+  "existingDatabaseWrites": 0,
+  "scope": "Actual MySQL and compiled risk repository, with typed parent/outbox stubs in an isolated reference database. No current dev_vue upgrade or browser acceptance."
+}

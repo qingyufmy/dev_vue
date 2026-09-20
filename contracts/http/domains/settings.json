@@ -371,6 +371,425 @@
           }
         }
       }
+    },
+    "/personal/settings": {
+      "get": {
+        "operationId": "getPersonalSettings",
+        "summary": "getPersonalSettings",
+        "tags": [
+          "Settings"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "nickname",
+                        "preferences",
+                        "hasFeishu",
+                        "emailAvailable",
+                        "revision"
+                      ],
+                      "properties": {
+                        "nickname": {
+                          "type": "string"
+                        },
+                        "preferences": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "analysis",
+                            "decision",
+                            "analysisSound",
+                            "decisionSound",
+                            "feishuEnabled",
+                            "emailEnabled"
+                          ],
+                          "properties": {
+                            "analysis": {
+                              "type": "string",
+                              "enum": [
+                                "off",
+                                "effective",
+                                "all"
+                              ]
+                            },
+                            "decision": {
+                              "type": "string",
+                              "enum": [
+                                "off",
+                                "effective",
+                                "all"
+                              ]
+                            },
+                            "analysisSound": {
+                              "type": "string",
+                              "enum": [
+                                "off",
+                                "bell",
+                                "chime",
+                                "pulse"
+                              ]
+                            },
+                            "decisionSound": {
+                              "type": "string",
+                              "enum": [
+                                "off",
+                                "bell",
+                                "chime",
+                                "pulse"
+                              ]
+                            },
+                            "feishuEnabled": {
+                              "type": "boolean"
+                            },
+                            "emailEnabled": {
+                              "type": "boolean"
+                            }
+                          }
+                        },
+                        "hasFeishu": {
+                          "type": "boolean"
+                        },
+                        "emailAvailable": {
+                          "type": "boolean"
+                        },
+                        "revision": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    },
+                    "meta": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "operationId": "savePersonalSettings",
+        "summary": "savePersonalSettings",
+        "tags": [
+          "Settings"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "revision"
+                      ],
+                      "properties": {
+                        "revision": {
+                          "type": "integer",
+                          "minimum": 0
+                        }
+                      }
+                    },
+                    "meta": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "nickname",
+                  "preferences",
+                  "revision"
+                ],
+                "properties": {
+                  "nickname": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "preferences": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "analysis",
+                      "decision",
+                      "analysisSound",
+                      "decisionSound",
+                      "feishuEnabled",
+                      "emailEnabled"
+                    ],
+                    "properties": {
+                      "analysis": {
+                        "type": "string",
+                        "enum": [
+                          "off",
+                          "effective",
+                          "all"
+                        ]
+                      },
+                      "decision": {
+                        "type": "string",
+                        "enum": [
+                          "off",
+                          "effective",
+                          "all"
+                        ]
+                      },
+                      "analysisSound": {
+                        "type": "string",
+                        "enum": [
+                          "off",
+                          "bell",
+                          "chime",
+                          "pulse"
+                        ]
+                      },
+                      "decisionSound": {
+                        "type": "string",
+                        "enum": [
+                          "off",
+                          "bell",
+                          "chime",
+                          "pulse"
+                        ]
+                      },
+                      "feishuEnabled": {
+                        "type": "boolean"
+                      },
+                      "emailEnabled": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  "revision": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "feishuWebhook": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "feishuSecret": {
+                    "type": "string",
+                    "maxLength": 256
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/personal/notifications": {
+      "get": {
+        "operationId": "getPersonalNotifications",
+        "summary": "getPersonalNotifications",
+        "tags": [
+          "Settings"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "unread",
+                        "items"
+                      ],
+                      "properties": {
+                        "unread": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "items": {
+                          "type": "array",
+                          "maxItems": 50,
+                          "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "id",
+                              "kind",
+                              "resourceId",
+                              "title",
+                              "summary",
+                              "actionable",
+                              "createdAt",
+                              "read"
+                            ],
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": [
+                                  "analysis",
+                                  "decision"
+                                ]
+                              },
+                              "resourceId": {
+                                "type": "string"
+                              },
+                              "title": {
+                                "type": "string"
+                              },
+                              "summary": {
+                                "type": "string"
+                              },
+                              "actionable": {
+                                "type": "boolean"
+                              },
+                              "createdAt": {
+                                "type": "string"
+                              },
+                              "read": {
+                                "type": "boolean"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "meta": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/personal/notifications/read": {
+      "post": {
+        "operationId": "readPersonalNotification",
+        "summary": "readPersonalNotification",
+        "tags": [
+          "Settings"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": [
+                        "read"
+                      ],
+                      "properties": {
+                        "read": {
+                          "type": "boolean"
+                        }
+                      }
+                    },
+                    "meta": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "all": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  }
+                },
+                "oneOf": [
+                  {
+                    "required": [
+                      "id"
+                    ],
+                    "not": {
+                      "required": [
+                        "all"
+                      ]
+                    }
+                  },
+                  {
+                    "required": [
+                      "all"
+                    ],
+                    "not": {
+                      "required": [
+                        "id"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {}

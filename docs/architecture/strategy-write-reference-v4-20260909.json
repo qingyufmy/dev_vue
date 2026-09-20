@@ -1,0 +1,88 @@
+{
+  "kind": "strategy-write-schema-reference/v1",
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "referenceDatabaseRemoved": true,
+  "scaffoldParents": [
+    "users",
+    "trading_accounts",
+    "trading_account_ownerships"
+  ],
+  "checks": [
+    "real_create_commit_then_injected_ack_loss_recovered_and_conflict_rejected",
+    "concurrent_same_key_one_strategy",
+    "real_schedule_query_and_compare_swap_utc_bindings",
+    "seven_real_write_kinds_and_historical_replay_after_retirement_or_end",
+    "failed_prepare_no_receipt_and_revoked_authority_replay_rejected",
+    "receipt_foreign_key_and_five_check_rejections"
+  ],
+  "migrationSha256": "7a7b1cdb5c345ddbe7f6734a4e6b3063067ef0fbc10f7b96043ec72a88dcf54a",
+  "parentSources": {
+    "strategy": "b5252c385357b9cccec2513a6d3f17634f8a73f194818420de88ed76b0790960",
+    "preferences": "87c8d3e026442c73bf502c251828d719962b0dfbe3609a2b3150aabf8b651b99"
+  },
+  "artifacts": [
+    {
+      "path": "scripts/verify-strategy-write-reference-local.mjs",
+      "sha256": "c81b746b0dfb2a91c0ae27ed0ba0753480c778f2d65885fe1b759a86df1a18be"
+    },
+    {
+      "path": "scripts/run-strategy-write-reference-local.py",
+      "sha256": "0ea4fa83d26e0917d5a49c19365ac08716d7c34706bc0a5770e363e0de3e0274"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/application/strategy-service.js",
+      "sha256": "22b85fb3e3ec2c364c89239923850368915adaad36316e62e5d627d0409a8a8d"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/application/strategy-write-command.js",
+      "sha256": "1c5244f08f01511f40459c6f6638a86ef9b7ffb26ea75d006ded69baf63684eb"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/mysql-strategy-catalog.js",
+      "sha256": "3dc8d238683711ba6972aa2c2e922550b978c93f8e433708e51d9dd48565303f"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/mysql-strategy-create.js",
+      "sha256": "31578023eb5489d6cc478cfeebda5210ef60d08194c6bf4ac5a0a214ff47f06b"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/mysql-strategy-metadata.js",
+      "sha256": "4c63fdfc653b8514001e1c1d1d6f80084eb01a569ea67ce39f4794b0d5862979"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/mysql-owned-strategy-write.js",
+      "sha256": "b5bc4b1d3509383342861305f9a3e1bc706a89a79c04571fe59a1c0e8e570150"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/mysql-strategy-version-writes.js",
+      "sha256": "a958a7c0bd4ff353e2bd2de8da4a5880fabc0eb2d626dca94d895f8030e7ee4c"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/mysql-strategy-write-receipts.js",
+      "sha256": "f6a44bc215124308069081af508d9a7d9e83414e6c85424d0ef01bbc3455c01b"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/strategy-transaction.js",
+      "sha256": "b906873f8aaa9bbdf195bb5fec47a6db8b5c046d7cb2b1e3323de19cca793213"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/strategy-sql-time.js",
+      "sha256": "09e58ad0f159b8e22e77c53809f022a30391f16c056193666bdcf87a4960db3e"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/mysql-analysis-schedule-store.js",
+      "sha256": "210dd3960420b475d3279c56b0ec0e87dd376dcaaae908dd99ff0e2ada6853fb"
+    },
+    {
+      "path": "server/dist-v4/modules/strategies/infrastructure/mysql-subscription-execution-preferences.js",
+      "sha256": "31caa9d81e5d269d048f952c83acb545f51a134019da588f26a76e073eaf014c"
+    }
+  ],
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "serverVersion": "8.4.8",
+  "canonicalDdl": "CREATE TABLE `strategy_write_receipts_v4` (\n  `actor_user_id` int NOT NULL,\n  `idempotency_key` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `action` varchar(40) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `request_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `resource_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `result_revision` bigint unsigned NOT NULL,\n  `result_json` json NOT NULL,\n  `result_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `recorded_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`actor_user_id`,`idempotency_key`),\n  KEY `idx_strategy_receipt_actor_time` (`actor_user_id`,`recorded_at_utc`,`idempotency_key`),\n  CONSTRAINT `fk_strategy_receipt_actor` FOREIGN KEY (`actor_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_strategy_receipt_action` CHECK ((`action` in (_utf8mb4'create_strategy',_utf8mb4'update_metadata',_utf8mb4'create_version',_utf8mb4'publish_version',_utf8mb4'retire_strategy',_utf8mb4'create_subscription',_utf8mb4'update_subscription'))),\n  CONSTRAINT `chk_strategy_receipt_hashes` CHECK ((regexp_like(`request_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c') and (not(regexp_like(`request_sha256`,_utf8mb4'[^0-9a-f]',_utf8mb4'c'))) and regexp_like(`result_sha256`,_utf8mb4'^[0-9a-f]{64}$',_utf8mb4'c') and (not(regexp_like(`result_sha256`,_utf8mb4'[^0-9a-f]',_utf8mb4'c'))))),\n  CONSTRAINT `chk_strategy_receipt_key` CHECK ((char_length(`idempotency_key`) between 16 and 128)),\n  CONSTRAINT `chk_strategy_receipt_result` CHECK ((json_type(`result_json`) = _utf8mb4'OBJECT')),\n  CONSTRAINT `chk_strategy_receipt_revision` CHECK (((`result_revision` > 0) and (`result_revision` <= 9007199254740991)))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+  "stage": "update_subscription",
+  "receiptCount": 8,
+  "observedAt": "2026-09-09T08:13:12.518Z"
+}

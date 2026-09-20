@@ -1,0 +1,5 @@
+{
+  "api_base": "http://localhost:4174",
+  "web_base": "http://localhost:4174",
+  "gateway_base": "http://localhost:3012"
+}

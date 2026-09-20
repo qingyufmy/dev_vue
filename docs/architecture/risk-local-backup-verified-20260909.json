@@ -1,0 +1,199 @@
+{
+  "kind": "risk-dev-vue-local-backup/v1",
+  "status": "verified",
+  "observedAt": "2026-09-08T22:52:11.093Z",
+  "source": "dev_vue",
+  "target": "dev_vue_m1_source_20260909_01",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "preparationManifestHash": "ffc9fc55f53bb13d43648b353adbb16e19bd7a025e32691466a07671ab71d2a0",
+  "parity": {
+    "tableCount": 238,
+    "rows": "338717",
+    "scope": "ordered_complete_insert_values_and_exact_counts",
+    "matched": true
+  },
+  "metadataParity": {
+    "tableCount": 238,
+    "rowParity": true,
+    "columnMetadataParity": true,
+    "semanticDdlParity": true,
+    "differences": [
+      {
+        "table": "account_runtime_snapshots",
+        "differences": [
+          {
+            "column": "clock_status",
+            "change": "explicit_redundant_utf8mb4_charset"
+          }
+        ]
+      },
+      {
+        "table": "global_risk_controls",
+        "differences": [
+          {
+            "column": "reason",
+            "change": "explicit_redundant_utf8mb4_charset"
+          }
+        ]
+      },
+      {
+        "table": "legacy_candle_backfill_v4",
+        "differences": [
+          {
+            "column": "status",
+            "change": "explicit_redundant_utf8mb4_charset"
+          }
+        ]
+      },
+      {
+        "table": "legacy_candle_mappings_v4",
+        "differences": [
+          {
+            "column": "timeframe",
+            "change": "explicit_redundant_utf8mb4_charset"
+          }
+        ]
+      },
+      {
+        "table": "market_candles",
+        "differences": [
+          {
+            "column": "timeframe",
+            "change": "explicit_redundant_utf8mb4_charset"
+          }
+        ]
+      },
+      {
+        "table": "market_quotes",
+        "differences": [
+          {
+            "column": "trade_mode",
+            "change": "explicit_redundant_utf8mb4_charset"
+          }
+        ]
+      },
+      {
+        "table": "observer_channels",
+        "differences": [
+          {
+            "column": "display_name",
+            "change": "explicit_redundant_utf8mb4_charset"
+          },
+          {
+            "column": "description",
+            "change": "explicit_redundant_utf8mb4_charset"
+          },
+          {
+            "column": "audience",
+            "change": "explicit_redundant_utf8mb4_charset"
+          }
+        ]
+      },
+      {
+        "table": "observer_sources",
+        "differences": [
+          {
+            "column": "display_name",
+            "change": "explicit_redundant_utf8mb4_charset"
+          },
+          {
+            "column": "notes",
+            "change": "explicit_redundant_utf8mb4_charset"
+          },
+          {
+            "column": "status",
+            "change": "explicit_redundant_utf8mb4_charset"
+          },
+          {
+            "column": "configuration_status",
+            "change": "explicit_redundant_utf8mb4_charset"
+          }
+        ]
+      },
+      {
+        "table": "outbox_events",
+        "differences": [
+          {
+            "column": "status",
+            "change": "explicit_redundant_utf8mb4_charset"
+          }
+        ]
+      },
+      {
+        "table": "strategy_memory_injection_logs_v4",
+        "differences": [
+          {
+            "column": "runtime_kind",
+            "change": "explicit_redundant_utf8mb4_charset"
+          }
+        ]
+      },
+      {
+        "table": "strategy_memory_libraries_v4",
+        "differences": [
+          {
+            "column": "mode",
+            "change": "explicit_redundant_utf8mb4_charset"
+          },
+          {
+            "column": "status",
+            "change": "explicit_redundant_utf8mb4_charset"
+          }
+        ]
+      },
+      {
+        "table": "strategy_memory_library_revisions_v4",
+        "differences": [
+          {
+            "column": "content_text",
+            "change": "explicit_redundant_utf8mb4_charset"
+          },
+          {
+            "column": "source_kind",
+            "change": "explicit_redundant_utf8mb4_charset"
+          }
+        ]
+      },
+      {
+        "table": "trade_history_migration_checkpoints_v4",
+        "differences": [
+          {
+            "column": "status",
+            "change": "explicit_redundant_utf8mb4_charset"
+          }
+        ]
+      },
+      {
+        "table": "trading_context_changes_v4",
+        "differences": [
+          {
+            "column": "action",
+            "change": "explicit_redundant_utf8mb4_charset"
+          },
+          {
+            "column": "result_mode",
+            "change": "explicit_redundant_utf8mb4_charset"
+          }
+        ]
+      },
+      {
+        "table": "trading_contexts",
+        "differences": [
+          {
+            "column": "mode",
+            "change": "explicit_redundant_utf8mb4_charset"
+          }
+        ]
+      }
+    ]
+  },
+  "currentDevVueWrites": 0,
+  "sourceUnchanged": true,
+  "sqlScopeReviewed": true,
+  "decryptionIntegrityVerified": true,
+  "restoredDatabaseRetained": true,
+  "currentDatabaseUpgraded": false,
+  "privateReceiptSha256": "72fe4ba90dcdecedba90b1dd9f1ee86a9077f60f46121fdee64c703ac351db29",
+  "temporaryPlaintextRemoved": true,
+  "scope": "Backup and restore verified; risk migration has not run in restored or current database."
+}

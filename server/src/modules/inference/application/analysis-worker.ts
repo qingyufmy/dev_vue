@@ -1,10 +1,11 @@
-import type { StrategyService } from '../../strategies/application/strategy-service.js'
+import type { ActiveStrategyVersionReader } from '../../strategies/index.js'
 import type { AnalysisInputSnapshot, AnalysisRun, JsonObject, MarketAnalysisResult } from '../domain/inference.js'
 import { InferenceError } from '../domain/inference.js'
 import type { AnalysisContextBuilder } from './analysis-context-builder.js'
 import type { InferenceRepository } from './inference-ports.js'
 import type { InferenceService } from './inference-service.js'
 import type { AnalysisWindowGuard } from './analysis-window-guard.js'
+import { analysisModelSnapshot } from './analysis-model-snapshot.js'
 
 export interface AnalysisModelGateway {
   readonly profileId: string | null
@@ -29,12 +30,13 @@ export class AnalysisWorker {
   constructor(
     private readonly repository: InferenceRepository,
     private readonly inference: InferenceService,
-    private readonly strategies: StrategyService,
+    private readonly strategies: ActiveStrategyVersionReader,
     private readonly contexts: AnalysisContextBuilder,
     private readonly modelSource: AnalysisModelGateway | AnalysisModelGatewayResolver,
     private readonly workerId: string,
     private readonly windows: AnalysisWindowGuard,
     private readonly currentTime: () => Date = () => new Date(),
+    private readonly wait: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms)),
   ) {}
 
   async process(runId: string, now = new Date()) {
@@ -63,7 +65,15 @@ export class AnalysisWorker {
 
     let snapshot
     try {
-      snapshot = await this.contexts.build(run, strategy, now)
+      for (let attempt = 0; ; attempt++) {
+        try { snapshot = await this.contexts.build(run, strategy, now); break }
+        catch (error) {
+          if (!(error instanceof InferenceError) || error.code !== 'market_candle_close_pending' || attempt >= 3) throw error
+          await this.wait(5000)
+          now = this.currentTime()
+          await this.windows.assertAllowed(run, now)
+        }
+      }
     } catch (error) {
       await this.repository.failQueuedAnalysis(run.id, errorCode(error))
       return { status: 'failed' as const, code: errorCode(error) }
@@ -71,18 +81,24 @@ export class AnalysisWorker {
 
     const timeoutMs = normalizeTimeout(model.timeoutMs)
     const maxAttempts = normalizeAttempts(model.maxAttempts)
-    let claim = await this.inference.beginAnalysis(
+    let claim
+    try { claim = await this.inference.beginAnalysis(
       run.userId, run.id, run.revision, snapshot,
       { profileId: model.profileId, provider: model.provider, model: model.model },
       this.workerId, new Date(now.getTime() + timeoutMs * maxAttempts).toISOString(),
-    )
+    ) } catch (error) {
+      // Deterministic preparation failures must not remain queued after queue retries end.
+      if (!(error instanceof InferenceError) || error.code === 'analysis_revision_conflict') throw error
+      await this.repository.failQueuedAnalysis(run.id, error.code)
+      return { status: 'failed' as const, code: error.code }
+    }
 
     while (true) {
       let output
       try {
         // Context preparation and provider retries can cross a window boundary.
         await this.windows.assertAllowed(run, this.currentTime())
-        output = await model.analyze({ taskId: claim.taskId, attemptId: claim.attemptId, snapshot, signal: AbortSignal.timeout(timeoutMs) })
+        output = await model.analyze({ taskId: claim.taskId, attemptId: claim.attemptId, snapshot: analysisModelSnapshot(snapshot), signal: AbortSignal.timeout(timeoutMs) })
       } catch (error) {
         const failure = modelFailure(error)
         const retry = await this.inference.failAnalysisAttempt(claim, model, failure, maxAttempts)

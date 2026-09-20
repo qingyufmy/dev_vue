@@ -14,6 +14,33 @@ function fixture() {
   return { reader, memberships, service: new LearningService(reader, memberships) }
 }
 const apps: ReturnType<typeof Fastify>[] = []
+it('rejects invalid course cursors before reading data', async () => {
+  const f = fixture(), app = Fastify(); apps.push(app)
+  await app.register(learningRoutes, { service: f.service, wwwOrigin: 'https://www.example.test', auth: {} as AuthService })
+  const result = await app.inject({ url: '/learning/courses?cursor=invalid', headers: { host: 'www.example.test' } })
+  expect(result.statusCode).toBe(400)
+  expect(result.json().code).toBe('api_request_invalid')
+  expect(result.headers['content-type']).toContain('application/problem+json')
+  expect(f.reader.list).not.toHaveBeenCalled()
+})
+it('blocks malformed course output instead of exposing an invalid DTO', async () => {
+  const f = fixture(), app = Fastify(); apps.push(app)
+  vi.mocked(f.reader.list).mockResolvedValue([{ ...course, updated_at: 'internal-invalid-time' }])
+  await app.register(learningRoutes, { service: f.service, wwwOrigin: 'https://www.example.test', auth: {} as AuthService })
+  const result = await app.inject({ url: '/learning/courses', headers: { host: 'www.example.test' } })
+  expect(result.statusCode).toBe(503)
+  expect(result.json().code).toBe('api_response_invalid')
+  expect(result.body).not.toContain('internal-invalid-time')
+})
+it('keeps the wrong-host guard before query validation and data access', async () => {
+  const f = fixture(), app = Fastify(); apps.push(app)
+  await app.register(learningRoutes, { service: f.service, wwwOrigin: 'https://www.example.test', auth: {} as AuthService })
+  const result = await app.inject({ url: '/learning/courses?cursor=invalid', headers: { host: 'trade.example.test' } })
+  expect(result.statusCode).toBe(421)
+  expect(result.json().code).toBe('www_host_required')
+  expect(result.headers['content-type']).toContain('application/problem+json')
+  expect(f.reader.list).not.toHaveBeenCalled()
+})
 afterEach(async () => { for (const app of apps.splice(0)) await app.close() })
 describe('learning read authorization', () => {
   it('returns no protected lessons for guests or insufficient plans', async () => {

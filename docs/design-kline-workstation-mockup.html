@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>K 线工作台 — 设计稿</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg-primary: #0f1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #1c2128;
+    --bg-hover: #21262d;
+    --border: #30363d;
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #6e7681;
+    --green: #3fb950;
+    --green-dim: rgba(63,185,80,0.15);
+    --red: #f85149;
+    --red-dim: rgba(248,81,73,0.15);
+    --blue: #58a6ff;
+    --yellow: #d29922;
+    --purple: #bc8cff;
+    --panel-w-left: 240px;
+    --panel-w-right: 300px;
+    --header-h: 48px;
+    --bottom-h: 36px;
+  }
+  body { font-family: -apple-system, 'Segoe UI', sans-serif; background: var(--bg-primary); color: var(--text-primary); height: 100vh; overflow: hidden; font-size: 13px; }
+
+  /* === HEADER === */
+  .header { height: var(--header-h); background: var(--bg-secondary); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 16px; gap: 20px; }
+  .header .logo { font-weight: 700; font-size: 14px; color: var(--yellow); white-space: nowrap; }
+  .header .logo span { color: var(--text-secondary); font-weight: 400; font-size: 12px; margin-left: 6px; }
+  .header .account-selector { background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; color: var(--text-primary); font-size: 12px; cursor: pointer; }
+  .header .metrics { display: flex; gap: 24px; margin-left: auto; }
+  .header .metric { display: flex; flex-direction: column; align-items: flex-end; }
+  .header .metric-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .header .metric-value { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .header .metric-value.positive { color: var(--green); }
+  .header .metric-value.negative { color: var(--red); }
+  .header .status-group { display: flex; gap: 12px; align-items: center; margin-left: 20px; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+  .status-dot.green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-dot.yellow { background: var(--yellow); }
+  .status-label { font-size: 11px; color: var(--text-secondary); }
+
+  /* === MAIN LAYOUT === */
+  .main { display: flex; height: calc(100vh - var(--header-h) - var(--bottom-h)); }
+
+  /* === LEFT PANEL === */
+  .left-panel { width: var(--panel-w-left); background: var(--bg-secondary); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; overflow-y: auto; }
+  .panel-section { padding: 12px; border-bottom: 1px solid var(--border); }
+  .panel-section-title { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); margin-bottom: 8px; font-weight: 600; }
+  .symbol-selector { display: flex; gap: 4px; flex-wrap: wrap; }
+  .symbol-btn { padding: 4px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text-secondary); }
+  .symbol-btn.active { background: var(--yellow); color: #000; border-color: var(--yellow); font-weight: 600; }
+  .tf-selector { display: flex; gap: 3px; }
+  .tf-btn { flex: 1; padding: 4px 0; text-align: center; border-radius: 4px; font-size: 11px; cursor: pointer; background: var(--bg-tertiary); color: var(--text-secondary); border: 1px solid transparent; }
+  .tf-btn.active { background: var(--blue); color: #fff; font-weight: 600; }
+
+  /* AI Signal Card */
+  .signal-card { background: var(--bg-tertiary); border-radius: 8px; padding: 10px; border: 1px solid var(--border); }
+  .signal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+  .signal-badge { padding: 2px 8px; border-radius: 4px; font-size: 10px; font-weight: 600; }
+  .signal-badge.bullish { background: var(--green-dim); color: var(--green); }
+  .signal-badge.bearish { background: var(--red-dim); color: var(--red); }
+  .signal-badge.neutral { background: var(--bg-hover); color: var(--text-secondary); }
+  .signal-confidence { font-size: 20px; font-weight: 700; }
+  .signal-bar { height: 6px; border-radius: 3px; background: var(--bg-hover); overflow: hidden; display: flex; margin: 6px 0; }
+  .signal-bar-fill { height: 100%; border-radius: 3px; }
+  .signal-bar-fill.bull { background: var(--green); }
+  .signal-bar-fill.bear { background: var(--red); }
+  .signal-text { font-size: 11px; color: var(--text-secondary); line-height: 1.5; }
+  .signal-meta { font-size: 10px; color: var(--text-muted); margin-top: 6px; }
+
+  /* Chan Theory */
+  .chan-status { display: flex; flex-direction: column; gap: 6px; }
+  .chan-row { display: flex; justify-content: space-between; font-size: 11px; }
+  .chan-label { color: var(--text-muted); }
+  .chan-value { font-weight: 500; }
+
+  /* Calendar */
+  .calendar-event { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 11px; }
+  .calendar-time { color: var(--text-muted); white-space: nowrap; min-width: 40px; }
+  .calendar-flag { font-size: 14px; }
+  .calendar-impact { width: 4px; height: 4px; border-radius: 50%; flex-shrink: 0; }
+  .calendar-impact.high { background: var(--red); }
+
+  /* === CHART CANVAS === */
+  .chart-canvas { flex: 1; display: flex; flex-direction: column; background: var(--bg-primary); min-width: 0; }
+  .chart-toolbar { display: flex; align-items: center; padding: 6px 12px; background: var(--bg-secondary); border-bottom: 1px solid var(--border); gap: 16px; }
+  .chart-toolbar .symbol-name { font-weight: 700; font-size: 15px; }
+  .chart-toolbar .tf-label { color: var(--blue); font-size: 12px; font-weight: 600; }
+  .chart-toolbar .quote-bar { display: flex; gap: 16px; margin-left: auto; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .quote-bid { color: var(--green); }
+  .quote-ask { color: var(--red); }
+  .quote-spread { color: var(--text-muted); }
+  .chart-area { flex: 1; position: relative; overflow: hidden; }
+
+  /* Candlestick placeholder */
+  .chart-placeholder { width: 100%; height: 100%; position: relative; }
+  .candle { position: absolute; }
+  .candle-body { width: 8px; border-radius: 1px; }
+  .candle-wick { width: 1px; margin: 0 auto; }
+  .candle.green .candle-body { background: var(--green); }
+  .candle.green .candle-wick { background: var(--green); }
+  .candle.red .candle-body { background: var(--red); }
+  .candle.red .candle-wick { background: var(--red); }
+
+  /* Volume bars */
+  .volume-area { position: absolute; bottom: 0; left: 0; right: 0; height: 60px; display: flex; align-items: flex-end; padding: 0 40px; gap: 3px; opacity: 0.4; }
+  .vol-bar { flex: 1; border-radius: 1px 1px 0 0; min-height: 2px; }
+
+  /* Overlay: Position markers */
+  .position-line { position: absolute; left: 0; right: 0; height: 0; display: flex; align-items: center; }
+  .position-line .line { flex: 1; height: 1px; }
+  .position-line .line.green { background: var(--green); }
+  .position-line .line.red { background: var(--red); }
+  .position-line .line.dashed { border-top: 1px dashed; height: 0; }
+  .position-line .label { font-size: 10px; padding: 1px 6px; border-radius: 3px; white-space: nowrap; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .position-line .label.green { background: var(--green-dim); color: var(--green); border: 1px solid rgba(63,185,80,0.3); }
+  .position-line .label.red { background: var(--red-dim); color: var(--red); border: 1px solid rgba(248,81,73,0.3); }
+  .position-line .label.blue { background: rgba(88,166,255,0.15); color: var(--blue); border: 1px solid rgba(88,166,255,0.3); }
+
+  /* Signal markers on chart */
+  .signal-marker { position: absolute; font-size: 16px; filter: drop-shadow(0 0 4px); }
+  .signal-marker.buy { color: var(--green); }
+  .signal-marker.sell { color: var(--red); }
+  .signal-marker .conf { font-size: 9px; font-weight: 700; position: absolute; top: -2px; left: 12px; }
+
+  /* Crosshair data panel */
+  .crosshair-data { position: absolute; top: 8px; left: 60px; background: rgba(22,27,34,0.9); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; display: flex; gap: 12px; font-size: 11px; font-variant-numeric: tabular-nums; z-index: 5; }
+  .crosshair-data .ohlc-label { color: var(--text-muted); margin-right: 4px; }
+  .crosshair-data .up { color: var(--green); }
+  .crosshair-data .dn { color: var(--red); }
+
+  /* === RIGHT PANEL === */
+  .right-panel { width: var(--panel-w-right); background: var(--bg-secondary); border-left: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
+  .right-tabs { display: flex; border-bottom: 1px solid var(--border); }
+  .right-tab { flex: 1; padding: 8px 0; text-align: center; font-size: 11px; cursor: pointer; color: var(--text-muted); border-bottom: 2px solid transparent; }
+  .right-tab.active { color: var(--text-primary); border-bottom-color: var(--yellow); font-weight: 600; }
+  .right-content { flex: 1; overflow-y: auto; padding: 8px; }
+  .position-item { background: var(--bg-tertiary); border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; border: 1px solid var(--border); cursor: pointer; transition: border-color 0.15s; }
+  .position-item:hover { border-color: var(--blue); }
+  .position-item-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .position-ticket { font-size: 10px; color: var(--text-muted); }
+  .position-pnl { font-weight: 700; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .position-pnl.positive { color: var(--green); }
+  .position-pnl.negative { color: var(--red); }
+  .position-details { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 8px; font-size: 11px; }
+  .position-details dt { color: var(--text-muted); }
+  .position-details dd { text-align: right; font-variant-numeric: tabular-nums; }
+  .position-actions { display: flex; gap: 4px; margin-top: 6px; }
+  .position-actions button { flex: 1; padding: 4px; border-radius: 4px; font-size: 10px; border: 1px solid var(--border); background: var(--bg-hover); color: var(--text-secondary); cursor: pointer; }
+  .position-actions button:hover { border-color: var(--blue); color: var(--text-primary); }
+  .position-actions button.danger { border-color: rgba(248,81,73,0.3); color: var(--red); }
+  .position-actions button.danger:hover { background: var(--red-dim); }
+
+  /* Pending order */
+  .order-item { background: var(--bg-tertiary); border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; border: 1px solid var(--border); }
+  .order-item .type-badge { font-size: 10px; padding: 1px 5px; border-radius: 3px; font-weight: 600; }
+  .order-item .type-badge.buy { background: var(--green-dim); color: var(--green); }
+  .order-item .type-badge.sell { background: var(--red-dim); color: var(--red); }
+
+  /* Quick trade */
+  .quick-trade { padding: 8px; }
+  .trade-direction { display: flex; gap: 6px; margin-bottom: 8px; }
+  .trade-dir-btn { flex: 1; padding: 10px; border-radius: 6px; font-size: 14px; font-weight: 700; cursor: pointer; border: 2px solid transparent; text-align: center; }
+  .trade-dir-btn.buy { background: var(--green-dim); color: var(--green); border-color: rgba(63,185,80,0.3); }
+  .trade-dir-btn.buy.active { border-color: var(--green); background: rgba(63,185,80,0.25); }
+  .trade-dir-btn.sell { background: var(--red-dim); color: var(--red); border-color: rgba(248,81,73,0.3); }
+  .trade-form-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .trade-form-label { font-size: 11px; color: var(--text-muted); min-width: 36px; }
+  .trade-form-input { flex: 1; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px; color: var(--text-primary); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .trade-form-input:focus { border-color: var(--blue); outline: none; }
+  .volume-shortcuts { display: flex; gap: 3px; }
+  .volume-shortcuts button { padding: 2px 6px; border-radius: 3px; font-size: 10px; background: var(--bg-hover); border: 1px solid var(--border); color: var(--text-muted); cursor: pointer; }
+  .volume-shortcuts button:hover { color: var(--text-primary); border-color: var(--blue); }
+  .chart-set-btn { font-size: 10px; color: var(--blue); cursor: pointer; white-space: nowrap; }
+  .chart-set-btn:hover { text-decoration: underline; }
+  .submit-trade { width: 100%; padding: 10px; border-radius: 6px; font-size: 13px; font-weight: 700; cursor: pointer; border: none; margin-top: 8px; }
+  .submit-trade.buy { background: var(--green); color: #000; }
+  .submit-trade.sell { background: var(--red); color: #fff; }
+
+  /* Risk summary at bottom of right panel */
+  .risk-summary { padding: 8px 12px; border-top: 1px solid var(--border); background: var(--bg-tertiary); display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+  .risk-mini { text-align: center; }
+  .risk-mini-label { font-size: 9px; color: var(--text-muted); }
+  .risk-mini-value { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .risk-mini-bar { height: 2px; background: var(--bg-hover); border-radius: 1px; margin-top: 2px; overflow: hidden; }
+  .risk-mini-bar-fill { height: 100%; border-radius: 1px; }
+
+  /* === BOTTOM BAR === */
+  .bottom-bar { height: var(--bottom-h); background: var(--bg-secondary); border-top: 1px solid var(--border); display: flex; align-items: center; padding: 0 16px; gap: 20px; font-size: 11px; }
+  .bottom-bar .status-item { display: flex; align-items: center; gap: 4px; }
+  .bottom-bar .status-dot { width: 6px; height: 6px; }
+  .bottom-bar .separator { width: 1px; height: 16px; background: var(--border); }
+  .bottom-bar .exec-item { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); }
+  .exec-badge { padding: 1px 5px; border-radius: 3px; font-size: 9px; font-weight: 600; }
+  .exec-badge.succeeded { background: var(--green-dim); color: var(--green); }
+  .exec-badge.queued { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .exec-badge.rejected { background: var(--red-dim); color: var(--red); }
+
+  /* Context menu */
+  .context-menu { position: absolute; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 20; min-width: 180px; }
+  .context-menu-item { padding: 6px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+  .context-menu-item:hover { background: var(--bg-hover); }
+  .context-menu-divider { height: 1px; background: var(--border); margin: 4px 0; }
+
+  /* Annotation tooltip */
+  .annotation-tooltip { position: absolute; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.4); z-index: 15; min-width: 200px; }
+  .annotation-tooltip .tt-header { font-weight: 600; margin-bottom: 6px; display: flex; justify-content: space-between; }
+  .annotation-tooltip .tt-row { display: flex; justify-content: space-between; font-size: 11px; padding: 2px 0; }
+  .annotation-tooltip .tt-label { color: var(--text-muted); }
+  .annotation-tooltip .tt-actions { display: flex; gap: 4px; margin-top: 8px; }
+  .annotation-tooltip .tt-btn { padding: 4px 10px; border-radius: 4px; font-size: 10px; border: 1px solid var(--border); background: var(--bg-hover); color: var(--text-secondary); cursor: pointer; }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="logo">AI 交易实验室 <span>量见</span></div>
+  <select class="account-selector">
+    <option>MT5 · 860058 · DooTechnology-Demo · 1:500</option>
+  </select>
+  <div class="metrics">
+    <div class="metric">
+      <span class="metric-label">净值</span>
+      <span class="metric-value">18,483.48</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">余额</span>
+      <span class="metric-value">17,894.04</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">浮动盈亏</span>
+      <span class="metric-value positive">+589.44</span>
+    </div>
+    <div class="metric">
+      <span class="metric-label">可用保证金</span>
+      <span class="metric-value">17,627.67</span>
+    </div>
+  </div>
+  <div class="status-group">
+    <span class="status-dot green"></span><span class="status-label">桥接在线</span>
+    <span class="status-dot green"></span><span class="status-label">允许交易</span>
+    <span style="color:var(--text-muted);font-size:12px;margin-left:8px">11:55 MT5</span>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div class="main">
+
+  <!-- LEFT PANEL -->
+  <div class="left-panel">
+    <div class="panel-section">
+      <div class="panel-section-title">品种</div>
+      <div class="symbol-selector">
+        <span class="symbol-btn active">XAUUSD</span>
+        <span class="symbol-btn">EURUSD</span>
+        <span class="symbol-btn">GBPUSD</span>
+        <span class="symbol-btn">USDJPY</span>
+      </div>
+    </div>
+    <div class="panel-section">
+      <div class="panel-section-title">周期</div>
+      <div class="tf-selector">
+        <span class="tf-btn">M1</span>
+        <span class="tf-btn">M5</span>
+        <span class="tf-btn active">M15</span>
+        <span class="tf-btn">M30</span>
+        <span class="tf-btn">H1</span>
+        <span class="tf-btn">H4</span>
+        <span class="tf-btn">D1</span>
+      </div>
+    </div>
+    <div class="panel-section">
+      <div class="panel-section-title">AI 信号</div>
+      <div class="signal-card">
+        <div class="signal-header">
+          <span class="signal-badge bullish">观望偏多</span>
+          <span class="signal-confidence" style="color:var(--green)">60%</span>
+        </div>
+        <div class="signal-bar">
+          <div class="signal-bar-fill bull" style="width:60%"></div>
+          <div class="signal-bar-fill bear" style="width:40%"></div>
+        </div>
+        <div class="signal-text">任务模式为仅管理。当前无新入场机会。持仓与挂单均无明确结构失配。</div>
+        <div class="signal-meta">道诚交易策略 · 09/16 11:45:48</div>
+      </div>
+    </div>
+    <div class="panel-section">
+      <div class="panel-section-title">缠论状态</div>
+      <div class="chan-status">
+        <div class="chan-row"><span class="chan-label">趋势</span><span class="chan-value" style="color:var(--green)">↑ 向上</span></div>
+        <div class="chan-row"><span class="chan-label">H1 笔</span><span class="chan-value">上升笔进行中</span></div>
+        <div class="chan-row"><span class="chan-label">M15 段</span><span class="chan-value">第3段 (向上)</span></div>
+        <div class="chan-row"><span class="chan-label">中枢</span><span class="chan-value">4310-4330</span></div>
+      </div>
+    </div>
+    <div class="panel-section" style="opacity:0.6">
+      <div class="panel-section-title">经济日历 ▾</div>
+      <div class="calendar-event">
+        <span class="calendar-time">20:30</span>
+        <span class="calendar-impact high"></span>
+        <span class="calendar-flag">🇺🇸</span>
+        <span>美国 CPI 年率</span>
+      </div>
+      <div class="calendar-event">
+        <span class="calendar-time">22:00</span>
+        <span class="calendar-impact high"></span>
+        <span class="calendar-flag">🇺🇸</span>
+        <span>密歇根消费者信心</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- CHART CANVAS -->
+  <div class="chart-canvas">
+    <div class="chart-toolbar">
+      <span class="symbol-name">XAUUSD</span>
+      <span class="tf-label">M15</span>
+      <div class="quote-bar">
+        <span class="quote-bid">Bid 4324.50</span>
+        <span class="quote-ask">Ask 4324.80</span>
+        <span class="quote-spread">Spread 30</span>
+      </div>
+    </div>
+    <div class="chart-area">
+      <div class="chart-placeholder" style="background: var(--bg-primary);">
+        <!-- Crosshair data -->
+        <div class="crosshair-data">
+          <span><span class="ohlc-label">O</span><span class="dn">4326.12</span></span>
+          <span><span class="ohlc-label">H</span><span class="dn">4328.45</span></span>
+          <span><span class="ohlc-label">L</span><span class="up">4322.80</span></span>
+          <span><span class="ohlc-label">C</span><span class="dn">4324.50</span></span>
+          <span><span class="ohlc-label">V</span>1,247</span>
+        </div>
+
+        <!-- Simulated candlesticks -->
+        <svg width="100%" height="100%" style="position:absolute;top:0;left:0" preserveAspectRatio="none">
+          <!-- Grid lines -->
+          <line x1="0" y1="20%" x2="100%" y2="20%" stroke="#1c2128" stroke-width="0.5"/>
+          <line x1="0" y1="40%" x2="100%" y2="40%" stroke="#1c2128" stroke-width="0.5"/>
+          <line x1="0" y1="60%" x2="100%" y2="60%" stroke="#1c2128" stroke-width="0.5"/>
+          <line x1="0" y1="80%" x2="100%" y2="80%" stroke="#1c2128" stroke-width="0.5"/>
+
+          <!-- Price labels on right -->
+          <text x="98%" y="19%" fill="#6e7681" font-size="10" text-anchor="end">4340.00</text>
+          <text x="98%" y="39%" fill="#6e7681" font-size="10" text-anchor="end">4330.00</text>
+          <text x="98%" y="59%" fill="#6e7681" font-size="10" text-anchor="end">4320.00</text>
+          <text x="98%" y="79%" fill="#6e7681" font-size="10" text-anchor="end">4310.00</text>
+
+          <!-- Candles (simplified representation) -->
+          <!-- Green candles -->
+          <rect x="5%" y="55%" width="7" height="18" fill="#3fb950" rx="1"/>
+          <line x1="5.3%" y1="50%" x2="5.3%" y2="75%" stroke="#3fb950" stroke-width="1"/>
+
+          <rect x="8%" y="48%" width="7" height="22" fill="#3fb950" rx="1"/>
+          <line x1="8.3%" y1="44%" x2="8.3%" y2="72%" stroke="#3fb950" stroke-width="1"/>
+
+          <rect x="11%" y="42%" width="7" height="15" fill="#3fb950" rx="1"/>
+          <line x1="11.3%" y1="38%" x2="11.3%" y2="58%" stroke="#3fb950" stroke-width="1"/>
+
+          <!-- Red candles -->
+          <rect x="14%" y="38%" width="7" height="20" fill="#f85149" rx="1"/>
+          <line x1="14.3%" y1="35%" x2="14.3%" y2="60%" stroke="#f85149" stroke-width="1"/>
+
+          <rect x="17%" y="45%" width="7" height="12" fill="#f85149" rx="1"/>
+          <line x1="17.3%" y1="42%" x2="17.3%" y2="58%" stroke="#f85149" stroke-width="1"/>
+
+          <!-- More candles showing uptrend -->
+          <rect x="20%" y="40%" width="7" height="16" fill="#3fb950" rx="1"/>
+          <line x1="20.3%" y1="36%" x2="20.3%" y2="57%" stroke="#3fb950" stroke-width="1"/>
+
+          <rect x="23%" y="35%" width="7" height="14" fill="#3fb950" rx="1"/>
+          <line x1="23.3%" y1="30%" x2="23.3%" y2="50%" stroke="#3fb950" stroke-width="1"/>
+
+          <rect x="26%" y="38%" width="7" height="18" fill="#f85149" rx="1"/>
+          <line x1="26.3%" y1="33%" x2="26.3%" y2="57%" stroke="#f85149" stroke-width="1"/>
+
+          <rect x="29%" y="42%" width="7" height="10" fill="#3fb950" rx="1"/>
+          <line x1="29.3%" y1="38%" x2="29.3%" y2="53%" stroke="#3fb950" stroke-width="1"/>
+
+          <rect x="32%" y="36%" width="7" height="16" fill="#3fb950" rx="1"/>
+          <line x1="32.3%" y1="32%" x2="32.3%" y2="53%" stroke="#3fb950" stroke-width="1"/>
+
+          <rect x="35%" y="33%" width="7" height="12" fill="#3fb950" rx="1"/>
+          <line x1="35.3%" y1="28%" x2="35.3%" y2="46%" stroke="#3fb950" stroke-width="1"/>
+
+          <rect x="38%" y="37%" width="7" height="14" fill="#f85149" rx="1"/>
+          <line x1="38.3%" y1="34%" x2="38.3%" y2="52%" stroke="#f85149" stroke-width="1"/>
+
+          <rect x="41%" y="40%" width="7" height="10" fill="#f85149" rx="1"/>
+          <line x1="41.3%" y1="37%" x2="41.3%" y2="51%" stroke="#f85149" stroke-width="1"/>
+
+          <rect x="44%" y="42%" width="7" height="14" fill="#3fb950" rx="1"/>
+          <line x1="44.3%" y1="38%" x2="44.3%" y2="57%" stroke="#3fb950" stroke-width="1"/>
+
+          <rect x="47%" y="38%" width="7" height="16" fill="#3fb950" rx="1"/>
+          <line x1="47.3%" y1="33%" x2="47.3%" y2="55%" stroke="#3fb950" stroke-width="1"/>
+
+          <rect x="50%" y="35%" width="7" height="10" fill="#3fb950" rx="1"/>
+          <line x1="50.3%" y1="30%" x2="50.3%" y2="46%" stroke="#3fb950" stroke-width="1"/>
+
+          <rect x="53%" y="39%" width="7" height="14" fill="#f85149" rx="1"/>
+          <line x1="53.3%" y1="36%" x2="53.3%" y2="54%" stroke="#f85149" stroke-width="1"/>
+
+          <rect x="56%" y="42%" width="7" height="12" fill="#f85149" rx="1"/>
+          <line x1="56.3%" y1="39%" x2="56.3%" y2="55%" stroke="#f85149" stroke-width="1"/>
+
+          <rect x="59%" y="44%" width="7" height="10" fill="#3fb950" rx="1"/>
+          <line x1="59.3%" y1="40%" x2="59.3%" y2="55%" stroke="#3fb950" stroke-width="1"/>
+
+          <rect x="62%" y="40%" width="7" height="14" fill="#3fb950" rx="1"/>
+          <line x1="62.3%" y1="36%" x2="62.3%" y2="55%" stroke="#3fb950" stroke-width="1"/>
+
+          <rect x="65%" y="37%" width="7" height="12" fill="#3fb950" rx="1"/>
+          <line x1="65.3%" y1="33%" x2="65.3%" y2="50%" stroke="#3fb950" stroke-width="1"/>
+
+          <rect x="68%" y="40%" width="7" height="16" fill="#f85149" rx="1"/>
+          <line x1="68.3%" y1="36%" x2="68.3%" y2="57%" stroke="#f85149" stroke-width="1"/>
+
+          <rect x="71%" y="43%" width="7" height="10" fill="#f85149" rx="1"/>
+          <line x1="71.3%" y1="40%" x2="71.3%" y2="54%" stroke="#f85149" stroke-width="1"/>
+
+          <rect x="74%" y="45%" width="7" height="8" fill="#3fb950" rx="1"/>
+          <line x1="74.3%" y1="42%" x2="74.3%" y2="54%" stroke="#3fb950" stroke-width="1"/>
+
+          <rect x="77%" y="42%" width="7" height="12" fill="#3fb950" rx="1"/>
+          <line x1="77.3%" y1="38%" x2="77.3%" y2="55%" stroke="#3fb950" stroke-width="1"/>
+
+          <rect x="80%" y="40%" width="7" height="8" fill="#3fb950" rx="1"/>
+          <line x1="80.3%" y1="36%" x2="80.3%" y2="49%" stroke="#3fb950" stroke-width="1"/>
+
+          <!-- Position line: Buy @ 4322.29 -->
+          <line x1="0" y1="57%" x2="95%" y2="57%" stroke="#3fb950" stroke-width="1" stroke-dasharray="0"/>
+          <rect x="85%" y="55.5%" width="80" height="16" rx="3" fill="rgba(63,185,80,0.15)" stroke="rgba(63,185,80,0.3)" stroke-width="0.5"/>
+          <text x="85.5%" y="56.8%" fill="#3fb950" font-size="9" font-weight="600">多 1.00 #833191449</text>
+
+          <!-- SL line -->
+          <line x1="0" y1="82%" x2="95%" y2="82%" stroke="#f85149" stroke-width="1" stroke-dasharray="4,3"/>
+          <rect x="88%" y="80.5%" width="50" height="14" rx="3" fill="rgba(248,81,73,0.15)" stroke="rgba(248,81,73,0.3)" stroke-width="0.5"/>
+          <text x="88.5%" y="81.5%" fill="#f85149" font-size="9" font-weight="600">SL 4307</text>
+
+          <!-- TP line -->
+          <line x1="0" y1="18%" x2="95%" y2="18%" stroke="#3fb950" stroke-width="1" stroke-dasharray="6,3"/>
+          <rect x="88%" y="16.5%" width="50" height="14" rx="3" fill="rgba(63,185,80,0.15)" stroke="rgba(63,185,80,0.3)" stroke-width="0.5"/>
+          <text x="88.5%" y="17.5%" fill="#3fb950" font-size="9" font-weight="600">TP 4380</text>
+
+          <!-- Pending order line -->
+          <line x1="0" y1="15%" x2="95%" y2="15%" stroke="#58a6ff" stroke-width="1" stroke-dasharray="2,3"/>
+          <rect x="85%" y="13.5%" width="90" height="14" rx="3" fill="rgba(88,166,255,0.15)" stroke="rgba(88,166,255,0.3)" stroke-width="0.5"/>
+          <text x="85.5%" y="14.5%" fill="#58a6ff" font-size="9" font-weight="600">挂 4380 #833454485</text>
+
+          <!-- AI Signal marker -->
+          <polygon points="20%,34% 19.5%,30% 20.5%,30%" fill="#3fb950"/>
+          <text x="21%" y="29%" fill="#3fb950" font-size="8" font-weight="700">92%</text>
+
+          <!-- Another signal -->
+          <polygon points="59%,43% 58.5%,39% 59.5%,39%" fill="#3fb950"/>
+          <text x="60%" y="38%" fill="#3fb950" font-size="8" font-weight="700">78%</text>
+
+          <!-- Chan theory: segment line (yellow) -->
+          <polyline points="5%,58% 14%,38% 26%,45% 35%,33% 47%,38% 56%,42% 65%,37% 74%,45% 80%,40%" fill="none" stroke="#d29922" stroke-width="1.5" opacity="0.7"/>
+
+          <!-- Chan theory: center box (grey dashed) -->
+          <rect x="44%" y="36%" width="24%" height="8%" fill="none" stroke="#6e7681" stroke-width="1" stroke-dasharray="3,2" opacity="0.5"/>
+        </svg>
+
+        <!-- Buy signal marker (HTML for better styling) -->
+        <!-- Position entry marker -->
+        <div style="position:absolute;left:29.3%;top:56%;font-size:10px;color:var(--green);font-weight:700;">▲</div>
+
+        <!-- Context menu (shown for demo) -->
+        <div class="context-menu" style="right:40px;top:50%;">
+          <div class="context-menu-item">📊 分析此处价格</div>
+          <div class="context-menu-divider"></div>
+          <div class="context-menu-item" style="color:var(--green)">🟢 在此价位买入限价单</div>
+          <div class="context-menu-item" style="color:var(--red)">🔴 在此价位卖出限价单</div>
+          <div class="context-menu-divider"></div>
+          <div class="context-menu-item">⚙ 图表设置</div>
+        </div>
+
+        <!-- Position tooltip (shown for demo) -->
+        <div class="annotation-tooltip" style="left:20%;top:45%;">
+          <div class="tt-header">
+            <span style="color:var(--green)">多头持仓</span>
+            <span style="font-size:10px;color:var(--text-muted)">#833191449</span>
+          </div>
+          <div class="tt-row"><span class="tt-label">开仓价</span><span>4322.29</span></div>
+          <div class="tt-row"><span class="tt-label">当前价</span><span style="color:var(--green)">4324.50</span></div>
+          <div class="tt-row"><span class="tt-label">手数</span><span>1.00</span></div>
+          <div class="tt-row"><span class="tt-label">止损</span><span style="color:var(--red)">4307.00</span></div>
+          <div class="tt-row"><span class="tt-label">止盈</span><span style="color:var(--green)">4380.00</span></div>
+          <div class="tt-row"><span class="tt-label">浮盈</span><span style="color:var(--green);font-weight:700">+$589.44</span></div>
+          <div class="tt-actions">
+            <button class="tt-btn" style="color:var(--blue)">修改 SL/TP</button>
+            <button class="tt-btn" style="color:var(--red)">平仓</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT PANEL -->
+  <div class="right-panel">
+    <div class="right-tabs">
+      <div class="right-tab active">持仓 2</div>
+      <div class="right-tab">挂单 1</div>
+      <div class="right-tab">快速下单</div>
+    </div>
+    <div class="right-content">
+      <!-- Position 1 -->
+      <div class="position-item">
+        <div class="position-item-header">
+          <span style="font-weight:600">XAUUSD.s <span style="font-size:10px;color:var(--text-muted)">#833191449</span></span>
+          <span class="position-pnl positive">+$589.44</span>
+        </div>
+        <div class="position-details">
+          <dt>方向</dt><dd style="color:var(--green)">买入</dd>
+          <dt>手数</dt><dd>1.00</dd>
+          <dt>开仓价</dt><dd>4322.29</dd>
+          <dt>当前价</dt><dd>4324.50</dd>
+          <dt>止损</dt><dd style="color:var(--red)">4307.00</dd>
+          <dt>止盈</dt><dd style="color:var(--green)">4380.00</dd>
+        </div>
+        <div class="position-actions">
+          <button>修改 SL/TP</button>
+          <button class="danger">平仓</button>
+        </div>
+      </div>
+      <!-- Position 2 -->
+      <div class="position-item">
+        <div class="position-item-header">
+          <span style="font-weight:600">XAUUSD.s <span style="font-size:10px;color:var(--text-muted)">#824050887</span></span>
+          <span class="position-pnl positive">+$0.46</span>
+        </div>
+        <div class="position-details">
+          <dt>方向</dt><dd style="color:var(--red)">卖出</dd>
+          <dt>手数</dt><dd>0.01</dd>
+          <dt>开仓价</dt><dd>4328.79</dd>
+          <dt>当前价</dt><dd>4324.50</dd>
+          <dt>止损</dt><dd>--</dd>
+          <dt>止盈</dt><dd>--</dd>
+        </div>
+        <div class="position-actions">
+          <button>修改 SL/TP</button>
+          <button class="danger">平仓</button>
+        </div>
+      </div>
+    </div>
+    <!-- Risk summary -->
+    <div class="risk-summary">
+      <div class="risk-mini">
+        <div class="risk-mini-label">日亏</div>
+        <div class="risk-mini-value">0.00%</div>
+        <div class="risk-mini-bar"><div class="risk-mini-bar-fill" style="width:0%;background:var(--green)"></div></div>
+      </div>
+      <div class="risk-mini">
+        <div class="risk-mini-label">回撤</div>
+        <div class="risk-mini-value">6.71%</div>
+        <div class="risk-mini-bar"><div class="risk-mini-bar-fill" style="width:67%;background:var(--yellow)"></div></div>
+      </div>
+      <div class="risk-mini">
+        <div class="risk-mini-label">持仓</div>
+        <div class="risk-mini-value">2 笔</div>
+        <div class="risk-mini-bar"><div class="risk-mini-bar-fill" style="width:20%;background:var(--green)"></div></div>
+      </div>
+      <div class="risk-mini">
+        <div class="risk-mini-label">总手</div>
+        <div class="risk-mini-value">1.01手</div>
+        <div class="risk-mini-bar"><div class="risk-mini-bar-fill" style="width:20%;background:var(--green)"></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- BOTTOM BAR -->
+<div class="bottom-bar">
+  <div class="status-item">
+    <span class="status-dot green"></span>
+    <span style="color:var(--text-secondary)">AI 分析 02:37 后更新</span>
+  </div>
+  <div class="separator"></div>
+  <div class="exec-item">
+    <span class="exec-badge succeeded">✓</span>
+    <span>挂单 4380 保留</span>
+  </div>
+  <div class="separator"></div>
+  <div class="exec-item">
+    <span class="exec-badge succeeded">✓</span>
+    <span>修改 SL 4307 完成</span>
+  </div>
+  <div class="separator"></div>
+  <div style="color:var(--text-muted);margin-left:auto;font-size:10px">AI 决策: 观望 60% | 无新入场机会</div>
+</div>
+
+</body>
+</html>

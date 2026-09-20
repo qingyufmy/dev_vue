@@ -1,4 +1,7 @@
+import { assertOrderDispatchPolicy } from '../src/modules/execution/domain/order-dispatch-policy.js'
+import { resolveRiskPolicy, DEFAULT_RISK_POLICY } from '../src/modules/risk/index.js'
 import { describe, expect, it } from 'vitest'
+import { createBridgeCommandProcessor } from '../src/queue/bridge-command-processor.js'
 import {
   BridgeCommandService, BridgeCommandError, canonicalHash, createBridgeCommand,
   type BridgeCommand, type BridgeCommandAcceptedEnvelope, type BridgeCommandRepository,
@@ -10,7 +13,58 @@ const NOW = new Date('2026-09-03T09:00:00.000Z')
 const route = { terminalInstanceId: 'terminal_12345678', brokerServer: 'DPrime-Demo', login: '596520', connectionEpoch: 7 }
 
 describe('Bridge V4 server command lifecycle', () => {
-  it.each(['execution_subscription_changed', 'execution_schedule_invalid', 'execution_schedule_closed', 'execution_schedule_unproven', 'execution_schedule_changed'])('fails before socket write and releases reservation for %s', async code => {
+  it.each(['queued', 'succeeded', 'failed'] as const)('ignores stale reconciliation jobs for %s commands', async status => {
+    const repo = new MemoryBridgeRepository(), transport = new MemoryTransport(repo.trace)
+    const service = new BridgeCommandService(repo), command = await service.create(input(), NOW)
+    repo.command = { ...command, status }
+    const process = createBridgeCommandProcessor(service, transport)
+    expect(await process({ name: 'bridge.command.reconcile', data: { commandId: command.id } }))
+      .toEqual({ commandId: command.id, status, dispatched: false })
+    expect(transport.messages).toEqual([])
+    expect(repo.trace).toEqual(['persist:queued'])
+  })
+
+  it.each(['dispatched', 'accepted', 'uncertain', 'reconciling'] as const)('repeated reconciliation jobs query only the ledger for %s commands', async status => {
+    const repo = new MemoryBridgeRepository(), transport = new MemoryTransport(repo.trace)
+    const service = new BridgeCommandService(repo), command = await service.create(input(), NOW)
+    repo.command = { ...command, status }
+    const process = createBridgeCommandProcessor(service, transport)
+    const job = { name: 'bridge.command.reconcile', data: { commandId: command.id } }
+    await process(job)
+    await process(job)
+    await process({ name: 'bridge.command.dispatch', data: job.data })
+    expect(transport.messages.map(message => message.type)).toEqual(['command.reconcile', 'command.reconcile'])
+    expect(repo.command?.status).toBe('reconciling')
+  })
+
+  it('rejects unknown job operations and embedded terminal instructions before accessing commands', async () => {
+    const repo = new MemoryBridgeRepository(), transport = new MemoryTransport(repo.trace)
+    const process = createBridgeCommandProcessor(new BridgeCommandService(repo), transport)
+    await expect(process({ name: 'unexpected', data: { commandId: 'command_12345678' } }))
+      .rejects.toThrow('bridge_command_job_name_invalid')
+    await expect(process({ name: 'bridge.command.reconcile', data: { commandId: 'command_12345678', terminalTicket: '1' } as { commandId: string } }))
+      .rejects.toThrow('bridge_command_job_invalid')
+    expect(repo.trace).toEqual([])
+    expect(transport.messages).toEqual([])
+  })
+
+  it('rechecks current order limit and halts against the immutable queued request', () => {
+    const command = createBridgeCommand(input(), NOW)
+    const policy = resolveRiskPolicy({ userId: command.userId, accountId: command.accountId,
+      platformPolicyVersionId: '1', accountPolicyVersionId: null, policySetRevision: 1,
+      platform: { values: { ...DEFAULT_RISK_POLICY, maxOrderVolume: 1 }, globalKillSwitch: false, revision: 1 },
+      account: { tradeSendEnabled: true }, updatedAt: NOW.toISOString() })
+    const volume = Number(command.request.payload.params.volume)
+    policy.values.maxOrderVolume = volume
+    expect(() => assertOrderDispatchPolicy(command, policy)).not.toThrow()
+    policy.values.maxOrderVolume = volume / 2
+    expect(() => assertOrderDispatchPolicy(command, policy)).toThrowError(expect.objectContaining({ code: 'execution_order_volume_exceeded' }))
+    policy.globalKillSwitch = true
+    expect(() => assertOrderDispatchPolicy(command, policy)).toThrowError(expect.objectContaining({ code: 'execution_dispatch_policy_halted' }))
+    expect(() => assertOrderDispatchPolicy(command, { ...policy, accountId: 'other' })).toThrowError(expect.objectContaining({ code: 'execution_dispatch_policy_unavailable' }))
+  })
+
+  it.each(['execution_pending_review_unavailable', 'execution_duplicate_live_pending', 'execution_duplicate_pending_dispatch', 'execution_dedup_context_invalid', 'execution_dedup_snapshot_stale', 'execution_order_volume_exceeded', 'execution_dispatch_policy_unavailable', 'execution_dispatch_policy_halted', 'execution_subscription_changed', 'execution_schedule_invalid', 'execution_schedule_closed', 'execution_schedule_unproven', 'execution_schedule_changed'])('fails before socket write and releases reservation for %s', async code => {
     const repo = new MemoryBridgeRepository(), transport = new MemoryTransport(repo.trace)
     repo.markDispatched = async () => { throw new BridgeCommandError(code, 409) }
     const service = new BridgeCommandService(repo), command = await service.create(input(), NOW)

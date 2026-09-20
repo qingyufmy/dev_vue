@@ -36,13 +36,13 @@ describe('trader command components', () => {
     expect(source).toContain('<AlertDialogTitle>')
     expect(source).toContain('<AlertDialogDescription>')
     expect(source).toContain('<AlertDialogCancel')
-    expect(source).toContain('<AlertDialogAction')
-    expect(source).toContain('HTTP 接受不等于终端成交')
+    expect(source).toContain('<Button type="button"')
+    expect(source).toContain('提交后请在执行记录中查看处理结果')
     expect(source).toContain('影响范围')
     expect(source).toContain('close_position')
     expect(source).toContain('cancel_order')
     expect(source).toContain('distribution_close')
-    expect(source).toMatch(/AlertDialogAction[^>]*min-h-11/)
+    expect(source).toMatch(/Button[^>]*min-h-11/)
   })
 
   it('renders every operation state and calls uncertain out as no-replay', () => {
@@ -50,8 +50,8 @@ describe('trader command components', () => {
     for (const status of ['accepted', 'queued', 'running', 'succeeded', 'partially_succeeded', 'rejected', 'failed', 'uncertain', 'cancelled', 'expired']) {
       expect(source).toContain(`${status}:`)
     }
-    expect(source).toContain('不会自动重发')
-    expect(source).toContain('精确对账')
+    expect(source).toContain('不要重复提交')
+    expect(source).toContain('结果尚未确认')
     expect(source).toContain('<Empty')
     expect(source).toContain('<Table')
     expect(source).toContain('md:hidden')
@@ -65,7 +65,7 @@ describe('trader command components', () => {
     expect(source).toContain("'cancel-order'")
     expect(source).toContain('修改止盈止损')
     expect(source).toContain('修改挂单')
-    expect(source).toContain('当前为观摩或只读模式')
+    expect(source).toContain('当前仅可查看')
     expect(source).toMatch(/variant="destructive"[^>]*min-h-11/)
 
     const workspace = componentSource('InventoryWorkspace.vue')

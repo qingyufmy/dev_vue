@@ -1,0 +1,1273 @@
+{
+  "kind": "risk-receipt-upgrade-rehearsal/v1",
+  "passed": true,
+  "identity": {
+    "database": "dev_vue_m1_source_20260909_01",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "mode": "--inject-create-loss",
+  "result": {
+    "status": "reconcile",
+    "ddlCount": 0
+  },
+  "baselineHash": "b72950c21eec26c77182138120b89c96e55f5d31b6e76e4eb6507920869d686a",
+  "history": [
+    {
+      "id": "inplace_001_01_users_last_seen_at_utc",
+      "checksum": "cd91b878646811a8ad3604e9861c7f5d19dd8afa9eb4b287dcfd0c1b6ae683d4",
+      "status": "completed",
+      "startedAt": "2026-09-06T13:28:46.387000Z",
+      "completedAt": "2026-09-06T13:28:46.400000Z"
+    },
+    {
+      "id": "inplace_001_02_users_profile_revision",
+      "checksum": "a053ce52693557d13f7cb4973b67889f0b5e451973b6366a1ceed807f01e5ef1",
+      "status": "completed",
+      "startedAt": "2026-09-06T13:28:46.401000Z",
+      "completedAt": "2026-09-06T13:28:46.408000Z"
+    },
+    {
+      "id": "inplace_001_03_bridge_refresh_sessions_credential_version",
+      "checksum": "453d8c021b9030198d3315c4b23efd99e0bda3b6394c28b030d5e89444c10cac",
+      "status": "completed",
+      "startedAt": "2026-09-06T13:28:46.409000Z",
+      "completedAt": "2026-09-06T13:28:46.417000Z"
+    },
+    {
+      "id": "inplace_001_04_bridge_refresh_sessions_installation_id",
+      "checksum": "ae9bc21f503e64360e6cbe144fb057d2038a7969749dbd372079d30dc9a6ec60",
+      "status": "completed",
+      "startedAt": "2026-09-06T13:28:46.417000Z",
+      "completedAt": "2026-09-06T13:28:46.422000Z"
+    },
+    {
+      "id": "inplace_001_05_bridge_refresh_sessions_profile_id",
+      "checksum": "1852e848e099d078ad5ff184a2570d8c082297b7df4e3141281c7122f62311ef",
+      "status": "completed",
+      "startedAt": "2026-09-06T13:28:46.423000Z",
+      "completedAt": "2026-09-06T13:28:46.428000Z"
+    },
+    {
+      "id": "inplace_001_06_bridge_refresh_sessions_generation",
+      "checksum": "8957dba504685e97a3ebe8d84d0d3bd049800d39c5782f5fa94f06fff7361669",
+      "status": "completed",
+      "startedAt": "2026-09-06T13:28:46.429000Z",
+      "completedAt": "2026-09-06T13:28:46.435000Z"
+    },
+    {
+      "id": "inplace_001_07_bridge_refresh_sessions_migration_key",
+      "checksum": "9a2263e53e38ca20a60da68e3f014cdece5be6e891e731dc7a0a3e5402e71b87",
+      "status": "completed",
+      "startedAt": "2026-09-06T13:28:46.436000Z",
+      "completedAt": "2026-09-06T13:28:46.442000Z"
+    },
+    {
+      "id": "inplace_001_08_bridge_refresh_sessions_source_fingerprint",
+      "checksum": "c1c57acee488ff3a68ea900f725ead51abb1438954179fe6ed727286c5196ab0",
+      "status": "completed",
+      "startedAt": "2026-09-06T13:28:46.443000Z",
+      "completedAt": "2026-09-06T13:28:46.448000Z"
+    },
+    {
+      "id": "inplace_001_09_bridge_refresh_sessions_source_refresh_session_id",
+      "checksum": "2746ee2692c307e74b493831d2f918a33e1e325f6812448ff47657e81780c115",
+      "status": "completed",
+      "startedAt": "2026-09-06T13:28:46.449000Z",
+      "completedAt": "2026-09-06T13:28:46.454000Z"
+    },
+    {
+      "id": "inplace_002_01_auth_sessions",
+      "checksum": "48f6d3796a7a0f8a862ef477e69b5cd97c346e3284ebbf9170788d4156bd0e4a",
+      "status": "completed",
+      "startedAt": "2026-09-06T13:49:34.845000Z",
+      "completedAt": "2026-09-06T13:49:34.859000Z"
+    },
+    {
+      "id": "inplace_002_02_auth_authorization_codes",
+      "checksum": "158ee33d5c0e1359e2b777b8c01a009e3b47f4443baf1193a5baf839694de365",
+      "status": "completed",
+      "startedAt": "2026-09-06T13:49:34.859000Z",
+      "completedAt": "2026-09-06T13:49:34.873000Z"
+    },
+    {
+      "id": "inplace_002_03_terminal_profiles",
+      "checksum": "d6d2a687adce9d5c9280a00f6ac4f3a5b08932ae7613106c36d193b9daa1d688",
+      "status": "completed",
+      "startedAt": "2026-09-06T13:49:34.874000Z",
+      "completedAt": "2026-09-06T13:49:34.881000Z"
+    },
+    {
+      "id": "inplace_002_04_bridge_connection_capacity_grants",
+      "checksum": "a5f23554dad296277da0863d49215cf9402fec71079f3e04ed5ffdb222025058",
+      "status": "completed",
+      "startedAt": "2026-09-06T13:49:34.882000Z",
+      "completedAt": "2026-09-06T13:49:34.891000Z"
+    },
+    {
+      "id": "inplace_002_05_data_migration_runs",
+      "checksum": "ffe6d67303fa66e5e5ef90a2057ea93e3c3918f0789a18531c2db472b94a6a30",
+      "status": "completed",
+      "startedAt": "2026-09-06T13:49:34.892000Z",
+      "completedAt": "2026-09-06T13:49:34.897000Z"
+    },
+    {
+      "id": "inplace_002_06_data_migration_checkpoints",
+      "checksum": "0f9217892fa398c076967967a86319a25d55998f6ec51b356bffad73099d1271",
+      "status": "completed",
+      "startedAt": "2026-09-06T13:49:34.898000Z",
+      "completedAt": "2026-09-06T13:49:34.904000Z"
+    },
+    {
+      "id": "inplace_002_07_data_migration_batches",
+      "checksum": "af28984895255bebe9530a5203873528229345d1ec8311464b6ddaf3f62dab38",
+      "status": "completed",
+      "startedAt": "2026-09-06T13:49:34.905000Z",
+      "completedAt": "2026-09-06T13:49:34.912000Z"
+    },
+    {
+      "id": "inplace_002_08_data_migration_id_maps",
+      "checksum": "8af2fc24d9cb4bef9cbfb39c74e4edcd59237af990731d3649d678e0b38401fd",
+      "status": "completed",
+      "startedAt": "2026-09-06T13:49:34.912000Z",
+      "completedAt": "2026-09-06T13:49:34.919000Z"
+    },
+    {
+      "id": "inplace_002_09_data_migration_row_receipts",
+      "checksum": "ccddcf2dd2b1be9ae89dd1cbfd89963a68d3658765df3357c73e0ed13b18a02b",
+      "status": "completed",
+      "startedAt": "2026-09-06T13:49:34.919000Z",
+      "completedAt": "2026-09-06T13:49:34.926000Z"
+    },
+    {
+      "id": "inplace_003_01_trading_accounts_v4_build",
+      "checksum": "814f7b8a5f07a344b21371952a2107417d36498b26b361ac0bbc19c331768e1d",
+      "status": "completed",
+      "startedAt": "2026-09-06T14:25:36.363000Z",
+      "completedAt": "2026-09-06T14:25:36.386000Z"
+    },
+    {
+      "id": "inplace_003_02_trading_account_ownership_intervals_v4_build",
+      "checksum": "f1cae5e187123c4c26b3072b0901cf2099c113fbb7d7057c79fb33ca0c9c6560",
+      "status": "completed",
+      "startedAt": "2026-09-06T14:25:36.387000Z",
+      "completedAt": "2026-09-06T14:25:36.401000Z"
+    },
+    {
+      "id": "inplace_003_03_trading_account_ownerships_v4_build",
+      "checksum": "12c5bc764f95c4fb06a9391c0017adb73c0c7bf8f0be6f18ffbde38a30dab307",
+      "status": "completed",
+      "startedAt": "2026-09-06T14:25:36.402000Z",
+      "completedAt": "2026-09-06T14:25:36.413000Z"
+    },
+    {
+      "id": "inplace_003_04_user_trading_account_settings_v4_build",
+      "checksum": "54440c8bcf20c4ebad8cda1cb9d5e169b004ed7a4b35cb49063fc1145a489998",
+      "status": "completed",
+      "startedAt": "2026-09-06T14:25:36.413000Z",
+      "completedAt": "2026-09-06T14:25:36.423000Z"
+    },
+    {
+      "id": "inplace_004_01_data_migration_source_rows",
+      "checksum": "b8855e891a7cf3e7830a8b4311844764f42078c2a5f72fbed6d0954e101026fe",
+      "status": "completed",
+      "startedAt": "2026-09-06T14:57:17.476000Z",
+      "completedAt": "2026-09-06T14:57:17.496000Z"
+    },
+    {
+      "id": "inplace_005_01_strategies",
+      "checksum": "c3ecdab295a7e4acaf102d5521696316adf07eb00468e4a5c43d6bc16fe25dbb",
+      "status": "completed",
+      "startedAt": "2026-09-06T15:51:35.399000Z",
+      "completedAt": "2026-09-06T15:51:35.423000Z"
+    },
+    {
+      "id": "inplace_005_02_strategy_versions",
+      "checksum": "0821d9ae7c6322b0d7ade0feea07cfd14c929f8cdebc9ffac0bba876c01acd35",
+      "status": "completed",
+      "startedAt": "2026-09-06T15:51:35.423000Z",
+      "completedAt": "2026-09-06T15:51:35.435000Z"
+    },
+    {
+      "id": "inplace_005_03_strategy_active_version_fk",
+      "checksum": "24dbdf2987fa31116e323445724e436eb7083bb99e1a6d8a1900ac3c76ed1b9e",
+      "status": "completed",
+      "startedAt": "2026-09-06T15:51:35.435000Z",
+      "completedAt": "2026-09-06T15:51:35.465000Z"
+    },
+    {
+      "id": "inplace_006_01_strategy_subscriptions_v4_build",
+      "checksum": "d8684953218327f93648a3dfe29ca37b8fdef43b987e53018c2db3034906fb85",
+      "status": "completed",
+      "startedAt": "2026-09-06T17:34:02.865000Z",
+      "completedAt": "2026-09-06T17:34:02.899000Z"
+    },
+    {
+      "id": "inplace_006_02_subscription_schedules_v4_build",
+      "checksum": "b9b7ae1e00e9516b89871419c270ce9774a8d5a2a684eca21455ee21cbe644a3",
+      "status": "completed",
+      "startedAt": "2026-09-06T17:34:02.900000Z",
+      "completedAt": "2026-09-06T17:34:02.907000Z"
+    },
+    {
+      "id": "inplace_006_03_subscription_execution_preferences_v4_build",
+      "checksum": "d92169c09ad04d95739764520628b77c84e29df573311cbce825ba8e19db06c6",
+      "status": "completed",
+      "startedAt": "2026-09-06T17:34:02.908000Z",
+      "completedAt": "2026-09-06T17:34:02.920000Z"
+    },
+    {
+      "id": "inplace_007_01_macro_data_sources",
+      "checksum": "f097a9203ee9c42ec600f31426206dfa0f80a60850b8a3b44dca025bb91d7d50",
+      "status": "completed",
+      "startedAt": "2026-09-06T18:38:44.715000Z",
+      "completedAt": "2026-09-06T18:38:44.740000Z"
+    },
+    {
+      "id": "inplace_007_02_macro_feature_sets",
+      "checksum": "a77d64fb56d61475cd22751d9389ce2c6db3e128f2334c1a9b61938efa96457e",
+      "status": "completed",
+      "startedAt": "2026-09-06T18:38:44.741000Z",
+      "completedAt": "2026-09-06T18:38:44.750000Z"
+    },
+    {
+      "id": "inplace_007_03_economic_calendar_events",
+      "checksum": "babea2c19e0472cdab74dd1f811397cca252f9cb644bc0605a1575a039269244",
+      "status": "completed",
+      "startedAt": "2026-09-06T18:38:44.751000Z",
+      "completedAt": "2026-09-06T18:38:44.761000Z"
+    },
+    {
+      "id": "inplace_007_04_macro_model_versions",
+      "checksum": "13087d6d040b71ff3e133f674383afa47aa84f69435161a570e3531644d29472",
+      "status": "completed",
+      "startedAt": "2026-09-06T18:38:44.762000Z",
+      "completedAt": "2026-09-06T18:38:44.774000Z"
+    },
+    {
+      "id": "inplace_007_05_macro_series",
+      "checksum": "4b4afcff292a65452a02d409ed6c1480f27c972daa7a7af8e749dbc690860097",
+      "status": "completed",
+      "startedAt": "2026-09-06T18:38:44.775000Z",
+      "completedAt": "2026-09-06T18:38:44.784000Z"
+    },
+    {
+      "id": "inplace_007_06_macro_ingestion_runs",
+      "checksum": "c6b2c2af4711f4dded71b21bf989c61d9395f0026a106017d43fe84c725b42d3",
+      "status": "completed",
+      "startedAt": "2026-09-06T18:38:44.785000Z",
+      "completedAt": "2026-09-06T18:38:44.795000Z"
+    },
+    {
+      "id": "inplace_007_07_macro_pipeline_jobs",
+      "checksum": "b23105c181e179883f67afee13f311667f59caa6eacbf0a5cb76aa19d6ea94d9",
+      "status": "completed",
+      "startedAt": "2026-09-06T18:38:44.796000Z",
+      "completedAt": "2026-09-06T18:38:44.809000Z"
+    },
+    {
+      "id": "inplace_007_08_macro_research_snapshots",
+      "checksum": "1ba69c93544432bed23a00b30fb7e12880318fbaf6311be63be01203ed81e549",
+      "status": "completed",
+      "startedAt": "2026-09-06T18:38:44.810000Z",
+      "completedAt": "2026-09-06T18:38:44.824000Z"
+    },
+    {
+      "id": "inplace_007_09_economic_calendar_event_revisions",
+      "checksum": "3f3edf91efa5b51b30cef1b4f4af8d1e2b4d6540becfdbb0d75e17f1c94b1cd6",
+      "status": "completed",
+      "startedAt": "2026-09-06T18:38:44.825000Z",
+      "completedAt": "2026-09-06T18:38:44.837000Z"
+    },
+    {
+      "id": "inplace_007_10_macro_observations",
+      "checksum": "805bf7acc583133e9193aa3954898a2caf6628d7760852942a9c2651b2487708",
+      "status": "completed",
+      "startedAt": "2026-09-06T18:38:44.837000Z",
+      "completedAt": "2026-09-06T18:38:44.849000Z"
+    },
+    {
+      "id": "inplace_007_11_macro_snapshot_observations",
+      "checksum": "299b73c3d71e879073acc812fc44ce0a710924a3882998960e453c4c16c3f01c",
+      "status": "completed",
+      "startedAt": "2026-09-06T18:38:44.850000Z",
+      "completedAt": "2026-09-06T18:38:44.864000Z"
+    },
+    {
+      "id": "inplace_008_01_email_verified",
+      "checksum": "3cb9c7ca5b1a9619762e26072e522796ece8b92d394b4c852e35ceea4496a0db",
+      "status": "completed",
+      "startedAt": "2026-09-06T18:52:11.244000Z",
+      "completedAt": "2026-09-06T18:52:11.279000Z"
+    },
+    {
+      "id": "inplace_008_02_phone_verified",
+      "checksum": "c9e83af6764f0c293ca4c354585a267cf47f1ab5ad90ba0c9da6337c3ffdc46f",
+      "status": "completed",
+      "startedAt": "2026-09-06T18:52:11.279000Z",
+      "completedAt": "2026-09-06T18:52:11.302000Z"
+    },
+    {
+      "id": "inplace_008_03_auth_method",
+      "checksum": "faa3d03e6dbf1597751152804be99e95834fb4a9e65aa355596e9fbe2dd9645d",
+      "status": "completed",
+      "startedAt": "2026-09-06T18:52:11.303000Z",
+      "completedAt": "2026-09-06T18:52:11.331000Z"
+    },
+    {
+      "id": "inplace_008_04_plan_period",
+      "checksum": "f656c8b10a32df7705ba03d3346b95059ce81b5bd6c452a72f2845dd35b1eeb1",
+      "status": "completed",
+      "startedAt": "2026-09-06T18:52:11.332000Z",
+      "completedAt": "2026-09-06T18:52:11.353000Z"
+    },
+    {
+      "id": "inplace_008_05_changelog_seen_version",
+      "checksum": "278dce48dc118a9f41ab9940f998ab5e0ffd281504d03a55d9ce626bfc647d8f",
+      "status": "completed",
+      "startedAt": "2026-09-06T18:52:11.354000Z",
+      "completedAt": "2026-09-06T18:52:11.378000Z"
+    },
+    {
+      "id": "inplace_009_01_user_referral_accounts",
+      "checksum": "38b5b9cc45c45be8d4c87eb63034156fea1e96b1200ffe6fa7754f1f7396dc75",
+      "status": "completed",
+      "startedAt": "2026-09-06T19:05:47.801000Z",
+      "completedAt": "2026-09-06T19:05:47.820000Z"
+    },
+    {
+      "id": "inplace_010_01_referral_credit_ledger",
+      "checksum": "dc08b3299d5b02ec1f0b5e3fe834820ad5c2a0324dc197aa94f7d52742d11623",
+      "status": "completed",
+      "startedAt": "2026-09-06T19:38:33.530000Z",
+      "completedAt": "2026-09-06T19:38:33.550000Z"
+    },
+    {
+      "id": "inplace_011_01_payment_orders",
+      "checksum": "20a8fd7437933a6539ba452c42aeab1655dd3ab531d49ccd6c2e1f636416a1cd",
+      "status": "completed",
+      "startedAt": "2026-09-06T20:24:32.230000Z",
+      "completedAt": "2026-09-06T20:24:32.251000Z"
+    },
+    {
+      "id": "inplace_012_01_payment_transactions",
+      "checksum": "aabf96ede051bd3f736594e960d88ea1cec63db2191fb110153fbdd5709ff094",
+      "status": "completed",
+      "startedAt": "2026-09-06T20:36:10.338000Z",
+      "completedAt": "2026-09-06T20:36:10.351000Z"
+    },
+    {
+      "id": "inplace_012_02_payment_matches",
+      "checksum": "92b73a42434056d3f8bdc3d5504f59c67e163f0d0b979aed51d2b4419a262eed",
+      "status": "completed",
+      "startedAt": "2026-09-06T20:36:10.351000Z",
+      "completedAt": "2026-09-06T20:36:10.376000Z"
+    },
+    {
+      "id": "inplace_013_01_memberships",
+      "checksum": "a18948f4bbb414624e08094855bd8ab28bb488971e47b97d22ff9b5cff39548e",
+      "status": "completed",
+      "startedAt": "2026-09-06T21:36:08.685000Z",
+      "completedAt": "2026-09-06T21:36:08.701000Z"
+    },
+    {
+      "id": "inplace_014_01_referral_rule_constraints",
+      "checksum": "91cb456434338ec836ca3cee9ddcd732cd18433a29479eded6ebfce15825545e",
+      "status": "completed",
+      "startedAt": "2026-09-06T22:22:58.337000Z",
+      "completedAt": "2026-09-06T22:22:58.366000Z"
+    },
+    {
+      "id": "inplace_015_01_referral_rule_changes",
+      "checksum": "6179a0daf0870f0df5f2257d5ad08bd5b45f498aee072df8b6c3139df2bcd104",
+      "status": "completed",
+      "startedAt": "2026-09-06T22:31:28.146000Z",
+      "completedAt": "2026-09-06T22:31:28.168000Z"
+    },
+    {
+      "id": "inplace_016_01_payment_wallet_addresses",
+      "checksum": "70c669449cce43fa3b90a31fa23f65d2166184f0d1a59b660e11f6449aa7ec9e",
+      "status": "completed",
+      "startedAt": "2026-09-06T23:01:57.494000Z",
+      "completedAt": "2026-09-06T23:01:57.509000Z"
+    },
+    {
+      "id": "inplace_017_01_system_settings",
+      "checksum": "9e6d781a58520190c2c33763465f1bb7bd3475d542725bd5e27a0f7d295aba08",
+      "status": "completed",
+      "startedAt": "2026-09-06T23:45:58.225000Z",
+      "completedAt": "2026-09-06T23:45:58.247000Z"
+    },
+    {
+      "id": "inplace_017_02_system_setting_changes",
+      "checksum": "7059f04fd2e38b1e18ae5a6888fadbb04e3d25a4085e7ee5a961a2e0251fe226",
+      "status": "completed",
+      "startedAt": "2026-09-06T23:45:58.248000Z",
+      "completedAt": "2026-09-06T23:45:58.260000Z"
+    },
+    {
+      "id": "inplace_017_03_system_settings_exact_tokens",
+      "checksum": "f02a59a74656605820c8dbe0796ba2575c3acdb4c4c665c9a7756412caac87d4",
+      "status": "completed",
+      "startedAt": "2026-09-06T23:45:58.261000Z",
+      "completedAt": "2026-09-06T23:45:58.281000Z"
+    },
+    {
+      "id": "inplace_018_01_system_setting_requests",
+      "checksum": "7390a2389320f6ae18bd9d1db4fec9e81678d024f8cad3c9524c2bbc26cf8df9",
+      "status": "completed",
+      "startedAt": "2026-09-07T00:24:12.361000Z",
+      "completedAt": "2026-09-07T00:24:12.390000Z"
+    },
+    {
+      "id": "inplace_019_01_learning_courses",
+      "checksum": "e2096e95c5e3337b761c40a74ae49ce832e837915d715e79a219fa45e1092e90",
+      "status": "completed",
+      "startedAt": "2026-09-07T02:00:12.331000Z",
+      "completedAt": "2026-09-07T02:00:12.362000Z"
+    },
+    {
+      "id": "inplace_019_02_learning_lessons",
+      "checksum": "5e507c9536d5e8c1d1dce6f759a505b354de7c8328e4100e8f18cb0ea048a533",
+      "status": "completed",
+      "startedAt": "2026-09-07T02:00:12.362000Z",
+      "completedAt": "2026-09-07T02:00:12.374000Z"
+    },
+    {
+      "id": "inplace_019_03_learning_media_references",
+      "checksum": "1bd2f0482128fadb86b66169694be047dc116544e867516fbf85ba37a91604d1",
+      "status": "completed",
+      "startedAt": "2026-09-07T02:00:12.375000Z",
+      "completedAt": "2026-09-07T02:00:12.385000Z"
+    },
+    {
+      "id": "inplace_019_04_learning_progress",
+      "checksum": "d283dcde4954506e5979a66ad79edce32380219b55ea036897b87f12ab7522e7",
+      "status": "completed",
+      "startedAt": "2026-09-07T02:00:12.386000Z",
+      "completedAt": "2026-09-07T02:00:12.398000Z"
+    },
+    {
+      "id": "inplace_020_01_learning_progress_changes",
+      "checksum": "d306aa96f1f497c10713be46ad18e6d5566f80829e4cde159284e87ac59af9f2",
+      "status": "completed",
+      "startedAt": "2026-09-07T16:02:45.371000Z",
+      "completedAt": "2026-09-07T16:02:45.395000Z"
+    },
+    {
+      "id": "inplace_020_02_learning_request_key_preservation",
+      "checksum": "d3d1c3f0f5261562521d1555bd74237a6f3e795c7dfd5879b4ae1a65fac4434a",
+      "status": "completed",
+      "startedAt": "2026-09-07T16:02:45.397000Z",
+      "completedAt": "2026-09-07T16:02:45.422000Z"
+    },
+    {
+      "id": "inplace_021_01_ai_manual_analysis_cooldowns",
+      "checksum": "edc8d2fae405638e64d1019497091335c3cadf87689eacf31e75f161233635b4",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:01:17.413000Z",
+      "completedAt": "2026-09-08T01:01:17.446000Z"
+    },
+    {
+      "id": "inplace_021_02_outbox_events",
+      "checksum": "28b33b0afd6274afa031dbab1804b80a597062bf24f71309754c47644bb6ad9a",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:01:17.447000Z",
+      "completedAt": "2026-09-08T01:01:17.457000Z"
+    },
+    {
+      "id": "inplace_021_03_global_risk_controls",
+      "checksum": "cd79ab88baaff16508e97ff17079bf28d6660cbd7f3140d9401a0c364bb27611",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:01:17.458000Z",
+      "completedAt": "2026-09-08T01:01:17.469000Z"
+    },
+    {
+      "id": "inplace_021_04_strategy_memory_libraries_v4",
+      "checksum": "0eae3fd01c51fac709cc62322fa6cc47e5dade20ebfb723692b0ca05c0f7e5c6",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:01:17.470000Z",
+      "completedAt": "2026-09-08T01:01:17.490000Z"
+    },
+    {
+      "id": "inplace_021_05_strategy_memory_library_revisions_v4",
+      "checksum": "e2f6f2eebcb521a6492444d13b08343eef574e55e30f878f8a6ebfed23d7fa0a",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:01:17.492000Z",
+      "completedAt": "2026-09-08T01:01:17.509000Z"
+    },
+    {
+      "id": "inplace_021_06_strategy_memory_libraries_v4",
+      "checksum": "d2699c8732009dd1c674dd88a8fe05bc3ddda71548bcaf82eadb2efeda56347d",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:01:17.510000Z",
+      "completedAt": "2026-09-08T01:01:17.538000Z"
+    },
+    {
+      "id": "inplace_021_07_strategy_memory_injection_logs_v4",
+      "checksum": "4552716fbfaf2c17d1929ef56cd01bf638b80b9958a4a54886cbe0e3db8eb455",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:01:17.539000Z",
+      "completedAt": "2026-09-08T01:01:17.559000Z"
+    },
+    {
+      "id": "inplace_021_08_trade_history_migration_checkpoints_v4",
+      "checksum": "631ddee0d8e680c90eb703281c993e39780e0a4d735fb1f1d1e540f6ac76d8fc",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:01:17.560000Z",
+      "completedAt": "2026-09-08T01:01:17.569000Z"
+    },
+    {
+      "id": "inplace_021_09_observer_management_registry",
+      "checksum": "17ff0fcedc1ba6b276aeca89cfb8d7d14e1373b4d1686f3bff632e14a203c76a",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:01:17.570000Z",
+      "completedAt": "2026-09-08T01:01:17.576000Z"
+    },
+    {
+      "id": "inplace_021_10_observer_management_operations",
+      "checksum": "81ef088e84131690a8aa317f7e7e89391b7c27dea721feeccfa310751de9046f",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:01:17.577000Z",
+      "completedAt": "2026-09-08T01:01:17.589000Z"
+    },
+    {
+      "id": "inplace_021_11_bridge_v4_pairing_requests",
+      "checksum": "eb3cd948d2c2d9b6cf43298d064c99d9ec74b9acfb1694c1bea6ee79c1234987",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:01:17.590000Z",
+      "completedAt": "2026-09-08T01:01:17.617000Z"
+    },
+    {
+      "id": "inplace_022_01_users_plan_expires_at",
+      "checksum": "32dfa73892fa235ca4845751845bfdb74a9b653ff6d769fd21c6741b01336e2a",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:14:50.774000Z",
+      "completedAt": "2026-09-08T01:14:50.862000Z"
+    },
+    {
+      "id": "inplace_022_02_users_deleted_at",
+      "checksum": "59078d225cd4687d1ee33872b93a7c2c6f3094155ba9859cceda0057943b3d3a",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:14:50.863000Z",
+      "completedAt": "2026-09-08T01:14:50.931000Z"
+    },
+    {
+      "id": "inplace_022_03_users_created_at",
+      "checksum": "06c3b80d06de9a0fec1da70f60c6d09cff248dde67d3b362b99d3cc2069e26e0",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:14:50.933000Z",
+      "completedAt": "2026-09-08T01:14:51.018000Z"
+    },
+    {
+      "id": "inplace_022_04_users_updated_at",
+      "checksum": "3e57c2b4e175f18356af3b3cb7a8376c284df8e1a2f608b92eabb89f8ebf914f",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:14:51.019000Z",
+      "completedAt": "2026-09-08T01:14:51.075000Z"
+    },
+    {
+      "id": "inplace_022_05_bridge_refresh_sessions_expires_at",
+      "checksum": "0157d9508ea60c532128cd3c4501f1f7c43dd506bd95e84c65b1dad5e1962005",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:14:51.076000Z",
+      "completedAt": "2026-09-08T01:14:51.101000Z"
+    },
+    {
+      "id": "inplace_022_06_bridge_refresh_sessions_revoked_at",
+      "checksum": "236c038b5e12e6f38861f66c525c9d3e1613973f1f2e08006da75967a8e3864e",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:14:51.102000Z",
+      "completedAt": "2026-09-08T01:14:51.132000Z"
+    },
+    {
+      "id": "inplace_022_07_bridge_refresh_sessions_last_used_at",
+      "checksum": "c40d459a03d0268bb97e155e56c4ff113e5a6638188756462afa003982fd7267",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:14:51.133000Z",
+      "completedAt": "2026-09-08T01:14:51.154000Z"
+    },
+    {
+      "id": "inplace_022_08_bridge_refresh_sessions_created_at",
+      "checksum": "5ee41a57bb7eafe732590f9791bc0ea9bd4d8d49f56a1584d6110964243fc9ac",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:14:51.155000Z",
+      "completedAt": "2026-09-08T01:14:51.178000Z"
+    },
+    {
+      "id": "inplace_022_09_bridge_refresh_sessions_updated_at",
+      "checksum": "ccf5ae2e9d03e4fee8cf1d3fa9feb02cce38c8fbe816c78a3a82056336dd5002",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:14:51.179000Z",
+      "completedAt": "2026-09-08T01:14:51.200000Z"
+    },
+    {
+      "id": "inplace_022_10_ai_model_profiles_created_at",
+      "checksum": "420648df2e4694c4a9921772d3a2700f14deb374ee2f3f15ae1bf98046c9f413",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:14:51.201000Z",
+      "completedAt": "2026-09-08T01:14:51.220000Z"
+    },
+    {
+      "id": "inplace_022_11_ai_model_profiles_updated_at",
+      "checksum": "7234ac71345fadef9f1514926bd8650d5633048a5e3bfc3559482d323168c6db",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:14:51.221000Z",
+      "completedAt": "2026-09-08T01:14:51.243000Z"
+    },
+    {
+      "id": "inplace_022_12_ai_model_profiles_deleted_at",
+      "checksum": "cbd55f97779e7c180610012d6a4f49d88d23d4ed09099318a18f19d682ecf914",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:14:51.244000Z",
+      "completedAt": "2026-09-08T01:14:51.265000Z"
+    },
+    {
+      "id": "inplace_022_13_user_model_defaults_created_at",
+      "checksum": "dfa994ca76a3ab81200e9f04f95517e98d87ca09a384975a86c1396cc4b8721a",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:14:51.265000Z",
+      "completedAt": "2026-09-08T01:14:51.279000Z"
+    },
+    {
+      "id": "inplace_022_14_user_model_defaults_updated_at",
+      "checksum": "35b74ca393e99061a51f9832dd4890e19e13bf7e1e88fa4653ab75a41174fc17",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:14:51.280000Z",
+      "completedAt": "2026-09-08T01:14:51.292000Z"
+    },
+    {
+      "id": "inplace_022_15_platform_model_usage_policy_updated_at",
+      "checksum": "0965e2f07ed8ee578f4f4250fd522ab1fd24ac3489e7ab9484132a9097172676",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:14:51.292000Z",
+      "completedAt": "2026-09-08T01:14:51.309000Z"
+    },
+    {
+      "id": "inplace_022_16_ai_model_usage_logs_created_at",
+      "checksum": "8dc88b9cc2596df206ee512f5864d647713d8b0aa1a6e8b42398b05319e60349",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:14:51.309000Z",
+      "completedAt": "2026-09-08T01:14:51.458000Z"
+    },
+    {
+      "id": "inplace_023_01_ai_model_profiles_provider",
+      "checksum": "a4d84d2c6a6f84efa54311d20814ab053705c39494c9b6a8958f5f7144ea86b9",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:26:13.619000Z",
+      "completedAt": "2026-09-08T01:26:13.656000Z"
+    },
+    {
+      "id": "inplace_023_02_ai_model_profiles_model_name",
+      "checksum": "a2ca71d6bf74328f8b164f14dffc77e053eacdb3d99b6b0a02bd5fa092469a75",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:26:13.656000Z",
+      "completedAt": "2026-09-08T01:26:13.669000Z"
+    },
+    {
+      "id": "inplace_023_03_ai_model_profiles_max_tokens",
+      "checksum": "1e177bf853d53b52afa4f86a6a07325440e411a159c491c89f4f4c30fa580c49",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:26:13.670000Z",
+      "completedAt": "2026-09-08T01:26:13.689000Z"
+    },
+    {
+      "id": "inplace_023_04_ai_model_profiles_request_timeout_ms",
+      "checksum": "39e3425cfc81a90dbe4d4c20c9a9068efdf8ce29c51102dd43fc237c083a7afb",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:26:13.689000Z",
+      "completedAt": "2026-09-08T01:26:13.719000Z"
+    },
+    {
+      "id": "inplace_023_05_platform_model_usage_policy_daily_requests_per_user",
+      "checksum": "8c8a110c308f94e4c80d6d3b676f1881262c19326dc80f787d3bb76a11199967",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:26:13.721000Z",
+      "completedAt": "2026-09-08T01:26:13.742000Z"
+    },
+    {
+      "id": "inplace_023_06_platform_model_usage_policy_daily_tokens_per_user",
+      "checksum": "14bad296e5edc1b9c1cc817a5b588867265b2f0522cfc4e21f91c0cc578f5f15",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:26:13.743000Z",
+      "completedAt": "2026-09-08T01:26:13.755000Z"
+    },
+    {
+      "id": "inplace_023_07_ai_model_usage_logs_token_count",
+      "checksum": "9d749e69f17231c86ee14776d06e619adbb81f496e52a3423815e0bf715878a0",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:26:13.755000Z",
+      "completedAt": "2026-09-08T01:26:13.893000Z"
+    },
+    {
+      "id": "inplace_023_08_ai_model_usage_logs_request_bytes",
+      "checksum": "8b1e5fdda35bbefe12b0cfb2e033b5e9c3b52133241b7d055d8fdf03d1b9b620",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:26:13.894000Z",
+      "completedAt": "2026-09-08T01:26:14.029000Z"
+    },
+    {
+      "id": "inplace_023_09_ai_model_usage_logs_response_bytes",
+      "checksum": "8808200b110a878c32e09e13bb502a99f65ed4cbf00f5225f1f528302c879d2c",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:26:14.030000Z",
+      "completedAt": "2026-09-08T01:26:14.148000Z"
+    },
+    {
+      "id": "inplace_023_10_ai_model_usage_logs_duration_ms",
+      "checksum": "f9905f0c17d7cfe76e41cdb39d504dd2c5af628a50fde1db459073c603ae283b",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:26:14.149000Z",
+      "completedAt": "2026-09-08T01:26:14.269000Z"
+    },
+    {
+      "id": "inplace_023_11_ai_model_usage_logs_input_tokens",
+      "checksum": "2cd13b16d6ba7f027277eb0b8a36e3db60888abef39163f6d5d2a97a31540dc6",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:26:14.270000Z",
+      "completedAt": "2026-09-08T01:26:14.392000Z"
+    },
+    {
+      "id": "inplace_023_12_ai_model_usage_logs_output_tokens",
+      "checksum": "1af18b2ecd520e3500366785b46564176dcf7652d20a8a24dfdd677fb59261a5",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:26:14.393000Z",
+      "completedAt": "2026-09-08T01:26:14.518000Z"
+    },
+    {
+      "id": "inplace_023_13_ai_model_usage_logs_reasoning_tokens",
+      "checksum": "d956d8591d58370dca8c10d2735fe8717247704694b1750e1d6011aae9a5e274",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:26:14.518000Z",
+      "completedAt": "2026-09-08T01:26:14.645000Z"
+    },
+    {
+      "id": "inplace_023_14_ai_model_usage_logs_cached_tokens",
+      "checksum": "1a27007ea311045b635fec08ec14534e9ffc80931e1580155885494eac5316f7",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:26:14.645000Z",
+      "completedAt": "2026-09-08T01:26:14.775000Z"
+    },
+    {
+      "id": "inplace_024_01_ai_model_usage_logs_id",
+      "checksum": "750e024bc76d9eb1eabf3e1bb84fecba6539c904e330afe1243a5140f9df76f3",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:36:34.323000Z",
+      "completedAt": "2026-09-08T01:36:34.478000Z"
+    },
+    {
+      "id": "inplace_024_02_trading_accounts_broker_server",
+      "checksum": "e6e4150dcb7be9d026c539ddfc02b249916124e36acb54d1d1d9c9e48de6ccdf",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:36:34.479000Z",
+      "completedAt": "2026-09-08T01:36:34.485000Z"
+    },
+    {
+      "id": "inplace_024_03_users_nickname",
+      "checksum": "83a36d019a484b5e160262630dfcaa3a23e8dbcb79e9e23ac1d0088dc76d2582",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:36:34.486000Z",
+      "completedAt": "2026-09-08T01:36:34.552000Z"
+    },
+    {
+      "id": "inplace_024_04_users_avatar",
+      "checksum": "0d08d67a43b9eb921d82ce9ef196646bb437fa78b1b7589dd001152256f656bb",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:36:34.554000Z",
+      "completedAt": "2026-09-08T01:36:34.627000Z"
+    },
+    {
+      "id": "inplace_024_05_users_role",
+      "checksum": "a804eccc8b15603bbe6cdcac661036480eba2ca7782fac5c7678043431658b6a",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:36:34.628000Z",
+      "completedAt": "2026-09-08T01:36:34.695000Z"
+    },
+    {
+      "id": "inplace_024_06_users_plan",
+      "checksum": "87bd644fca959c6e50abf8077b23604196d86d7a3ea03807810f73b6ef635a02",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:36:34.696000Z",
+      "completedAt": "2026-09-08T01:36:34.757000Z"
+    },
+    {
+      "id": "inplace_024_07_users_created_at",
+      "checksum": "6185a95847705ef114ad4d8875af90a1655bd8619c006aa03ee013e511ad0024",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:36:34.758000Z",
+      "completedAt": "2026-09-08T01:36:34.884000Z"
+    },
+    {
+      "id": "inplace_024_08_users_updated_at",
+      "checksum": "2259ece895311aa8f9cb58c93efef51abd52dcd6aec8f420c8641ac0d476b785",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:36:34.885000Z",
+      "completedAt": "2026-09-08T01:36:34.957000Z"
+    },
+    {
+      "id": "inplace_024_09_trading_accounts_margin_mode",
+      "checksum": "d9373f399cbc02b73bbbed9f0fea93e24e3ad397af56acdab99b6bd22145c6e6",
+      "status": "completed",
+      "startedAt": "2026-09-08T01:36:34.959000Z",
+      "completedAt": "2026-09-08T01:36:34.977000Z"
+    },
+    {
+      "id": "inplace_025_01_ai_model_profiles_owner_user_id",
+      "checksum": "eb71ddb7c0e427228cc405f85975a66cb27a197ca93e5fdafe3efab74eae2081",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:00:42.497000Z",
+      "completedAt": "2026-09-08T02:00:42.512000Z"
+    },
+    {
+      "id": "inplace_025_02_ai_model_profiles_scope",
+      "checksum": "01b0f7c341b21d5f78807adae13df4cf676ff6171ecba5ca9b179471cb9d34c4",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:00:42.513000Z",
+      "completedAt": "2026-09-08T02:00:42.529000Z"
+    },
+    {
+      "id": "inplace_025_03_ai_model_profiles_provider",
+      "checksum": "75feff96052211353659bce852aca6050cd652b9346352494f4b7a207ec84aeb",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:00:42.530000Z",
+      "completedAt": "2026-09-08T02:00:42.538000Z"
+    },
+    {
+      "id": "inplace_025_04_ai_model_profiles_model_name",
+      "checksum": "4229ce4fdc76ffd0f8748f9d9b4bc7bc17c91b4bda55dbfcc6007e67b04ec3cf",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:00:42.539000Z",
+      "completedAt": "2026-09-08T02:00:42.547000Z"
+    },
+    {
+      "id": "inplace_025_05_ai_model_profiles_temperature",
+      "checksum": "ed5fc9685777f34b1b59257a3e98a11d9685e3f7eb77a1fdced76e90a206f679",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:00:42.548000Z",
+      "completedAt": "2026-09-08T02:00:42.557000Z"
+    },
+    {
+      "id": "inplace_025_06_ai_model_profiles_max_tokens",
+      "checksum": "b503d4d6e00955916f95b503b9c7b10b4a62e3e3fa1c7fa92fa195f343c63b2f",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:00:42.558000Z",
+      "completedAt": "2026-09-08T02:00:42.568000Z"
+    },
+    {
+      "id": "inplace_025_07_ai_model_profiles_thinking_enabled",
+      "checksum": "c0913a36e27da5df5fcdeca2e693026b509041d884576e96cd3172d931b7e775",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:00:42.569000Z",
+      "completedAt": "2026-09-08T02:00:42.576000Z"
+    },
+    {
+      "id": "inplace_025_08_ai_model_profiles_reasoning_effort",
+      "checksum": "c609331a04a09abb2f5ed969b8f9e2bcea2fd542c5807729a5b37832259a37f9",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:00:42.577000Z",
+      "completedAt": "2026-09-08T02:00:42.586000Z"
+    },
+    {
+      "id": "inplace_025_09_ai_model_profiles_status",
+      "checksum": "32d13303888d69833f348ed306dd1290df661a7c8543b38a10fff9387488ae7b",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:00:42.587000Z",
+      "completedAt": "2026-09-08T02:00:42.596000Z"
+    },
+    {
+      "id": "inplace_025_10_platform_model_usage_policy_id",
+      "checksum": "602dbe06890077447cab91675caee4d7f4e34c8aefeade4b0843f31a95c28748",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:00:42.596000Z",
+      "completedAt": "2026-09-08T02:00:42.601000Z"
+    },
+    {
+      "id": "inplace_025_11_platform_model_usage_policy_daily_requests_per_user",
+      "checksum": "dafc66ac107809c67653d3b32a2c785f7d5e0ed2cbfc6280d91ab3f79382c471",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:00:42.603000Z",
+      "completedAt": "2026-09-08T02:00:42.607000Z"
+    },
+    {
+      "id": "inplace_025_12_platform_model_usage_policy_daily_tokens_per_user",
+      "checksum": "50cb996f1f0eba96937fc85712fb4ab833c0abfce117e30f1b27754a9352948f",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:00:42.608000Z",
+      "completedAt": "2026-09-08T02:00:42.613000Z"
+    },
+    {
+      "id": "inplace_025_13_ai_model_usage_logs_credential_source",
+      "checksum": "ed5fbb91544c42874ba19578410944d95c7cf02eaa4941b3e9ead33e6b8a6344",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:00:42.614000Z",
+      "completedAt": "2026-09-08T02:00:42.620000Z"
+    },
+    {
+      "id": "inplace_025_14_ai_model_usage_logs_request_phase",
+      "checksum": "ce8fae9698c4acc20c80ac90349abf18121b601f4090307ba597bbe56570fdc4",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:00:42.621000Z",
+      "completedAt": "2026-09-08T02:00:42.632000Z"
+    },
+    {
+      "id": "inplace_025_15_ai_model_usage_logs_request_status",
+      "checksum": "3813da4d45b689a3c21368789aef97b3c4d119d1f27b9f80c781b20c266647d4",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:00:42.633000Z",
+      "completedAt": "2026-09-08T02:00:42.639000Z"
+    },
+    {
+      "id": "inplace_025_16_ai_model_usage_logs_accounting_status",
+      "checksum": "d5f3a9e4784129775b3a190a22625ad65ba7b21e88a4d9491af47485d533713b",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:00:42.640000Z",
+      "completedAt": "2026-09-08T02:00:42.648000Z"
+    },
+    {
+      "id": "inplace_025_17_bridge_refresh_sessions_token_hash",
+      "checksum": "d21f15fd9f189d18a15ff9b55ddfc481b8707dd85816482dc80f31578a803955",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:00:42.649000Z",
+      "completedAt": "2026-09-08T02:00:42.674000Z"
+    },
+    {
+      "id": "inplace_026_01_chk_v4_model_profiles_owner",
+      "checksum": "d62bbdc459b123098097981bb2b785ed1a3faa9d4b7decb64293350a4bb064c6",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:08:22.325000Z",
+      "completedAt": "2026-09-08T02:08:22.356000Z"
+    },
+    {
+      "id": "inplace_026_02_chk_v4_model_policy_singleton",
+      "checksum": "7ee06e2a79fb71eab1d8d7d01622fca844723e96d949135d959751c544c7fc91",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:08:22.357000Z",
+      "completedAt": "2026-09-08T02:08:22.385000Z"
+    },
+    {
+      "id": "inplace_027_01_uk_bridge_refresh_migration_key",
+      "checksum": "91ff7a3798b3c4381bbd25d9e44a2e00a1326c86d4ecd99785fa86e324a3beca",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:15:18.326000Z",
+      "completedAt": "2026-09-08T02:15:18.353000Z"
+    },
+    {
+      "id": "inplace_027_02_uk_bridge_refresh_source_migration",
+      "checksum": "7a4b8a01d8c9013e1cf1543e1d610c0adf1f3a3de236256a2e6cd387954188e9",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:15:18.354000Z",
+      "completedAt": "2026-09-08T02:15:18.388000Z"
+    },
+    {
+      "id": "inplace_027_03_idx_bridge_refresh_device",
+      "checksum": "9b0d2d357dc72acecf456119553a279471c2dd188bedea4898a99823210f9daa",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:15:18.389000Z",
+      "completedAt": "2026-09-08T02:15:18.413000Z"
+    },
+    {
+      "id": "inplace_027_04_idx_v4_model_profiles_owner",
+      "checksum": "9ee4899a9633f8358dce8f135b98855da13bebfdb8f5420d7fad267b78fc1912",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:15:18.414000Z",
+      "completedAt": "2026-09-08T02:15:18.428000Z"
+    },
+    {
+      "id": "inplace_027_05_idx_v4_model_usage_quota",
+      "checksum": "260ef3c41f57e088e8965b23be3f82c4fffdf2dd4862587963ce6d9c4003e3dd",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:15:18.429000Z",
+      "completedAt": "2026-09-08T02:15:18.476000Z"
+    },
+    {
+      "id": "inplace_027_06_idx_v4_model_usage_recovery",
+      "checksum": "92c7fd0ac15fcf272eae5a80310465d17dd2136f95f1ce6e08225168a9580342",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:15:18.478000Z",
+      "completedAt": "2026-09-08T02:15:18.535000Z"
+    },
+    {
+      "id": "inplace_028_01_fk_v4_bridge_refresh_user",
+      "checksum": "a8b6a574b97bfeb441141b936f918e39050ec851626297088d801c809bd65bc9",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:23:16.978000Z",
+      "completedAt": "2026-09-08T02:23:17.002000Z"
+    },
+    {
+      "id": "inplace_028_02_fk_v4_model_default_profile",
+      "checksum": "40217ad8cef6fb12192e682367df632d0de959124bf2ecfbb52262c12fca32d9",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:23:17.003000Z",
+      "completedAt": "2026-09-08T02:23:17.022000Z"
+    },
+    {
+      "id": "inplace_028_03_fk_v4_capabilities_profile",
+      "checksum": "54dc8ffc13663dbe094da52f07975fc238771bb0c0b2ffc905c7e314696e41ab",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:23:17.023000Z",
+      "completedAt": "2026-09-08T02:23:17.046000Z"
+    },
+    {
+      "id": "inplace_028_04_fk_v4_capabilities_verifier",
+      "checksum": "7a03f10c10636b50e12bf664e44357c177b346fdd47da498a1f8dc8eba832d4b",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:23:17.047000Z",
+      "completedAt": "2026-09-08T02:23:17.070000Z"
+    },
+    {
+      "id": "inplace_028_05_fk_v4_model_usage_profile",
+      "checksum": "87de27b5d91ed8b7b1baa6e7569af662dad23a94dbb282cb68b0eb21b573d7c6",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:23:17.072000Z",
+      "completedAt": "2026-09-08T02:23:17.276000Z"
+    },
+    {
+      "id": "inplace_029_01_usage_strategy_capacity",
+      "checksum": "db10826a888ab9dd43ce62b2abae219cb7ee9e573ad42f31f2606e043f18ac76",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:33:38.786000Z",
+      "completedAt": "2026-09-08T02:33:38.987000Z"
+    },
+    {
+      "id": "inplace_030_01_fk_strategy_subscriptions_account",
+      "checksum": "f5eed98904aa4443249629c2eca397ba155b559d73715ae73a7cc26d7c2a91cd",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:39:48.651000Z",
+      "completedAt": "2026-09-08T02:39:48.684000Z"
+    },
+    {
+      "id": "inplace_030_02_fk_strategy_subscriptions_user",
+      "checksum": "30a8611c9ba0fb7d40b3fd63b400ab55a19165cc3bcde20544c7a335fc9fe4a9",
+      "status": "completed",
+      "startedAt": "2026-09-08T02:39:48.685000Z",
+      "completedAt": "2026-09-08T02:39:48.710000Z"
+    },
+    {
+      "id": "inplace_035_01_account_root_promotion",
+      "checksum": "6f468bae7f5d2a89c3cce2c60654680efd29a2bb7dc22579f3cb5af51c40fe93",
+      "status": "completed",
+      "startedAt": "2026-09-08T14:33:22.981000Z",
+      "completedAt": "2026-09-08T14:33:32.165000Z"
+    },
+    {
+      "id": "inplace_036_01_terminal_account_bindings",
+      "checksum": "5eeda88f7fe506d76786fb3e6cd656101f35dcdfc47686ff77947fc75bf48c0c",
+      "status": "completed",
+      "startedAt": "2026-09-08T14:42:03.921000Z",
+      "completedAt": "2026-09-08T14:42:13.933000Z"
+    },
+    {
+      "id": "inplace_036_02_bridge_connection_sessions",
+      "checksum": "ca8ea61962e3a384cc3573de55d622cfa3ae8dd923ac58187e861ba3b3bf01c0",
+      "status": "completed",
+      "startedAt": "2026-09-08T14:42:18.727000Z",
+      "completedAt": "2026-09-08T14:42:28.570000Z"
+    },
+    {
+      "id": "inplace_037_01_observer_sources",
+      "checksum": "2d6f7b35a4bd492756d0054a0d1ca7eb37b77f982aaa2d4ba2dc18531e7e02e3",
+      "status": "completed",
+      "startedAt": "2026-09-08T14:49:36.198000Z",
+      "completedAt": "2026-09-08T14:49:45.914000Z"
+    },
+    {
+      "id": "inplace_037_02_observer_channels",
+      "checksum": "22d7909156bd20413b33da623567467868268d11ff9fbaa78fae3635ae932d2b",
+      "status": "completed",
+      "startedAt": "2026-09-08T14:49:50.825000Z",
+      "completedAt": "2026-09-08T14:50:01.036000Z"
+    },
+    {
+      "id": "inplace_037_03_observer_channel_accesses",
+      "checksum": "65931ff886b59c797b75f0e0c497ee50273256353b91d3b014afeef0e05d34fa",
+      "status": "completed",
+      "startedAt": "2026-09-08T14:50:06.681000Z",
+      "completedAt": "2026-09-08T14:50:16.109000Z"
+    },
+    {
+      "id": "inplace_037_04_trading_contexts",
+      "checksum": "f8a18b842548ff6c990c851b19716f65867cdfa2a5b8febf41d54139c3da00c1",
+      "status": "completed",
+      "startedAt": "2026-09-08T14:50:20.863000Z",
+      "completedAt": "2026-09-08T14:50:30.305000Z"
+    },
+    {
+      "id": "inplace_038_01_account_runtime_snapshots",
+      "checksum": "c2aa18eff3045a59d2cc1045dd20de514b953744adcc301ed890ea9419f16e5b",
+      "status": "completed",
+      "startedAt": "2026-09-08T14:56:20.057000Z",
+      "completedAt": "2026-09-08T14:56:29.581000Z"
+    },
+    {
+      "id": "inplace_038_02_market_quotes",
+      "checksum": "2e097edff3a1aa1472454563af0ed7e1c4883abe5c7ea35ac91abe69bdcb523c",
+      "status": "completed",
+      "startedAt": "2026-09-08T14:56:34.455000Z",
+      "completedAt": "2026-09-08T14:56:43.950000Z"
+    },
+    {
+      "id": "inplace_038_03_open_position_snapshots",
+      "checksum": "31f2282998ee53c274a19336db01359065f9545f0587f98f16a8f81dd1149351",
+      "status": "completed",
+      "startedAt": "2026-09-08T14:56:48.795000Z",
+      "completedAt": "2026-09-08T14:56:58.878000Z"
+    },
+    {
+      "id": "inplace_038_04_pending_order_snapshots",
+      "checksum": "10c8c481140f7d763915e82bbc687fdcfa1e22a9d3f57a5e0ab3668d981b3f18",
+      "status": "completed",
+      "startedAt": "2026-09-08T14:57:04.221000Z",
+      "completedAt": "2026-09-08T14:57:14.417000Z"
+    },
+    {
+      "id": "inplace_038_05_trading_projection_revisions",
+      "checksum": "46aad19e8f4121c95a518a4b91893d684f0b915b2afe0b2acd1241f9ca657627",
+      "status": "completed",
+      "startedAt": "2026-09-08T14:57:19.117000Z",
+      "completedAt": "2026-09-08T14:57:28.525000Z"
+    },
+    {
+      "id": "inplace_038_06_trading_projection_provenance_v4",
+      "checksum": "1f61e79ce1407858928175af324d6925768037b25bef155b626e5a3516dc683e",
+      "status": "completed",
+      "startedAt": "2026-09-08T14:57:33.290000Z",
+      "completedAt": "2026-09-08T14:57:42.830000Z"
+    },
+    {
+      "id": "inplace_039_01_legacy_candle_backfill_v4",
+      "checksum": "5bacf20ca52e58c81353640b117762694dbb06ff6a3bde6db85838d85e6c5da8",
+      "status": "completed",
+      "startedAt": "2026-09-08T15:04:26.443000Z",
+      "completedAt": "2026-09-08T15:04:36.004000Z"
+    },
+    {
+      "id": "inplace_039_02_market_candles_build_v4",
+      "checksum": "b81e93421cb18e00f4e33cd80b82d29581cd6ebbca6bfd6ed28cfef8477bede6",
+      "status": "completed",
+      "startedAt": "2026-09-08T15:04:40.796000Z",
+      "completedAt": "2026-09-08T15:04:50.435000Z"
+    },
+    {
+      "id": "inplace_039_03_legacy_candle_mappings_v4",
+      "checksum": "2d0eab50b94c5921f3d4a5007ee1dfd985763c6658093d7ebfbf76c41f367dba",
+      "status": "completed",
+      "startedAt": "2026-09-08T15:04:55.329000Z",
+      "completedAt": "2026-09-08T15:05:06.420000Z"
+    },
+    {
+      "id": "inplace_040_01_legacy_candle_promotion",
+      "checksum": "39a5bc0342361fabeacae9643adb7f073a4aa76f8875715c6fe66b6fbc1f4a18",
+      "status": "completed",
+      "startedAt": "2026-09-08T15:29:47.837000Z",
+      "completedAt": "2026-09-08T15:30:03.127000Z"
+    },
+    {
+      "id": "inplace_041_01_trading_context_changes_v4",
+      "checksum": "9c6ebdd2085469655abd8ed45d89eb6f6b72f49566f065733d67661a87dee42e",
+      "status": "completed",
+      "startedAt": "2026-09-08T15:37:01.972000Z",
+      "completedAt": "2026-09-08T15:37:22.846000Z"
+    },
+    {
+      "id": "inplace_042_01_observer_management_registry_seed",
+      "checksum": "ff7ce1e81d6bbf7d6650930f200b865613eb35fcb972ae87206d43dbc0d95bfe",
+      "status": "completed",
+      "startedAt": "2026-09-08T18:49:53.713000Z",
+      "completedAt": "2026-09-08T18:49:53.713000Z"
+    },
+    {
+      "id": "inplace_043_01_risk_policy_sets_v4",
+      "checksum": "9e2139a0f833a85d9606042296f1c3185dfbcb331e0ab62a5f7c0c6c31b58abf",
+      "status": "completed",
+      "startedAt": "2026-09-08T23:03:50.732000Z",
+      "completedAt": "2026-09-08T23:04:41.218000Z"
+    },
+    {
+      "id": "inplace_043_02_risk_policy_versions_v4",
+      "checksum": "fdabafbbd3c7c1e6b3312c2fe369194b2e56232299642fbc7f6a8705ea491e91",
+      "status": "completed",
+      "startedAt": "2026-09-08T23:04:45.664000Z",
+      "completedAt": "2026-09-08T23:04:54.595000Z"
+    },
+    {
+      "id": "inplace_043_03_risk_policy_sets_v4",
+      "checksum": "a8bd3ef1c177d06dfb2a2c355c1a8ce3f961762274c5c9f9d37a774eaaa6f67a",
+      "status": "completed",
+      "startedAt": "2026-09-08T23:04:59.399000Z",
+      "completedAt": "2026-09-08T23:05:41.717000Z"
+    },
+    {
+      "id": "inplace_043_04_risk_policy_change_items_v4",
+      "checksum": "74cafba203bf45ca117cf33072b47c797a21cc54278214e4dc4744dbd2a395ce",
+      "status": "completed",
+      "startedAt": "2026-09-08T23:05:46.179000Z",
+      "completedAt": "2026-09-08T23:05:55.108000Z"
+    },
+    {
+      "id": "inplace_043_05_account_risk_states",
+      "checksum": "03deb6aa524b4a82b38ae3d5d8e5a66b29105dfc023f4bb29e6f8400c07be0d9",
+      "status": "completed",
+      "startedAt": "2026-09-08T23:06:00.219000Z",
+      "completedAt": "2026-09-08T23:06:10.740000Z"
+    },
+    {
+      "id": "inplace_043_06_risk_state_events",
+      "checksum": "74dd4a8595c3fcafc38810f699508b7cae375f2c77f301b42c5f35a835001f45",
+      "status": "completed",
+      "startedAt": "2026-09-08T23:06:15.343000Z",
+      "completedAt": "2026-09-08T23:06:24.234000Z"
+    },
+    {
+      "id": "inplace_043_07_account_risk_summaries",
+      "checksum": "f31b9a669f69a5abef9b5dc98de02e9f3e5831d7dd4558b2ef2c743b5272786f",
+      "status": "completed",
+      "startedAt": "2026-09-08T23:06:28.685000Z",
+      "completedAt": "2026-09-08T23:06:37.640000Z"
+    },
+    {
+      "id": "inplace_043_08_risk_manual_releases",
+      "checksum": "0d612bf20358b7990e64b4414340e6db42e091f7c4995bebf74a3e090ccaf825",
+      "status": "completed",
+      "startedAt": "2026-09-08T23:06:42.160000Z",
+      "completedAt": "2026-09-08T23:06:51.283000Z"
+    },
+    {
+      "id": "inplace_044_01_risk_policy_write_receipts",
+      "checksum": "4d12b48a9c2e1f3b82ab565ea034f630e142912c1481b2604f14162891036cef",
+      "status": "started",
+      "startedAt": "2026-09-09T00:59:42.089000Z",
+      "completedAt": null
+    }
+  ],
+  "tools": [
+    {
+      "path": "scripts/rehearse-risk-policy-upgrade-local.mjs",
+      "sha256": "284062faa9025e98fc56ed260ed41d79fc24c254877172dab78df3f7ac52f3c2"
+    },
+    {
+      "path": "scripts/run-risk-policy-upgrade-rehearsal-local.py",
+      "sha256": "397cf7dca295c6d77a18325eee94a2c7ee42246a77a33cb8e5506138c2a716b7"
+    },
+    {
+      "path": "scripts/lib/risk-policy-receipt-upgrade.mjs",
+      "sha256": "95e8e1c9e127f2be64079bad4e1e3eef87184675d04958fa9f23ffcc9da84740"
+    },
+    {
+      "path": "scripts/lib/mysql-risk-policy-receipt-store.mjs",
+      "sha256": "6f56c28b8acea3f0030722e3b01226eb71acf0cfd203f69c26a351b4724d27bf"
+    },
+    {
+      "path": "server/db/migrations/inplace/044_risk_policy_write_receipts.sql",
+      "sha256": "8fa254048bd98d24a2984f652962edcab214d5a6d7d15f56aef0c31cd25b9ba2"
+    }
+  ],
+  "tableState": {
+    "hash": "d250fb22d9f0f1314548fbac2380f95717b9cef7c319851fd43ef1a4ed33aca5",
+    "rows": 0,
+    "ddl": "CREATE TABLE `risk_policy_write_receipts` (\n  `user_id` int NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `idempotency_key` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `request_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `result_json` json NOT NULL,\n  `result_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`user_id`,`trading_account_id`,`idempotency_key`),\n  KEY `fk_risk_policy_receipt_account` (`trading_account_id`),\n  CONSTRAINT `fk_risk_policy_receipt_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_risk_policy_receipt_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+  },
+  "protectedSnapshotHash": "21ee2b862aead2f96369f7fb9d5255466146610ed2eb4aa75a40379397a6d85e",
+  "ddlAttempted": 1,
+  "ddlAcknowledged": 1,
+  "currentDatabaseWrites": 0,
+  "observedAt": "2026-09-09T01:00:00.632Z"
+}

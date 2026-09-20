@@ -1,0 +1,14 @@
+{
+  "kind": "clock-observation-empty-schema-rehearsal/v1",
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "dataCopied": false,
+  "referenceDatabaseRemoved": true,
+  "planHash": "4c5054cdc007cf286eaa1811db78cddcfcaac60c5cc30511fce731e33185e192",
+  "ddlAckLossRecovered": true,
+  "replayNoDDL": true,
+  "ddlAttempts": 1,
+  "steps": 264,
+  "scope": "Cloned current DDL and migration journal; no business data copied. Current upgrade separately checks every old table data hash.",
+  "observedAt": "2026-09-11T07:56:20.157Z"
+}

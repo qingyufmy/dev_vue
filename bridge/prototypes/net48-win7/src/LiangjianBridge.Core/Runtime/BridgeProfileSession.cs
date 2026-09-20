@@ -18,6 +18,8 @@ namespace Liangjian.BridgeV4.Runtime
         private readonly ProfileOutboxCoordinator outbox;
         private readonly JavaScriptSerializer serializer = new JavaScriptSerializer();
         private PendingCommand pendingCommand;
+        public BridgeMarketStreams MarketStreams { get; set; }
+        public ITerminalProjectionSource MarketHistorySource { get; set; }
 
         public BridgeProfileSession(ProfileRuntime runtimeValue, ITerminalQuerySource terminalValue)
             : this(runtimeValue, terminalValue, null)
@@ -47,6 +49,27 @@ namespace Liangjian.BridgeV4.Runtime
             }
             BridgeEnvelope envelope = BridgeEnvelope.Parse(incomingJson);
             runtime.ValidateRoute(envelope.TerminalInstanceId, envelope.BrokerServer, envelope.Login, envelope.ConnectionEpoch);
+            if (envelope.MessageType == "stream.subscribe" || envelope.MessageType == "stream.unsubscribe")
+            {
+                if (MarketStreams == null) throw new InvalidDataException("bridge_market_stream_unavailable");
+                MarketStreams.Control(envelope, nowUtcMsc); return null;
+            }
+            if (envelope.MessageType == "stream.ack")
+            {
+                object subscription, status, stream, revision;
+                long acknowledgedRevision;
+                if (!envelope.Payload.TryGetValue("subscription_id", out subscription)
+                    || !envelope.Payload.TryGetValue("stream", out stream) || !(Equals(stream, "account") && Equals(subscription, "account-snapshot")
+                        || Equals(stream, "positions") && Equals(subscription, "terminal-positions")
+                        || Equals(stream, "pending_orders") && Equals(subscription, "terminal-pending_orders")
+                        || BridgeMarketStreams.IsMarketAck(subscription, stream))
+                    || !envelope.Payload.TryGetValue("revision", out revision) || !(revision is int || revision is long)
+                    || !long.TryParse(Convert.ToString(revision, CultureInfo.InvariantCulture), out acknowledgedRevision) || acknowledgedRevision < 1
+                    || String.IsNullOrEmpty(envelope.CorrelationId)
+                    || !envelope.Payload.TryGetValue("status", out status) || (!Equals(status, "applied") && !Equals(status, "duplicate")))
+                    throw new InvalidDataException("bridge_account_stream_ack_invalid");
+                return null;
+            }
             if (envelope.MessageType == "data.persisted.ack")
             {
                 outbox.ApplyPersistedAck(runtime, envelope);
@@ -178,6 +201,26 @@ namespace Liangjian.BridgeV4.Runtime
                 return null;
             }
             TerminalCommandExecutionResult result = commands.Reconcile(runtime, request, record, nowUtcMsc);
+            if (result.Status == "uncertain")
+            {
+                IDictionary<string, object> previous = serializer.DeserializeObject(record.ResultJson)
+                    as IDictionary<string, object>;
+                object previousResultRaw;
+                IDictionary<string, object> previousResult;
+                object context;
+                if (previous != null && previous.TryGetValue("result", out previousResultRaw)
+                    && (previousResult = previousResultRaw as IDictionary<string, object>) != null
+                    && previousResult.TryGetValue("reconcile", out context))
+                {
+                    IDictionary<string, object> details = result.Result == null
+                        ? new Dictionary<string, object>(StringComparer.Ordinal)
+                        : new Dictionary<string, object>(result.Result, StringComparer.Ordinal);
+                    // Keep the original command facts across every read-only reconciliation attempt.
+                    details["reconcile"] = context;
+                    result = TerminalCommandExecutionResult.Create("uncertain", details,
+                        result.ErrorCode, result.TerminalCode);
+                }
+            }
             IDictionary<string, object> payload = ResultPayload(record.CommandId, record.Action,
                 result.Status, nowUtcMsc, result.Result, result.ErrorCode, result.TerminalCode);
             StoreResult(record.IdempotencyKey, payload, result.Status, nowUtcMsc);
@@ -285,6 +328,18 @@ namespace Liangjian.BridgeV4.Runtime
         private string QueryProjection(BridgeEnvelope envelope, BridgeQueryRequest request, long nowUtcMsc)
         {
             bool candles = request.Resource == "market.candles";
+            // Existing projection cursors keep their snapshot semantics.
+            if (candles && MarketHistorySource != null
+                && BridgeQueryRequest.ReadOptionalText(request.Parameters, "cursor", 2048) == null)
+            {
+                string windowTimeframe = BridgeQueryRequest.ReadText(request.Parameters, "timeframe", 4);
+                long windowStart = BridgeQueryRequest.ReadLong(request.Parameters, "range_start_utc_msc");
+                long windowEnd = BridgeQueryRequest.ReadLong(request.Parameters, "range_end_utc_msc");
+                int windowLimit = BridgeQueryRequest.ReadInt(request.Parameters, "limit", 1, 500);
+                if (windowLimit >= 2 && windowEnd > windowStart
+                    && windowEnd - windowStart <= ProjectionSourceSupport.CandleWindowMsc(windowTimeframe, windowLimit - 1))
+                    return QueryMarketWindow(envelope, request, nowUtcMsc);
+            }
             ProjectionCursorState cursor = ProjectionCursorCodec.Decode(
                 BridgeQueryRequest.ReadOptionalText(request.Parameters, "cursor", 2048), candles);
             string scopeKey = candles
@@ -316,6 +371,25 @@ namespace Liangjian.BridgeV4.Runtime
                 : ProjectionCursorCodec.EncodeHistory(result.SnapshotId, result.History.NextCursor);
             return QueryResponse(envelope, request, result.ObservedAtUtcMsc, result.SourceRevision,
                 "local_projection", items, hasMore, nextCursor, nowUtcMsc);
+        }
+
+        private string QueryMarketWindow(BridgeEnvelope envelope, BridgeQueryRequest request, long now)
+        {
+            BridgeAccountFacts.Read(runtime, terminal, now);
+            var c = runtime.Configuration;
+            string symbol = BridgeQueryRequest.ReadText(request.Parameters, "symbol", 64), timeframe = BridgeQueryRequest.ReadText(request.Parameters, "timeframe", 4);
+            long start = BridgeQueryRequest.ReadLong(request.Parameters, "range_start_utc_msc"), end = BridgeQueryRequest.ReadLong(request.Parameters, "range_end_utc_msc");
+            int limit = BridgeQueryRequest.ReadInt(request.Parameters, "limit", 2, 500);
+            if (start < 1 || end <= start || end > now + 15000 || end - start > ProjectionSourceSupport.CandleWindowMsc(timeframe, limit - 1)) throw new InvalidDataException("bridge_market_window_invalid");
+            var batch = MarketHistorySource.Fetch(new ProjectionSyncRequest { ProfileId = c.ProfileId, TerminalInstanceId = c.TerminalInstanceId, Platform = c.Platform, BrokerServer = c.BrokerServer, Login = c.Login, ConnectionEpoch = runtime.ConnectionEpoch,
+                Resource = "market.candles", ScopeKey = symbol + "|" + timeframe, RangeStartUtcMsc = start, RangeEndUtcMsc = end, Limit = limit, AllowOpenCandles = true });
+            long observed = (long)(DateTime.UtcNow - new DateTime(1970,1,1,0,0,0,DateTimeKind.Utc)).TotalMilliseconds;
+            BridgeAccountFacts.Read(runtime, terminal, observed);
+            if (batch == null || batch.Candles == null || batch.HasMore || batch.NextCursor != null
+                || batch.Resource != "market.candles" || batch.ScopeKey != symbol + "|" + timeframe
+                || string.IsNullOrWhiteSpace(batch.SourceRevision) || batch.Candles.Count > limit
+                || observed > request.DeadlineUtcMsc) throw new InvalidDataException("bridge_market_window_incomplete");
+            return QueryResponse(envelope, request, observed, batch.SourceRevision, "terminal", CandleItems(batch.Candles), false, null, observed);
         }
 
         private string QueryTerminal(BridgeEnvelope envelope, BridgeQueryRequest request, long nowUtcMsc)
@@ -355,6 +429,40 @@ namespace Liangjian.BridgeV4.Runtime
             {
                 items.Add(root);
             }
+            if (request.Resource == "market.instrument" && items.Count == 1)
+            {
+                var instrument = (IDictionary<string, object>)items[0];
+                object symbolValue;
+                string symbol = instrument.TryGetValue("symbol", out symbolValue) ? symbolValue as string
+                    : instrument.TryGetValue("name", out symbolValue) ? symbolValue as string : null;
+                long? tick = null;
+                bool connected = true;
+                try
+                {
+                    string id = Guid.NewGuid().ToString("N");
+                    var payload = new Dictionary<string, object> { { "request_id", id }, { "resource", "market.quote" },
+                        { "params", new Dictionary<string, object> { { "symbols", new[] { symbol } } } }, { "deadline_utc_msc", request.DeadlineUtcMsc } };
+                    var quoteRequest = BridgeQueryRequest.Parse(BridgeEnvelope.Parse(SerializeEnvelope(id, null, "query.request", payload, nowUtcMsc)));
+                    var quote = terminal.Query(runtime, quoteRequest, nowUtcMsc);
+                    if (quote.Succeeded && quote.RequestId == id && quote.Resource == TerminalResourceCode.MarketQuote)
+                    {
+                        var quoteRoot = serializer.DeserializeObject(quote.DataJson) as IDictionary<string, object>;
+                        object quotes;
+                        if (quoteRoot != null && quoteRoot.TryGetValue("items", out quotes) && quotes is object[] && ((object[])quotes).Length == 1)
+                        {
+                            var row = ((object[])quotes)[0] as IDictionary<string, object>;
+                            object quoteSymbol, timestamp; long value;
+                            if (row != null && row.TryGetValue("symbol", out quoteSymbol) && Equals(quoteSymbol, symbol)
+                                && row.TryGetValue("time_utc_msc", out timestamp) && Int64.TryParse(Convert.ToString(timestamp, CultureInfo.InvariantCulture), out value)) tick = value;
+                        }
+                    }
+                    else connected = false;
+                }
+                catch (InvalidOperationException) { connected = false; }
+                catch (InvalidDataException) { connected = false; }
+                instrument["market_state"] = BridgeMarketState.Classify(BridgeMarketState.Mode(instrument), tick,
+                    (long)(DateTime.UtcNow - new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc)).TotalMilliseconds, connected);
+            }
             string revision = ProjectionQueryCoordinator.Hash(request.Resource + "|"
                 + result.ObservedAtUtcMsc.ToString(CultureInfo.InvariantCulture) + "|" + result.DataJson);
             return QueryResponse(envelope, request, result.ObservedAtUtcMsc, revision,
@@ -364,12 +472,24 @@ namespace Liangjian.BridgeV4.Runtime
         private string QueryResponse(BridgeEnvelope envelope, BridgeQueryRequest request, long observedAtUtcMsc,
             string revision, string source, IList<object> items, bool hasMore, string nextCursor, long nowUtcMsc)
         {
-            return SerializeEnvelope(envelope, "query.response", new Dictionary<string, object>(StringComparer.Ordinal)
+            var payload = new Dictionary<string, object>(StringComparer.Ordinal)
             {
                 { "request_id", request.RequestId }, { "resource", request.Resource },
                 { "observed_at_utc_msc", observedAtUtcMsc }, { "source_revision", revision },
                 { "source", source }, { "items", items }, { "has_more", hasMore }, { "next_cursor", nextCursor }
-            }, nowUtcMsc);
+            };
+            if (source == "local_projection" && request.Resource.StartsWith("history.", StringComparison.Ordinal))
+            {
+                // Only the complete, frozen local projection path reaches this response.
+                payload["history_coverage"] = new Dictionary<string, object>
+                {
+                    { "version", 1 }, { "status", "complete" },
+                    { "range_start_utc_msc", BridgeQueryRequest.ReadLong(request.Parameters, "range_start_utc_msc") },
+                    { "range_end_utc_msc", BridgeQueryRequest.ReadLong(request.Parameters, "range_end_utc_msc") },
+                    { "source_revision", revision }, { "collected_at_utc_msc", observedAtUtcMsc }
+                };
+            }
+            return SerializeEnvelope(envelope, "query.response", payload, nowUtcMsc);
         }
 
         private string QueryError(BridgeEnvelope envelope, BridgeQueryRequest request, long nowUtcMsc,

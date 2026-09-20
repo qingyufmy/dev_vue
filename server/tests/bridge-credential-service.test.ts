@@ -1,6 +1,6 @@
 import { bridgeCredentialRoutes } from '../src/modules/bridge/transport/http/bridge-credential-routes.js'
 import Fastify from 'fastify'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   BridgeCredentialError,
   BridgeCredentialService,
@@ -172,6 +172,45 @@ describe('BridgeCredentialService', () => {
 })
 
 describe('Bridge credential V4 routes', () => {
+  it('rejects unknown or coerced fields on all credential paths before effects and hides invalid results', async () => {
+    const fixture = createFixture()
+    const app = Fastify()
+    await app.register(bridgeCredentialRoutes, { prefix: '/api/v4', service: fixture.service })
+    const device = { refresh_token: legacyToken, installation_id: 'install-01', profile_id: 'default' }
+    const operations = [
+      { path: '/bridge/legacy-credential-exchanges', method: 'exchangeLegacyCredential' as const,
+        payload: { schema_version: 1, legacy_refresh_token: legacyToken, installation_id: 'install-01', profile_id: 'default', source_fingerprint: fingerprint } },
+      { path: '/bridge/session-tokens', method: 'createSessionToken' as const, payload: device },
+      { path: '/bridge/credential-revocations', method: 'revokeDeviceCredential' as const, payload: device },
+    ]
+    try {
+      for (const input of operations) {
+        const call = vi.spyOn(fixture.service, input.method)
+        const request = { method: 'POST' as const, url: '/api/v4' + input.path, payload: input.payload }
+        for (const payload of [{ ...input.payload, user_id: 8 }, { ...input.payload, profile_id: 3 }]) {
+          expect((await app.inject({ ...request, payload })).statusCode).toBe(400)
+        }
+        const query = await app.inject({ ...request, url: request.url + '?token=' + legacyToken })
+        expect(query.statusCode).toBe(400)
+        expect(query.body).not.toContain(legacyToken)
+        expect(call).not.toHaveBeenCalled()
+        call.mockResolvedValueOnce({ unexpected_secret: legacyToken } as never)
+        const failed = await app.inject(request)
+        expect(failed.statusCode).toBe(503)
+        expect(failed.json()).toMatchObject({ code: 'bridge_credential_result_unknown', retryable: false })
+        expect(failed.headers['content-type']).toContain('application/problem+json')
+        expect(failed.headers['cache-control']).toBe('no-store')
+        expect(failed.body).not.toContain(legacyToken)
+        call.mockRejectedValueOnce(new BridgeCredentialError('bridge_credential_commit_unknown', 503, false))
+        const uncertain = await app.inject(request)
+        expect(uncertain.statusCode).toBe(503)
+        expect(uncertain.json()).toMatchObject({ code: 'bridge_credential_commit_unknown', retryable: false })
+        expect(uncertain.body).not.toContain(legacyToken)
+        call.mockRestore()
+      }
+    } finally { await app.close() }
+  })
+
   it('rejects extra fields, coercion, invalid bodies and oversize revocations without reflecting secrets', async () => {
     const fixture = createFixture()
     const app = Fastify({ logger: false })

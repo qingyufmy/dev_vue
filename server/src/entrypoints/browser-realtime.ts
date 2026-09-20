@@ -23,7 +23,7 @@ async function main() {
   await Promise.all([assertTradingSchemaReady(pool, assertAccountPrincipalReadSchemaV2), connectCacheRedis(ticketCache), connectCacheRedis(eventCache)])
 
   const { sessions, events } = createBrowserTradingModule(pool, createBridgeGatewayLeases(ticketCache), eventCache,
-    () => health.workSucceeded(), code => health.workFailed(code), createAccountPrincipalReader)
+    () => health.workSucceeded(), code => health.workFailed(code), createAccountPrincipalReader, ticketCache)
   const app = Fastify({ logger: true, bodyLimit: 8 * 1024, trustProxy: true })
   const webSockets = new BrowserRealtimeWebSocketServer(
     app.server,

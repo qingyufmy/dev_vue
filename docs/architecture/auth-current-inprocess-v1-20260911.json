@@ -1,0 +1,16 @@
+{
+  "kind": "auth-current-inprocess/v1",
+  "passed": false,
+  "checks": [
+    "real-password-login",
+    "authorization-code-exchange",
+    "authenticated-session",
+    "code-replay-rejected"
+  ],
+  "networkListenerStarted": false,
+  "browserVerified": false,
+  "sessionsCreated": 2,
+  "sessionsRevoked": 0,
+  "cleanupFailed": true,
+  "observedAt": "2026-09-11T04:21:16.535Z"
+}

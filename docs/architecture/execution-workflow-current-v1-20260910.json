@@ -1,0 +1,297 @@
+{
+  "kind": "execution-workflow-current-upgrade/v1",
+  "passed": true,
+  "target": "dev_vue",
+  "planHash": "73fa3775367561d51a538ae728eedd8159989f92e5a544001bf91aac25fe412f",
+  "receiptSha256": "5c3901ad66471bc14618f285e0ce041091ed84639a9aee1d6b381843fb9aab9d",
+  "businessDataWrites": 0,
+  "phase": "complete",
+  "ddlAttempted": 33,
+  "cases": [],
+  "frozenAccountCount": 2,
+  "baselineHash": "e31ea80757f4cae0fb7d3c11e7f30e174da531f0c966690173845b695cedc79e",
+  "result": {
+    "apply": true,
+    "steps": [
+      {
+        "id": "inplace_063_01_inference_root_promotion",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_01_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_02_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_03_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_04_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_05_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_06_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_07_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_08_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_09_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_10_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_11_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_12_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_13_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_14_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_15_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_16_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_17_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_18_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_19_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_20_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_21_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_22_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_23_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_24_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_25_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_26_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_27_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_28_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_29_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_30_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_31_execution_workflow",
+        "status": "applied"
+      },
+      {
+        "id": "inplace_064_32_execution_workflow",
+        "status": "applied"
+      }
+    ],
+    "structureComplete": true,
+    "fullNormalizationComplete": false
+  },
+  "replay": {
+    "apply": true,
+    "steps": [
+      {
+        "id": "inplace_063_01_inference_root_promotion",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_01_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_02_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_03_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_04_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_05_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_06_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_07_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_08_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_09_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_10_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_11_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_12_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_13_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_14_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_15_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_16_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_17_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_18_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_19_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_20_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_21_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_22_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_23_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_24_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_25_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_26_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_27_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_28_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_29_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_30_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_31_execution_workflow",
+        "status": "completed"
+      },
+      {
+        "id": "inplace_064_32_execution_workflow",
+        "status": "completed"
+      }
+    ],
+    "structureComplete": true,
+    "fullNormalizationComplete": false
+  },
+  "completedSteps": 238,
+  "tableCount": 293,
+  "businessRows": 338557,
+  "afterSnapshotHash": "7fe05ccb6f198f31476cf443416aeae995902d868e8a62bbcaf5bb16babf120b",
+  "writeFreezeRestored": true,
+  "observedAt": "2026-09-10T15:06:38.330Z"
+}

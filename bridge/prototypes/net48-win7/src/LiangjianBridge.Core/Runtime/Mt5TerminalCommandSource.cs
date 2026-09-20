@@ -326,7 +326,10 @@ namespace Liangjian.BridgeV4.Runtime
             RequireOnly(request.ExpectedState, "ticket", "symbol", "direction", "order_type", "magic", "volume",
                 "open_price", "stop_limit_price", "stop_loss", "take_profit", "expiration_utc_msc");
             Require(request.ExpectedState, "ticket", "symbol", "direction", "order_type", "magic", "volume",
-                "open_price", "stop_limit_price", "stop_loss", "take_profit", "expiration_utc_msc");
+                "open_price");
+            foreach (string field in new[] { "stop_limit_price", "stop_loss", "take_profit", "expiration_utc_msc" })
+                if (!request.ExpectedState.ContainsKey(field))
+                    throw new InvalidDataException("bridge_mt5_command_field_required");
             Ticket(request.ExpectedState, "ticket");
             Text(request.ExpectedState, "symbol", 64);
             string direction = Text(request.ExpectedState, "direction");

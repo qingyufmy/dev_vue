@@ -1,0 +1,113 @@
+{
+  "kind": "inference-root-promotion-candidate/v1",
+  "renames": [
+    {
+      "from": "inference_snapshots",
+      "to": "inference_snapshots_legacy_v3"
+    },
+    {
+      "from": "inference_snapshots_v4_build",
+      "to": "inference_snapshots"
+    },
+    {
+      "from": "inference_snapshot_payloads_v4_build",
+      "to": "inference_snapshot_payloads"
+    },
+    {
+      "from": "ai_model_tasks",
+      "to": "ai_model_tasks_legacy_v3"
+    },
+    {
+      "from": "ai_model_tasks_v4_build",
+      "to": "ai_model_tasks"
+    },
+    {
+      "from": "ai_model_attempts_v4_build",
+      "to": "ai_model_attempts"
+    },
+    {
+      "from": "ai_analysis_runs_v4_build",
+      "to": "ai_analysis_runs"
+    },
+    {
+      "from": "market_analyses_v4_build",
+      "to": "market_analyses"
+    },
+    {
+      "from": "market_analysis_payloads_v4_build",
+      "to": "market_analysis_payloads"
+    },
+    {
+      "from": "ai_trader_runs_v4_build",
+      "to": "ai_trader_runs"
+    },
+    {
+      "from": "trade_decisions_v4_build",
+      "to": "trade_decisions"
+    },
+    {
+      "from": "trade_decision_payloads_v4_build",
+      "to": "trade_decision_payloads"
+    },
+    {
+      "from": "risk_decisions_v4_build",
+      "to": "risk_decisions_v4"
+    },
+    {
+      "from": "risk_decision_payloads_v4_build",
+      "to": "risk_decision_payloads_v4"
+    }
+  ],
+  "retained": [
+    {
+      "from": "inference_snapshots",
+      "to": "inference_snapshots_legacy_v3",
+      "rows": "789",
+      "sha256": "549474c7c20dcb37d990eeb91bd65e71d7d69cc5bbfd509cce1aeb8243cff28e",
+      "incomingForeignKeys": []
+    },
+    {
+      "from": "ai_model_tasks",
+      "to": "ai_model_tasks_legacy_v3",
+      "rows": "9317",
+      "sha256": "34d4831dae971bc72129a7879eb19421f98747c3099124b616abf664bcd615eb",
+      "incomingForeignKeys": [
+        {
+          "tableName": "ai_manual_analysis_jobs",
+          "constraintName": "fk_manual_analysis_model_task",
+          "columnName": "model_task_id",
+          "parent": "ai_model_tasks",
+          "parentColumn": "task_id",
+          "ordinal": 1
+        },
+        {
+          "tableName": "ai_model_task_attempts",
+          "constraintName": "fk_model_attempt_task",
+          "columnName": "task_id",
+          "parent": "ai_model_tasks",
+          "parentColumn": "task_id",
+          "ordinal": 1
+        },
+        {
+          "tableName": "ai_model_task_events",
+          "constraintName": "fk_model_event_task",
+          "columnName": "task_id",
+          "parent": "ai_model_tasks",
+          "parentColumn": "task_id",
+          "ordinal": 1
+        }
+      ]
+    }
+  ],
+  "sql": "RENAME TABLE `inference_snapshots` TO `inference_snapshots_legacy_v3`, `inference_snapshots_v4_build` TO `inference_snapshots`, `inference_snapshot_payloads_v4_build` TO `inference_snapshot_payloads`, `ai_model_tasks` TO `ai_model_tasks_legacy_v3`, `ai_model_tasks_v4_build` TO `ai_model_tasks`, `ai_model_attempts_v4_build` TO `ai_model_attempts`, `ai_analysis_runs_v4_build` TO `ai_analysis_runs`, `market_analyses_v4_build` TO `market_analyses`, `market_analysis_payloads_v4_build` TO `market_analysis_payloads`, `ai_trader_runs_v4_build` TO `ai_trader_runs`, `trade_decisions_v4_build` TO `trade_decisions`, `trade_decision_payloads_v4_build` TO `trade_decision_payloads`, `risk_decisions_v4_build` TO `risk_decisions_v4`, `risk_decision_payloads_v4_build` TO `risk_decision_payloads_v4`",
+  "writes": 0,
+  "executed": false,
+  "runtimeReady": false,
+  "dataMigrationComplete": false,
+  "requires": [
+    "complete-source-DDL-rehearsal",
+    "preserved-rows-and-incoming-foreign-keys-proof",
+    "subscription-root-promotion-and-business-backfill",
+    "durable-upgrade-journal-and-ack-loss-recovery"
+  ]
+}

@@ -12,6 +12,9 @@ export class ExecutionService {
     const source = await this.repository.loadApprovedRiskSource(userId, decisionId)
     if (!source) throw new ExecutionError('execution_source_not_found', 404)
     if (source.userId !== userId || source.riskDecisionId !== decisionId) throw new ExecutionError('execution_source_revision_conflict', 409)
+    const existing = await this.repository.replayPreparedExecution({ userId, accountId: source.accountId,
+      riskDecisionId: decisionId, sourceHash: executionSourceHash(source) })
+    if (existing) return existing
     const prepared = prepareExecutionBundle(source, now)
     if (prepared.kind === 'noop') return prepared
     // Repository revalidates the source/hash and account capacity inside one

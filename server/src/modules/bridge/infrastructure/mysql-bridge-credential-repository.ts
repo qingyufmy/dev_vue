@@ -33,16 +33,27 @@ function isEligible(row: LegacySessionRow): boolean {
 
 async function inTransaction<T>(pool: Pool, work: (connection: PoolConnection) => Promise<T>): Promise<T> {
   const connection = await pool.getConnection()
+  let committing = false
+  let destroyed = false
   try {
     await connection.beginTransaction()
     const result = await work(connection)
+    committing = true
     await connection.commit()
     return result
   } catch (error) {
-    await connection.rollback()
+    if (committing) {
+      destroyed = true
+      connection.destroy()
+      throw new BridgeCredentialError('bridge_credential_commit_unknown', 503, false)
+    }
+    try { await connection.rollback() } catch {
+      destroyed = true
+      connection.destroy()
+    }
     throw error
   } finally {
-    connection.release()
+    if (!destroyed) connection.release()
   }
 }
 
@@ -162,12 +173,13 @@ export class MysqlBridgeCredentialRepository implements BridgeCredentialReposito
           AND s.installation_id = ?
           AND s.profile_id = ?
           AND s.revoked_at IS NULL
+          AND (s.installation_authorization_id IS NULL OR EXISTS (SELECT 1 FROM bridge_installation_authorizations i
+            WHERE i.id=s.installation_authorization_id AND i.user_id=s.user_id AND i.installation_id=s.installation_id AND i.revoked_at_utc IS NULL))
           AND u.deletion_status = 'active'
           AND u.deleted_at IS NULL
-          AND (u.role = 'admin' OR u.plan_expires_at IS NULL OR u.plan_expires_at > UTC_TIMESTAMP(3))
         FOR UPDATE`, [input.tokenHash, input.installationId, input.profileId])
       const session = rows[0]
-      if (!session || !isEligible(session)) {
+      if (!session) {
         throw new BridgeCredentialError('bridge_credential_binding_invalid', 401)
       }
       await connection.execute(`

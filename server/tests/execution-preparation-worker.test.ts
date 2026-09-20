@@ -48,3 +48,17 @@ describe('ExecutionPreparationWorker', () => {
     expect(sends).toBe(0)
   })
 })
+
+
+it.each([1, 2])('keeps an account blocked by an unresolved command pending at read %s', async blockedRead => {
+  let reads = 0, created = 0, released = 0
+  const source = { loadPrepared: async () => ++reads === blockedRead
+    ? { blocked: true, accountId: '7' }
+    : { intentId: 'intent-1', accountId: '7', command: {} } }
+  const leases = { acquire: async () => true, renew: async () => true, release: async () => { released++ } }
+  const commands = { findByIntent: async () => null, create: async () => { created++; return {} } }
+  const worker = new ExecutionPreparationWorker(source as never, leases, commands as never)
+  expect(await worker.run('intent-1')).toEqual({ kind: 'busy', accountId: '7' })
+  expect(created).toBe(0)
+  expect(released).toBe(blockedRead === 2 ? 1 : 0)
+})

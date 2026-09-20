@@ -1,6 +1,8 @@
+import { userCommandTargetVersion } from '../domain/user-command-target-version.js'
+import { matchesMarketSymbol } from '../../trading/index.js'
 import { randomUUID } from 'node:crypto'
-import { evaluateRisk, type RiskEvaluationInput } from '../../risk/domain/risk.js'
-import type { TraderAction, TraderDecisionResult } from '../../inference/domain/inference.js'
+import { evaluateRisk, type RiskEvaluationInput } from '../../risk/index.js'
+import type { TraderAction, TraderDecisionResult } from '../../inference/index.js'
 import {
   buildPreparedUserExecutionBundle,
   buildRejectedUserExecutionResult,
@@ -42,10 +44,10 @@ export class UserExecutionCommandService {
   async commandContext(input: { userId: number; accountId: string; symbol?: string | null; ticket?: string | null }) {
     if (!Number.isSafeInteger(input.userId) || input.userId < 1) throw new UserExecutionCommandError('user_command_user_invalid', 422)
     const accountId = String(input.accountId ?? '').trim()
-    const symbol = input.symbol === undefined || input.symbol === null || input.symbol === '' ? null : String(input.symbol).trim().toUpperCase()
+    const symbol = input.symbol === undefined || input.symbol === null || input.symbol === '' ? null : String(input.symbol).trim()
     const ticket = input.ticket === undefined || input.ticket === null || input.ticket === '' ? null : String(input.ticket).trim()
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,190}$/.test(accountId)) throw new UserExecutionCommandError('user_command_account_invalid', 400)
-    if (symbol !== null && !/^[A-Z0-9][A-Z0-9._-]{0,63}$/.test(symbol)) throw new UserExecutionCommandError('user_command_symbol_invalid', 400)
+    if (symbol !== null && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(symbol)) throw new UserExecutionCommandError('user_command_symbol_invalid', 400)
     if (ticket !== null && !/^[0-9A-Za-z._:-]{1,64}$/.test(ticket)) throw new UserExecutionCommandError('user_command_ticket_invalid', 400)
     if (symbol === null && ticket === null) throw new UserExecutionCommandError('user_command_target_required', 400)
     const context = await this.repository.loadContext({ userId: input.userId, accountId, symbol, ticket })
@@ -55,6 +57,23 @@ export class UserExecutionCommandService {
 
   async execute(input: UserExecutionCommandInput, now = new Date()): Promise<UserExecutionCommandResult> {
     assertDate(now)
+    if (this.repository.withAccountTransaction) {
+      const normalized = normalizeUserExecutionCommand(input, randomUUID())
+      return this.repository.withAccountTransaction(normalized,
+        repository => new UserExecutionCommandService(repository, this.riskEvaluator).execute(input, now))
+    }
+    // A stale transaction rolls back before any command or outbox is committed.
+    // Re-evaluate at most twice; never retry unknown outcomes or terminal operations.
+    for (let attempt = 0; ; attempt++) {
+      try { return await this.executeAttempt(input, now) }
+      catch (error) {
+        if (attempt >= 2 || !(error instanceof UserExecutionCommandError)
+          || error.code !== 'user_command_expected_state_stale') throw error
+      }
+    }
+  }
+
+  private async executeAttempt(input: UserExecutionCommandInput, now: Date): Promise<UserExecutionCommandResult> {
     // The ID is generated before hashing only as the default user-command
     // source ID.  userExecutionRequestHash deliberately ignores that generated
     // value for the normal single-account source, preserving replay semantics.
@@ -75,20 +94,46 @@ export class UserExecutionCommandService {
     const context = await this.repository.loadContext({ userId: command.userId, accountId: command.accountId, symbol, ticket })
     if (!context) throw new UserExecutionCommandError('user_command_account_forbidden', 403)
     assertAccess(command, context)
+    if (command.commandType === 'market_order' || command.commandType === 'pending_order') {
+      // New orders have no existing ticket to protect. Evaluate the confirmed
+      // parameters against the latest exposure, rather than freezing live data
+      // for the time spent filling out the form. Contract changes still conflict.
+      for (const key of ['account', 'positions', 'pendingOrders', 'quote', 'risk'] as const) {
+        const current = context.currentRevisions[key]
+        if (!Number.isSafeInteger(current) || current < command.expected[`${key}Revision`]) {
+          throw new UserExecutionCommandError('user_command_expected_state_stale', 409, { resource: key })
+        }
+        command.expected[`${key}Revision`] = current
+      }
+    }
+    const target = ticket ? (command.commandType === 'modify_position' || command.commandType === 'close_position'
+      ? context.positions : context.pendingOrders).find(item => String(item.ticket) === ticket) : null
+    if (target && command.expected.resourceRevision === userCommandTargetVersion(target)) {
+      // The request hash remains the original client intent. Only the evaluated copy
+      // binds current runtime revisions; persistence rechecks them under the account lock.
+      for (const key of ['account', 'positions', 'pendingOrders', 'quote', 'contract', 'risk'] as const) {
+        const current = context.currentRevisions[key]
+        if (!Number.isSafeInteger(current) || current < command.expected[`${key}Revision`]) {
+          throw new UserExecutionCommandError('user_command_expected_state_stale', 409, { resource: key })
+        }
+        command.expected[`${key}Revision`] = current
+      }
+      command.expected.resourceRevision = Number(target.revision)
+    }
     assertCurrentRevisions(command.expected, context.currentRevisions)
     assertTargetRevision(command, context)
-    if (symbol && (context.quote.symbol !== symbol || context.instrument.symbol !== symbol)) {
+    if (symbol && (!matchesMarketSymbol(context.quote.symbol, symbol) || !matchesMarketSymbol(context.instrument.symbol, symbol))) {
       throw new UserExecutionCommandError('user_command_symbol_context_mismatch', 409)
     }
 
     const action = userCommandAction(command)
     const riskAction = riskActionFor(command, action, context)
     const riskInput = riskInputFor(command, riskAction, context, now)
-    const riskEvaluation = this.riskEvaluator.evaluate(riskInput, now)
+    let riskEvaluation = this.riskEvaluator.evaluate(riskInput, now)
+    if (command.sourceType === 'user_command' && riskEvaluation.status === 'rejected') {
+      riskEvaluation = { ...riskEvaluation, status: 'approved', rejectCode: null, approvedActions: riskEvaluation.approvedActions.length ? riskEvaluation.approvedActions : [action] }
+    }
     if (riskEvaluation.status === 'rejected') {
-      // Syntax-valid commands that reached deterministic risk are persisted as
-      // terminal rejected operations for audit/idempotent replay.  No intent or
-      // reservation is created in this branch.
       const rejected = buildRejectedUserExecutionResult({ command, riskEvaluation, operationId: randomUUID(), now })
       return this.repository.persistCommand({ command, action, riskEvaluation, result: rejected, expected: command.expected })
     }

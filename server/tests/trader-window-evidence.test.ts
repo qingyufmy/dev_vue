@@ -1,5 +1,6 @@
+import { createSubscriptionExecutionWindowReader } from '../src/modules/strategies/composition.js'
 import { createSubscriptionPreferencesReader } from '../src/modules/strategies/composition.js'
-const traderWindowStaleReason = (clock: Parameters<typeof staleReason>[0], connection: Parameters<typeof staleReason>[1], run: TraderRun) => staleReason(clock, connection, run, createSubscriptionPreferencesReader)
+const traderWindowStaleReason = (clock: Parameters<typeof staleReason>[0], connection: Parameters<typeof staleReason>[1], run: TraderRun) => staleReason(clock, connection, run, createSubscriptionPreferencesReader, createSubscriptionExecutionWindowReader(connection))
 import { createTransactionAccountClock } from '../src/modules/trading/composition.js'
 import { describe, expect, it } from 'vitest'
 import type { PoolConnection } from 'mysql2/promise'
@@ -27,7 +28,7 @@ describe('frozen trader window evidence', () => {
     const snapshot = { subscriptionWindowHash: fingerprint, executionPreferences: { contractVersion: 1, takeProfitMode: 'ai_recommended', revision: '1' } }
     let timezone = 'UTC', cursorRevision = 1
     const connection = { async execute(sql: string) {
-      if (sql.includes('FROM subscription_execution_preferences_v4')) return [[{ contract_version: 1, take_profit_mode: 'ai_recommended', revision: '1' }]]
+      if (sql.includes('FROM subscription_execution_preferences')) return [[{ contract_version: 1, take_profit_mode: 'ai_recommended', revision: '1' }]]
       if (sql.includes('FROM inference_snapshots')) return [[{ payload_json: JSON.stringify(snapshot), payload_sha256: contentHash(snapshot) }]]
       return [[{ receive_timezone: timezone, receive_window_json: { enabled: false }, revision: cursorRevision }]]
     } } as unknown as PoolConnection

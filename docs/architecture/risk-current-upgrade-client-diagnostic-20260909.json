@@ -1,0 +1,50 @@
+{
+  "kind": "risk-current-upgrade-inspection/v1",
+  "passed": false,
+  "code": "risk_structure_store_other_clients",
+  "trace": [
+    "    at check (file:///D:/dev_codex/dev_vue/scripts/lib/mysql-risk-structure-store.mjs:15:52)",
+    "    at assertRiskUpgradeConnection (file:///D:/dev_codex/dev_vue/scripts/lib/mysql-risk-structure-store.mjs:43:3)",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)",
+    "    at async mysqlRiskStructureStore (file:///D:/dev_codex/dev_vue/scripts/lib/mysql-risk-structure-store.mjs:53:3)",
+    "    at async file:///D:/dev_codex/dev_vue/scripts/inspect-risk-current-upgrade-local.mjs:24:19"
+  ],
+  "sourceWrites": 0,
+  "clients": [
+    {
+      "id": "595",
+      "user": "dev_vue",
+      "host": "192.168.31.162:59456",
+      "command": "Sleep",
+      "seconds": 12237
+    },
+    {
+      "id": "596",
+      "user": "dev_vue",
+      "host": "192.168.31.162:59458",
+      "command": "Sleep",
+      "seconds": 14622
+    },
+    {
+      "id": "598",
+      "user": "dev_vue",
+      "host": "192.168.31.162:63555",
+      "command": "Sleep",
+      "seconds": 12237
+    },
+    {
+      "id": "599",
+      "user": "dev_vue",
+      "host": "192.168.31.162:63584",
+      "command": "Sleep",
+      "seconds": 12062
+    },
+    {
+      "id": "600",
+      "user": "dev_vue",
+      "host": "192.168.31.162:63585",
+      "command": "Sleep",
+      "seconds": 12237
+    }
+  ]
+}

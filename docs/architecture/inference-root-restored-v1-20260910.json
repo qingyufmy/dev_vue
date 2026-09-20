@@ -1,0 +1,22 @@
+{
+  "kind": "inference-root-restored-rehearsal/v1",
+  "passed": true,
+  "target": "dev_vue_m1_source_20260910_02",
+  "currentDevVueWrites": 0,
+  "receiptSha256": "5c3901ad66471bc14618f285e0ce041091ed84639a9aee1d6b381843fb9aab9d",
+  "planHash": "ece15ce0863e407a79e02b4689e6301f8494a6086966e800af9343adb9b0fef1",
+  "phase": "complete",
+  "ddlAttempted": 2,
+  "baselineHash": "4b208f80a65cbfe2474aeee394226085872c15a3c9bc49d6d72940949544f14a",
+  "tableCount": 270,
+  "totalRows": 338762,
+  "promotedSnapshotHash": "a6c21b53bee56b7931d447ba0cab3876a8dd9a5b5bb952a9452f38466cd42982",
+  "restoredSnapshotHash": "21448c9a35617a3779bc4fa2295472e7676de98d9787a93624cdaf6b42a783ba",
+  "checks": [
+    "all-tables-all-column-row-digests-preserved-after-rename",
+    "reverse-restores-row-digests-and-DDL",
+    "upgrade-journal-unchanged"
+  ],
+  "durableUpgradeCoordinatorVerified": false,
+  "observedAt": "2026-09-10T14:42:13.468Z"
+}

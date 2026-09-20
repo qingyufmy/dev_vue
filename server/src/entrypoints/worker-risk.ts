@@ -1,9 +1,13 @@
 import { Worker } from 'bullmq'
+import { createMysqlInstrumentSnapshotReader, createMysqlInstrumentCollectionRequester } from '../modules/trading/composition.js'
 import {
   assertV4RuntimeEnabled, closeHttpServer, createMysqlPool, installProcessLifecycle,
   loadServerEnvironment, loadV4RuntimeConfig, RoleHealth, startRoleHealthServer,
 } from '../bootstrap/index.js'
 import { createRiskReviewWorker } from '../modules/risk/composition.js'
+import { createMysqlRiskReviewSettlement, createMysqlTradeDecisionRiskWriter, createTransactionProposedDecisionEvidenceReader, createDecisionStrategyEvidenceReader } from '../modules/inference/composition.js'
+import { createStrategyExecutionConfigReader } from '../modules/strategies/composition.js'
+import { processRiskReviewJob } from '../modules/risk/index.js'
 import { RISK_QUEUE, type RiskReviewJob } from '../queue/task-queues.js'
 
 loadServerEnvironment()
@@ -14,10 +18,12 @@ async function main() {
   const health = new RoleHealth('worker-risk')
   const pool = createMysqlPool(config.mysql)
   await pool.query('SELECT 1')
-  const processor = createRiskReviewWorker(pool)
+  const processor = createRiskReviewWorker(pool, createMysqlTradeDecisionRiskWriter, createMysqlInstrumentSnapshotReader(pool),
+    createTransactionProposedDecisionEvidenceReader(pool), { evidence: createDecisionStrategyEvidenceReader, config: createStrategyExecutionConfigReader }, createMysqlInstrumentCollectionRequester(pool))
+  const settle = createMysqlRiskReviewSettlement(pool)
   const worker = new Worker<RiskReviewJob>(RISK_QUEUE, async job => {
     if (job.name !== 'risk.review' || !job.data.decisionId) throw new Error('risk_job_invalid')
-    const result = await processor.process(job.data.decisionId)
+    const result = await processRiskReviewJob(processor, settle, job.data.decisionId, job.attemptsMade + 1 >= (job.opts.attempts ?? 1))
     health.workSucceeded()
     return result
   }, { connection: config.queueRedis, prefix: config.queuePrefix, concurrency: config.riskConcurrency, autorun: false })

@@ -1,0 +1,49 @@
+{
+  "kind": "strategy-role-prompt-review-candidate/v1",
+  "observedAt": "2026-09-10T15:46:31.174Z",
+  "sourceId": "2",
+  "sourceVersion": "1",
+  "sourceHash": "6188d7ae3349483b4e925b1746508e07c37ac55375078908f0d2cc65f16cb6aa",
+  "sourcePromptHash": "f6e0a1e2ac41945a9aa7ff8a8aaa0cebc12a3bcc981a929ad5cf810a090e11ae",
+  "planHash": "798ffa6fd0581cf217035041ab4fae3238b9531820815841b8493cfc90f0f7ec",
+  "privateArtifact": "D:\\dev_codex\\.backup-core-20260910-01\\strategy-2-v1-role-candidate-v1.json",
+  "roles": {
+    "analysis": {
+      "promptHash": "44c9175f30366feaa25ecb86813c8b53bb20e82ec8aa47cf1edfe90c3585a524",
+      "bytes": 469,
+      "sourceSections": [
+        0
+      ]
+    },
+    "trader": {
+      "promptHash": "7ff2a699f7f9073a55b9c0c2f06161b1825ea5b1f7fc4c209b2e49df73c7ad2b",
+      "bytes": 457,
+      "sourceSections": [
+        0
+      ]
+    }
+  },
+  "sections": [
+    {
+      "index": 0,
+      "heading": "111",
+      "roles": [
+        "analysis",
+        "trader"
+      ],
+      "sourceHash": "f6e0a1e2ac41945a9aa7ff8a8aaa0cebc12a3bcc981a929ad5cf810a090e11ae",
+      "bytes": 3
+    }
+  ],
+  "originalTextFullyAssigned": true,
+  "compilePassed": true,
+  "configStatus": "converted",
+  "configProblems": [],
+  "runtimeBlockers": [
+    "legacy_prompt_has_no_strategy_semantics",
+    "preserve_retired_status"
+  ],
+  "executable": false,
+  "semanticAcceptance": "pending",
+  "databaseWrites": 0
+}

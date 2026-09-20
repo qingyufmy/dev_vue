@@ -1,0 +1,48 @@
+{
+  "kind": "restored-strategy-source-preservation/v1",
+  "passed": true,
+  "target": "dev_vue_m1_source_20260910_01",
+  "runId": "2bcb5c02-e78f-12ef-7fcb-9284d231b9c1",
+  "currentDevVueWrites": 0,
+  "runtimeEnabled": false,
+  "roleConversionCompleted": false,
+  "tools": [
+    {
+      "path": "scripts/rehearse-strategy-source-archive-local.mjs",
+      "sha256": "c51d140c9810a4f8d7ec18d468d3c6a2fc24509798f63732795a6651e562a071"
+    },
+    {
+      "path": "scripts/run-strategy-source-archive-local.py",
+      "sha256": "654cecec45519d2e0db2eee7995289b918ef97d66e73e3cb4bbc8d275f2cb374"
+    },
+    {
+      "path": "scripts/lib/strategy-source-archive-batch.mjs",
+      "sha256": "f7f51baed249b3e2a147e2b04b31eab8cbe663715952cc2fa2f850e1d62a9e5d"
+    },
+    {
+      "path": "scripts/lib/frozen-source-batch.mjs",
+      "sha256": "b228c3127b2607a64bb677ee362c22bcb060d11e47948986fbad4a00a1bb046f"
+    },
+    {
+      "path": "scripts/lib/v4-backfill-mysql-repository.mjs",
+      "sha256": "c10905a49e99e8c12dabcb9e86434634eeb34344f4c0769f0fb88f543eb31c92"
+    },
+    {
+      "path": "scripts/lib/strategy-backfill-schema-preflight.mjs",
+      "sha256": "433ec5109e8346c1ae2046347aa7252804e217a84a7fe3250f6484db78ebe586"
+    }
+  ],
+  "stage": "commit_and_replay",
+  "failedBatchRolledBack": true,
+  "replayedAfterCommitUnknown": true,
+  "sourceRows": 8,
+  "ledgerCounts": {
+    "data_migration_runs": 1,
+    "data_migration_checkpoints": 2,
+    "data_migration_batches": 2,
+    "data_migration_row_receipts": 8,
+    "data_migration_source_rows": 8
+  },
+  "businessTablesUnchanged": true,
+  "observedAt": "2026-09-10T03:20:27.680Z"
+}

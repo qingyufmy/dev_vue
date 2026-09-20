@@ -1,0 +1,38 @@
+{
+  "kind": "inference-build-current-proof/v1",
+  "passed": true,
+  "target": "dev_vue",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "sources": [
+    {
+      "path": "docs/architecture/inference-current-prepare-20260910.json",
+      "sha256": "a94ddc1c6c478e45e22f788d9fec00ea401aafbf98b1f73aa683952b09650583"
+    },
+    {
+      "path": "docs/architecture/inference-current-apply-20260910.json",
+      "sha256": "e344b4c3c248a332baf5b31f8d23a1e6c4b8ca738c233a1f27139613c81125f4"
+    },
+    {
+      "path": "docs/architecture/inference-current-replay-20260910.json",
+      "sha256": "2acc70568ba8d437117858eafbf4800e187d14aeb1e41fec258c370a08efbf3d"
+    }
+  ],
+  "inventory": {
+    "path": "docs/architecture/inference-schema-current-inventory-v6-20260910.json",
+    "sha256": "309aa74599940bb7b98f1ed164682fb994b01c510cc08a333872572a2eb409c6"
+  },
+  "receiptSha256": "5c3901ad66471bc14618f285e0ce041091ed84639a9aee1d6b381843fb9aab9d",
+  "planHash": "0bfcfa5268cbdc519ac1d3b7bae3712b073bc463c64bb17c93c1f9fe93364866",
+  "completedSteps": 204,
+  "startedSteps": 0,
+  "tableCount": 270,
+  "buildTableCount": 12,
+  "ddlApplied": 13,
+  "replayDdl": 0,
+  "protectedTableCount": 257,
+  "protectedSnapshotHash": "e8505a9b8a9eac3e551d2ede5e97db53db8265f67006643c84d94a836cfd13a7",
+  "priorHistoryUnchanged": true,
+  "businessDataWrites": 0,
+  "canonicalPromotionComplete": false,
+  "observedAt": "2026-09-10T09:17:35.880Z"
+}

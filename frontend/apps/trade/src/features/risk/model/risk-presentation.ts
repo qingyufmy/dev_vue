@@ -3,7 +3,7 @@ import type { RiskPolicy, RiskSummary } from '@aurum/contracts'
 
 export const manualReleaseRuleLabels: Record<string, string> = {
   RISK_DAILY_LOSS_LIMIT: '当日亏损限制',
-  RISK_DRAWDOWN_LIMIT: '账户回撤限制',
+  RISK_DRAWDOWN_LIMIT: '当日回撤限制',
   RISK_DAILY_OPEN_LIMIT: '当日开仓次数限制',
   RISK_CONSECUTIVE_LOSS_LIMIT: '连续亏损限制',
   RISK_COOLDOWN_ACTIVE: '亏损冷静期',
@@ -15,9 +15,11 @@ export const rejectCodeLabels: Record<string, string> = {
   RISK_TRADE_SEND_DISABLED: '交易发送已关闭',
   RISK_DATA_INCOMPLETE: '风险数据不完整',
   RISK_DAILY_LOSS_LIMIT: '触及当日亏损限制',
-  RISK_DRAWDOWN_LIMIT: '触及账户回撤限制',
+  RISK_DRAWDOWN_LIMIT: '触及当日回撤限制',
   RISK_OPEN_POSITION_LIMIT: '持仓数量超限',
   RISK_PENDING_ORDER_LIMIT: '挂单数量超限',
+  RISK_ORDER_VOLUME_LIMIT: '单笔手数超限',
+  RISK_INSTRUMENT_DIRECTION_DISABLED: '券商不允许该方向开仓',
   RISK_TOTAL_VOLUME_LIMIT: '总手数超限',
   RISK_DAILY_OPEN_LIMIT: '当日开仓次数超限',
   RISK_CONSECUTIVE_LOSS_LIMIT: '连续亏损超限',
@@ -43,9 +45,10 @@ export const availabilityCodeLabels: Record<string, string> = {
 export const policyFields = [
   { key: 'maxRiskPerTradePercent', wire: 'max_risk_per_trade_percent', label: '单笔最大风险', description: '单笔计划风险占账户净值的上限。', suffix: '%', step: '0.01', group: 'loss' },
   { key: 'maxDailyLossPercent', wire: 'max_daily_loss_percent', label: '当日亏损上限', description: '达到后停止接受新的开仓动作。', suffix: '%', step: '0.01', group: 'loss' },
-  { key: 'maxDrawdownPercent', wire: 'max_drawdown_percent', label: '最大回撤上限', description: '账户回撤达到该比例后限制交易。', suffix: '%', step: '0.01', group: 'loss' },
+  { key: 'maxDrawdownPercent', wire: 'max_drawdown_percent', label: '当日回撤上限', description: '按账户交易日计算，经资金进出校正后，相对当日净值峰值的回撤上限。', suffix: '%', step: '0.01', group: 'loss' },
   { key: 'maxOpenPositions', wire: 'max_open_positions', label: '最多持仓笔数', description: '当前账户可同时存在的持仓数量。', suffix: '笔', step: '1', group: 'exposure' },
   { key: 'maxPendingOrders', wire: 'max_pending_orders', label: '最多挂单笔数', description: '当前账户可同时存在的挂单数量。', suffix: '笔', step: '1', group: 'exposure' },
+  { key: 'maxOrderVolume', wire: 'max_order_volume', label: '单笔最大手数', description: '每笔新市价单或挂单的手数上限。', suffix: '手', step: '0.01', group: 'exposure' },
   { key: 'maxTotalVolume', wire: 'max_total_volume', label: '最大总手数', description: '持仓与新动作合计手数的约束。', suffix: '手', step: '0.01', group: 'exposure' },
   { key: 'maxSpreadPoints', wire: 'max_spread_points', label: '最大允许点差', description: '点差超过该值时拒绝新开仓。', suffix: '点', step: '0.1', group: 'market' },
   { key: 'minOpenIntervalSeconds', wire: 'min_open_interval_seconds', label: '最短开仓间隔', description: '两次成功开仓之间至少间隔多久。', suffix: '秒', step: '1', group: 'frequency' },
@@ -58,21 +61,25 @@ export const policyFields = [
 
 export type NumericPolicyKey = typeof policyFields[number]['key']
 
-export function riskState(policy: RiskPolicy | null, summary: RiskSummary | null) {
-  if (!policy || !summary) return { level: 'unknown' as const, title: '等待风险数据', detail: '正在读取当前账户的风险规则与实时摘要。', reasons: [] as string[] }
+export function riskState(policy: RiskPolicy | null, summary: RiskSummary | null, now = Date.now()) {
+  if (!policy) return { level: 'unknown' as const, title: '风控规则待同步', detail: '尚未取得账户规则，请刷新后查看。', reasons: [] as string[] }
   const reasons: string[] = []
   if (policy.globalKillSwitch) reasons.push('平台已暂停交易')
   if (policy.accountKillSwitch) reasons.push('账户已手动暂停交易')
   if (!policy.tradeSendEnabled) reasons.push('交易发送已关闭')
-  if (!summary.dataComplete) reasons.push('风险数据不完整')
+  if (!summary) return { level: reasons.length ? 'blocked' as const : 'unknown' as const, title: reasons[0] ?? '账户风险数据待准备', detail: '风险汇总尚未生成。可以先查看和设置规则，当前无法确认风险用量。', reasons }
+  const observed = Date.parse(summary.observedAt)
+  if (!Number.isFinite(observed) || observed > now + 5000 || now - observed > policy.maxRiskSummaryAgeSeconds * 1000) reasons.push('风险数据已过期，请等待更新')
+  if (summary.clockStatus !== 'calibrated' || summary.terminalTimezoneOffsetMinutes === null) reasons.push('账户交易时区尚未确认')
+  if (!summary.dataComplete || summary.incompleteReasons.length) reasons.push('风险数据不完整')
   if (Number(summary.dailyLossPercent) >= Number(policy.maxDailyLossPercent)) reasons.push('触及当日亏损限制')
-  if (Number(summary.drawdownPercent) >= Number(policy.maxDrawdownPercent)) reasons.push('触及账户回撤限制')
+  if (Number(summary.drawdownPercent) >= Number(policy.maxDrawdownPercent)) reasons.push('触及当日回撤限制')
   if (summary.openPositions >= policy.maxOpenPositions) reasons.push('持仓数量达到上限')
   if (summary.pendingOrders >= policy.maxPendingOrders) reasons.push('挂单数量达到上限')
   if (Number(summary.totalVolume) >= Number(policy.maxTotalVolume)) reasons.push('总手数达到上限')
   if (summary.dailyOpenCount >= policy.maxDailyOpenCount) reasons.push('当日开仓次数达到上限')
   if (summary.consecutiveLosses >= policy.consecutiveLossLimit) reasons.push('连续亏损达到上限')
-  if (summary.cooldownUntil && Date.parse(summary.cooldownUntil) > Date.now()) reasons.push('处于亏损冷静期')
+  if (summary.cooldownUntil && Date.parse(summary.cooldownUntil) > now) reasons.push('处于亏损冷静期')
   if (reasons.length) return { level: 'blocked' as const, title: '部分交易动作受限', detail: `${reasons[0] ?? '账户触发风险限制'}；平仓、撤单或收紧保护价仍会按动作类型单独评审。`, reasons }
 
   const warning = [
@@ -91,7 +98,7 @@ export function riskState(policy: RiskPolicy | null, summary: RiskSummary | null
 export function ratio(current: string | number, limit: string | number) {
   const maximum = Number(limit)
   if (!Number.isFinite(maximum) || maximum <= 0) return 0
-  return Math.min(100, Math.max(0, Number(current) / maximum * 100))
+  return Math.min(100, Math.max(0, (Number.isFinite(Number(current)) ? Number(current) : 0) / maximum * 100))
 }
 
 export function formatDecimal(value: string | number | null | undefined, digits = 2) {
@@ -109,14 +116,44 @@ export function formatDateTime(value: string | null | undefined, timezoneOffsetM
 }
 
 export function releaseRuleLabel(code: string) {
-  return manualReleaseRuleLabels[code] ?? code
+  return manualReleaseRuleLabels[code] ?? '其他风险限制'
 }
 
 export function rejectCodeLabel(code: string | null) {
   if (!code) return '通过全部风控规则'
-  return rejectCodeLabels[code] ?? code
+  return rejectCodeLabels[code] ?? '其他风控规则'
 }
 
 export function availabilityLabel(code: string | null | undefined) {
-  return code ? availabilityCodeLabels[code] ?? code : '当前不可手动解除'
+  return code ? availabilityCodeLabels[code] ?? '当前条件不支持手动解除' : '当前不可手动解除'
+}
+
+export function riskErrorMessage(reason: unknown, fallback: string) {
+  const code = reason instanceof Error ? reason.message : ''
+  const labels: Record<string, string> = {
+    risk_summary_not_found: '账户风险数据尚未生成',
+    risk_policy_not_found: '尚未取得账户风控规则',
+    risk_account_forbidden: '当前账户不可访问，请重新选择账户',
+    risk_summary_revision_conflict: '风险数据已更新，请刷新后重试',
+    revision_conflict: '设置已更新，请刷新后重新编辑',
+  }
+  return labels[code] ?? fallback
+}
+export function riskDataReason(code: string) {
+  const labels: Record<string, string> = {
+    terminal_clock_unverified: '账户交易时区尚未确认',
+    history_incomplete: '交易历史仍需补齐',
+    account_snapshot_missing: '账户资金数据尚未同步',
+    positions_incomplete: '持仓数据尚未同步完整',
+    pending_orders_incomplete: '挂单数据尚未同步完整',
+  }
+  return labels[code] ?? '部分风险计算数据尚未准备完整'
+}
+
+export function riskActionLabel(kind: string) {
+  return ({ market_order: '市价开仓', pending_order: '设置挂单', close_position: '平仓', partial_close: '部分平仓', modify_position: '调整持仓保护', modify_order: '修改挂单', cancel_order: '撤销挂单' } as Record<string, string>)[kind] ?? '交易操作'
+}
+export function riskDetailFields(value: Record<string, unknown>) {
+  const labels: Record<string, string> = { symbol: '品种', ticket: '订单号', volume: '手数', price: '价格', stop_loss: '止损', take_profit: '止盈', spread_points: '点差', risk_percent: '风险比例', risk_amount: '风险金额', close_percent: '平仓比例', resolved_volume: '平仓手数', remaining_volume: '剩余手数' }
+  return Object.entries(value).flatMap(([key, raw]) => labels[key] && (typeof raw === 'number' && Number.isFinite(raw) || typeof raw === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(raw)) ? [{ label: labels[key]!, value: String(raw) }] : [])
 }

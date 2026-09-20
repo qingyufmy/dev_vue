@@ -1,3 +1,6 @@
+import { createAccountRiskSummaryReader } from '../src/modules/risk/composition.js'
+import { createAccountInventorySummaryReader } from '../src/modules/trading/composition.js'
+import { createSubscriptionExecutionWindowReader, createAnalysisSubscriberReader } from '../src/modules/strategies/composition.js'
 import { createMysqlInferenceRepository } from '../src/modules/inference/composition.js'
 import { createMysqlTraderWindowGuard } from '../src/modules/inference/composition.js'
 import { createSubscriptionPreferencesReader } from '../src/modules/strategies/composition.js'
@@ -11,6 +14,27 @@ const config = { version: 1, timezone: 'terminal_server', enabled: true, weekday
 const subscription = { user_id: 42, trading_account_id: '7', receive_timezone: 'terminal_server', receive_window_json: config }
 const now = new Date('2026-09-07T19:00:00Z')
 describe('trader fan-out window', () => {
+  it('consumes the public strategy port in its transaction without querying strategy tables itself', async () => {
+    let active = false
+    const connection = {
+      async beginTransaction() { active = true }, async commit() { active = false },
+      async rollback() { active = false }, release() {},
+      async execute() { throw Error('unexpected SQL in consumer') },
+    } as unknown as PoolConnection
+    const guard = createMysqlTraderWindowGuard({ async getConnection() { return connection } } as unknown as Pool,
+      () => ({ async read() { throw Error('disabled window must not read clock') } }), db => {
+        expect(db).toBe(connection)
+        expect(active).toBe(true)
+        return { async read(scope) {
+          expect(scope).toEqual({ subscriptionId: 'sub', userId: 42, accountId: '7', subscriptionRevision: 4,
+            traderStrategyId: '20', traderStrategyVersionId: '21' })
+          return { userId: 42, accountId: '7', timezone: 'UTC', window: { enabled: false } }
+        } }
+      })
+    await expect(guard.assertAllowed({ subscriptionId: 'sub', userId: 42, tradingAccountId: '7', subscriptionRevision: 4,
+      strategyId: '20', strategyVersionId: '21' } as TraderRun, now)).resolves.toMatch(/^[a-f0-9]{64}$/)
+    expect(active).toBe(false)
+  })
   it('binds clock reads to the active guard transaction and rolls back untrusted or failed reads', async () => {
     for (const outcome of ['calibrated', 'missing', 'error'] as const) {
       const events: string[] = []
@@ -22,7 +46,8 @@ describe('trader fan-out window', () => {
         release() { events.push('release') },
         async execute(sql: string) {
           expect(active).toBe(true)
-          if (sql.includes('FROM strategy_subscriptions')) return [[subscription]]
+          if (sql.includes('FROM trading_account_ownerships own')) return [[{ positions_revision: 0, pending_orders_revision: 0, has_positions: 0, has_pending_orders: 0 }]]
+        if (sql.includes('FROM strategy_subscriptions')) return [[subscription]]
           expect(sql).toContain('FROM trading_accounts a')
           expect(sql).toContain('FOR SHARE')
           events.push('clock')
@@ -34,7 +59,7 @@ describe('trader fan-out window', () => {
         expect(transaction).toBe(connection)
         expect(active).toBe(true)
         return createTransactionAccountClock(transaction)
-      })
+      }, createSubscriptionExecutionWindowReader)
       const run = { subscriptionId: 'sub', userId: 42, tradingAccountId: '7', subscriptionRevision: 4, strategyId: '20', strategyVersionId: '21' } as TraderRun
       if (outcome === 'calibrated') await expect(guard.assertAllowed(run, now)).resolves.toMatch(/^[a-f0-9]{64}$/)
       else await expect(guard.assertAllowed(run, now)).rejects.toThrow(outcome === 'missing' ? 'trader_schedule_closed' : 'clock_read_failed')
@@ -52,7 +77,7 @@ describe('trader fan-out window', () => {
         return [present ? [{ ...subscription, receive_window_json: { enabled: false } }] : []]
       },
     }
-    const guard = createMysqlTraderWindowGuard({ async getConnection() { return connection } } as unknown as Pool, createTransactionAccountClock)
+    const guard = createMysqlTraderWindowGuard({ async getConnection() { return connection } } as unknown as Pool, createTransactionAccountClock, createSubscriptionExecutionWindowReader)
     const run = { subscriptionId: 'sub', userId: 42, tradingAccountId: '7', subscriptionRevision: 4, strategyId: '20', strategyVersionId: '21' } as TraderRun
     await guard.assertAllowed(run, now)
     present = false
@@ -67,6 +92,7 @@ describe('trader fan-out window', () => {
       async execute(sql: string, args: unknown[] = []) {
         if (sql.includes('FROM ai_analysis_runs r')) return [[{ id: 'run', user_id: 42, strategy_id: '10', strategy_version_id: '11', standard_symbol: 'XAUUSD', revision: 2, status: 'running', input_snapshot_id: 'snapshot', model_task_id: 'task', trigger_type: 'scheduled' }]]
         if (sql.includes('FROM ai_model_tasks WHERE')) return [[{ id: 'task', status: 'running', fencing_token: 1, deadline_at_utc: new Date(Date.now() + 60000) }]]
+        if (sql.includes('FROM trading_account_ownerships own')) return [[{ positions_revision: 0, pending_orders_revision: 0, has_positions: 0, has_pending_orders: 0 }]]
         if (sql.includes('FROM strategy_subscriptions s')) return [[{ ...subscription, id: 'sub', revision: 1, trader_strategy_id: '12', trader_strategy_version_id: '13', has_positions: 0, has_pending_orders: 0,
           receive_window_json: config }]]
         if (sql.includes('FROM trading_accounts a')) return [[]]
@@ -75,7 +101,7 @@ describe('trader fan-out window', () => {
         throw new Error('unexpected_sql')
       },
     }
-    const repo = createMysqlInferenceRepository({ async getConnection() { return connection } } as unknown as Pool, createTransactionAccountClock, createSubscriptionPreferencesReader)
+    const repo = createMysqlInferenceRepository({ async getConnection() { return connection } } as unknown as Pool, createTransactionAccountClock, createSubscriptionPreferencesReader, createSubscriptionExecutionWindowReader, { subscribers: createAnalysisSubscriberReader, inventory: createAccountInventorySummaryReader, risks: createAccountRiskSummaryReader })
     const input = { runId: 'run', userId: 42, expectedRevision: 2, marketAnalysisId: 'analysis', taskId: 'task', attemptId: 'attempt', fencingToken: 1, usage: null,
       result: { opportunity: 'long_setup', marketBias: 'bullish', confidence: 70, summary: 'result', analyzedAt: now.toISOString(), validUntil: now.toISOString() } } as Parameters<InferenceRepository['completeAnalysis']>[0]
     expect((await repo.completeAnalysis(input)).traderRuns).toEqual([])

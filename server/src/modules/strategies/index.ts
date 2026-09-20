@@ -1,9 +1,26 @@
 export * from './domain/strategy.js'
+export { parseStrategyRiskBudget, resolveStrategyRiskBudget } from './domain/strategy-risk-budget.js'
 export * from './domain/strategy-entry-methods.js'
 export * from './domain/strategy-market-plan.js'
 export * from './domain/subscription-window.js'
+export type { RuntimeStrategyAccess } from './application/runtime-strategy-access.js'
+export type { StrategyExecutionConfigReader, StrategyExecutionConfigScope, StrategyExecutionConfig } from './application/strategy-execution-config-reader.js'
+export type { AnalysisWindowReader } from './application/analysis-window-reader.js'
+export type { AnalysisSubscriber, AnalysisSubscriberReader } from './application/analysis-subscriber-reader.js'
+export type { SubscriptionExecutionWindowScope, SubscriptionExecutionWindow, SubscriptionExecutionWindowReader } from './application/subscription-execution-window-reader.js'
 export * from './domain/subscription-take-profit.js'
 export * from './application/strategy-service.js'
+export type { ActiveStrategyVersionReader } from './application/active-strategy-version-reader.js'
 export type { SubscriptionPreferencesReader } from './application/subscription-preferences-reader.js'
 export type { AnalysisStrategyAccess } from './application/analysis-strategy-access.js'
 export * from './domain/ema34-evidence.js'
+export * from './domain/strategy-reference-requirement.js'
+export type { AnalysisScheduleStore, DueAnalysisSchedule } from './application/analysis-schedule-store.js'
+
+export { parseChanEvidencePlan, type ChanEvidencePlan } from './domain/chan-evidence.js'
+
+export { parsePriceActionEvidencePlan, type PriceActionEvidencePlan } from './domain/price-action-evidence.js'
+
+export { parseEntryEventPolicy, type EntryEventPolicy } from './domain/entry-event-policy.js'
+
+export { assertStrategySymbol } from './domain/strategy-runtime-settings.js'

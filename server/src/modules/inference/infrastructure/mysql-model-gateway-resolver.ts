@@ -1,3 +1,5 @@
+import type { RuntimeStrategyAccess } from '../../strategies/index.js'
+import type { AccountPrincipalReader } from '../../auth/index.js'
 import { createDecipheriv } from 'node:crypto'
 import type { Pool, RowDataPacket } from 'mysql2/promise'
 import type { AnalysisModelGatewayResolver } from '../application/analysis-worker.js'
@@ -8,13 +10,6 @@ import {
 } from './http-json-model-gateway.js'
 import type { ModelUsageLedger, RuntimeModelUsageKind } from '../application/model-usage-ledger.js'
 
-interface StrategyScopeRow extends RowDataPacket {
-  id: string
-  active_version_id: string
-  scope: 'platform' | 'user'
-  owner_user_id: number | null
-}
-
 interface ProfileRow extends RowDataPacket {
   id: string
   owner_user_id: number
@@ -23,6 +18,11 @@ interface ProfileRow extends RowDataPacket {
   model_name: string
   api_base_url: string
   api_key_encrypted: string
+  thinking_enabled?: number
+  reasoning_effort?: string | null
+  context_window_tokens?: number | null
+  max_input_tokens?: number | null
+  max_output_tokens?: number | null
   temperature: string | number | null
   max_tokens: number | null
   request_timeout_ms: number | null
@@ -35,7 +35,6 @@ interface ProfileRow extends RowDataPacket {
 }
 
 interface PlatformUsageRow extends RowDataPacket {
-  plan: string
   share_for_manual: number
   share_for_auto: number
   allowed_plans: string | string[] | null
@@ -52,44 +51,54 @@ export class MysqlRuntimeModelProfileCatalog {
     private readonly pool: Pool,
     private readonly keyring: ReadonlyMap<string, Buffer>,
     private readonly options: RuntimeModelResolverOptions,
+    private readonly strategies: RuntimeStrategyAccess,
+    private readonly principals: AccountPrincipalReader,
   ) {}
 
-  async resolve(input: { userId: number; strategyId: string; strategyVersionId: string; usage: RuntimeModelUsageKind }): Promise<RuntimeModelProfile> {
-    const [strategies] = await this.pool.execute<StrategyScopeRow[]>(`SELECT CAST(id AS CHAR) id,CAST(active_version_id AS CHAR) active_version_id,scope,owner_user_id
-      FROM strategies WHERE id=? AND active_version_id=? AND status='active' AND deleted_at_utc IS NULL
-        AND (scope='platform' OR owner_user_id=?) LIMIT 1`, [input.strategyId, input.strategyVersionId, input.userId])
-    const strategy = strategies[0]
-    if (!strategy) throw new InferenceError('model_strategy_unavailable', 409)
-    const [profiles] = await this.pool.execute<ProfileRow[]>(`${profileSelect}
-      INNER JOIN user_model_defaults d ON d.model_profile_id=p.id AND d.user_id=?
-      WHERE ((p.scope='user' AND p.owner_user_id=?) OR (p.scope='platform' AND p.owner_user_id=0))
-        AND p.status='active' AND p.deleted_at IS NULL LIMIT 1`, [input.userId, input.userId])
-    const profile = profiles[0]
-    if (!profile) throw new InferenceError('model_profile_unavailable', 409)
-    if (profile.scope === 'platform') await this.assertPlatformSharing(input.userId, input.usage)
+  async resolve(input: { userId: number; strategyId: string; strategyVersionId: string; usage: RuntimeModelUsageKind; purpose?: 'analysis'|'trader' }): Promise<RuntimeModelProfile> {
+    if (!await this.strategies.canUseCurrent(input.userId, input.strategyId, input.strategyVersionId)) throw new InferenceError('model_strategy_unavailable', 409)
+    const selected = await this.strategies.readModelProfileId?.(input.userId, input.strategyId, input.strategyVersionId)
+    const profile = await this.readDefaultProfile(input.userId, input.usage,input.purpose??'analysis', selected)
     return mapProfile(profile, this.keyring, this.options, input)
   }
 
   async resolveForFrozenReview(input: { userId: number; strategyId: string; usage: RuntimeModelUsageKind }): Promise<RuntimeModelProfile> {
-    const [strategies] = await this.pool.execute<StrategyScopeRow[]>(`SELECT CAST(id AS CHAR) id,CAST(active_version_id AS CHAR) active_version_id,scope,owner_user_id
-      FROM strategies WHERE id=? AND deleted_at_utc IS NULL AND (scope='platform' OR owner_user_id=?) LIMIT 1`, [input.strategyId, input.userId])
-    if (!strategies[0]) throw new InferenceError('model_strategy_unavailable', 409)
-    const [profiles] = await this.pool.execute<ProfileRow[]>(`${profileSelect}
-      INNER JOIN user_model_defaults d ON d.model_profile_id=p.id AND d.user_id=?
-      WHERE ((p.scope='user' AND p.owner_user_id=?) OR (p.scope='platform' AND p.owner_user_id=0))
-        AND p.status='active' AND p.deleted_at IS NULL LIMIT 1`, [input.userId, input.userId])
-    const profile = profiles[0]
-    if (!profile) throw new InferenceError('model_profile_unavailable', 409)
-    if (profile.scope === 'platform') await this.assertPlatformSharing(input.userId, input.usage)
+    if (!await this.strategies.canUseFrozenReview(input.userId, input.strategyId)) throw new InferenceError('model_strategy_unavailable', 409)
+    const profile = await this.readDefaultProfile(input.userId, input.usage,'review')
     return mapProfile(profile, this.keyring, this.options, input)
   }
 
+  private async readDefaultProfile(userId: number, usage: RuntimeModelUsageKind,purpose:'analysis'|'trader'|'review', selected?: string | null): Promise<ProfileRow> {
+    // Inspect the binding independently of capability availability. A broken or
+    // unverified personal default must not silently spend platform credentials.
+    const column={analysis:'analysis_model_profile_id',trader:'trader_model_profile_id',review:'review_model_profile_id'}[purpose]
+    const [assignments]=await this.pool.execute<(RowDataPacket & {id:string|null})[]>(`SELECT CAST(${column} AS CHAR) id FROM user_model_assignments_v4 WHERE user_id=?`,[userId])
+    const [defaults] = assignments[0]?.id ? [[assignments[0]]] : await this.pool.execute<(RowDataPacket & { id: string })[]>(
+      'SELECT CAST(model_profile_id AS CHAR) id FROM user_model_defaults WHERE user_id=? LIMIT 2', [userId])
+    if (defaults.length > 1) throw new InferenceError('model_profile_unavailable', 409)
+    const personal = selected ? { id: selected } : defaults[0]
+    if (!personal) await this.assertPlatformSharing(userId, usage)
+    const [profiles] = personal
+      ? await this.pool.execute<ProfileRow[]>(`${profileSelect}
+        WHERE p.id=? AND ((p.scope='user' AND p.owner_user_id=?) OR (p.scope='platform' AND p.owner_user_id=0))
+          AND p.status='active' AND p.deleted_at IS NULL LIMIT 1`, [personal.id, userId])
+      : await this.pool.execute<ProfileRow[]>(`${profileSelect}
+        INNER JOIN user_model_defaults d ON d.model_profile_id=p.id AND d.user_id=0
+        WHERE p.scope='platform' AND p.owner_user_id=0 AND p.status='active' AND p.deleted_at IS NULL LIMIT 1`)
+    const profile = profiles[0]
+    if (!profile) throw new InferenceError('model_profile_unavailable', 409)
+    if (personal && profile.scope === 'platform') await this.assertPlatformSharing(userId, usage)
+    return profile
+  }
+
   private async assertPlatformSharing(userId: number, usage: 'manual' | 'auto') {
-    const [rows] = await this.pool.execute<PlatformUsageRow[]>(`SELECT u.plan,p.share_for_manual,p.share_for_auto,p.allowed_plans
-      FROM users u INNER JOIN platform_model_usage_policy p ON p.id=1 WHERE u.id=? LIMIT 1`, [userId])
+    const principal = (await this.principals.readMany([userId], 'none')).get(userId)
+    if (!principal) throw new InferenceError('platform_model_sharing_unavailable', 409)
+    const [rows] = await this.pool.execute<PlatformUsageRow[]>(`SELECT share_for_manual,share_for_auto,allowed_plans
+      FROM platform_model_usage_policy WHERE id=1`, [])
     const row = rows[0]
     const shared = usage === 'manual' ? Boolean(row?.share_for_manual) : Boolean(row?.share_for_auto)
-    if (!row || !shared || !planAllowed(row.allowed_plans, row.plan)) throw new InferenceError('platform_model_sharing_unavailable', 409)
+    if (!row || !shared || !planAllowed(row.allowed_plans, principal.plan)) throw new InferenceError('platform_model_sharing_unavailable', 409)
   }
 }
 
@@ -117,7 +126,7 @@ export class MysqlTraderModelGatewayResolver implements TraderModelGatewayResolv
   ) {}
   async resolve(input: { userId: number; strategyId: string; strategyVersionId: string }) {
     return new HttpJsonTraderModelGateway(
-      await this.profiles.resolve({ ...input, usage: 'auto' }), this.usage, fetch, this.onUsageSettlementError,
+      await this.profiles.resolve({ ...input, usage: 'auto',purpose:'trader' }), this.usage, fetch, this.onUsageSettlementError,
     )
   }
 }
@@ -139,7 +148,7 @@ export function loadCredentialKeyring(env: NodeJS.ProcessEnv = process.env) {
 }
 
 const profileSelect = `SELECT CAST(p.id AS CHAR) id,p.owner_user_id,p.scope,p.provider,p.model_name,p.api_base_url,
-  p.api_key_encrypted,p.temperature,p.max_tokens,p.request_timeout_ms,c.protocol,c.verification_status,
+  p.api_key_encrypted,p.temperature,p.max_tokens,p.request_timeout_ms,p.thinking_enabled,p.reasoning_effort,c.context_window_tokens,c.max_input_tokens,c.max_output_tokens,c.protocol,c.verification_status,
   c.provider capability_provider,c.model_name capability_model_name,c.api_base_url capability_api_base_url,
   c.supports_structured_output
   FROM ai_model_profiles p INNER JOIN ai_model_provider_capabilities c ON c.model_profile_id=p.id`
@@ -160,10 +169,10 @@ function mapProfile(
   if (!protocol) throw new InferenceError('model_protocol_unsupported', 409)
   const endpoint = providerEndpoint(row.api_base_url, protocol, options.allowPrivateEndpoints)
   const temperature = Number(row.temperature ?? 0.3)
-  const maxTokens = Number(row.max_tokens ?? 2_000)
+  const maxTokens = Number(row.max_output_tokens)
   const timeoutMs = Number(row.request_timeout_ms ?? options.defaultTimeoutMs)
   if (!Number.isFinite(temperature) || temperature < 0 || temperature > 2) throw new InferenceError('model_temperature_invalid', 409)
-  if (!Number.isSafeInteger(maxTokens) || maxTokens < 128 || maxTokens > 393_216) throw new InferenceError('model_max_tokens_invalid', 409)
+  if (!Number.isSafeInteger(maxTokens) || maxTokens < 1 || maxTokens > 2_147_483_647) throw new InferenceError('model_max_tokens_invalid', 409)
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > 600_000) throw new InferenceError('model_timeout_invalid', 409)
   const apiKey = decryptCredential(row.api_key_encrypted, keyring)
   if (!apiKey.trim() || Buffer.byteLength(apiKey, 'utf8') > 16 * 1024) throw new InferenceError('model_credential_invalid', 409)
@@ -174,6 +183,9 @@ function mapProfile(
     protocol,
     endpoint,
     apiKey,
+    thinkingEnabled:row.thinking_enabled===undefined?undefined:!!row.thinking_enabled,
+    reasoningEffort:row.reasoning_effort,
+    contextWindowTokens:row.context_window_tokens, maxInputTokens:row.max_input_tokens, maxOutputTokens:row.max_output_tokens,
     temperature,
     maxTokens,
     timeoutMs,
@@ -187,7 +199,7 @@ function mapProfile(
   }
 }
 
-function decryptCredential(envelope: string, keyring: ReadonlyMap<string, Buffer>) {
+export function decryptCredential(envelope: string, keyring: ReadonlyMap<string, Buffer>) {
   let parsed: unknown
   try { parsed = JSON.parse(envelope) }
   catch { throw new InferenceError('model_credential_not_encrypted', 409) }

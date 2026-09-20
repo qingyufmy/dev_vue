@@ -1,8 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useTradeSession, loadLoginView } from '~/features/auth'
 import { loadHomeView } from '~/features/home'
-import { loadMarketView } from '~/features/market'
-import { loadModulePlaceholderView } from '~/features/shell'
+import { loadModelsView } from '~/features/models'
 
 const moduleRoutes = [
   { path: '/settings/models', title: '模型配置', description: '个人与平台共享模型、默认模型和用途路由将在对应阶段接入。' },
@@ -11,7 +10,9 @@ const moduleRoutes = [
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/market', name: 'market', component: loadMarketView, meta: { title: '市场行情' } },
+    {path:'/settings/personal',name:'personal-settings',component:()=>import('~/features/personal').then(m=>m.loadPersonalSettingsView()),meta:{title:'个人设置'}},
+    { path: '/bridge/authorize', name: 'bridge-authorize', component: () => import('~/features/bridge').then((module) => module.BridgeAuthorizationView), meta: { title: '授权量见智桥' } },
+    { path: '/market', redirect: '/' },
     {
       path: '/bridge', name: 'bridge',
       component: () => import('~/features/bridge').then((module) => module.BridgeView),
@@ -73,7 +74,7 @@ export const router = createRouter({
     },
     ...moduleRoutes.map((route) => ({
       path: route.path,
-      component: loadModulePlaceholderView,
+      component: loadModelsView,
       meta: { title: route.title, description: route.description },
     })),
   ],

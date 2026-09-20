@@ -1,14 +1,18 @@
 using System;
 using System.IO;
 using System.Windows.Forms;
+using System.Runtime.InteropServices;
 using Liangjian.BridgeV4;
 using Liangjian.BridgeV4.Compatibility;
 using Liangjian.BridgeV4.Migration;
+using Liangjian.BridgeV4.Configuration;
 
 namespace Liangjian.BridgeV4.App
 {
     internal static class Program
     {
+        [DllImport("user32.dll")]
+        private static extern bool AllowSetForegroundWindow(int processId);
         [STAThread]
         private static int Main(string[] arguments)
         {
@@ -64,7 +68,35 @@ namespace Liangjian.BridgeV4.App
             {
                 MessageBox.Show(eventArgs.Exception.Message, "量见智桥", MessageBoxButtons.OK, MessageBoxIcon.Error);
             };
-            Application.Run(new MainForm(request));
+            string dataRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Liangjian", "BridgeV4");
+            using (BridgeApplicationInstance instance = new BridgeApplicationInstance(dataRoot))
+            {
+                if (!instance.IsPrimary)
+                {
+                    AllowSetForegroundWindow(-1);
+                    instance.NotifyPrimary();
+                    return 0;
+                }
+                using (MainForm form = new MainForm(request))
+                {
+                    // Create the HWND before accepting a request from another launch.
+                    IntPtr window = form.Handle;
+                    instance.Listen(delegate
+                    {
+                        try
+                        {
+                            form.BeginInvoke(new Action(delegate
+                            {
+                                if (form.IsDisposed) return;
+                                form.RestoreWindow();
+                            }));
+                        }
+                        catch (InvalidOperationException) { }
+                    });
+                    Application.Run(form);
+                }
+            }
             return 0;
         }
     }

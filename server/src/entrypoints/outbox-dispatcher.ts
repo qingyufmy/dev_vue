@@ -1,3 +1,5 @@
+import { createNotificationPublisher } from '../modules/notifications/composition.js'
+import { createNotificationSourceReader } from '../modules/inference/composition.js'
 import {
   assertV4RuntimeEnabled, AsyncPollLoop, closeHttpServer, connectCacheRedis, createCacheRedis, createMysqlPool,
   installProcessLifecycle, loadServerEnvironment, loadV4RuntimeConfig, RoleHealth, startRoleHealthServer,
@@ -7,6 +9,8 @@ import {
   OutboxDispatcher, RedisOutboxRealtimePublisher,
 } from '../outbox/index.js'
 import { RuntimeTaskQueues } from '../queue/task-queues.js'
+import { createPartialCloseWorkflowQueue } from '../queue/partial-close-workflow-queue.js'
+import { assertMysqlExecutionWorkflowSchemaReady } from '../modules/execution/composition.js'
 
 loadServerEnvironment()
 
@@ -18,14 +22,18 @@ async function main() {
   const realtimeRedis = createCacheRedis(config.cacheRedis)
   await pool.query('SELECT 1')
   await connectCacheRedis(realtimeRedis)
+  await assertMysqlExecutionWorkflowSchemaReady(pool)
   const queues = new RuntimeTaskQueues(config.queueRedis, config.queuePrefix)
+  const partialClose = createPartialCloseWorkflowQueue(config.queueRedis, config.queuePrefix)
   await Promise.all([
+    partialClose.waitUntilReady(),
     queues.execution.waitUntilReady(), queues.bridgeDispatch.waitUntilReady(), queues.analysis.waitUntilReady(),
-    queues.trader.waitUntilReady(), queues.risk.waitUntilReady(), queues.review.waitUntilReady(), queues.bridgeHistory.waitUntilReady(),
+    queues.trader.waitUntilReady(), queues.risk.waitUntilReady(), queues.review.waitUntilReady(), queues.manualCandidates.waitUntilReady(), queues.bridgeHistoryTask.waitUntilReady(), queues.bridgeInstrument.waitUntilReady(),
   ])
-  const dispatcher = new OutboxDispatcher(new MysqlOutboxRepository(pool), new CompositeOutboxPublisher([
-    new BullMqOutboxTaskPublisher(queues),
+  const dispatcher = new OutboxDispatcher(new MysqlOutboxRepository(pool, { partialCloseWorkflows: true }), new CompositeOutboxPublisher([
+    new BullMqOutboxTaskPublisher(queues, partialClose),
     new RedisOutboxRealtimePublisher(pool, realtimeRedis),
+    createNotificationPublisher(pool, createNotificationSourceReader(pool)),
   ]))
   const loop = new AsyncPollLoop(async () => {
     try {
@@ -43,8 +51,8 @@ async function main() {
     dependencyReady: async () => {
       try {
         await Promise.all([
-          pool.query('SELECT 1'), realtimeRedis.ping(), queues.execution.getJobCounts(), queues.bridgeDispatch.getJobCounts(),
-          queues.analysis.getJobCounts(), queues.trader.getJobCounts(), queues.risk.getJobCounts(), queues.review.getJobCounts(), queues.bridgeHistory.getJobCounts(),
+          pool.query('SELECT 1'), realtimeRedis.ping(), partialClose.getJobCounts(), queues.execution.getJobCounts(), queues.bridgeDispatch.getJobCounts(),
+          queues.analysis.getJobCounts(), queues.trader.getJobCounts(), queues.risk.getJobCounts(), queues.review.getJobCounts(), queues.manualCandidates.getJobCounts(), queues.bridgeHistoryTask.getJobCounts(), queues.bridgeInstrument.getJobCounts(),
         ])
         return true
       } catch { return false }
@@ -58,7 +66,7 @@ async function main() {
     health.setReady(false)
     await loop.stop()
     await closeHttpServer(healthServer)
-    await Promise.allSettled([queues.close(), realtimeRedis.quit(), pool.end()])
+    await Promise.allSettled([partialClose.close(), queues.close(), realtimeRedis.quit(), pool.end()])
   })
 }
 

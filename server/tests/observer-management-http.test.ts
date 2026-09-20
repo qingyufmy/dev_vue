@@ -5,6 +5,7 @@ import {
   ObserverManagementService,
 } from '../src/modules/trading/application/observer-management-service.js'
 import {
+  ObserverManagementError,
   type ObserverChannelConfig,
   type ObserverManagementCommand,
   type ObserverManagementList,
@@ -24,10 +25,14 @@ const channelConfig: ObserverChannelConfig = {
   displayName: '公开频道', sourceId: '1', slug: 'gold-demo', description: null,
   audience: 'assigned', active: false, sortOrder: 0,
 }
+const now = '2026-09-09T08:00:00.000Z'
+const sourceRow = { id: '1', display_name: '观摩源', notes: null, operator_user_id: 9, trading_account_id: '7',
+  analysis_strategy_id: null, status: 'disabled', configuration_status: 'pending', created_by_user_id: 9,
+  created_at_utc: now, updated_at_utc: now, revision: 1 }
 
 class MemoryObserverManagementRepository implements ObserverManagementRepository {
   readonly writes: Array<{ actorUserId: number; idempotencyKey: string; requestHash: string; command: ObserverManagementCommand }> = []
-  readonly page: ObserverManagementPage = { items: [{ id: '1' }], next_cursor: null, registry_revision: 3 }
+  readonly page: ObserverManagementPage = { items: [sourceRow], next_cursor: null, registry_revision: 3 }
 
   async list(_actorUserId: number, _input: ObserverManagementList) { return this.page }
 
@@ -112,12 +117,12 @@ describe('P4B observer management application boundary', () => {
     const missingKey = await app.inject({ method: 'POST', url: '/api/v4/admin/observer/sources', payload: { display_name: '源' } })
     expect(missingKey.statusCode).toBe(400)
     const injected = await app.inject({
-      method: 'POST', url: '/api/v4/admin/observer/sources', headers: { 'idempotency-key': 'operator-test' },
+      method: 'POST', url: '/api/v4/admin/observer/sources', headers: { 'x-csrf-token': 'test-csrf-token-valid', 'idempotency-key': 'operator-test' },
       payload: { display_name: '源', operator_user_id: 99 },
     })
     expect(injected.statusCode).toBe(400)
     const created = await app.inject({
-      method: 'POST', url: '/api/v4/admin/observer/sources', headers: { 'idempotency-key': 'source-create-1' },
+      method: 'POST', url: '/api/v4/admin/observer/sources', headers: { 'x-csrf-token': 'test-csrf-token-valid', 'idempotency-key': 'source-create-1' },
       payload: { display_name: '源', trading_account_id: '7' },
     })
     expect(created.statusCode).toBe(201)
@@ -125,7 +130,7 @@ describe('P4B observer management application boundary', () => {
     expect(created.json()).toMatchObject({ data: { operation_id: expect.any(String), target_id: '1', revision: '1', registry_revision: '4' } })
 
     const emptyNotes = await app.inject({
-      method: 'POST', url: '/api/v4/admin/observer/sources', headers: { 'idempotency-key': 'source-empty-notes' },
+      method: 'POST', url: '/api/v4/admin/observer/sources', headers: { 'x-csrf-token': 'test-csrf-token-valid', 'idempotency-key': 'source-empty-notes' },
       payload: { display_name: '空备注', notes: '' },
     })
     expect(emptyNotes.statusCode).toBe(201)
@@ -134,7 +139,7 @@ describe('P4B observer management application boundary', () => {
     })
 
     const emptyDescription = await app.inject({
-      method: 'POST', url: '/api/v4/admin/observer/channels', headers: { 'idempotency-key': 'channel-empty-description' },
+      method: 'POST', url: '/api/v4/admin/observer/channels', headers: { 'x-csrf-token': 'test-csrf-token-valid', 'idempotency-key': 'channel-empty-description' },
       payload: { display_name: '空描述', slug: 'empty-description', description: '' },
     })
     expect(emptyDescription.statusCode).toBe(201)
@@ -148,7 +153,7 @@ describe('P4B observer management application boundary', () => {
     const { app, repository, ready } = appFor()
     await ready
     const update = await app.inject({
-      method: 'PUT', url: '/api/v4/admin/observer/channels/2', headers: { 'idempotency-key': 'channel-update-1' },
+      method: 'PUT', url: '/api/v4/admin/observer/channels/2', headers: { 'x-csrf-token': 'test-csrf-token-valid', 'idempotency-key': 'channel-update-1' },
       payload: { expected_revision: '1', ...{
         display_name: '频道', source_id: '1', slug: 'channel-2', description: null,
         audience: 'assigned', active: false, sort_order: 2,
@@ -157,13 +162,13 @@ describe('P4B observer management application boundary', () => {
     expect(update.statusCode).toBe(200)
     expect(repository.writes.at(-1)!.command).toMatchObject({ kind: 'channel.update', id: '2', expectedRevision: 1 })
     const access = await app.inject({
-      method: 'PUT', url: '/api/v4/admin/observer/channels/2/accesses/42', headers: { 'idempotency-key': 'access-set-1' },
+      method: 'PUT', url: '/api/v4/admin/observer/channels/2/accesses/42', headers: { 'x-csrf-token': 'test-csrf-token-valid', 'idempotency-key': 'access-set-1' },
       payload: { granted: true, expected_revision: 0 },
     })
     expect(access.statusCode).toBe(200)
     expect(repository.writes.at(-1)!.command).toMatchObject({ kind: 'access.set', channelId: '2', userId: 42, granted: true, expectedRevision: 0 })
     const cleared = await app.inject({
-      method: 'PUT', url: '/api/v4/admin/observer/default-channel', headers: { 'idempotency-key': 'default-clear-1' },
+      method: 'PUT', url: '/api/v4/admin/observer/default-channel', headers: { 'x-csrf-token': 'test-csrf-token-valid', 'idempotency-key': 'default-clear-1' },
       payload: { channel_id: null, expected_revision: '0' },
     })
     expect(cleared.statusCode).toBe(200)
@@ -177,6 +182,7 @@ describe('P4B observer management application boundary', () => {
       id: '00000000-0000-4000-8000-000000000002',
       action: 'source.create',
       actor_user_id: 9,
+      created_at_utc: now,
       target_id: '1',
       result: { operation_id: '00000000-0000-4000-8000-000000000002', target_id: '1', revision: 1, registry_revision: 4 },
       audit: { kind: 'source.create', config: { status: 'disabled' } },
@@ -196,6 +202,106 @@ describe('P4B observer management application boundary', () => {
     expect(page.json().data.items[0]).not.toHaveProperty('request_hash')
     expect(page.json().data.items[0]).not.toHaveProperty('unexpected')
     await app.close()
+  })
+})
+
+describe('observer read runtime contracts', () => {
+  it('validates all six write responses, refuses query injection, and marks post-write corruption unknown', async () => {
+    const { app, repository, ready } = appFor()
+    await ready
+    const requests = [
+      { method: 'POST' as const, path: '/sources', payload: { display_name: '源' }, status: 201 },
+      { method: 'PUT' as const, path: '/sources/1', payload: { display_name: '源', notes: null, trading_account_id: null,
+        analysis_strategy_id: null, status: 'disabled', expected_revision: '1' }, status: 200 },
+      { method: 'POST' as const, path: '/channels', payload: { display_name: '频道', slug: 'gold' }, status: 201 },
+      { method: 'PUT' as const, path: '/channels/1', payload: { display_name: '频道', slug: 'gold', description: null,
+        source_id: null, active: false, audience: 'assigned', sort_order: 0, expected_revision: '1' }, status: 200 },
+      { method: 'PUT' as const, path: '/channels/1/accesses/7', payload: { granted: true, expected_revision: '0' }, status: 200 },
+      { method: 'PUT' as const, path: '/default-channel', payload: { channel_id: null, expected_revision: '0' }, status: 200 },
+    ]
+    try {
+      for (const [index, input] of requests.entries()) {
+        const request = { method: input.method, url: '/api/v4/admin/observer' + input.path,
+          headers: { 'x-csrf-token': 'test-csrf-token-valid', 'idempotency-key': `write-contract-${index}` }, payload: input.payload }
+        const rejected = await app.inject({ ...request, url: request.url + '?actor=7' })
+        expect(rejected.statusCode).toBe(400)
+        expect(repository.writes).toHaveLength(index)
+        const result = await app.inject(request)
+        expect(result.statusCode, result.body).toBe(input.status)
+        expect(result.headers['cache-control']).toBe('no-store')
+      }
+      const count = repository.writes.length
+      vi.spyOn(repository, 'execute').mockImplementationOnce(async input => {
+        repository.writes.push(input)
+        return { operation_id: 'invalid', target_id: '1', revision: 1, registry_revision: 4 }
+      })
+      const corrupt = await app.inject({ method: 'POST', url: '/api/v4/admin/observer/sources',
+        headers: { 'x-csrf-token': 'test-csrf-token-valid', 'idempotency-key': 'corrupt-response-1' }, payload: { display_name: '源' } })
+      expect(repository.writes).toHaveLength(count + 1)
+      expect(corrupt.statusCode).toBe(503)
+      expect(corrupt.json()).toMatchObject({ code: 'observer_management_commit_unknown', retryable: false })
+      expect(corrupt.headers['content-type']).toContain('application/problem+json')
+    } finally { await app.close() }
+  })
+
+  it('reports commit uncertainty without encouraging an automatic retry', async () => {
+    const { app, repository, ready } = appFor()
+    vi.spyOn(repository, 'execute').mockRejectedValueOnce(new ObserverManagementError('observer_management_commit_unknown', 503))
+    await ready
+    try {
+      const result = await app.inject({ method: 'POST', url: '/api/v4/admin/observer/sources',
+        headers: { 'x-csrf-token': 'test-csrf-token-valid', 'idempotency-key': 'uncertain-write-1' }, payload: { display_name: '源' } })
+      expect(result.statusCode).toBe(503)
+      expect(result.json()).toMatchObject({ code: 'observer_management_commit_unknown', retryable: false })
+    } finally { await app.close() }
+  })
+
+  it('validates channel/access projections and rejects malformed rows', async () => {
+    const { app, repository, ready } = appFor()
+    await ready
+    try {
+      repository.page.items = [{ id: '1', source_id: '1', source_trading_account_id: '7', display_name: '频道',
+        slug: 'gold', description: null, audience: 'assigned', active: false, is_default: false, sort_order: 0,
+        created_at_utc: now, updated_at_utc: null, revision: 1 }]
+      const channels = await app.inject('/api/v4/admin/observer/channels')
+      expect(channels.statusCode, channels.body).toBe(200)
+      expect(channels.headers['cache-control']).toBe('no-store')
+      repository.page.items = [{ observer_channel_id: '1', user_id: 7, granted_at_utc: now,
+        revoked_at_utc: null, granted_by_user_id: 9, revision: 1 }]
+      expect((await app.inject('/api/v4/admin/observer/channels/1/accesses')).statusCode).toBe(200)
+      repository.page.items = [{ ...sourceRow, status: 'invalid' }]
+      const malformed = await app.inject('/api/v4/admin/observer/sources')
+      expect(malformed.statusCode).toBe(503)
+      expect(malformed.json().code).toBe('api_response_invalid')
+      expect(malformed.headers['content-type']).toContain('application/problem+json')
+      repository.page.items = [{ id: '1' }]
+      expect((await app.inject('/api/v4/admin/observer/sources')).statusCode).toBe(503)
+    } finally { await app.close() }
+  })
+
+  it('keeps admin authorization and rejects duplicate or unknown filters without querying', async () => {
+    const { app, repository, ready } = appFor(undefined, 'user')
+    const list = vi.spyOn(repository, 'list')
+    await ready
+    try {
+      const denied = await app.inject('/api/v4/admin/observer/sources')
+      expect(denied.statusCode).toBe(403)
+      expect(denied.headers['cache-control']).toBe('no-store')
+      expect(list).not.toHaveBeenCalled()
+    } finally { await app.close() }
+    const admin = appFor()
+    const adminList = vi.spyOn(admin.repository, 'list')
+    await admin.ready
+    try {
+      for (const query of ['limit=1&limit=2', 'limit=1e2', 'cursor=0', 'actor=7']) {
+        expect((await admin.app.inject('/api/v4/admin/observer/sources?' + query)).statusCode).toBe(400)
+      }
+      expect(adminList).not.toHaveBeenCalled()
+      adminList.mockRejectedValueOnce(new Error('private SQL details'))
+      const failed = await admin.app.inject('/api/v4/admin/observer/sources')
+      expect(failed.statusCode).toBe(503)
+      expect(failed.body).not.toContain('private SQL')
+    } finally { await admin.app.close() }
   })
 })
 

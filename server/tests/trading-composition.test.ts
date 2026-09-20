@@ -71,3 +71,14 @@ it('connects event and observer control channels to one hub and detaches them on
   cache.emit('message', BROWSER_REALTIME_EVENT_CHANNEL, JSON.stringify(event))
   expect(publish).toHaveBeenCalledOnce(); expect(cache.listenerCount('message')).toBe(0)
 })
+
+
+it('reads capacity usage from the actual gateway leases, not the legacy lease keys', async () => {
+  const execute = vi.fn(async (sql: string) => [sql.includes('capacity_grants') ? [{ quantity: '0' }] : [{ quantity: '1' }], []])
+  const count = vi.fn(async () => 1)
+  const module = createTradingApiModule({ execute } as unknown as Pool, {} as Redis,
+    { trade: {} as never, admin: {} as never }, { current: async () => null, count },
+    createActivePrincipalAccess, createAccountPrincipalReader, createAdminPrincipalAccess, createAnalysisStrategyAccess)
+  expect(await module.connectionCapacity.summary(7)).toMatchObject({ active: 1, total: 1, available: 0 })
+  expect(count).toHaveBeenCalledWith(7)
+})

@@ -1,0 +1,3141 @@
+{
+  "kind": "risk-upgrade-readiness/v1",
+  "inspected": true,
+  "observedAt": "2026-09-09T01:08:19.555Z",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "missingTargets": [
+    "risk_decisions_v4",
+    "risk_decision_payloads_v4"
+  ],
+  "missingSources": [],
+  "missingDependencies": [
+    "trade_decisions",
+    "trade_decision_payloads",
+    "ai_trader_runs",
+    "market_analyses",
+    "market_instrument_snapshots"
+  ],
+  "counts": {
+    "risk_policy_sets_v4": "0",
+    "risk_policy_versions_v4": "0",
+    "risk_policy_change_items_v4": "0",
+    "account_risk_states": "0",
+    "account_risk_summaries": "0",
+    "risk_state_events": "0",
+    "risk_manual_releases": "0",
+    "global_risk_controls": "0",
+    "risk_policy_sets": "3",
+    "risk_policy_versions": "10",
+    "risk_policy_change_items": "60",
+    "risk_profiles": "0",
+    "risk_account_state": "4",
+    "risk_decisions": "395",
+    "risk_rule_rollouts": "19",
+    "global_risk_control": "1"
+  },
+  "controls": {
+    "global_risk_control": [
+      {
+        "enabled": 0,
+        "count": "1"
+      }
+    ],
+    "global_risk_controls": []
+  },
+  "tables": [
+    {
+      "name": "account_risk_states",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "account_risk_summaries",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "account_runtime_snapshots",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "global_risk_control",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "global_risk_controls",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "market_quotes",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "outbox_events",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "risk_account_state",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "risk_decisions",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "risk_manual_releases",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "risk_policy_change_items",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "risk_policy_change_items_v4",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "risk_policy_sets",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "risk_policy_sets_v4",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "risk_policy_versions",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "risk_policy_versions_v4",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "risk_profiles",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "risk_rule_rollouts",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "risk_state_events",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_subscriptions",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "trading_account_ownerships",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "trading_accounts",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "trading_projection_revisions",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "users",
+      "engine": "InnoDB"
+    }
+  ],
+  "columns": [
+    {
+      "tableName": "account_risk_states",
+      "name": "trading_account_id",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_states",
+      "name": "user_id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_states",
+      "name": "business_date",
+      "type": "date",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_states",
+      "name": "equity",
+      "type": "decimal(24,8)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_states",
+      "name": "free_margin",
+      "type": "decimal(24,8)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_states",
+      "name": "daily_loss_percent",
+      "type": "decimal(12,6)",
+      "nullable": "NO",
+      "defaultValue": "0.000000",
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_states",
+      "name": "drawdown_percent",
+      "type": "decimal(12,6)",
+      "nullable": "NO",
+      "defaultValue": "0.000000",
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_states",
+      "name": "open_positions",
+      "type": "int unsigned",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_states",
+      "name": "pending_orders",
+      "type": "int unsigned",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_states",
+      "name": "total_volume",
+      "type": "decimal(24,8)",
+      "nullable": "NO",
+      "defaultValue": "0.00000000",
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_states",
+      "name": "daily_open_count",
+      "type": "int unsigned",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_states",
+      "name": "consecutive_losses",
+      "type": "int unsigned",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_states",
+      "name": "terminal_timezone_offset_minutes",
+      "type": "smallint",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_states",
+      "name": "clock_status",
+      "type": "enum('calibrated','observer_bootstrap','stale','unavailable')",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_states",
+      "name": "last_successful_open_at_utc",
+      "type": "datetime(3)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_states",
+      "name": "cooldown_until_utc",
+      "type": "datetime(3)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_states",
+      "name": "data_complete",
+      "type": "tinyint(1)",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_states",
+      "name": "incomplete_reasons_json",
+      "type": "json",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_states",
+      "name": "observed_at_utc",
+      "type": "datetime(3)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_states",
+      "name": "revision",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_summaries",
+      "name": "trading_account_id",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_summaries",
+      "name": "policy_version_id",
+      "type": "bigint unsigned",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_summaries",
+      "name": "payload_json",
+      "type": "json",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_summaries",
+      "name": "observed_at_utc",
+      "type": "datetime(3)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_risk_summaries",
+      "name": "revision",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_runtime_snapshots",
+      "name": "trading_account_id",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_runtime_snapshots",
+      "name": "balance",
+      "type": "decimal(24,8)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_runtime_snapshots",
+      "name": "equity",
+      "type": "decimal(24,8)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_runtime_snapshots",
+      "name": "margin_amount",
+      "type": "decimal(24,8)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_runtime_snapshots",
+      "name": "free_margin",
+      "type": "decimal(24,8)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_runtime_snapshots",
+      "name": "floating_profit",
+      "type": "decimal(24,8)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_runtime_snapshots",
+      "name": "leverage",
+      "type": "int unsigned",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_runtime_snapshots",
+      "name": "timezone_offset_minutes",
+      "type": "smallint",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_runtime_snapshots",
+      "name": "clock_status",
+      "type": "enum('calibrated','observer_bootstrap','stale','unavailable')",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_runtime_snapshots",
+      "name": "trade_permission",
+      "type": "tinyint(1)",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "account_runtime_snapshots",
+      "name": "observed_at_utc",
+      "type": "datetime(3)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "account_runtime_snapshots",
+      "name": "revision",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "global_risk_control",
+      "name": "id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "global_risk_control",
+      "name": "global_kill_switch",
+      "type": "tinyint",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "global_risk_control",
+      "name": "reason",
+      "type": "varchar(1000)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "global_risk_control",
+      "name": "changed_by",
+      "type": "int",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "global_risk_control",
+      "name": "updated_at",
+      "type": "datetime",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "global_risk_controls",
+      "name": "id",
+      "type": "tinyint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "global_risk_controls",
+      "name": "kill_switch",
+      "type": "tinyint(1)",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "global_risk_controls",
+      "name": "reason",
+      "type": "varchar(1000)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "global_risk_controls",
+      "name": "changed_by_user_id",
+      "type": "int",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "global_risk_controls",
+      "name": "revision",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": "1",
+      "extra": ""
+    },
+    {
+      "tableName": "global_risk_controls",
+      "name": "updated_at_utc",
+      "type": "datetime(3)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "market_quotes",
+      "name": "trading_account_id",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "market_quotes",
+      "name": "symbol",
+      "type": "varchar(64)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "market_quotes",
+      "name": "bid",
+      "type": "decimal(24,10)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "market_quotes",
+      "name": "ask",
+      "type": "decimal(24,10)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "market_quotes",
+      "name": "last_price",
+      "type": "decimal(24,10)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "market_quotes",
+      "name": "spread",
+      "type": "decimal(24,10)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "market_quotes",
+      "name": "trade_mode",
+      "type": "enum('full','long_only','short_only','close_only','disabled','unknown')",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "market_quotes",
+      "name": "observed_at_utc",
+      "type": "datetime(3)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "market_quotes",
+      "name": "revision",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "outbox_events",
+      "name": "id",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": "auto_increment"
+    },
+    {
+      "tableName": "outbox_events",
+      "name": "event_id",
+      "type": "char(36)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "outbox_events",
+      "name": "aggregate_type",
+      "type": "varchar(64)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "outbox_events",
+      "name": "aggregate_id",
+      "type": "varchar(191)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "outbox_events",
+      "name": "event_type",
+      "type": "varchar(128)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "outbox_events",
+      "name": "payload_json",
+      "type": "json",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "outbox_events",
+      "name": "status",
+      "type": "enum('pending','dispatching','dispatched','failed','dead')",
+      "nullable": "NO",
+      "defaultValue": "pending",
+      "extra": ""
+    },
+    {
+      "tableName": "outbox_events",
+      "name": "attempts",
+      "type": "int unsigned",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "outbox_events",
+      "name": "available_at_utc",
+      "type": "datetime(3)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "outbox_events",
+      "name": "lease_owner",
+      "type": "varchar(128)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "outbox_events",
+      "name": "lease_expires_at_utc",
+      "type": "datetime(3)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "outbox_events",
+      "name": "created_at_utc",
+      "type": "datetime(3)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "outbox_events",
+      "name": "dispatched_at_utc",
+      "type": "datetime(3)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "trading_account_id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "user_id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "business_date",
+      "type": "date",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "day_start_equity",
+      "type": "decimal(20,8)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "day_realized_net",
+      "type": "decimal(20,8)",
+      "nullable": "NO",
+      "defaultValue": "0.00000000",
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "day_floating_pnl",
+      "type": "decimal(20,8)",
+      "nullable": "NO",
+      "defaultValue": "0.00000000",
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "cumulative_cash_flow",
+      "type": "decimal(20,8)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "equity_high_water",
+      "type": "decimal(20,8)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "drawdown_pct",
+      "type": "decimal(12,6)",
+      "nullable": "NO",
+      "defaultValue": "0.000000",
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "consecutive_losses",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "cooldown_until",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "halt_status",
+      "type": "varchar(24)",
+      "nullable": "NO",
+      "defaultValue": "active",
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "halt_reason",
+      "type": "varchar(128)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "halt_started_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "halt_reason_changed_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "last_recovered_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "user_kill_switch",
+      "type": "tinyint",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "data_complete",
+      "type": "tinyint",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "last_success_open_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "created_at",
+      "type": "datetime",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "updated_at",
+      "type": "datetime",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "last_deal_time_msc",
+      "type": "bigint",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "last_deal_ticket",
+      "type": "bigint",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "last_risk_snapshot_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "data_incomplete_reason",
+      "type": "varchar(255)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "manual_reset_business_date",
+      "type": "date",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "manual_reset_floating_baseline",
+      "type": "decimal(20,8)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_account_state",
+      "name": "risk_calculation_version",
+      "type": "smallint",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "risk_decisions",
+      "name": "id",
+      "type": "bigint",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": "auto_increment"
+    },
+    {
+      "tableName": "risk_decisions",
+      "name": "order_intent_id",
+      "type": "bigint",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_decisions",
+      "name": "policy_version_ids_json",
+      "type": "text",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_decisions",
+      "name": "original_order_json",
+      "type": "longtext",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_decisions",
+      "name": "approved_order_json",
+      "type": "longtext",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_decisions",
+      "name": "rule_results_json",
+      "type": "longtext",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_decisions",
+      "name": "decision_status",
+      "type": "varchar(20)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_decisions",
+      "name": "reject_code",
+      "type": "varchar(128)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_decisions",
+      "name": "created_at",
+      "type": "datetime",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "id",
+      "type": "char(36)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "user_id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "trading_account_id",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "platform_policy_version_id",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "account_policy_version_id",
+      "type": "bigint unsigned",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "policy_set_revision",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "risk_state_revision",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "released_rules_json",
+      "type": "json",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "baseline_json",
+      "type": "json",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "breach_fingerprint",
+      "type": "char(64)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "reason",
+      "type": "varchar(500)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "idempotency_key",
+      "type": "varchar(128)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "request_sha256",
+      "type": "char(64)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "status",
+      "type": "enum('active','superseded','expired','revoked')",
+      "nullable": "NO",
+      "defaultValue": "active",
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "expires_at_utc",
+      "type": "datetime(3)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "created_at_utc",
+      "type": "datetime(3)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "invalidated_at_utc",
+      "type": "datetime(3)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "invalidation_reason",
+      "type": "varchar(128)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "legacy_source_table",
+      "type": "varchar(64)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "legacy_id",
+      "type": "varchar(191)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "name": "revision",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": "1",
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_change_items",
+      "name": "id",
+      "type": "bigint",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": "auto_increment"
+    },
+    {
+      "tableName": "risk_policy_change_items",
+      "name": "policy_set_id",
+      "type": "bigint",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_change_items",
+      "name": "field_code",
+      "type": "varchar(80)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_change_items",
+      "name": "old_value_json",
+      "type": "text",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_change_items",
+      "name": "new_value_json",
+      "type": "text",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_change_items",
+      "name": "change_class",
+      "type": "varchar(20)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_change_items",
+      "name": "status",
+      "type": "varchar(20)",
+      "nullable": "NO",
+      "defaultValue": "pending",
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_change_items",
+      "name": "requested_by",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_change_items",
+      "name": "reason",
+      "type": "varchar(500)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_change_items",
+      "name": "effective_at",
+      "type": "datetime",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_change_items",
+      "name": "cancelled_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_change_items",
+      "name": "created_at",
+      "type": "datetime",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_change_items_v4",
+      "name": "id",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": "auto_increment"
+    },
+    {
+      "tableName": "risk_policy_change_items_v4",
+      "name": "policy_set_id",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_change_items_v4",
+      "name": "policy_version_id",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_change_items_v4",
+      "name": "field_code",
+      "type": "varchar(80)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_change_items_v4",
+      "name": "old_value_json",
+      "type": "json",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_change_items_v4",
+      "name": "new_value_json",
+      "type": "json",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_change_items_v4",
+      "name": "change_class",
+      "type": "enum('tighten','relax_within_platform','toggle','inherit')",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_change_items_v4",
+      "name": "requested_by_user_id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_change_items_v4",
+      "name": "reason",
+      "type": "varchar(500)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_change_items_v4",
+      "name": "changed_at_utc",
+      "type": "datetime(3)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_sets",
+      "name": "id",
+      "type": "bigint",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": "auto_increment"
+    },
+    {
+      "tableName": "risk_policy_sets",
+      "name": "scope",
+      "type": "varchar(24)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_sets",
+      "name": "owner_user_id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_sets",
+      "name": "trading_account_id",
+      "type": "int",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_sets",
+      "name": "name",
+      "type": "varchar(128)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_sets",
+      "name": "active_version_id",
+      "type": "bigint",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_sets",
+      "name": "status",
+      "type": "varchar(20)",
+      "nullable": "NO",
+      "defaultValue": "active",
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_sets",
+      "name": "created_at",
+      "type": "datetime",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_sets",
+      "name": "updated_at",
+      "type": "datetime",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "name": "id",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": "auto_increment"
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "name": "scope",
+      "type": "enum('platform','account')",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "name": "owner_user_id",
+      "type": "int",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "name": "trading_account_id",
+      "type": "bigint unsigned",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "name": "name",
+      "type": "varchar(191)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "name": "status",
+      "type": "enum('active','retired')",
+      "nullable": "NO",
+      "defaultValue": "active",
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "name": "active_version_id",
+      "type": "bigint unsigned",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "name": "revision",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": "1",
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "name": "active_scope_key",
+      "type": "varchar(191)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": "STORED GENERATED"
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "name": "legacy_source_table",
+      "type": "varchar(64)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "name": "legacy_id",
+      "type": "varchar(191)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "name": "created_at_utc",
+      "type": "datetime(3)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "name": "updated_at_utc",
+      "type": "datetime(3)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_versions",
+      "name": "id",
+      "type": "bigint",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": "auto_increment"
+    },
+    {
+      "tableName": "risk_policy_versions",
+      "name": "policy_set_id",
+      "type": "bigint",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_versions",
+      "name": "version_no",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_versions",
+      "name": "config_json",
+      "type": "longtext",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_versions",
+      "name": "created_by",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_versions",
+      "name": "change_reason",
+      "type": "varchar(500)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_versions",
+      "name": "effective_at",
+      "type": "datetime",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_versions",
+      "name": "created_at",
+      "type": "datetime",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "name": "id",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": "auto_increment"
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "name": "policy_set_id",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "name": "version_number",
+      "type": "int unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "name": "policy_json",
+      "type": "json",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "name": "policy_sha256",
+      "type": "char(64)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "name": "created_by_user_id",
+      "type": "int",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "name": "change_reason",
+      "type": "varchar(500)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "name": "legacy_source_table",
+      "type": "varchar(64)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "name": "legacy_id",
+      "type": "varchar(191)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "name": "created_at_utc",
+      "type": "datetime(3)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_profiles",
+      "name": "id",
+      "type": "bigint",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": "auto_increment"
+    },
+    {
+      "tableName": "risk_profiles",
+      "name": "user_id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_profiles",
+      "name": "name",
+      "type": "varchar(128)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_profiles",
+      "name": "config_json",
+      "type": "longtext",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_profiles",
+      "name": "status",
+      "type": "varchar(20)",
+      "nullable": "NO",
+      "defaultValue": "active",
+      "extra": ""
+    },
+    {
+      "tableName": "risk_profiles",
+      "name": "created_at",
+      "type": "datetime",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_profiles",
+      "name": "updated_at",
+      "type": "datetime",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_profiles",
+      "name": "deleted_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_rule_rollouts",
+      "name": "rule_code",
+      "type": "varchar(80)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_rule_rollouts",
+      "name": "mode",
+      "type": "varchar(16)",
+      "nullable": "NO",
+      "defaultValue": "shadow",
+      "extra": ""
+    },
+    {
+      "tableName": "risk_rule_rollouts",
+      "name": "forced_enforce",
+      "type": "tinyint",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "risk_rule_rollouts",
+      "name": "updated_by",
+      "type": "int",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_rule_rollouts",
+      "name": "updated_at",
+      "type": "datetime",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_state_events",
+      "name": "id",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": "auto_increment"
+    },
+    {
+      "tableName": "risk_state_events",
+      "name": "trading_account_id",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_state_events",
+      "name": "user_id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_state_events",
+      "name": "event_type",
+      "type": "varchar(64)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_state_events",
+      "name": "from_revision",
+      "type": "bigint unsigned",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_state_events",
+      "name": "to_revision",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_state_events",
+      "name": "payload_json",
+      "type": "json",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "risk_state_events",
+      "name": "occurred_at_utc",
+      "type": "datetime(3)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "name": "id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": "auto_increment"
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "name": "user_id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "name": "trading_account_id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "name": "strategy_id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "name": "risk_profile_id",
+      "type": "int",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "name": "symbols_json",
+      "type": "text",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "name": "execution_enabled",
+      "type": "tinyint",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "name": "memory_mode",
+      "type": "varchar(20)",
+      "nullable": "NO",
+      "defaultValue": "shared",
+      "extra": ""
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "name": "conflicting_strategy_id",
+      "type": "int",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "name": "is_deleted",
+      "type": "tinyint",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "name": "created_at",
+      "type": "datetime",
+      "nullable": "NO",
+      "defaultValue": "now()",
+      "extra": "DEFAULT_GENERATED"
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "name": "updated_at",
+      "type": "datetime",
+      "nullable": "NO",
+      "defaultValue": "now()",
+      "extra": "DEFAULT_GENERATED"
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "name": "schedule_enabled",
+      "type": "tinyint",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "name": "schedule_timezone",
+      "type": "varchar(64)",
+      "nullable": "NO",
+      "defaultValue": "terminal_server",
+      "extra": ""
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "name": "schedule_weekdays_json",
+      "type": "varchar(64)",
+      "nullable": "NO",
+      "defaultValue": "[1,2,3,4,5]",
+      "extra": ""
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "name": "schedule_windows_json",
+      "type": "text",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "name": "outside_window_behavior",
+      "type": "varchar(24)",
+      "nullable": "NO",
+      "defaultValue": "pause_all",
+      "extra": ""
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "name": "take_profit_mode",
+      "type": "varchar(24)",
+      "nullable": "NO",
+      "defaultValue": "ai_recommended",
+      "extra": ""
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "name": "active_execution_user_key",
+      "type": "int",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": "STORED GENERATED INVISIBLE"
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "name": "user_id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "name": "trading_account_id",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "name": "role",
+      "type": "enum('owner','observer_source')",
+      "nullable": "NO",
+      "defaultValue": "owner",
+      "extra": ""
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "name": "granted_at_utc",
+      "type": "datetime(3)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "name": "revoked_at_utc",
+      "type": "datetime(3)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "name": "interval_id",
+      "type": "char(36)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "name": "revision",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": "1",
+      "extra": ""
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "name": "open_owner_account_id",
+      "type": "bigint unsigned",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": "STORED GENERATED"
+    },
+    {
+      "tableName": "trading_accounts",
+      "name": "id",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": "auto_increment"
+    },
+    {
+      "tableName": "trading_accounts",
+      "name": "platform",
+      "type": "enum('mt4','mt5')",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "trading_accounts",
+      "name": "broker_server",
+      "type": "varchar(191)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "trading_accounts",
+      "name": "account_login",
+      "type": "varchar(64)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "trading_accounts",
+      "name": "currency",
+      "type": "varchar(12)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "trading_accounts",
+      "name": "created_at_utc",
+      "type": "datetime(3)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "trading_accounts",
+      "name": "updated_at_utc",
+      "type": "datetime(3)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "trading_accounts",
+      "name": "deleted_at_utc",
+      "type": "datetime(3)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "trading_accounts",
+      "name": "margin_mode",
+      "type": "varchar(20)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "trading_accounts",
+      "name": "ownership_revision",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": "1",
+      "extra": ""
+    },
+    {
+      "tableName": "trading_projection_revisions",
+      "name": "trading_account_id",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "trading_projection_revisions",
+      "name": "resource_kind",
+      "type": "varchar(64)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "trading_projection_revisions",
+      "name": "resource_id",
+      "type": "varchar(191)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "trading_projection_revisions",
+      "name": "revision",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "trading_projection_revisions",
+      "name": "updated_at_utc",
+      "type": "datetime(3)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "id",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": "auto_increment"
+    },
+    {
+      "tableName": "users",
+      "name": "uid",
+      "type": "varchar(32)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "email",
+      "type": "varchar(255)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "email_verified",
+      "type": "tinyint",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "auth_method",
+      "type": "varchar(20)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "password",
+      "type": "varchar(255)",
+      "nullable": "NO",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "nickname",
+      "type": "varchar(100)",
+      "nullable": "NO",
+      "defaultValue": "",
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "avatar",
+      "type": "varchar(500)",
+      "nullable": "NO",
+      "defaultValue": "",
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "role",
+      "type": "varchar(20)",
+      "nullable": "NO",
+      "defaultValue": "user",
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "plan",
+      "type": "varchar(20)",
+      "nullable": "NO",
+      "defaultValue": "free",
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "plan_period",
+      "type": "varchar(20)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "plan_expires_at",
+      "type": "datetime(3)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "telegram_id",
+      "type": "varchar(100)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "telegram_username",
+      "type": "varchar(100)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "telegram_name",
+      "type": "varchar(100)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "telegram_chat_id",
+      "type": "varchar(100)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "telegram_group_status",
+      "type": "varchar(50)",
+      "nullable": "YES",
+      "defaultValue": "",
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "telegram_bot_started_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "telegram_joined_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "telegram_last_invite_sent_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "referral_code",
+      "type": "varchar(50)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "referral_credit",
+      "type": "decimal(20,8)",
+      "nullable": "NO",
+      "defaultValue": "0.00000000",
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "referred_by",
+      "type": "varchar(50)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "last_seen_at",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "bridge_heartbeat",
+      "type": "datetime",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "created_at",
+      "type": "datetime(3)",
+      "nullable": "NO",
+      "defaultValue": "now(3)",
+      "extra": "DEFAULT_GENERATED"
+    },
+    {
+      "tableName": "users",
+      "name": "updated_at",
+      "type": "datetime(3)",
+      "nullable": "NO",
+      "defaultValue": "now(3)",
+      "extra": "DEFAULT_GENERATED"
+    },
+    {
+      "tableName": "users",
+      "name": "phone",
+      "type": "varchar(20)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "phone_verified",
+      "type": "tinyint",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "changelog_seen_version",
+      "type": "int",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "token_version",
+      "type": "int",
+      "nullable": "NO",
+      "defaultValue": "0",
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "plan_source",
+      "type": "varchar(20)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "deleted_at",
+      "type": "datetime(3)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "deletion_status",
+      "type": "varchar(24)",
+      "nullable": "NO",
+      "defaultValue": "active",
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "last_seen_at_utc",
+      "type": "datetime(3)",
+      "nullable": "YES",
+      "defaultValue": null,
+      "extra": ""
+    },
+    {
+      "tableName": "users",
+      "name": "profile_revision",
+      "type": "bigint unsigned",
+      "nullable": "NO",
+      "defaultValue": "1",
+      "extra": ""
+    }
+  ],
+  "keys": [
+    {
+      "tableName": "account_risk_states",
+      "constraintName": "fk_account_risk_state_account",
+      "columnName": "trading_account_id",
+      "referencedTable": "trading_accounts",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "account_risk_states",
+      "constraintName": "fk_account_risk_state_user",
+      "columnName": "user_id",
+      "referencedTable": "users",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "account_risk_states",
+      "constraintName": "PRIMARY",
+      "columnName": "trading_account_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "account_risk_summaries",
+      "constraintName": "fk_account_risk_summary_account",
+      "columnName": "trading_account_id",
+      "referencedTable": "trading_accounts",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "account_risk_summaries",
+      "constraintName": "PRIMARY",
+      "columnName": "trading_account_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "account_runtime_snapshots",
+      "constraintName": "fk_account_snapshot_account",
+      "columnName": "trading_account_id",
+      "referencedTable": "trading_accounts",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "account_runtime_snapshots",
+      "constraintName": "PRIMARY",
+      "columnName": "trading_account_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "global_risk_control",
+      "constraintName": "PRIMARY",
+      "columnName": "id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "global_risk_controls",
+      "constraintName": "fk_global_risk_actor",
+      "columnName": "changed_by_user_id",
+      "referencedTable": "users",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "global_risk_controls",
+      "constraintName": "PRIMARY",
+      "columnName": "id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "market_quotes",
+      "constraintName": "fk_market_quotes_account",
+      "columnName": "trading_account_id",
+      "referencedTable": "trading_accounts",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "market_quotes",
+      "constraintName": "PRIMARY",
+      "columnName": "trading_account_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "market_quotes",
+      "constraintName": "PRIMARY",
+      "columnName": "symbol",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "outbox_events",
+      "constraintName": "PRIMARY",
+      "columnName": "id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "outbox_events",
+      "constraintName": "uk_outbox_event_id",
+      "columnName": "event_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_account_state",
+      "constraintName": "PRIMARY",
+      "columnName": "trading_account_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_decisions",
+      "constraintName": "PRIMARY",
+      "columnName": "id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_decisions",
+      "constraintName": "uk_risk_decision_intent",
+      "columnName": "order_intent_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "constraintName": "fk_risk_manual_release_account",
+      "columnName": "trading_account_id",
+      "referencedTable": "trading_accounts",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "constraintName": "fk_risk_manual_release_account_policy",
+      "columnName": "account_policy_version_id",
+      "referencedTable": "risk_policy_versions_v4",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "constraintName": "fk_risk_manual_release_platform_policy",
+      "columnName": "platform_policy_version_id",
+      "referencedTable": "risk_policy_versions_v4",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "constraintName": "fk_risk_manual_release_user",
+      "columnName": "user_id",
+      "referencedTable": "users",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "constraintName": "PRIMARY",
+      "columnName": "id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "constraintName": "uk_risk_manual_release_episode",
+      "columnName": "trading_account_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "constraintName": "uk_risk_manual_release_episode",
+      "columnName": "breach_fingerprint",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "constraintName": "uk_risk_manual_release_legacy",
+      "columnName": "legacy_source_table",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "constraintName": "uk_risk_manual_release_legacy",
+      "columnName": "legacy_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "constraintName": "uk_risk_manual_release_request",
+      "columnName": "user_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "constraintName": "uk_risk_manual_release_request",
+      "columnName": "trading_account_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_manual_releases",
+      "constraintName": "uk_risk_manual_release_request",
+      "columnName": "idempotency_key",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_policy_change_items",
+      "constraintName": "PRIMARY",
+      "columnName": "id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_policy_change_items_v4",
+      "constraintName": "fk_risk_policy_change_actor",
+      "columnName": "requested_by_user_id",
+      "referencedTable": "users",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "risk_policy_change_items_v4",
+      "constraintName": "fk_risk_policy_change_set",
+      "columnName": "policy_set_id",
+      "referencedTable": "risk_policy_sets_v4",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "risk_policy_change_items_v4",
+      "constraintName": "fk_risk_policy_change_version",
+      "columnName": "policy_version_id",
+      "referencedTable": "risk_policy_versions_v4",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "risk_policy_change_items_v4",
+      "constraintName": "PRIMARY",
+      "columnName": "id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_policy_sets",
+      "constraintName": "PRIMARY",
+      "columnName": "id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "constraintName": "fk_risk_policy_account",
+      "columnName": "trading_account_id",
+      "referencedTable": "trading_accounts",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "constraintName": "fk_risk_policy_active_version",
+      "columnName": "active_version_id",
+      "referencedTable": "risk_policy_versions_v4",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "constraintName": "fk_risk_policy_active_version",
+      "columnName": "id",
+      "referencedTable": "risk_policy_versions_v4",
+      "referencedColumn": "policy_set_id"
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "constraintName": "fk_risk_policy_owner",
+      "columnName": "owner_user_id",
+      "referencedTable": "users",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "constraintName": "PRIMARY",
+      "columnName": "id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "constraintName": "uk_risk_policy_active_scope",
+      "columnName": "active_scope_key",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "constraintName": "uk_risk_policy_legacy",
+      "columnName": "legacy_source_table",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_policy_sets_v4",
+      "constraintName": "uk_risk_policy_legacy",
+      "columnName": "legacy_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_policy_versions",
+      "constraintName": "PRIMARY",
+      "columnName": "id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_policy_versions",
+      "constraintName": "uk_risk_policy_version",
+      "columnName": "policy_set_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_policy_versions",
+      "constraintName": "uk_risk_policy_version",
+      "columnName": "version_no",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "constraintName": "fk_risk_policy_version_actor",
+      "columnName": "created_by_user_id",
+      "referencedTable": "users",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "constraintName": "fk_risk_policy_version_set",
+      "columnName": "policy_set_id",
+      "referencedTable": "risk_policy_sets_v4",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "constraintName": "PRIMARY",
+      "columnName": "id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "constraintName": "uk_risk_policy_version_identity",
+      "columnName": "id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "constraintName": "uk_risk_policy_version_identity",
+      "columnName": "policy_set_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "constraintName": "uk_risk_policy_version_legacy",
+      "columnName": "legacy_source_table",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "constraintName": "uk_risk_policy_version_legacy",
+      "columnName": "legacy_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "constraintName": "uk_risk_policy_version_number",
+      "columnName": "policy_set_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_policy_versions_v4",
+      "constraintName": "uk_risk_policy_version_number",
+      "columnName": "version_number",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_profiles",
+      "constraintName": "PRIMARY",
+      "columnName": "id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_rule_rollouts",
+      "constraintName": "PRIMARY",
+      "columnName": "rule_code",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_state_events",
+      "constraintName": "fk_risk_state_event_account",
+      "columnName": "trading_account_id",
+      "referencedTable": "trading_accounts",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "risk_state_events",
+      "constraintName": "fk_risk_state_event_user",
+      "columnName": "user_id",
+      "referencedTable": "users",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "risk_state_events",
+      "constraintName": "PRIMARY",
+      "columnName": "id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_state_events",
+      "constraintName": "uk_risk_state_event_revision",
+      "columnName": "trading_account_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "risk_state_events",
+      "constraintName": "uk_risk_state_event_revision",
+      "columnName": "to_revision",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "constraintName": "fk_strategy_subscriptions_account",
+      "columnName": "trading_account_id",
+      "referencedTable": "trading_accounts_legacy_v3",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "constraintName": "fk_strategy_subscriptions_user",
+      "columnName": "user_id",
+      "referencedTable": "users",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "constraintName": "PRIMARY",
+      "columnName": "id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "strategy_subscriptions",
+      "constraintName": "uk_subscription_active_execution_user",
+      "columnName": "active_execution_user_key",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "constraintName": "fk_account_owners_account",
+      "columnName": "trading_account_id",
+      "referencedTable": "trading_accounts",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "constraintName": "fk_account_owners_interval",
+      "columnName": "interval_id",
+      "referencedTable": "trading_account_ownership_intervals",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "constraintName": "fk_account_owners_interval",
+      "columnName": "user_id",
+      "referencedTable": "trading_account_ownership_intervals",
+      "referencedColumn": "user_id"
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "constraintName": "fk_account_owners_interval",
+      "columnName": "trading_account_id",
+      "referencedTable": "trading_account_ownership_intervals",
+      "referencedColumn": "trading_account_id"
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "constraintName": "fk_account_owners_interval",
+      "columnName": "role",
+      "referencedTable": "trading_account_ownership_intervals",
+      "referencedColumn": "role"
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "constraintName": "fk_account_owners_user",
+      "columnName": "user_id",
+      "referencedTable": "users",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "constraintName": "PRIMARY",
+      "columnName": "user_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "constraintName": "PRIMARY",
+      "columnName": "trading_account_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "constraintName": "PRIMARY",
+      "columnName": "role",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "trading_account_ownerships",
+      "constraintName": "uk_account_owners_open_owner",
+      "columnName": "open_owner_account_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "trading_accounts",
+      "constraintName": "PRIMARY",
+      "columnName": "id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "trading_accounts",
+      "constraintName": "uk_trading_account_identity",
+      "columnName": "platform",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "trading_accounts",
+      "constraintName": "uk_trading_account_identity",
+      "columnName": "broker_server",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "trading_accounts",
+      "constraintName": "uk_trading_account_identity",
+      "columnName": "account_login",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "trading_projection_revisions",
+      "constraintName": "fk_projection_revisions_account",
+      "columnName": "trading_account_id",
+      "referencedTable": "trading_accounts",
+      "referencedColumn": "id"
+    },
+    {
+      "tableName": "trading_projection_revisions",
+      "constraintName": "PRIMARY",
+      "columnName": "trading_account_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "trading_projection_revisions",
+      "constraintName": "PRIMARY",
+      "columnName": "resource_kind",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "trading_projection_revisions",
+      "constraintName": "PRIMARY",
+      "columnName": "resource_id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "users",
+      "constraintName": "email",
+      "columnName": "email",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "users",
+      "constraintName": "idx_users_phone",
+      "columnName": "phone",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "users",
+      "constraintName": "PRIMARY",
+      "columnName": "id",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "users",
+      "constraintName": "referral_code",
+      "columnName": "referral_code",
+      "referencedTable": null,
+      "referencedColumn": null
+    },
+    {
+      "tableName": "users",
+      "constraintName": "uid",
+      "columnName": "uid",
+      "referencedTable": null,
+      "referencedColumn": null
+    }
+  ],
+  "sourceMigrations": [
+    {
+      "file": "20260903_007_deterministic_risk_review.sql",
+      "sha256": "ed697bb67c7c87d389575f00462a961011cd45d115287cc018bf6e40fbef7d3e"
+    },
+    {
+      "file": "20260903_008_manual_risk_release.sql",
+      "sha256": "c27c28fa6aaa1f63aadeb9b43e0858679d927f88f932050a943d2f4b07fe34c1"
+    }
+  ],
+  "structureStates": {
+    "risk_policy_sets_v4": {
+      "hash": "7a931972f59546b3b5b4ff7070672d9611507d76fdd3c0c12384bc18ae443718",
+      "rows": 0,
+      "ddl": "CREATE TABLE `risk_policy_sets_v4` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `scope` enum('platform','account') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `owner_user_id` int DEFAULT NULL,\n  `trading_account_id` bigint unsigned DEFAULT NULL,\n  `name` varchar(191) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `status` enum('active','retired') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',\n  `active_version_id` bigint unsigned DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `active_scope_key` varchar(191) CHARACTER SET ascii COLLATE ascii_bin GENERATED ALWAYS AS ((case when (`status` = _utf8mb4'active') then (case when (`scope` = _utf8mb4'platform') then _utf8mb4'platform' else concat(_utf8mb4'account:',cast(`trading_account_id` as char charset utf8mb4)) end) else NULL end)) STORED,\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_risk_policy_active_scope` (`active_scope_key`),\n  UNIQUE KEY `uk_risk_policy_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `idx_risk_policy_owner` (`owner_user_id`,`trading_account_id`,`status`,`id`),\n  KEY `fk_risk_policy_account` (`trading_account_id`),\n  KEY `fk_risk_policy_active_version` (`active_version_id`,`id`),\n  CONSTRAINT `fk_risk_policy_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_risk_policy_active_version` FOREIGN KEY (`active_version_id`, `id`) REFERENCES `risk_policy_versions_v4` (`id`, `policy_set_id`),\n  CONSTRAINT `fk_risk_policy_owner` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_risk_policy_scope` CHECK ((((`scope` = _utf8mb4'platform') and (`owner_user_id` is null) and (`trading_account_id` is null)) or ((`scope` = _utf8mb4'account') and (`owner_user_id` is not null) and (`trading_account_id` is not null))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    "risk_policy_versions_v4": {
+      "hash": "dfa7a7777c56b293e5a13842c071c401f1034962255bf373daed3aeba8cb880d",
+      "rows": 0,
+      "ddl": "CREATE TABLE `risk_policy_versions_v4` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `policy_set_id` bigint unsigned NOT NULL,\n  `version_number` int unsigned NOT NULL,\n  `policy_json` json NOT NULL,\n  `policy_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `created_by_user_id` int DEFAULT NULL,\n  `change_reason` varchar(500) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_risk_policy_version_identity` (`id`,`policy_set_id`),\n  UNIQUE KEY `uk_risk_policy_version_number` (`policy_set_id`,`version_number`),\n  UNIQUE KEY `uk_risk_policy_version_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `fk_risk_policy_version_actor` (`created_by_user_id`),\n  CONSTRAINT `fk_risk_policy_version_actor` FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_risk_policy_version_set` FOREIGN KEY (`policy_set_id`) REFERENCES `risk_policy_sets_v4` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    "risk_policy_change_items_v4": {
+      "hash": "2e642fde712714d55782fbdd4bf551bae920dd832c4c3c4c389f4e6ef408f243",
+      "rows": 0,
+      "ddl": "CREATE TABLE `risk_policy_change_items_v4` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `policy_set_id` bigint unsigned NOT NULL,\n  `policy_version_id` bigint unsigned NOT NULL,\n  `field_code` varchar(80) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `old_value_json` json DEFAULT NULL,\n  `new_value_json` json DEFAULT NULL,\n  `change_class` enum('tighten','relax_within_platform','toggle','inherit') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `requested_by_user_id` int NOT NULL,\n  `reason` varchar(500) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `changed_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_risk_policy_changes` (`policy_set_id`,`changed_at_utc`,`id`),\n  KEY `fk_risk_policy_change_version` (`policy_version_id`),\n  KEY `fk_risk_policy_change_actor` (`requested_by_user_id`),\n  CONSTRAINT `fk_risk_policy_change_actor` FOREIGN KEY (`requested_by_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_risk_policy_change_set` FOREIGN KEY (`policy_set_id`) REFERENCES `risk_policy_sets_v4` (`id`),\n  CONSTRAINT `fk_risk_policy_change_version` FOREIGN KEY (`policy_version_id`) REFERENCES `risk_policy_versions_v4` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    "account_risk_states": {
+      "hash": "4db6d16d799e757edba4be707dd9ded038e3e8c8020d0b60bcda635df05a478d",
+      "rows": 0,
+      "ddl": "CREATE TABLE `account_risk_states` (\n  `trading_account_id` bigint unsigned NOT NULL,\n  `user_id` int NOT NULL,\n  `business_date` date DEFAULT NULL,\n  `equity` decimal(24,8) NOT NULL,\n  `free_margin` decimal(24,8) NOT NULL,\n  `daily_loss_percent` decimal(12,6) NOT NULL DEFAULT '0.000000',\n  `drawdown_percent` decimal(12,6) NOT NULL DEFAULT '0.000000',\n  `open_positions` int unsigned NOT NULL DEFAULT '0',\n  `pending_orders` int unsigned NOT NULL DEFAULT '0',\n  `total_volume` decimal(24,8) NOT NULL DEFAULT '0.00000000',\n  `daily_open_count` int unsigned NOT NULL DEFAULT '0',\n  `consecutive_losses` int unsigned NOT NULL DEFAULT '0',\n  `terminal_timezone_offset_minutes` smallint DEFAULT NULL,\n  `clock_status` enum('calibrated','observer_bootstrap','stale','unavailable') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `last_successful_open_at_utc` datetime(3) DEFAULT NULL,\n  `cooldown_until_utc` datetime(3) DEFAULT NULL,\n  `data_complete` tinyint(1) NOT NULL DEFAULT '0',\n  `incomplete_reasons_json` json NOT NULL,\n  `observed_at_utc` datetime(3) NOT NULL,\n  `revision` bigint unsigned NOT NULL,\n  PRIMARY KEY (`trading_account_id`),\n  KEY `idx_account_risk_state_user` (`user_id`,`observed_at_utc`,`trading_account_id`),\n  CONSTRAINT `fk_account_risk_state_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_account_risk_state_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    "risk_state_events": {
+      "hash": "0c28e4e3a42fc3f02b7a3f28095329a82465c44875b6b48cf915adbeee783230",
+      "rows": 0,
+      "ddl": "CREATE TABLE `risk_state_events` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `user_id` int NOT NULL,\n  `event_type` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `from_revision` bigint unsigned DEFAULT NULL,\n  `to_revision` bigint unsigned NOT NULL,\n  `payload_json` json NOT NULL,\n  `occurred_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_risk_state_event_revision` (`trading_account_id`,`to_revision`),\n  KEY `idx_risk_state_events_user` (`user_id`,`occurred_at_utc`,`id`),\n  CONSTRAINT `fk_risk_state_event_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_risk_state_event_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    "account_risk_summaries": {
+      "hash": "6ef593a712583d2ad55ab2af25fc5ba3f1bafd47c9f3306b68a872b65523901f",
+      "rows": 0,
+      "ddl": "CREATE TABLE `account_risk_summaries` (\n  `trading_account_id` bigint unsigned NOT NULL,\n  `policy_version_id` bigint unsigned DEFAULT NULL,\n  `payload_json` json NOT NULL,\n  `observed_at_utc` datetime(3) NOT NULL,\n  `revision` bigint unsigned NOT NULL,\n  PRIMARY KEY (`trading_account_id`),\n  KEY `idx_account_risk_summary_observed` (`observed_at_utc`),\n  CONSTRAINT `fk_account_risk_summary_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    "risk_manual_releases": {
+      "hash": "d079f1d3ec62adf64e27a72097437d122b871812e33d4595a5eed89f555d0fc4",
+      "rows": 0,
+      "ddl": "CREATE TABLE `risk_manual_releases` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `user_id` int NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `platform_policy_version_id` bigint unsigned NOT NULL,\n  `account_policy_version_id` bigint unsigned DEFAULT NULL,\n  `policy_set_revision` bigint unsigned NOT NULL,\n  `risk_state_revision` bigint unsigned NOT NULL,\n  `released_rules_json` json NOT NULL,\n  `baseline_json` json NOT NULL,\n  `breach_fingerprint` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `reason` varchar(500) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `idempotency_key` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `request_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `status` enum('active','superseded','expired','revoked') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',\n  `expires_at_utc` datetime(3) NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `invalidated_at_utc` datetime(3) DEFAULT NULL,\n  `invalidation_reason` varchar(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_risk_manual_release_request` (`user_id`,`trading_account_id`,`idempotency_key`),\n  UNIQUE KEY `uk_risk_manual_release_episode` (`trading_account_id`,`breach_fingerprint`),\n  UNIQUE KEY `uk_risk_manual_release_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `idx_risk_manual_release_active` (`trading_account_id`,`status`,`expires_at_utc`,`created_at_utc`),\n  KEY `fk_risk_manual_release_platform_policy` (`platform_policy_version_id`),\n  KEY `fk_risk_manual_release_account_policy` (`account_policy_version_id`),\n  CONSTRAINT `fk_risk_manual_release_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_risk_manual_release_account_policy` FOREIGN KEY (`account_policy_version_id`) REFERENCES `risk_policy_versions_v4` (`id`),\n  CONSTRAINT `fk_risk_manual_release_platform_policy` FOREIGN KEY (`platform_policy_version_id`) REFERENCES `risk_policy_versions_v4` (`id`),\n  CONSTRAINT `fk_risk_manual_release_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    }
+  },
+  "scope": "Read-only metadata and aggregate counts. No DDL, DML, payload, policy reason or credentials exported. Counts share an InnoDB snapshot; metadata is not a schema lock. Not upgrade approval, full data mapping, or runtime acceptance."
+}

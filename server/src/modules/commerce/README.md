@@ -1,0 +1,7 @@
+# Commerce
+
+负责学习权益读取、推荐规则管理及钱包地址读取。index公开应用能力和钱包读取契约；composition仅供运行入口绑定MySQL适配器与HTTP插件。钱包业务消费者使用WalletAddressReader，不接收数据库连接；数据库适配器保留白名单链、游标、精确整数及托管证据校验。
+
+学习完成由learning拥有事务，MysqlLearningMembershipReader.forTransaction仍绑定原事务连接，权益校验不拆出独立提交。推荐规则路由由createReferralRuleHttp组装，外层API registrar只挂载插件，仍受admin Host限制与原路由鉴权/CSRF/幂等/revision约束。
+
+边界登记清零仅表示当前扫描范围通过，不表示支付、钱包、权益等全部旧功能已迁移。54项推荐规则/学习/钱包/路由登记回归、类型及构建通过；实际离线Fastify注册96/96匹配。真实数据库与前端业务验收继续按功能矩阵推进。

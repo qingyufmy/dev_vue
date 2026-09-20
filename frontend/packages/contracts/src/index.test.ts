@@ -183,11 +183,32 @@ describe('account risk V4 contracts', () => {
     manual_release_enabled: true, manual_release_max_daily_loss_percent: '5', manual_release_max_drawdown_percent: '12',
     manual_release_max_daily_open_count: 30, manual_release_consecutive_loss_limit: 5,
     max_risk_per_trade_percent: '1', max_daily_loss_percent: '3', max_drawdown_percent: '8', max_open_positions: 5,
-    max_pending_orders: 5, max_total_volume: '2', max_spread_points: '30', min_open_interval_seconds: 60,
+    max_pending_orders: 5, max_order_volume: '0.05', max_total_volume: '2', max_spread_points: '30', min_open_interval_seconds: 60,
     max_daily_open_count: 20, consecutive_loss_limit: 3, loss_cooldown_minutes: 15, pending_valid_minutes: 240,
     weekend_close_minutes: 30, trade_send_enabled: true, account_kill_switch: false, require_stop_loss: true,
     editable_fields: ['max_risk_per_trade_percent', 'trade_send_enabled'], revision: '3', updated_at: meta.generated_at,
   }
+
+  it('preserves decimal control ranges and rejects inverted or invalid locked bounds', () => {
+    const control = { allowed_min: '0.01', allowed_max: '0.2', locked_value: null, user_editable: true }
+    expect(riskPolicySchema.parse({ ...policy, numeric_controls: { max_order_volume: control } }).numericControls.max_order_volume).toEqual(control)
+    expect(riskPolicySchema.parse(policy).numericControls).toEqual({})
+    const { max_order_volume: _oldAbsent, ...historical } = policy
+    expect(riskPolicySchema.parse(historical).maxOrderVolume).toBeUndefined()
+    expect(riskPolicySchema.safeParse({ ...policy, numeric_controls: { max_order_volume: { ...control, allowed_min: '0.3' } } }).success).toBe(false)
+    expect(riskPolicySchema.safeParse({ ...policy, numeric_controls: { max_order_volume: { ...control, locked_value: '0.3' } } }).success).toBe(false)
+  })
+
+  it('reads the system ATR multiplier without allowing account writes or inventing it for old responses', () => {
+    expect(riskPolicySchema.parse(policy).pendingDedupAtrMultiplier).toBeUndefined()
+    for (const value of ['0', '0.05', '5']) {
+      expect(riskPolicySchema.parse({ ...policy, pending_dedup_atr_multiplier: value }).pendingDedupAtrMultiplier).toBe(value)
+    }
+    for (const value of ['-1', '5.01', '01', 0.05]) {
+      expect(riskPolicySchema.safeParse({ ...policy, pending_dedup_atr_multiplier: value }).success).toBe(false)
+    }
+    expect(riskPolicyPatchBodySchema.safeParse({ pending_dedup_atr_multiplier: '0.5', reason: '不能编辑系统字段' }).success).toBe(false)
+  })
 
   it('normalizes strict snake_case policy and summary resources without accepting camelCase wire fields', () => {
     expect(riskPolicySchema.parse(policy)).toMatchObject({ accountId: 'account-7', maxRiskPerTradePercent: '1', editableFields: ['max_risk_per_trade_percent', 'trade_send_enabled'], revision: 3 })

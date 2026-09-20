@@ -3,6 +3,7 @@ import Fastify from 'fastify'
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it, vi } from 'vitest'
 import { classifyTradeAttribution, TradeHistoryService, type TradeHistoryRepository, type TradeRecordDetail } from '../src/modules/trade-history/index.js'
+import { AuthError } from '../src/modules/auth/index.js'
 
 const now = '2026-09-04T08:00:00.000Z'
 const item = { accountCurrency: 'USD', currencyEvidence: 'explicit_record' as const,
@@ -25,6 +26,43 @@ function repository(overrides: Partial<TradeHistoryRepository> = {}): TradeHisto
 }
 
 describe('Stage 12S authoritative trade history', () => {
+  it('preserves authentication errors before validating malformed input', async () => {
+    const app = Fastify(), list = vi.fn()
+    await app.register(createTradeHistoryHttp(new TradeHistoryService(repository({ list })), {
+      async authenticate() { throw new AuthError('auth_required', 401) },
+    }))
+    try {
+      const result = await app.inject('/api/v4/trade-history?page_size=wrong')
+      expect(result.statusCode).toBe(401)
+      expect(result.headers['content-type']).toContain('application/problem+json')
+      expect(result.json().code).toBe('auth_required')
+      expect(list).not.toHaveBeenCalled()
+    } finally { await app.close() }
+  })
+
+  it('rejects malformed query values before the service accesses data', async () => {
+    const app = Fastify(), list = vi.fn()
+    await app.register(createTradeHistoryHttp(new TradeHistoryService(repository({ list })), { async authenticate() { return { userId: 7 } } }))
+    try {
+      for (const query of ['account_id=42&page_size=1e2', 'account_id=42&side=unknown', 'account_id=42&from_date=invalid']) {
+        const result = await app.inject('/api/v4/trade-history?' + query)
+        expect(result.statusCode).toBe(400)
+        expect(result.json().code).toBe('api_request_invalid')
+      }
+      expect(list).not.toHaveBeenCalled()
+    } finally { await app.close() }
+  })
+
+  it('blocks invalid successful output without echoing its contents', async () => {
+    const app = Fastify(), bad = { ...detail, closedAt: 'internal-invalid-time' }
+    await app.register(createTradeHistoryHttp(new TradeHistoryService(repository({ find: async () => bad })), { async authenticate() { return { userId: 7 } } }))
+    try {
+      const result = await app.inject('/api/v4/trade-history/trade-1')
+      expect(result.statusCode).toBe(503)
+      expect(result.json().code).toBe('api_response_invalid')
+      expect(result.body).not.toContain('internal-invalid-time')
+    } finally { await app.close() }
+  })
   it('freezes pagination and rejects a cursor reused with different filters', async () => {
     const list = vi.fn(repository().list)
     const service = new TradeHistoryService(repository({ list: async (...args) => list(...args) }), () => new Date(now))

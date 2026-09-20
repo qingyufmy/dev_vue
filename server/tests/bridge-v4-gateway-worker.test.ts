@@ -133,7 +133,7 @@ describe('Stage 12G Bridge V4 gateway and execution worker', () => {
     const sink = new MemorySink()
     const gateway = new BridgeGatewayService(
       { async issue() { throw new Error('unused') }, async consume() { return { userId: 42, installationId: 'installation_12345678', profileId: 'profile_12345678', generation: 1 } } },
-      new MemoryRoutes(), leases, { async getPurchasedCapacity() { return 0 } }, directory, transport, service,
+      new MemoryRoutes(), leases, { async getIncludedCapacity() { return 1 }, async getPurchasedCapacity() { return 0 } }, directory, transport, service,
       { async ingest() { return null } }, () => NOW,
     )
     const session = await gateway.open({ ticket: 'ticket', hello: hello(2), sink })
@@ -233,7 +233,7 @@ function cleanupFixture() {
   const gateway = new BridgeGatewayService(
     { async issue() { throw new Error('unused') }, async consume() {
       return { userId: 42, installationId: 'installation_12345678', profileId: 'profile_12345678', generation: 1 }
-    } }, routes, leases, { getPurchasedCapacity: capacity }, directory, transport, commands,
+    } }, routes, leases, { getIncludedCapacity: async () => 1, getPurchasedCapacity: capacity }, directory, transport, commands,
     { async ingest() { return null } }, () => NOW,
   )
   return { ...f, open: () => gateway.open({ ticket: 'ticket', hello: hello(2), sink }) }

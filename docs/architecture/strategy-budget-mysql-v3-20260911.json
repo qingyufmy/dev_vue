@@ -1,0 +1,56 @@
+{
+  "kind": "strategy-budget-mysql-reference/v1",
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "dataCopied": false,
+  "foreignKeysVerified": false,
+  "referenceDatabaseRemoved": true,
+  "checks": [],
+  "identity": {
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8",
+    "recovery": "0"
+  },
+  "sourceSteps": 240,
+  "tables": [
+    {
+      "table": "strategies",
+      "originalHash": "ba5c894df0c3baa3e2f959d46d7b2fd0bc90bfa1436b0c62e10c2f952608de97"
+    },
+    {
+      "table": "strategy_versions",
+      "originalHash": "0c782ff0ece02954afe419dce006545a1dc12fd1bd0978a5e4e535c38c6c7e62"
+    },
+    {
+      "table": "strategy_subscriptions",
+      "originalHash": "9a004c16177d58c99423a8c269fed599f2707851f5b3ee38a05bed308fe3637e"
+    },
+    {
+      "table": "trading_account_ownerships",
+      "originalHash": "59e43f0f9dc090f9cd61bf3d2bfe558f475354d7d0df5c36342a7961c490cb46"
+    },
+    {
+      "table": "trade_decisions",
+      "originalHash": "dd881046c64abcecc0d304113c916b931806861aeb6e4f0559ba236ebceaa215"
+    },
+    {
+      "table": "trade_decision_payloads",
+      "originalHash": "cbf760edb98f9d4a4e1f0284eed95f8d4579b490f5afc56ff761354f554a806f"
+    },
+    {
+      "table": "ai_trader_runs",
+      "originalHash": "a4f89e43581083efdf429a541653abfbfc7ab5e43c169f168136acbfcefd19a4"
+    },
+    {
+      "table": "inference_snapshots",
+      "originalHash": "bf79a919f883f9ce64e8fb968a192dab49c699c17984faedf15c2effa2cc4ef4"
+    },
+    {
+      "table": "inference_snapshot_payloads",
+      "originalHash": "a865321ec4edc9504e0842c3906969df061f248ad070245d6bf1000255ea1a8d"
+    }
+  ],
+  "errorCode": "ER_NO_SUCH_TABLE",
+  "missingTable": "dev_vue.subscription_execution_preferences_v4",
+  "observedAt": "2026-09-11T01:07:02.071Z"
+}

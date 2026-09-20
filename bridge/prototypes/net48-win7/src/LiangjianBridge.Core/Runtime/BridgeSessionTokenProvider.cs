@@ -44,6 +44,30 @@ namespace Liangjian.BridgeV4.Runtime
         string Post(Uri endpoint, byte[] requestBody, int timeoutMilliseconds);
     }
 
+    internal sealed class BridgeHttpStatusException : IOException
+    {
+        public BridgeHttpStatusException(int statusCode) : base("bridge_http_status_" + statusCode)
+        { StatusCode = statusCode; }
+        public int StatusCode { get; private set; }
+    }
+
+    internal static class TrustedBridgeControlOrigin
+    {
+        internal static string Validate(string value)
+        { return value == null ? null : InstallationAuthorizationClient.NormalizeBase(value); }
+        internal static Uri Resolve(Uri realtime, string configured, bool legacyHttps = false)
+        {
+            string expectedScheme = realtime.Scheme == "wss" ? "https" : "http";
+            if (configured == null)
+                return BridgeV4EndpointPolicy.ValidateControlUri((legacyHttps ? "https" : expectedScheme) + "://" + realtime.Authority);
+            Uri control = BridgeV4EndpointPolicy.ValidateControlUri(configured);
+            if (!string.Equals(control.Host, realtime.Host, StringComparison.OrdinalIgnoreCase)
+                || control.Scheme != expectedScheme)
+                throw new InvalidDataException("bridge_control_origin_mismatch");
+            return control;
+        }
+    }
+
     /// <summary>
     /// The production transport is deliberately small: no redirects, a
     /// bounded response, and no exception text from the peer is propagated.
@@ -78,8 +102,9 @@ namespace Liangjian.BridgeV4.Runtime
                 using (WebResponse response = request.GetResponse())
                 {
                     HttpWebResponse httpResponse = response as HttpWebResponse;
-                    if (httpResponse == null || (int)httpResponse.StatusCode != expectedStatus)
-                        throw new InvalidDataException("bridge_session_token_exchange_failed");
+                    if (httpResponse == null) throw new InvalidDataException("bridge_session_token_exchange_failed");
+                    if ((int)httpResponse.StatusCode != expectedStatus)
+                        throw new BridgeHttpStatusException((int)httpResponse.StatusCode);
                     return ReadResponse(response.GetResponseStream());
                 }
             }
@@ -87,10 +112,18 @@ namespace Liangjian.BridgeV4.Runtime
             {
                 throw;
             }
-            catch (WebException)
+            catch (WebException error)
             {
+                HttpWebResponse response = error.Response as HttpWebResponse;
+                if (response != null)
+                {
+                    int statusCode = (int)response.StatusCode;
+                    response.Dispose();
+                    throw new BridgeHttpStatusException(statusCode);
+                }
                 throw new InvalidDataException("bridge_session_token_exchange_failed");
             }
+            catch (BridgeHttpStatusException) { throw; }
             catch (IOException)
             {
                 throw new InvalidDataException("bridge_session_token_exchange_failed");
@@ -154,16 +187,17 @@ namespace Liangjian.BridgeV4.Runtime
         private readonly string installationId;
         private readonly IBridgeSessionTokenHttpClient httpClient;
         private readonly int timeoutMilliseconds;
+        private readonly string trustedControlBase;
         private readonly JavaScriptSerializer serializer = CreateSerializer();
 
-        public HttpBridgeSessionTokenProvider(string installationIdValue)
+        public HttpBridgeSessionTokenProvider(string installationIdValue, string trustedControlBase = null)
             : this(installationIdValue, new HttpWebRequestSessionTokenClient(),
-                DefaultTimeoutMilliseconds)
+                DefaultTimeoutMilliseconds, trustedControlBase)
         {
         }
 
         public HttpBridgeSessionTokenProvider(string installationIdValue,
-            IBridgeSessionTokenHttpClient httpClientValue, int timeoutMillisecondsValue)
+            IBridgeSessionTokenHttpClient httpClientValue, int timeoutMillisecondsValue, string trustedControlBase = null)
         {
             if (!ValidIdentifier(installationIdValue, 128))
                 throw new ArgumentException("installationIdValue");
@@ -174,6 +208,7 @@ namespace Liangjian.BridgeV4.Runtime
             installationId = installationIdValue;
             httpClient = httpClientValue;
             timeoutMilliseconds = timeoutMillisecondsValue;
+            this.trustedControlBase = TrustedBridgeControlOrigin.Validate(trustedControlBase);
         }
 
         public BridgeSessionToken Acquire(BridgeProfileSettings profile, string refreshToken)
@@ -187,7 +222,7 @@ namespace Liangjian.BridgeV4.Runtime
                     throw InvalidExchange();
 
                 Uri realtime = BridgeV4EndpointPolicy.ValidateRealtimeUri(profile.ServerUri);
-                Uri control = BuildControlUri(realtime);
+                Uri control = TrustedBridgeControlOrigin.Resolve(realtime, trustedControlBase);
                 Uri endpoint = BridgeV4EndpointPolicy.BuildControlPath(control,
                     "/api/v4/bridge/session-tokens");
                 requestBody = serializer.Serialize(new SessionTokenRequest
@@ -209,6 +244,11 @@ namespace Liangjian.BridgeV4.Runtime
                 {
                     responseBody = null;
                 }
+            }
+            catch (BridgeHttpStatusException error)
+            {
+                if (error.StatusCode == 401) throw new InvalidDataException("bridge_terminal_authorization_invalid");
+                throw InvalidExchange();
             }
             catch (InvalidDataException)
             {
@@ -278,17 +318,6 @@ namespace Liangjian.BridgeV4.Runtime
             // to another host or protocol.
             return new BridgeSessionToken(accessToken,
                 checked(DateTimeOffset.UtcNow.AddSeconds(expires).ToUnixTimeMilliseconds()));
-        }
-
-        private static Uri BuildControlUri(Uri realtime)
-        {
-            if (realtime == null) throw InvalidExchange();
-            string scheme = realtime.Scheme == "wss" ? Uri.UriSchemeHttps : Uri.UriSchemeHttp;
-            Uri control;
-            if (!Uri.TryCreate(scheme + "://" + realtime.Authority,
-                UriKind.Absolute, out control))
-                throw InvalidExchange();
-            return BridgeV4EndpointPolicy.ValidateControlUri(control.ToString());
         }
 
         private static int ReadExpires(IDictionary<string, object> values, string key)

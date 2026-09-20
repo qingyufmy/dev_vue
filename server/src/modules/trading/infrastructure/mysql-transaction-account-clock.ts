@@ -26,7 +26,7 @@ export async function readTransactionAccountClock(connection: PoolConnection, us
       AND NOT EXISTS (SELECT 1 FROM terminal_account_bindings other WHERE other.trading_account_id=a.id
         AND other.unbound_at_utc IS NULL AND other.terminal_profile_id<>b.terminal_profile_id)
       AND NOT EXISTS (SELECT 1 FROM bridge_connection_sessions session WHERE session.terminal_profile_id=b.terminal_profile_id
-        AND session.disconnected_at_utc IS NULL AND session.connection_epoch<>pp.connection_epoch)
+        AND session.disconnected_at_utc IS NULL AND session.connection_epoch_v4<>pp.connection_epoch)
     FOR SHARE`, [userId, accountId])
   return rows.length === 1 ? { timezoneOffsetMinutes: rows[0]!.timezone_offset_minutes, clockStatus: rows[0]!.clock_status } : null
 }

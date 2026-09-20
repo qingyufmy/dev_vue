@@ -1,0 +1,26 @@
+{
+  "kind": "development-freeze-inventory/v1",
+  "passed": true,
+  "writes": 0,
+  "accounts": [
+    {
+      "user": "dev_vue",
+      "host": "%",
+      "locked": "N"
+    },
+    {
+      "user": "dev_vue",
+      "host": "localhost",
+      "locked": "N"
+    }
+  ],
+  "databases": [
+    {
+      "db": "dev_vue"
+    },
+    {
+      "db": "dev_vue"
+    }
+  ],
+  "clients": []
+}

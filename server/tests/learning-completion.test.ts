@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { Pool, PoolConnection } from 'mysql2/promise'
 import { normalizeLearningCompletion, type LearningCompletionCommand } from '../src/modules/learning/domain/learning-completion.js'
 import { MysqlLearningCompletion } from '../src/modules/learning/infrastructure/mysql-learning-completion.js'
-import { MysqlLearningMembershipReader } from '../src/modules/commerce/index.js'
+import { MysqlLearningMembershipReader } from '../src/modules/commerce/infrastructure/mysql-learning-membership-reader.js'
 
 const command: LearningCompletionCommand = { userId: 7, courseId: '12', lessonId: '99',
   requestId: 'a56a2134-9105-4e93-a806-bb3793f7ad38', expectedRevision: '9007199254740993', completed: true }

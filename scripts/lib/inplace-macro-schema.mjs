@@ -1,3 +1,4 @@
+import { assertFrozenMigrationPrefix } from './frozen-migration-prefix.mjs'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { loadMigrationPlan, splitSqlStatements } from './v4-migration-plan.mjs'
@@ -16,8 +17,7 @@ export async function loadMacroSchemaCoordinator(root) {
     || reference.tables.length !== macroTableNames.length || new Set(reference.tables.map(t => t.name)).size !== macroTableNames.length
     || reference.tables.some(t => !macroTableNames.includes(t.name) || t.rows !== '0')) throw new Error('inplace_macro_reference_invalid')
   const migrations = await loadMigrationPlan({ rootDirectory: fileURLToPath(root) })
-  if (reference.migrations.length !== migrations.length || migrations.some(m => !reference.migrations.some(r => r.id === m.id
-    && r.status === 'completed' && r.checksum_sha256 === m.checksum))) throw new Error('inplace_macro_reference_history_changed')
+  assertFrozenMigrationPrefix(reference.migrations, migrations, macroTableNames, 'inplace_macro_reference_history_changed')
   const sql = splitSqlStatements(await readFile(new URL('server/db/migrations/inplace/008_macro_tables.sql', root), 'utf8'))
   if (sql.length !== macroTableNames.length || sql.some((statement, i) => statement !== reference.tables.find(t => t.name === macroTableNames[i]).ddl)) throw new Error('inplace_macro_sql_reference_mismatch')
   const available = new Set(['users'])

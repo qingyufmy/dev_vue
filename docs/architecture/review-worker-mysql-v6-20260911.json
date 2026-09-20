@@ -1,0 +1,32 @@
+{
+  "kind": "review-worker-mysql-reference/v1",
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "foreignKeysVerified": false,
+  "modelCalls": "synthetic-only",
+  "checks": [
+    "claim-and-complete-use-schema-compatible-status",
+    "unexpired-lease-not-stolen",
+    "expired-lease-reclaimed-and-attempt-expired",
+    "stale-worker-cannot-write-after-takeover",
+    "archived-case-never-calls-model",
+    "retry_wait-not-claimed-before-due-and-accepted-at-boundary",
+    "queued-not-claimed-before-due-and-accepted-at-boundary",
+    "recovery-selects-due-and-expired-only-and-worker-completes-once"
+  ],
+  "recoveryResults": [
+    {
+      "id": "job-8",
+      "status": "succeeded",
+      "versionId": "6824fb15-cfba-4dd0-a066-db672b688d61"
+    },
+    {
+      "id": "job-9",
+      "status": "succeeded",
+      "versionId": "ac53601f-1855-4449-923d-03f5e9058e4b"
+    }
+  ],
+  "redisVerified": false,
+  "referenceDatabaseRemoved": true,
+  "observedAt": "2026-09-11T04:13:39.121Z"
+}

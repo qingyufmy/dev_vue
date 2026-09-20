@@ -49,13 +49,23 @@ namespace Liangjian.BridgeV4.Runtime
                 SyncJobRecord existing = runtime.DataStore.ReadSyncJob(jobId);
                 if (existing == null)
                 {
+                    long syncStart = request.RangeStartUtcMsc;
+                    if (request.Resource.StartsWith("history.", StringComparison.Ordinal))
+                    {
+                        foreach (CoverageRangeRecord row in coverage)
+                        {
+                            if (row.Completeness != "complete" || row.RangeEndUtcMsc <= syncStart) continue;
+                            if (row.RangeStartUtcMsc > syncStart) break;
+                            syncStart = Math.Min(request.RangeEndUtcMsc, row.RangeEndUtcMsc);
+                        }
+                    }
                     runtime.DataStore.EnqueueSyncJob(runtime.ConnectionEpoch, new SyncJobRecord
                     {
                         JobId = jobId,
                         ConnectionEpoch = runtime.ConnectionEpoch,
                         Resource = request.Resource,
                         ScopeKey = request.ScopeKey,
-                        RangeStartUtcMsc = request.RangeStartUtcMsc,
+                        RangeStartUtcMsc = syncStart,
                         RangeEndUtcMsc = request.RangeEndUtcMsc,
                         State = "queued",
                         Attempt = 0,
@@ -106,7 +116,9 @@ namespace Liangjian.BridgeV4.Runtime
         {
             if (job.ConnectionEpoch != runtime.ConnectionEpoch
                 || job.Resource != request.Resource || job.ScopeKey != request.ScopeKey
-                || job.RangeStartUtcMsc != request.RangeStartUtcMsc || job.RangeEndUtcMsc != request.RangeEndUtcMsc)
+                || job.RangeStartUtcMsc < request.RangeStartUtcMsc || job.RangeStartUtcMsc >= request.RangeEndUtcMsc
+                || (request.Resource == "market.candles" && job.RangeStartUtcMsc != request.RangeStartUtcMsc)
+                || job.RangeEndUtcMsc != request.RangeEndUtcMsc)
             {
                 throw new InvalidDataException("bridge_projection_sync_job_conflict");
             }
@@ -182,10 +194,8 @@ namespace Liangjian.BridgeV4.Runtime
                 result.History = runtime.DataStore.ReadHistory(
                     HistoryKind(request.Resource), request.RangeStartUtcMsc, request.RangeEndUtcMsc,
                     request.Limit, request.HistoryCursor);
-                if (result.History.Items.Count > 0)
-                {
-                    result.ObservedAtUtcMsc = result.History.Items[result.History.Items.Count - 1].ObservedAtUtcMsc;
-                }
+                // History completeness belongs to the frozen query snapshot, not its last trade.
+                // All pages (including empty ones) retain the same observation time.
             }
             return result;
         }

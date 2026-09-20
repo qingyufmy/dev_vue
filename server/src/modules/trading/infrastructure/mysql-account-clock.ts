@@ -9,6 +9,23 @@ export async function resolveStoredAccountClock(
 ): Promise<AccountClock | undefined> {
   if (input.projection.resource !== 'account.metrics') return undefined
   const route = input.route
+  // Account metrics arrive every second; absence of a new daily clock sample is not revocation.
+  // Use the original observation timestamp so metrics cannot indefinitely renew the evidence.
+  if (input.projection.data.clockStatus === 'unavailable' && input.projection.data.timezoneOffsetMinutes === null) {
+    const [confirmed] = await connection.execute<RowDataPacket[]>(`SELECT reported_offset_minutes
+      FROM terminal_clock_observations_v4
+      WHERE trading_account_id=? AND user_id=? AND ownership_interval_id=? AND ownership_revision=?
+        AND terminal_profile_id=? AND terminal_instance_id=?
+        AND reported_status='calibrated' AND effective_status='calibrated'
+        AND reported_offset_minutes=effective_offset_minutes
+        AND observed_at_utc<=? AND observed_at_utc>=DATE_SUB(?,INTERVAL 24 HOUR)
+      ORDER BY observed_at_utc DESC,projection_revision DESC LIMIT 1 FOR SHARE`,
+    [route.accountId, route.userId, ownership.intervalId, ownership.ownershipRevision,
+      route.terminalProfileId, route.terminalInstanceId, new Date(input.projection.data.observedAt), new Date(input.projection.data.observedAt)])
+    if (confirmed.length === 1) {
+      return resolveAccountClock({ timezoneOffsetMinutes: confirmed[0]!.reported_offset_minutes, clockStatus: 'calibrated' }, null)
+    }
+  }
   const [rows] = await connection.execute<(RowDataPacket & {
     timezone_offset_minutes: number | null; clock_status: AccountClock['clockStatus']
   })[]>(`SELECT snap.timezone_offset_minutes,snap.clock_status

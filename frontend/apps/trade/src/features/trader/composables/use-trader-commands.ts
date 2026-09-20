@@ -9,6 +9,7 @@ import type {
 } from '@aurum/contracts'
 import { computed, ref } from 'vue'
 import { useTradeSession } from '~/features/auth'
+import { sameCommandTarget } from '../model/command-target-state'
 import { traderApi } from '../api/trader-api'
 
 export function useTraderCommands() {
@@ -22,6 +23,7 @@ export function useTraderCommands() {
   const submitting = ref(false)
   const error = ref('')
   const administrator = computed(() => session.value?.permissions.includes('admin') ?? false)
+  let preparedTarget: Record<string, unknown> | null = null
   let contextGeneration = 0
   let previewGeneration = 0
   const pendingRealtimeOperationIds = new Set<string>()
@@ -31,10 +33,14 @@ export function useTraderCommands() {
     loadingContext.value = true
     error.value = ''
     commandContext.value = null
+    preparedTarget = null
     distributionPreview.value = null
     try {
+      const workspace = ticket ? (await traderApi.getWorkspace(accountId)).data : null
+      const target = workspace ? [...workspace.positions.items, ...workspace.pendingOrders.items].find(item => item.ticket === ticket) : null
       const context = (await traderApi.getCommandContext(accountId, symbol, ticket)).data
       if (generation !== contextGeneration) return null
+      preparedTarget = target ? structuredClone(target) : null
       commandContext.value = context
       return commandContext.value
     } catch (reason) {
@@ -66,7 +72,24 @@ export function useTraderCommands() {
   async function submitCommand(accountId: string, command: ExecutionCommand) {
     return submit(async () => {
       const current = requireSession()
-      return (await traderApi.createCommand(current.csrf_token, accountId, command, crypto.randomUUID())).data
+      const generation = contextGeneration
+      let refreshed = command
+      if ('ticket' in command) {
+        const workspace = (await traderApi.getWorkspace(accountId)).data
+        const targets = command.command_type === 'modify_position' || command.command_type === 'close_position'
+          ? workspace.positions.items : workspace.pendingOrders.items
+        const target = targets.find(item => item.ticket === command.ticket)
+        if (!target || !preparedTarget || !sameCommandTarget(preparedTarget, target)) {
+          throw new Error('持仓或挂单已变化，请重新打开编辑界面核对手数和保护价。')
+        }
+        const context = (await traderApi.getCommandContext(accountId, target.symbol, command.ticket)).data
+        if (generation !== contextGeneration || context.accountId !== accountId || context.targetRevision !== command.expected_state.resource_revision) {
+          throw new Error('账户数据正在更新，请稍后重新确认；填写的价格已保留。')
+        }
+        refreshed = { ...command, expected_state: { ...context.expectedState, resource_revision: context.targetRevision } }
+      }
+      if (generation !== contextGeneration) throw new Error('账户已切换，请重新核对交易。')
+      return (await traderApi.createCommand(current.csrf_token, accountId, refreshed, crypto.randomUUID())).data
     })
   }
 
@@ -139,6 +162,7 @@ export function useTraderCommands() {
   function clearPreparedState() {
     contextGeneration += 1
     previewGeneration += 1
+    preparedTarget = null
     commandContext.value = null
     distributionPreview.value = null
     error.value = ''
@@ -182,5 +206,9 @@ export function useTraderCommands() {
 }
 
 function readableError(reason: unknown, fallback: string) {
-  return reason instanceof Error && reason.message ? reason.message : fallback
+  const message = reason instanceof Error ? reason.message : ''
+  if (message.includes('user_command_expected_state_stale') || message.includes('user_command_target_stale')) {
+    return '账户或持仓数据已更新，本次未提交。填写的价格已保留，请重新确认；若持仓已变化，请重新打开编辑界面。'
+  }
+  return message && !/^[a-z][a-z0-9_]+$/.test(message) ? message : fallback
 }

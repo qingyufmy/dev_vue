@@ -1,10 +1,10 @@
-import type { AccountClockReader } from '../../trading/index.js'
+import { instrumentTradePermissions, type AccountClockReader, type InstrumentSnapshotReader } from '../../trading/index.js'
 import { randomUUID } from 'node:crypto'
 import { assertDistributionWindow } from './mysql-execution-window.js'
 import { ExecutionError } from '../domain/execution.js'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import { sha256Canonical } from '../domain/execution.js'
-import type { JsonObject } from '../../inference/domain/inference.js'
+import type { JsonObject } from '../../inference/index.js'
 import {
   UserExecutionCommandError,
   type NormalizedUserExecutionCommand,
@@ -26,7 +26,7 @@ import type {
   UserExecutionIdempotencyMatch,
 } from '../application/user-execution-command-ports.js'
 import {
-  DEFAULT_RISK_POLICY,
+  readPlatformRiskValues, readPlatformRiskControls,
   resolveRiskPolicy,
   riskPolicyHash,
   type AccountRiskPolicyPatch,
@@ -35,8 +35,8 @@ import {
   type RiskInstrumentSnapshot,
   type RiskQuoteSnapshot,
   type RiskEvaluationResult,
-} from '../../risk/domain/risk.js'
-import type { ManualReleaseRuleCode, ManualRiskRelease } from '../../risk/domain/manual-risk-release.js'
+} from '../../risk/index.js'
+import type { ManualReleaseRuleCode, ManualRiskRelease } from '../../risk/index.js'
 
 /**
  * MySQL adapter for the user-command application port.
@@ -48,7 +48,18 @@ import type { ManualReleaseRuleCode, ManualRiskRelease } from '../../risk/domain
  * this adapter; this file does not execute DDL.
  */
 export class MysqlUserExecutionCommandRepository implements UserExecutionCommandRepository {
-  constructor(private readonly pool: Pool, private readonly accountClock: (connection: PoolConnection) => AccountClockReader) {}
+  constructor(private readonly pool: Pool | PoolConnection, private readonly accountClock: (connection: PoolConnection) => AccountClockReader,
+    private readonly instruments?: InstrumentSnapshotReader) {}
+
+  get withAccountTransaction() {
+    if (!('getConnection' in this.pool)) return undefined
+    return async (scope: { userId: number; accountId: string }, work: (repository: UserExecutionCommandRepository) => Promise<UserExecutionCommandResult>) =>
+      transaction(this.pool, async connection => {
+        await lockAccount(connection, scope.userId, scope.accountId)
+        await lockOwner(connection, scope.userId, scope.accountId)
+        return work(new MysqlUserExecutionCommandRepository(connection, this.accountClock, this.instruments))
+      })
+  }
 
   async loadContext(input: LoadUserExecutionCommandContextInput): Promise<UserExecutionCommandContext | null> {
     const [accountRows] = await this.pool.execute<AccountIdentityRow[]>(`
@@ -91,7 +102,8 @@ export class MysqlUserExecutionCommandRepository implements UserExecutionCommand
     const symbol = normalizeSymbol(input.symbol ?? (target && typeof target.symbol === 'string' ? target.symbol : null))
 
     const quote = await loadQuote(this.pool, input.accountId, symbol)
-    const instrument = await loadInstrument(this.pool, input.accountId, symbol)
+    if (!this.instruments) throw new UserExecutionCommandError('user_command_instrument_reader_unavailable', 503)
+    const instrument = await loadInstrument(this.instruments, input.accountId, symbol)
     const summary = await loadRiskSummary(this.pool, input.accountId, input.userId, runtime)
     const policy = await effectivePolicy(this.pool, input.userId, input.accountId)
     const manualRelease = await loadManualRelease(this.pool, input.userId, input.accountId)
@@ -154,7 +166,22 @@ export class MysqlUserExecutionCommandRepository implements UserExecutionCommand
       assertOperationIdentity(input)
       const operation = input.result.operation
       const now = operation.updatedAt
-      const commandJson = JSON.stringify(input.command)
+      let bridgeExpectedState: unknown = undefined
+      if (input.command.sourceType === 'user_command' && typeof input.action.parameters.ticket === 'string') {
+        const kind = ['modify_position', 'close_position'].includes(input.command.commandType) ? 'position' : 'pending_order'
+        const [states] = await connection.execute<RowDataPacket[]>(`SELECT state_json,state_sha256,projection_revision
+          FROM bridge_trade_state_snapshots_v4 WHERE trading_account_id=? AND entity_kind=? AND ticket=? LIMIT 1 FOR SHARE`,
+        [input.command.accountId,kind,input.action.parameters.ticket])
+        if (states[0]) {
+          const state = parse<Record<string, unknown>>(states[0].state_json, 'user_command_trade_state_invalid')
+          const expectedRevision = kind === 'position' ? input.expected.positionsRevision : input.expected.pendingOrdersRevision
+          if (Number(states[0].projection_revision) !== expectedRevision || sha256Canonical(state) !== states[0].state_sha256) {
+            throw new UserExecutionCommandError('user_command_expected_state_stale', 409, { resource: kind })
+          }
+          bridgeExpectedState = state
+        }
+      }
+      const commandJson = JSON.stringify({ ...input.command, ...(bridgeExpectedState ? { bridgeExpectedState } : {}) })
       const actionJson = JSON.stringify(input.action)
       const expectedStateJson = JSON.stringify(input.action.expectedState)
       const riskJson = JSON.stringify(input.riskEvaluation)
@@ -165,6 +192,9 @@ export class MysqlUserExecutionCommandRepository implements UserExecutionCommand
         throw new UserExecutionCommandError('user_command_policy_revision_stale', 409)
       }
       if (input.result.kind === 'prepared') {
+        if (['market_order', 'pending_order'].includes(input.action.kind)
+          && input.command.sourceType !== 'user_command'
+          && Number(input.action.parameters.volume) > policy.values.maxOrderVolume + 1e-9) throw new UserExecutionCommandError('user_command_order_volume_exceeded', 409)
         await assertReservationCapacity(connection, input.command.accountId, policy, input.result.reservations, input.riskEvaluation)
       }
 
@@ -178,7 +208,7 @@ export class MysqlUserExecutionCommandRepository implements UserExecutionCommand
         operation.sourceType, operation.sourceId, operation.idempotencyScope, operation.idempotencyKey,
         operation.requestHash, operation.resourceType, operation.resourceId, operation.parentOperationId,
         operation.distributionId, JSON.stringify(operationSummary(input.result)), operation.errorCode,
-        operation.acceptedAt, operation.updatedAt, operation.completedAt, operation.revision,
+        sqlDate(operation.acceptedAt), sqlDate(operation.updatedAt), sqlDate(operation.completedAt), operation.revision,
       ])
       await connection.execute(`
         INSERT INTO user_execution_commands
@@ -195,7 +225,7 @@ export class MysqlUserExecutionCommandRepository implements UserExecutionCommand
         policy.policySetRevision, policyHashFromEvaluation(input.riskEvaluation), input.expected.accountRevision,
         input.expected.positionsRevision, input.expected.pendingOrdersRevision, input.expected.quoteRevision,
         input.expected.contractRevision, input.expected.riskRevision, input.riskEvaluation.manualReleaseId,
-        operation.acceptedAt, operation.updatedAt, operation.revision,
+        sqlDate(operation.acceptedAt), sqlDate(operation.updatedAt), operation.revision,
       ])
 
       if (input.result.kind === 'prepared') {
@@ -219,7 +249,6 @@ interface RuntimeSnapshotRow extends RowDataPacket {
 }
 interface PayloadRevisionRow extends RowDataPacket { ticket: string; payload_json: string | object; revision: number }
 interface QuoteRow extends RowDataPacket { symbol: string; bid: string; ask: string; observed_at_utc: Date; revision: number }
-interface InstrumentRow extends RowDataPacket { symbol: string; payload_json: string | object; observed_at_utc: Date; revision: number }
 interface SummaryRow extends RowDataPacket { payload_json: string | object; observed_at_utc: Date; revision: number }
 interface RiskStateRevisionRow extends RowDataPacket { revision: number }
 interface CapacityRow extends RowDataPacket {
@@ -383,12 +412,12 @@ async function currentRevisionsOnConnection(connection: Pool | PoolConnection, a
       (SELECT revision FROM account_runtime_snapshots WHERE trading_account_id=? LIMIT 1) account_snapshot_revision,
       (SELECT revision FROM trading_projection_revisions WHERE trading_account_id=? AND resource_kind='positions' AND resource_id='open' LIMIT 1) positions_revision,
       (SELECT revision FROM trading_projection_revisions WHERE trading_account_id=? AND resource_kind='pending_orders' AND resource_id='open' LIMIT 1) pending_orders_revision,
-      (SELECT revision FROM market_quotes WHERE trading_account_id=? AND symbol=? LIMIT 1) quote_revision,
-      (SELECT revision FROM trading_projection_revisions WHERE trading_account_id=? AND resource_kind='market.quote' AND resource_id=? LIMIT 1) quote_projection_revision,
-      (SELECT revision FROM market_instrument_snapshots WHERE trading_account_id=? AND symbol=? LIMIT 1) contract_revision,
+      (SELECT revision FROM market_quotes WHERE trading_account_id=? AND LEFT(UPPER(symbol),CHAR_LENGTH(?))=UPPER(?)) quote_revision,
+      (SELECT revision FROM trading_projection_revisions WHERE trading_account_id=? AND resource_kind='market.quote' AND LEFT(UPPER(resource_id),CHAR_LENGTH(?))=UPPER(?)) quote_projection_revision,
+      (SELECT revision FROM market_instrument_snapshots WHERE trading_account_id=? AND LEFT(UPPER(symbol),CHAR_LENGTH(?))=UPPER(?)) contract_revision,
       (SELECT revision FROM account_risk_summaries WHERE trading_account_id=? LIMIT 1) risk_summary_revision,
       (SELECT revision FROM account_risk_states WHERE trading_account_id=? LIMIT 1) risk_state_revision`, [
-    accountId, accountId, accountId, accountId, accountId, symbol, accountId, symbol, accountId, symbol, accountId, accountId,
+    accountId, accountId, accountId, accountId, accountId, symbol, symbol, accountId, symbol, symbol, accountId, symbol, symbol, accountId, accountId,
   ])
   const row = rows[0]
   if (!row) throw new UserExecutionCommandError('user_command_revision_unavailable', 409)
@@ -420,33 +449,30 @@ function compareRevisions(expected: UserExecutionExpectedRevisions, current: Pic
   for (const [wanted, actual, resource] of pairs) if (wanted !== actual) throw new UserExecutionCommandError('user_command_expected_state_stale', 409, { resource })
 }
 
-async function loadQuote(pool: Pool, accountId: string, symbol: string | null): Promise<RiskQuoteSnapshot> {
+async function loadQuote(pool: Pool | PoolConnection, accountId: string, symbol: string | null): Promise<RiskQuoteSnapshot> {
   const [rows] = symbol
-    ? await pool.execute<QuoteRow[]>('SELECT symbol,bid,ask,observed_at_utc,revision FROM market_quotes WHERE trading_account_id=? AND symbol=? LIMIT 1', [accountId, symbol])
+    ? await pool.execute<QuoteRow[]>('SELECT symbol,bid,ask,observed_at_utc,revision FROM market_quotes WHERE trading_account_id=? AND LEFT(UPPER(symbol),CHAR_LENGTH(?))=UPPER(?) LIMIT 2', [accountId, symbol, symbol])
     : await pool.execute<QuoteRow[]>('SELECT symbol,bid,ask,observed_at_utc,revision FROM market_quotes WHERE trading_account_id=? ORDER BY observed_at_utc DESC,symbol LIMIT 1', [accountId])
+  if (rows.length > 1) throw new UserExecutionCommandError('user_command_symbol_context_mismatch', 409)
   const row = rows[0]
   if (!row) return { symbol: symbol ?? '', bid: '0', ask: '0', observedAt: new Date(0).toISOString(), revision: 0 }
   return { symbol: row.symbol, bid: String(row.bid), ask: String(row.ask), observedAt: iso(row.observed_at_utc), revision: Number(row.revision) }
 }
 
-async function loadInstrument(pool: Pool, accountId: string, symbol: string | null): Promise<RiskInstrumentSnapshot> {
-  const [rows] = symbol
-    ? await pool.execute<InstrumentRow[]>('SELECT symbol,payload_json,observed_at_utc,revision FROM market_instrument_snapshots WHERE trading_account_id=? AND symbol=? LIMIT 1', [accountId, symbol])
-    : await pool.execute<InstrumentRow[]>('SELECT symbol,payload_json,observed_at_utc,revision FROM market_instrument_snapshots WHERE trading_account_id=? ORDER BY observed_at_utc DESC,symbol LIMIT 1', [accountId])
-  const row = rows[0]
+async function loadInstrument(reader: InstrumentSnapshotReader, accountId: string, symbol: string | null): Promise<RiskInstrumentSnapshot> {
+  const row = symbol ? await reader.read(accountId, symbol) : null
   if (!row) return { symbol: symbol ?? '', point: '', tickSize: '', tickValue: '', volumeMin: '', volumeMax: '', volumeStep: '', tradeEnabled: false, revision: 0 }
-  const value = parse<Record<string, unknown>>(row.payload_json, 'user_command_instrument_payload_invalid')
+  const value = row.data
   const stringValue = (camel: string, snake: string) => String(value[camel] ?? value[snake] ?? '')
-  const tradeMode = String(value.tradeMode ?? value.trade_mode ?? '').toLowerCase()
   return {
-    symbol: row.symbol, point: stringValue('point', 'point'), tickSize: stringValue('tickSize', 'tick_size'), tickValue: stringValue('tickValue', 'tick_value'),
+    symbol: symbol!, point: stringValue('point', 'point'), tickSize: stringValue('tickSize', 'tick_size'), tickValue: stringValue('tickValue', 'tick_value'),
     volumeMin: stringValue('volumeMin', 'volume_min'), volumeMax: stringValue('volumeMax', 'volume_max'), volumeStep: stringValue('volumeStep', 'volume_step'),
-    tradeEnabled: typeof value.tradeEnabled === 'boolean' ? value.tradeEnabled : ['full', 'enabled', 'long_only', 'short_only'].includes(tradeMode),
+    ...instrumentTradePermissions(value),
     revision: Number(row.revision),
   }
 }
 
-async function loadRiskSummary(pool: Pool, accountId: string, userId: number, runtime: RuntimeSnapshotRow | undefined): Promise<AccountRiskSummary> {
+async function loadRiskSummary(pool: Pool | PoolConnection, accountId: string, userId: number, runtime: RuntimeSnapshotRow | undefined): Promise<AccountRiskSummary> {
   const [rows] = await pool.execute<SummaryRow[]>('SELECT payload_json,observed_at_utc,revision FROM account_risk_summaries WHERE trading_account_id=? LIMIT 1', [accountId])
   const row = rows[0]
   if (row) return mapRiskSummary(parse<Record<string, unknown>>(row.payload_json, 'user_command_risk_summary_invalid'), accountId, userId, Number(row.revision), row.observed_at_utc)
@@ -484,7 +510,7 @@ function mapRiskSummary(value: Record<string, unknown>, accountId: string, userI
   }
 }
 
-async function loadManualRelease(pool: Pool, userId: number, accountId: string): Promise<ManualRiskRelease | null> {
+async function loadManualRelease(pool: Pool | PoolConnection, userId: number, accountId: string): Promise<ManualRiskRelease | null> {
   const [rows] = await pool.execute<ManualReleaseRow[]>(`${manualReleaseSelect}
     WHERE r.user_id=? AND r.trading_account_id=? AND r.status='active'
     ORDER BY r.created_at_utc DESC,r.id DESC LIMIT 1`, [userId, accountId])
@@ -500,25 +526,21 @@ async function effectivePolicy(executor: Pool | PoolConnection, userId: number, 
   const account = accountRows[0]
   return resolveRiskPolicy({
     accountId, userId, platformPolicyVersionId: platform.version_id, accountPolicyVersionId: account?.version_id ?? null,
-    policySetRevision: Number(account?.set_revision ?? 0), platform: { values: platformValues(platform.policy_json), globalKillSwitch: Boolean(controlRows[0]?.kill_switch), revision: Number(controlRows[0]?.revision ?? 0) },
+    policySetRevision: Number(account?.set_revision ?? 0), platform: { values: readPlatformRiskValues(platform.policy_json), controls: readPlatformRiskControls(platform.policy_json), globalKillSwitch: Boolean(controlRows[0]?.kill_switch), revision: Number(controlRows[0]?.revision ?? 0) },
     account: account ? accountPatch(account.policy_json) : null, updatedAt: iso(account?.updated_at_utc ?? platform.updated_at_utc),
   })
 }
 
-async function currentRevisions(pool: Pool, accountId: string, symbol: string | null, accountRevision: number | null, riskRevision: number) {
+async function currentRevisions(pool: Pool | PoolConnection, accountId: string, symbol: string | null, accountRevision: number | null, riskRevision: number) {
   const current = await currentRevisionsOnConnection(pool, accountId, symbol ?? '')
-  return { ...current, account: accountRevision ?? current.account, risk: riskRevision || current.risk, analysis: 0, subscription: 0 }
+  return { ...current, account: accountRevision === null ? current.account : Number(accountRevision), risk: Number(riskRevision) || current.risk, analysis: 0, subscription: 0 }
 }
 
 function policySelect(where: string) {
   return `SELECT p.scope,p.revision set_revision,CAST(v.id AS CHAR) version_id,v.policy_json,p.updated_at_utc FROM risk_policy_sets_v4 p INNER JOIN risk_policy_versions_v4 v ON v.id=p.active_version_id AND v.policy_set_id=p.id WHERE p.status='active' AND ${where} LIMIT 1`
 }
 
-function platformValues(value: string | object) {
-  const parsed = parse<Partial<typeof DEFAULT_RISK_POLICY> & { values?: Partial<typeof DEFAULT_RISK_POLICY> }>(value, 'user_command_policy_invalid')
-  const values = parsed.values ?? parsed
-  return { ...DEFAULT_RISK_POLICY, ...values, allowedSymbols: [...(values.allowedSymbols ?? DEFAULT_RISK_POLICY.allowedSymbols)], requireStopLoss: true as const, failClosedOnIncompleteData: true as const }
-}
+
 
 function accountPatch(value: string | object) {
   const parsed = parse<Record<string, unknown> & { values?: Record<string, unknown> }>(value, 'user_command_policy_invalid')
@@ -611,14 +633,14 @@ async function insertPrepared(connection: PoolConnection, result: PreparedUserEx
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
     intent.id, intent.operationId, null, null, result.command.commandId, null, result.command.expected.riskRevision, intent.userId, intent.accountId,
     intent.actionId, intent.actionKind, intent.sourceType, intent.sourceId, intent.idempotencyKey, intent.requestHash, intent.expectedStateHash,
-    intent.status, intent.expiresAt, intent.errorCode, intent.createdAt, intent.updatedAt, intent.completedAt, intent.revision,
+    intent.status, sqlDate(intent.expiresAt), intent.errorCode, sqlDate(intent.createdAt), sqlDate(intent.updatedAt), sqlDate(intent.completedAt), intent.revision,
   ])
   const actionJson = JSON.stringify(intent.action)
   const expectedJson = JSON.stringify(intent.action.expectedState)
   await connection.execute(`INSERT INTO execution_intent_payloads (execution_intent_id,action_json,action_sha256,expected_state_json,expected_state_sha256,payload_bytes) VALUES (?,?,?,?,?,?)`, [
     intent.id, actionJson, sha256Canonical(intent.action), expectedJson, intent.expectedStateHash, Buffer.byteLength(actionJson) + Buffer.byteLength(expectedJson),
   ])
-  await connection.execute(`INSERT INTO execution_intent_events (execution_intent_id,event_type,from_status,to_status,reason_code,from_revision,to_revision,payload_json,occurred_at_utc) VALUES (?,'execution.intent.prepared',NULL,'prepared',NULL,NULL,1,?,?)`, [intent.id, JSON.stringify({ command_id: result.command.commandId }), intent.createdAt])
+  await connection.execute(`INSERT INTO execution_intent_events (execution_intent_id,event_type,from_status,to_status,reason_code,from_revision,to_revision,payload_json,occurred_at_utc) VALUES (?,'execution.intent.prepared',NULL,'prepared',NULL,NULL,1,?,?)`, [intent.id, JSON.stringify({ command_id: result.command.commandId }), sqlDate(intent.createdAt)])
   await outbox(connection, 'execution_intent', intent.id, 'execution.intent.prepared', { intent_id: intent.id, operation_id: intent.operationId, account_id: intent.accountId })
   for (const reservation of result.reservations) {
     await connection.execute(`
@@ -628,10 +650,10 @@ async function insertPrepared(connection: PoolConnection, result: PreparedUserEx
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, [
       reservation.id, reservation.executionIntentId, reservation.userId, reservation.accountId, reservation.symbol, reservation.accountCurrency,
       reservation.reservedVolume, reservation.reservedRiskAmount, reservation.reservedRiskPercent, reservation.reservedOpenPositions,
-      reservation.reservedPendingOrders, reservation.reservedDailyOpens, reservation.status, reservation.expiresAt, reservation.releasedAt,
-      reservation.releaseReason, reservation.createdAt, reservation.updatedAt, reservation.revision,
+      reservation.reservedPendingOrders, reservation.reservedDailyOpens, reservation.status, sqlDate(reservation.expiresAt), sqlDate(reservation.releasedAt),
+      reservation.releaseReason, sqlDate(reservation.createdAt), sqlDate(reservation.updatedAt), reservation.revision,
     ])
-    await connection.execute(`INSERT INTO risk_reservation_events_v4 (risk_reservation_id,event_type,from_status,to_status,reason_code,from_revision,to_revision,occurred_at_utc) VALUES (?,'risk.reservation.activated',NULL,'active',NULL,NULL,1,?)`, [reservation.id, reservation.createdAt])
+    await connection.execute(`INSERT INTO risk_reservation_events_v4 (risk_reservation_id,event_type,from_status,to_status,reason_code,from_revision,to_revision,occurred_at_utc) VALUES (?,'risk.reservation.activated',NULL,'active',NULL,NULL,1,?)`, [reservation.id, sqlDate(reservation.createdAt)])
   }
   // Keep this argument explicit: the caller has already persisted the complete
   // risk evaluation on the user-command row, and no FK is manufactured here.
@@ -646,6 +668,7 @@ async function assertReservationCapacity(
   evaluation: RiskEvaluationResult,
 ) {
   if (next.length === 0) return
+  if (next.some(item => item.reservedVolume > policy.values.maxOrderVolume + 1e-9)) throw new UserExecutionCommandError('user_command_order_volume_exceeded', 409)
   const [capacityRows] = await connection.execute<CapacityRow[]>(`
     SELECT open_positions,pending_orders,total_volume,daily_open_count
     FROM account_risk_states
@@ -680,7 +703,7 @@ async function assertReservationCapacity(
 
 async function insertOperationEvent(connection: PoolConnection, operation: UserExecutionOperation, eventType: string) {
   await connection.execute(`INSERT INTO operation_events (operation_id,event_type,from_status,to_status,reason_code,from_revision,to_revision,payload_json,occurred_at_utc) VALUES (?,?,NULL,?,?,NULL,?,?,?)`, [
-    operation.id, eventType, operation.status, operation.errorCode, operation.revision, JSON.stringify(operationSummary({ operation })), operation.updatedAt,
+    operation.id, eventType, operation.status, operation.errorCode, operation.revision, JSON.stringify(operationSummary({ operation })), sqlDate(operation.updatedAt),
   ])
 }
 
@@ -718,7 +741,7 @@ function nullableNumericId(value: string | null) {
 
 function mapRiskSummaryRevision(value: unknown) { return Number.isSafeInteger(Number(value)) ? Number(value) : 0 }
 function nullableRevision(value: unknown) { const number = mapRiskSummaryRevision(value); return number > 0 ? number : value === 0 ? 0 : null }
-function normalizeSymbol(value: unknown) { const symbol = String(value ?? '').trim().toUpperCase(); return /^[A-Z0-9][A-Z0-9._-]{0,63}$/.test(symbol) ? symbol : null }
+function normalizeSymbol(value: unknown) { const symbol = String(value ?? '').trim(); return /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(symbol) ? symbol : null }
 function normalizeClockStatus(value: unknown): AccountRiskSummary['clockStatus'] { return value === 'calibrated' || value === 'observer_bootstrap' || value === 'stale' || value === 'unavailable' ? value : 'unavailable' }
 function parse<T>(value: string | object, code: string): T { try { return (typeof value === 'string' ? JSON.parse(value) : value) as T } catch { throw new UserExecutionCommandError(code, 503) } }
 function iso(value: Date | string) { const date = new Date(value); return Number.isFinite(date.getTime()) ? date.toISOString() : new Date(0).toISOString() }
@@ -727,9 +750,12 @@ async function outbox(connection: PoolConnection, aggregateType: string, aggrega
   await connection.execute(`INSERT INTO outbox_events (event_id,aggregate_type,aggregate_id,event_type,payload_json,status,attempts,available_at_utc,created_at_utc) VALUES (?,?,?,?,?,'pending',0,UTC_TIMESTAMP(3),UTC_TIMESTAMP(3))`, [randomUUID(), aggregateType, aggregateId, eventType, JSON.stringify(payload)])
 }
 
-async function transaction<T>(pool: Pool, work: (connection: PoolConnection) => Promise<T>) {
+async function transaction<T>(pool: Pool | PoolConnection, work: (connection: PoolConnection) => Promise<T>) {
+  if (!('getConnection' in pool)) return work(pool)
   const connection = await pool.getConnection()
   try { await connection.beginTransaction(); const result = await work(connection); await connection.commit(); return result }
   catch (error) { await connection.rollback(); throw error }
   finally { connection.release() }
 }
+
+function sqlDate(value: string | null): string | null { return value === null ? null : new Date(value).toISOString().slice(0, 23).replace('T', ' ') }

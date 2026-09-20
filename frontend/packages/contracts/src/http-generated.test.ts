@@ -5,7 +5,8 @@ import { authLoginRequestSchema, authLoginResponseSchema, authorizationRequestSc
 
 it('keeps the existing auth parsers structurally compatible with generated wire contracts', () => {
   expectTypeOf<z.output<typeof authLoginRequestSchema>>().toExtend<AuthLoginRequest>()
-  expectTypeOf<AuthLoginRequest>().toExtend<z.output<typeof authLoginRequestSchema>>()
+  // Optional wire inputs may become required after parser defaults (remember=false).
+  expectTypeOf<AuthLoginRequest>().toExtend<z.input<typeof authLoginRequestSchema>>()
   expectTypeOf<z.output<typeof authorizationRequestSchema>>().toEqualTypeOf<AuthorizationRequest>()
   expectTypeOf<z.output<typeof authLoginResponseSchema>>().toEqualTypeOf<ApiWireSchemas['AuthLoginResponse']>()
   expectTypeOf<z.output<typeof sessionResponseSchema>>().toEqualTypeOf<SessionResponse>()

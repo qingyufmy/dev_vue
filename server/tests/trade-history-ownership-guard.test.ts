@@ -19,7 +19,7 @@ if (fact.kind !== 'deal') throw new Error('test_fact_invalid')
 const projection = projectMt4Trade(fact)!
 const route: BridgeGatewayRoute = { userId: 2, accountId: '42', platform: 'mt4', timezoneOffsetMinutes: 180,
   terminalProfileId: 'profile_12345678', terminalInstanceId: 'terminal_12345678', brokerServer: 'Demo', login: '123',
-  connectionEpoch: 3, connectionId: 'connection_12345678', sessionId: 'session_12345678' }
+  connectionEpoch: 3, connectionId: 'connection_12345678', sessionId: 'session_12345678', ownershipRevision: '3' }
 const interval = (userId = 1, start = 7, end: number | null = 10): OwnershipInterval => ({
   id: `00000000-0000-4000-8000-${String(userId).padStart(12, '0')}`, userId, accountId: '42', role: 'owner',
   startedAtUtc: at(start).toISOString(), endedAtUtc: end === null ? null : at(end).toISOString(),
@@ -56,7 +56,7 @@ describe('P3 MySQL adapter statements using offline fixtures (not a SQL engine)'
     const f = collectorFixture([interval()])
     const page = response()
     page.payload.items = page.payload.items.map(item => ({ ...item, account_currency: 'EUR', currency_evidence: 'explicit_record' }))
-    await new MysqlTradeHistoryCollectorRepository(f.pool).persistPage(route, 'history.trades', page, now)
+    await new MysqlTradeHistoryCollectorRepository(f.pool, () => ({ assert: async () => { f.calls.push({ sql: 'route guard', params: [] }) } })).persistPage(route, 'history.trades', page, now)
     for (const table of ['terminal_history_deals_v4', 'account_trade_records_v4']) {
       const insert = f.calls.find(call => call.sql.includes('INSERT') && call.sql.includes(`INTO ${table}`))!
       expect(insert.params.slice(-2)).toEqual(['EUR', 'explicit_record'])
@@ -66,7 +66,7 @@ describe('P3 MySQL adapter statements using offline fixtures (not a SQL engine)'
   })
   it('persists old facts with the proven old owner and checks account lock before sync lock', async () => {
     const f = collectorFixture([interval()])
-    await new MysqlTradeHistoryCollectorRepository(f.pool).persistPage(route, 'history.trades', response(), now)
+    await new MysqlTradeHistoryCollectorRepository(f.pool, () => ({ assert: async () => { f.calls.push({ sql: 'route guard', params: [] }) } })).persistPage(route, 'history.trades', response(), now)
     const insert = f.calls.find(call => call.sql.includes('INSERT INTO account_trade_records_v4'))!
     expect(insert.params[1]).toBe(1)
     expect(insert.params.at(-3)).toBe(interval().id)
@@ -76,7 +76,7 @@ describe('P3 MySQL adapter statements using offline fixtures (not a SQL engine)'
     }
     const dealInsert = f.calls.find(call => call.sql.includes('INSERT IGNORE INTO terminal_history_deals_v4'))!
     expect(dealInsert.params.slice(-2)).toEqual([null, 'unknown'])
-    expect(f.calls[0]!.sql).toContain('SELECT id FROM trading_accounts')
+    expect(f.calls[0]!.sql).toBe('route guard')
     expect(f.calls[1]!.sql).toContain('trade_history_sync_states_v4')
     expect(f.calls.find(call => call.sql.includes('FROM trading_account_ownership_intervals'))?.sql).toContain('LIMIT 2 FOR SHARE')
     expect(insert.sql).toContain('user_id=COALESCE(user_id,VALUES(user_id))')
@@ -85,7 +85,7 @@ describe('P3 MySQL adapter statements using offline fixtures (not a SQL engine)'
   })
   it('retains terminal facts and a null-owner projection instead of assigning unresolved history to the route user', async () => {
     const f = collectorFixture([])
-    await new MysqlTradeHistoryCollectorRepository(f.pool).persistPage(route, 'history.trades', response(), now)
+    await new MysqlTradeHistoryCollectorRepository(f.pool, () => ({ assert: async () => { f.calls.push({ sql: 'route guard', params: [] }) } })).persistPage(route, 'history.trades', response(), now)
     expect(f.calls.some(call => call.sql.includes('INSERT IGNORE INTO terminal_history_deals_v4'))).toBe(true)
     const insert = f.calls.find(call => call.sql.includes('INSERT INTO account_trade_records_v4'))!
     expect(insert.params[1]).toBeNull()
@@ -126,7 +126,8 @@ describe('P3 MySQL adapter statements using offline fixtures (not a SQL engine)'
   })
   it('rebuilds only derived totals and does not filter historical owners to the collector user', async () => {
     const f = collectorFixture([])
-    await new MysqlTradeHistoryCollectorRepository(f.pool).complete(route, now.getTime(), now)
+    await new MysqlTradeHistoryCollectorRepository(f.pool, () => ({ assert: async () => { f.calls.push({ sql: 'route guard', params: [] }) } })).complete(route, now.getTime(), now,
+      [{ resource: 'history.trades', rangeStartUtcMsc: 1000, rangeEndUtcMsc: now.getTime(), source: 'terminal', sourceRevision: 'revision', pageCount: 1, itemCount: 0, pageChainHash: 'a'.repeat(64) }])
     const rebuild = f.calls.find(call => call.sql.includes('INSERT INTO account_trade_daily_summaries_v4'))!
     expect(rebuild.sql).toContain(provenHistoryRecordSql())
     expect(rebuild.sql).not.toContain('r.user_id=?')
@@ -143,6 +144,7 @@ describe('P3 MySQL adapter statements using offline fixtures (not a SQL engine)'
 function collectorFixture(intervals: OwnershipInterval[]) {
   const calls: Array<{ sql: string; params: unknown[] }> = []
   let committed = false
+  let storedFactHash = ''
   const connection = {
     beginTransaction: async () => {}, commit: async () => { committed = true }, rollback: async () => {}, release: () => {},
     execute: async (sql: string, params: unknown[] = []) => {
@@ -150,7 +152,12 @@ function collectorFixture(intervals: OwnershipInterval[]) {
       expect((sql.match(/\?/g) ?? []).length).toBe(params.length)
       if (sql.startsWith('SELECT id FROM trading_accounts')) return [[{ id: '42' }], []]
       if (sql.startsWith('SELECT trading_account_id FROM trade_history_sync_states_v4')) return [[{ trading_account_id: '42' }], []]
+      if (sql.startsWith('SELECT trading_account_id,status FROM trade_history_sync_states_v4')) return [[{ trading_account_id: '42', status: 'syncing' }], []]
+      if (sql.startsWith('INSERT IGNORE INTO terminal_history_deals_v4')) { storedFactHash = String(params[21]); return [{ affectedRows: 1 }, []] }
+      if (sql.startsWith('SELECT id,evidence_sha256 FROM terminal_history_deals_v4')) return [[{ id: '00000000-0000-4000-8000-000000000001', evidence_sha256: storedFactHash }], []]
+      if (sql.startsWith('INSERT INTO terminal_history_deal_provenance_v4')) return [{ affectedRows: 1 }, []]
       if (sql.startsWith('SELECT history_revision')) return [[{ history_revision: 2 }], []]
+      if (sql.startsWith('INSERT INTO terminal_history_collection_receipts_v4')) return [{ affectedRows: 1 }, []]
       if (sql.includes('FROM trading_account_ownership_intervals')) return [intervals.map(i => ({
         id: i.id, user_id: i.userId, trading_account_id: i.accountId, role: i.role,
         started_at_utc: new Date(i.startedAtUtc), ended_at_utc: i.endedAtUtc ? new Date(i.endedAtUtc) : null,

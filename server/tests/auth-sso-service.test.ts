@@ -5,7 +5,7 @@ import { LearningService, LearningCompletionService } from '../src/modules/learn
 import { createLearningHttp } from '../src/modules/learning/composition.js'
 import { generateKeyPairSync, verify } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   AuthError,
   AuthService,
@@ -236,6 +236,71 @@ describe('SSO V4 service', () => {
 })
 
 describe('SSO V4 HTTP routes', () => {
+  it('validates login before authentication and withholds cookies on invalid result projections', async () => {
+    const { service } = fixture()
+    const fields = oauthFields(await service.startLogin('trade', '/'))
+    const payload = { ...fields, login: 'user@example.test', password: 'correct-password' }
+    const finish = vi.spyOn(service, 'finishLogin')
+    const app = Fastify()
+    await app.register(authCenterRoutes, { service })
+    const request = { method: 'POST' as const, url: '/api/v4/auth/login',
+      headers: { host: 'auth.example.test', origin: 'https://auth.example.test' }, payload }
+    try {
+      for (const bad of [{ ...payload, remember: 'true' }, { ...payload, user_id: 8 }, { ...payload, login: 7 }]) {
+        expect((await app.inject({ ...request, payload: bad })).statusCode).toBe(400)
+      }
+      expect((await app.inject({ ...request, url: request.url + '?client_id=admin-web' })).statusCode).toBe(400)
+      expect((await app.inject({ ...request, headers: { ...request.headers, origin: 'https://evil.test' }, payload: {} })).statusCode).toBe(403)
+      expect(finish).not.toHaveBeenCalled()
+      const success = await app.inject(request)
+      expect(success.statusCode, success.body).toBe(200)
+      const result = await finish.mock.results[0]!.value as Awaited<ReturnType<AuthService['finishLogin']>>
+      for (const bad of [{ ...result, rawSession: 'invalid' }, { ...result, redirectTo: 'https://evil.test/auth/callback' }]) {
+        finish.mockResolvedValueOnce(bad)
+        const failure = await app.inject(request)
+        expect(failure.statusCode).toBe(503)
+        expect(failure.json().code).toBe('auth_login_result_invalid')
+        expect(failure.headers['set-cookie']).toBeUndefined()
+        expect(failure.headers['cache-control']).toBe('no-store')
+        expect(failure.body).not.toContain('correct-password')
+      }
+    } finally { await app.close() }
+  })
+
+  it.each(['/session/logout', '/session/logout-web', '/session/revoke-all'])('validates no-body revocation and its exact scope: %s', async path => {
+    const { service, bridge } = fixture()
+    const fields = oauthFields(await service.startLogin('trade', '/'))
+    const login = await service.finishLogin({ clientId: fields.client_id!, redirectUri: fields.redirect_uri!,
+      responseType: fields.response_type!, scope: fields.scope!, state: fields.state!, nonce: fields.nonce!,
+      codeChallenge: fields.code_challenge!, codeChallengeMethod: fields.code_challenge_method! }, 'user@example.test', 'correct-password', false)
+    const callback = new URL(login.redirectTo)
+    const issued = await service.exchangeCode({ code: callback.searchParams.get('code')!, state: callback.searchParams.get('state')!,
+      clientId: 'trade-web', redirectUri: 'https://trade.example.test/auth/callback' })
+    const summary = await service.sessionSummary(issued.rawSession, 'trade-web')
+    const headers = { cookie: `__Host-Http-trade_session=${issued.rawSession}`, origin: 'https://trade.example.test',
+      'x-csrf-token': summary.data.csrf_token }
+    const app = Fastify()
+    await app.register(appSessionRoutes, { service, surface: 'trade' })
+    try {
+      for (const payload of [{}, { user_id: 8 }]) {
+        expect((await app.inject({ method: 'POST', url: '/api/v4' + path, headers, payload })).statusCode).toBe(400)
+      }
+      expect((await app.inject({ method: 'POST', url: '/api/v4' + path + '?user_id=8', headers })).statusCode).toBe(400)
+      await expect(service.resolveSession(issued.rawSession, 'trade-web')).resolves.toBeDefined()
+      expect(bridge.revokedUsers).toEqual([])
+      const result = await app.inject({ method: 'POST', url: '/api/v4' + path, headers })
+      expect(result.statusCode, result.body).toBe(204)
+      expect(result.body).toBe('')
+      expect(result.headers['content-type']).toBeUndefined()
+      expect(result.headers['cache-control']).toBe('no-store')
+      expect(result.headers['set-cookie']).toContain('Max-Age=0')
+      expect(bridge.revokedUsers).toEqual(path === '/session/revoke-all' ? [7] : [])
+      await expect(service.resolveSession(issued.rawSession, 'trade-web')).rejects.toMatchObject({ status: 401 })
+      if (path === '/session/logout') await expect(service.resolveSession(login.rawSession, 'auth')).resolves.toBeDefined()
+      else await expect(service.resolveSession(login.rawSession, 'auth')).rejects.toMatchObject({ status: 401 })
+    } finally { await app.close() }
+  })
+
   it.each([true, false])('validates identity center session and logout contracts (secure=%s)', async secureCookies => {
     const { service, bridge } = fixture()
     const contract = JSON.parse(await readFile(new URL('../../contracts/openapi-v4.json', import.meta.url), 'utf8'))
@@ -257,6 +322,13 @@ describe('SSO V4 HTTP routes', () => {
       const body = session.json()
       expect(validate(body), JSON.stringify(validate.errors)).toBe(true)
       expect(body.data.user.id).toBe('7')
+      expect((await auth.inject({ url: '/api/v4/auth/session?user_id=8', headers })).statusCode).toBe(400)
+      expect((await auth.inject({ url: '/api/v4/auth/session?user_id=8', headers: { host: headers.host } })).statusCode).toBe(401)
+      vi.spyOn(service, 'csrfToken').mockReturnValueOnce('')
+      const invalidSession = await auth.inject({ url: '/api/v4/auth/session', headers })
+      expect(invalidSession.statusCode).toBe(503)
+      expect(invalidSession.json().code).toBe('api_response_invalid')
+      expect(invalidSession.headers['cache-control']).toBe('no-store')
       expect(validate({ ...body, data: { ...body.data, app: 'trade', permissions: [] } })).toBe(false)
       expect(validate({ ...body, data: { ...body.data, authenticated_at: 'not-a-date' } })).toBe(false)
       const failures = [
@@ -268,7 +340,7 @@ describe('SSO V4 HTTP routes', () => {
       ]
       expect(failures.map(response => response.statusCode)).toEqual([401, 401, 404, 403, 403])
       for (const response of failures) {
-        expect(response.headers['content-type']).toContain('application/json')
+        expect(response.headers['content-type']).toContain('application/problem+json')
         expect(validateProblem(response.json()), JSON.stringify(validateProblem.errors)).toBe(true)
       }
       await expect(service.resolveSession(rawSession, 'auth')).resolves.toBeDefined()
@@ -396,6 +468,17 @@ describe('SSO V4 HTTP routes', () => {
     expect(session.json().data).toMatchObject({ app: 'trade', user: { id: '7', display_name: '测试交易者' } })
     const csrf = session.json().data.csrf_token as string
 
+    expect((await trade.inject({ url: '/api/v4/session?client_id=admin-web', headers: { cookie: appCookie } })).statusCode).toBe(400)
+    const deniedSession = await trade.inject({ url: '/api/v4/session?client_id=admin-web' })
+    expect(deniedSession.statusCode).toBe(401)
+    expect(deniedSession.headers['cache-control']).toBe('no-store')
+    const validSummary = await service.sessionSummary(decodeURIComponent(appCookie.slice(appCookie.indexOf('=') + 1)), 'trade-web')
+    vi.spyOn(service, 'sessionSummary').mockResolvedValueOnce({ ...validSummary, data: { ...validSummary.data, app: 'invalid' as never } })
+    const invalidSummary = await trade.inject({ url: '/api/v4/session', headers: { cookie: appCookie } })
+    expect(invalidSummary.statusCode).toBe(503)
+    expect(invalidSummary.json().code).toBe('api_response_invalid')
+    expect(invalidSummary.headers['content-type']).toContain('application/problem+json')
+
     const badOrigin = await trade.inject({ method: 'POST', url: '/api/v4/realtime/tickets', headers: {
       cookie: appCookie, origin: 'https://evil.example.test', 'x-csrf-token': csrf,
     } })
@@ -407,6 +490,17 @@ describe('SSO V4 HTTP routes', () => {
     expect(ticket.statusCode).toBe(201)
     expect(ticket.headers['set-cookie']).toContain('Path=/realtime/v4')
     expect(ticket.json().data).not.toHaveProperty('token')
+    const ticketHeaders = { cookie: appCookie, origin: 'https://trade.example.test', 'x-csrf-token': csrf }
+    const issue = vi.spyOn(service, 'issueRealtimeTicket')
+    expect((await trade.inject({ method: 'POST', url: '/api/v4/realtime/tickets?user_id=8', headers: ticketHeaders })).statusCode).toBe(400)
+    expect((await trade.inject({ method: 'POST', url: '/api/v4/realtime/tickets', headers: ticketHeaders, payload: {} })).statusCode).toBe(400)
+    expect(issue).not.toHaveBeenCalled()
+    const issued = await service.issueRealtimeTicket(decodeURIComponent(appCookie.slice(appCookie.indexOf('=') + 1)))
+    issue.mockResolvedValueOnce({ ...issued, ticket: 'invalid' })
+    const invalidTicket = await trade.inject({ method: 'POST', url: '/api/v4/realtime/tickets', headers: ticketHeaders })
+    expect(invalidTicket.statusCode).toBe(503)
+    expect(invalidTicket.headers['set-cookie']).toBeUndefined()
+    expect(invalidTicket.headers['cache-control']).toBe('no-store')
 
     const logout = await trade.inject({ method: 'POST', url: '/api/v4/session/logout', headers: {
       cookie: appCookie, origin: 'https://trade.example.test', 'x-csrf-token': csrf,

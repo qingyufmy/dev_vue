@@ -6,4 +6,27 @@
 
 当前登记边界债务清零不表示完整模块验收。repository仍有跨域SQL和事务协作需按表所有权继续核对，API运行校验、真实数据库权限/并发及前端完整流程另行验证。禁止绕过execution直接执行动作。
 
+风险审核的trade_decisions状态写入由inference公开TradeDecisionRiskWriter能力负责。运行入口将推理域工厂注入risk composition，repository把当前事务连接绑定给该工厂；先保持账户→决策既有锁序，再保存风险结果，调用带用户/账户/版本/proposed前置条件的决策写入，最后保存outbox。同一连接统一提交；决策版本冲突或写入失败回滚风险结果，不独立提交。风险域仍保留决策/推理/订阅等跨域只读联查，读取投影与锁所有权尚未全部收口。
+
+新增定向验证risk-decision-owner-transaction.test.ts覆盖同连接注入、成功提交、所有者版本冲突及异常回滚；这些是Mock事务行为，不是当前MySQL实测。
+
+风险读取、精确人工解锁回执和两个写操作均已接入HTTP域合同运行校验；成功与Problem响应分别验证，AuthError保留401/403。账户ID继续遵守既有OpaqueId合同。策略保存完整幂等/恢复仍待接入和验收，不因同源校验通过而算完成。risk-read-contract.test.ts覆盖身份失败、边界参数、合法空列表与非法响应；超长路径ID在默认路由器可能先被414拒绝，定向测试放宽测试路由上限以单独验证合同层。
+
+策略保存现在从本次事务生成确切结果，commit确认后返回，不再提交后回读当前策略。risk-policy-receipt及mysql-risk-policy-receipts提供请求摘要、冲突判断、原快照读写基础，尚未接入保存入口；适配器仅使用传入连接，不独立获取连接、提交或重试。044追加risk_policy_write_receipts，以user/account/key唯一，保存请求摘要及结果快照/摘要；它不属于043的既有8步证明，须独立加入升级验证后才能执行。当前未执行044，不声明真实回执可用。定向测试risk-policy-receipt-store.test.ts验证规范化摘要、原结果、权限撤销、篡改及跨作用域拒绝。
+
 定向验证：deterministic-risk-review.test.ts、user-execution-command-service.test.ts、execution-distribution-service.test.ts、execution-distribution-worker.test.ts。类型边界调整不改变规则实现、持久化正文或哈希编码。
+
+后续接入状态：策略保存事务已调用回执适配器，PUT及应用端口要求幂等键；锁定owner后先重放精确请求，再检查新请求revision。回执和业务写同事务，写回执失败整体回滚。只读回执HTTP和前端持久恢复尚未接入，044尚未执行，真实幂等不可计为已验收。
+
+全局控制必须来自已初始化且有效的global_risk_controls记录，缺失或非法值返回risk_global_control_unavailable，不默认开启交易。人工解锁幂等回执按原user_id/account/key定位并检查当前owner，应用层拒绝跨作用域回执。相关覆盖另见mysql-risk-control.test.ts、mysql-risk-transaction.test.ts；开发库仍缺风险结构，原地升级设计见docs/risk-inplace-upgrade-plan-20260909.md。
+
+
+risk_decisions_v4 的 operation_id 关联写入由 RiskDecisionExecutionWriter 公开能力负责。createTransactionRiskDecisionExecutionWriter 绑定执行域提供的事务连接，仅按决策/用户/账户/版本且未关联条件更新；不开始或结束事务、不重试。公开 index 不导出 MySQL 实现。
+
+比例平仓：partial-close-actions将close_percent意图按当前持仓、合约和revision确定性转换为volume，保留换算审计，禁止自动升级全平。evaluateRisk在纯管理及混合动作路径均使用解析结果；不改原始模型输入，execution只接明确数量。验证入口：partial-close-sizing、trader-position-size-contract、deterministic-risk-review测试。
+
+AccountRiskSummaryReader拥有account_risk_summaries的运行查询：read返回owner限定的正文与版本，readRevision不加载正文并使用调用方事务的FOR SHARE。未找到唯一授权记录返回null，不能补默认风险。交易员构建器及开始/完成版本复核由入口注入该实现；公开index不导出MySQL连接或工厂。真实查询夹具入口subscription-execution-window-reference.mjs。
+
+策略单笔预算：worker-risk注入inference的DecisionStrategyEvidenceReader及strategies的StrategyExecutionConfigReader。前者验证proposed决策、成功交易员任务和冻结交易快照，后者限定当前订阅/owner/active版本并核验prompt/config摘要。loadReviewCandidate构造可信预算上下文；completeReview在同一提交事务重读两份证据并比较完整上下文，变化时在risk写入前拒绝。risk_budget的配置语义由strategies公开解析器拥有，risk域只消费正十进制上限；固定手数精确比较及档位计算均取小值。RISK_STRATEGY_BUDGET_VERIFIED随审核正文保留版本/摘要/上限。历史缺少strategyConfigHash的待审决策返回stale，不补读当前配置。相关测试为decision-strategy-evidence、strategy-execution-config、risk-decision-owner-transaction与deterministic-risk-review；SQL测试目前为模拟连接，真实MySQL锁/并发与派发后配置变化链路仍须验证。
+
+真实预算读取/锁参考入口：`python -B scripts/run-strategy-budget-reference-local.py <absolute-report-path>`。限定当前开发库240步和VM UUID，9张当前表DDL的隔离副本保留CHECK/索引但剥离FK；实际两端口、预算计算及双连接共享锁由`strategy-budget-mysql-v1-20260911.json`记录。此参考不运行服务、不使用真实交易账户，不覆盖完整risk落库事务或派发阶段。

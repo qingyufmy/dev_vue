@@ -1,13 +1,14 @@
+import { unchangedUserCommandTradeState } from './mysql-user-command-trade-state.js'
 import type { Pool, RowDataPacket } from 'mysql2/promise'
-import type { JsonObject, JsonValue, TraderAction } from '../../inference/domain/inference.js'
+import type { JsonObject, JsonValue, TraderAction } from '../../inference/index.js'
 import type { ExecutionCommandSource } from '../application/execution-dispatch-ports.js'
 import { BridgeCommandError, type BridgeCommandAction } from '../domain/bridge-command.js'
 import { sha256Canonical } from '../domain/execution.js'
 
 interface CandidateRow extends RowDataPacket {
-  intent_id: string; user_id: number; trading_account_id: string | number; action_kind: TraderAction['kind']; expires_at_utc: Date
+  account_busy: number; intent_id: string; user_id: number; trading_account_id: string | number; action_kind: TraderAction['kind']; expires_at_utc: Date
   action_json: string | TraderAction; action_sha256: string; terminal_profile_id: string; terminal_instance_id: string
-  broker_server: string; account_login: string; connection_epoch_v4: string | number
+  broker_server: string; account_login: string; connection_epoch_v4: string | number; source_type: string
 }
 interface StateRow extends RowDataPacket { state_json: string | JsonObject; state_sha256: string; projection_revision: string | number }
 
@@ -22,7 +23,13 @@ export class MysqlExecutionCommandSource implements ExecutionCommandSource {
   }
 
   async loadPrepared(intentId: string, now: string) {
-    const [rows] = await this.pool.execute<CandidateRow[]>(`SELECT i.id intent_id,i.user_id,i.trading_account_id,i.action_kind,i.expires_at_utc,
+    const [rows] = await this.pool.execute<CandidateRow[]>(`SELECT i.id intent_id,i.user_id,i.trading_account_id,i.action_kind,i.expires_at_utc,i.source_type,
+        EXISTS (
+          SELECT 1 FROM bridge_commands_v4 active_command
+          WHERE active_command.trading_account_id=i.trading_account_id
+            AND active_command.execution_intent_id<>i.id
+            AND active_command.status IN ('queued','dispatched','accepted','uncertain','reconciling')
+        ) account_busy,
         p.action_json,p.action_sha256,b.terminal_profile_id,b.terminal_instance_id,a.broker_server,a.account_login,s.connection_epoch_v4
       FROM execution_intents i
       INNER JOIN execution_intent_payloads p ON p.execution_intent_id=i.id
@@ -34,15 +41,10 @@ export class MysqlExecutionCommandSource implements ExecutionCommandSource {
         AND s.connection_epoch_v4 IS NOT NULL AND s.disconnected_at_utc IS NULL
       INNER JOIN account_runtime_snapshots snap ON snap.trading_account_id=a.id AND snap.trade_permission=1
       WHERE i.id=? AND i.status='prepared' AND i.expires_at_utc>?
-        AND NOT EXISTS (
-          SELECT 1 FROM bridge_commands_v4 active_command
-          WHERE active_command.trading_account_id=i.trading_account_id
-            AND active_command.execution_intent_id<>i.id
-            AND active_command.status IN ('queued','dispatched','accepted','uncertain','reconciling')
-        )
       ORDER BY s.connection_epoch_v4 DESC LIMIT 1`, [intentId, now])
     const row = rows[0]
     if (!row) return null
+    if (Number(row.account_busy) === 1) return { blocked: true as const, accountId: String(row.trading_account_id) }
     const action = parse<TraderAction>(row.action_json)
     if (sha256Canonical(action) !== row.action_sha256 || action.kind !== row.action_kind) {
       throw new BridgeCommandError('bridge_command_intent_payload_invalid', 409)
@@ -85,7 +87,15 @@ export class MysqlExecutionCommandSource implements ExecutionCommandSource {
       accountId, entityKind, ticket, row.terminal_instance_id, row.connection_epoch_v4,
     ])
     const state = states[0] ? parse<JsonObject>(states[0].state_json) : null
-    if (!state || Number(states[0]!.projection_revision) !== revision || sha256Canonical(state) !== states[0]!.state_sha256) {
+    const currentRevision = Number(states[0]?.projection_revision)
+    const unchangedUserState = state && currentRevision > Number(revision) && row.source_type === 'user_command'
+      && await unchangedUserCommandTradeState(this.pool, row.intent_id, state)
+    // Workflow candidates are only hints; the command transaction must review and bind this exact newer snapshot.
+    const revisionMatches = Number.isSafeInteger(revision) && Number(revision) > 0
+      && Number.isSafeInteger(currentRevision) && currentRevision > 0
+      && ((row.source_type === 'position_workflow' && action.kind === 'modify_position') || unchangedUserState
+        ? currentRevision >= Number(revision) : currentRevision === revision)
+    if (!state || !revisionMatches || sha256Canonical(state) !== states[0]!.state_sha256) {
       throw new BridgeCommandError('bridge_command_expected_state_stale', 409)
     }
     return state

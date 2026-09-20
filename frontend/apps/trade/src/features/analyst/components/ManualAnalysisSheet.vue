@@ -31,7 +31,7 @@ watch(() => props.open, (open) => {
 })
 
 function submit() {
-  if (!strategyId.value || !symbol.value.trim()) return
+  if (props.pending || props.coolingDown || !strategyId.value || !/^[A-Za-z0-9._-]+$/.test(symbol.value.trim())) return
   emit('submit', strategyId.value, symbol.value)
 }
 
@@ -42,10 +42,10 @@ const statusLabels: Record<AnalysisJob['status'], string> = {
 
 <template>
   <Sheet :open="open" @update:open="emit('update:open', $event)">
-    <SheetContent class="w-full overflow-y-auto sm:max-w-md" side="right">
+    <SheetContent class="w-full overflow-y-auto data-[side=right]:w-full sm:data-[side=right]:max-w-md" side="right">
       <SheetHeader>
         <SheetTitle>手动分析行情</SheetTitle>
-        <SheetDescription>选择一条已发布的分析策略并提交一次分析。手动分析不自动下单，服务端限制每 3 分钟一次。</SheetDescription>
+        <SheetDescription>选择一条已发布的分析策略并提交一次分析。手动分析不自动下单，服务端限制每 5 分钟一次。</SheetDescription>
       </SheetHeader>
 
       <form class="grid flex-1 content-start gap-5 px-4" @submit.prevent="submit">
@@ -61,7 +61,7 @@ const statusLabels: Record<AnalysisJob['status'], string> = {
           <Field>
             <FieldLabel for="manual-analysis-symbol">交易品种</FieldLabel>
             <Input id="manual-analysis-symbol" v-model="symbol" maxlength="64" autocomplete="off" placeholder="例如 XAUUSD" />
-            <FieldDescription>请输入终端可识别的标准品种代码。</FieldDescription>
+            <FieldDescription>使用标准品种代码（例如 XAUUSD），终端后缀由桥接自动匹配。分析周期由所选策略决定。</FieldDescription>
           </Field>
         </FieldGroup>
 
@@ -69,7 +69,7 @@ const statusLabels: Record<AnalysisJob['status'], string> = {
         <Alert v-if="job">
           <RadioTower />
           <AlertTitle class="flex items-center gap-2">本次任务 <Badge variant="outline">{{ statusLabels[job.status] }}</Badge></AlertTitle>
-          <AlertDescription>{{ job.symbol }} 已进入独立分析队列，完成后分析记录会自动更新。</AlertDescription>
+          <AlertDescription>{{ job.symbol }} · {{ job.status === 'succeeded' ? '分析已完成，可关闭此面板查看分析记录。' : ['failed', 'expired', 'cancelled'].includes(job.status) ? '本次任务未完成，请检查配置后重新发起。' : '正在等待分析结果，完成后分析记录会自动更新。' }}</AlertDescription>
         </Alert>
       </form>
 
@@ -77,7 +77,7 @@ const statusLabels: Record<AnalysisJob['status'], string> = {
         <Button type="button" variant="outline" size="lg" @click="emit('update:open', false)">关闭</Button>
         <Button type="button" size="lg" :disabled="pending || coolingDown || !strategyId || !symbol.trim()" @click="submit">
           <Play data-icon="inline-start" />
-          {{ pending ? '正在提交' : coolingDown ? '3 分钟冷却中' : '执行一次分析' }}
+          {{ pending ? '正在提交' : coolingDown ? '5 分钟冷却中' : '执行一次分析' }}
         </Button>
       </SheetFooter>
     </SheetContent>

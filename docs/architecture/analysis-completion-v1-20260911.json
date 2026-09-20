@@ -1,0 +1,17 @@
+{
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "syntheticPorts": [
+    "subscription-candidates",
+    "account-inventory"
+  ],
+  "foreignKeysVerified": false,
+  "checks": [],
+  "errorCode": "ER_TRUNCATED_WRONG_VALUE",
+  "locations": [
+    "    at file:///D:/dev_codex/dev_vue/server/dist-v4/modules/inference/infrastructure/mysql-inference-repository.js:269:30",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)",
+    "    at async transaction (file:///D:/dev_codex/dev_vue/server/dist-v4/modules/inference/infrastructure/mysql-inference-repository.js:13:24)"
+  ],
+  "referenceDatabaseRemoved": true
+}

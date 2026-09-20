@@ -1,0 +1,15 @@
+{
+  "kind": "review-history-case-projection/v1",
+  "passed": true,
+  "target": "dev_vue",
+  "runId": "d89adc13-bbac-b205-fff5-89e8d8ce2b2b",
+  "manifestHash": "bfe22a5187d4836230ae62e8d2a35338ed167814786a2dfcf89cc2d109d4f5df",
+  "cases": 183,
+  "versions": 34,
+  "userStates": 33,
+  "replayNoAdditionalRows": true,
+  "oldDataAndLedgerUnchanged": true,
+  "caseTargetsVerified": true,
+  "afterHash": "960e56967ffa0263d79aef4c0693ad3b96253fcd8268aa94e68477380f49db3d",
+  "observedAt": "2026-09-11T03:38:31.782Z"
+}

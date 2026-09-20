@@ -1,0 +1,8 @@
+{
+  "kind": "risk-control-current-comparison/v1",
+  "verified": true,
+  "matched": 1,
+  "archived": 1,
+  "comparison": "Binary exact reason; equal control, actor, UTC; revision 1",
+  "observedAt": "2026-09-09T01:25:33.189Z"
+}

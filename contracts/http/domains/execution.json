@@ -50,6 +50,9 @@
           },
           "503": {
             "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -58,7 +61,7 @@
       "post": {
         "operationId": "createExecutionCommand",
         "summary": "Create one asynchronous command for an owned trading account",
-        "description": "The server validates authorization, idempotency, optimistic revisions and risk before creating an execution intent. Accepted means durably recorded, not executed by MT.",
+        "description": "The server validates authorization, idempotency, optimistic revisions and risk before creating an execution intent. Accepted means durably recorded, not executed by MT. After an uncertain result, retain the same idempotency key and complete request body; do not create a replacement command.",
         "tags": [
           "Execution"
         ],
@@ -108,6 +111,15 @@
           },
           "503": {
             "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "428": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -116,7 +128,7 @@
       "post": {
         "operationId": "createExecutionDistribution",
         "summary": "Create an asynchronous strategy distribution",
-        "description": "The server resolves and freezes the eligible subscribers for the strategy version. Each target is independently authorized, risk checked and executed.",
+        "description": "The server resolves and freezes the eligible subscribers for the strategy version. Each target is independently authorized, risk checked and executed. Retain the original key and complete body after an uncertain result.",
         "tags": [
           "Execution"
         ],
@@ -162,6 +174,9 @@
             "$ref": "#/components/responses/Problem"
           },
           "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -209,6 +224,18 @@
           },
           "409": {
             "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -241,6 +268,18 @@
           },
           "404": {
             "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "422": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -249,7 +288,7 @@
       "post": {
         "operationId": "createDistributionCloseCommand",
         "summary": "Create an exact asynchronous close for distribution targets",
-        "description": "Targets are selected only by frozen distribution target IDs. An empty target_ids value means all still-attributable targets; symbol, strategy and ticket filters are not accepted.",
+        "description": "Targets are selected only by frozen distribution target IDs. An empty target_ids value means all still-attributable targets; symbol, strategy and ticket filters are not accepted. Retain the original key and complete body after an uncertain result.",
         "tags": [
           "Execution"
         ],
@@ -301,6 +340,9 @@
             "$ref": "#/components/responses/Problem"
           },
           "503": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -383,6 +425,122 @@
             }
           },
           "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/history/executions": {
+      "get": {
+        "operationId": "listArchivedExecutions",
+        "tags": [
+          "Execution"
+        ],
+        "summary": "List personally owned retained historical executions",
+        "description": "Original legacy IDs and UTC times. Authenticated original user only; system owner 0 is not a browser identity. Does not create or retry runtime work.",
+        "parameters": [
+          {
+            "name": "page_size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Historical data only",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/listArchivedExecutionsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/history/executions/{legacy_id}": {
+      "get": {
+        "operationId": "getArchivedExecution",
+        "tags": [
+          "Execution"
+        ],
+        "summary": "Get personally owned retained historical executions",
+        "description": "Original legacy IDs and UTC times. Authenticated original user only; system owner 0 is not a browser identity. Does not create or retry runtime work.",
+        "parameters": [
+          {
+            "name": "legacy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Historical data only",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/getArchivedExecutionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -764,7 +922,8 @@
             "modify_order": "#/components/schemas/ModifyOrderCommand",
             "cancel_order": "#/components/schemas/CancelOrderCommand"
           }
-        }
+        },
+        "unevaluatedProperties": false
       },
       "MarketOrderCommand": {
         "type": "object",
@@ -1613,6 +1772,197 @@
         "properties": {
           "data": {
             "$ref": "#/components/schemas/Operation"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "ArchivedExecutionSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "legacy_id",
+          "legacy_account_id",
+          "symbol",
+          "action",
+          "status",
+          "created_at_utc"
+        ],
+        "properties": {
+          "legacy_id": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$"
+          },
+          "legacy_account_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[1-9][0-9]{0,18}$"
+          },
+          "symbol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "action": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "created_at_utc": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ArchivedExecutionDetail": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "legacy_id",
+          "legacy_account_id",
+          "symbol",
+          "action",
+          "status",
+          "created_at_utc",
+          "trade_ticket",
+          "pending_ticket",
+          "error_code",
+          "completed_at_utc",
+          "identity_namespace",
+          "executable"
+        ],
+        "properties": {
+          "legacy_id": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$"
+          },
+          "legacy_account_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[1-9][0-9]{0,18}$"
+          },
+          "symbol": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "action": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "created_at_utc": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "trade_ticket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pending_ticket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completed_at_utc": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "identity_namespace": {
+            "type": "string",
+            "enum": [
+              "retained-legacy"
+            ]
+          },
+          "executable": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          }
+        }
+      },
+      "listArchivedExecutionsResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "items",
+              "next_cursor",
+              "identity_namespace",
+              "executable"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "$ref": "#/components/schemas/ArchivedExecutionSummary"
+                }
+              },
+              "next_cursor": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "identity_namespace": {
+                "type": "string",
+                "enum": [
+                  "retained-legacy"
+                ]
+              },
+              "executable": {
+                "type": "boolean",
+                "enum": [
+                  false
+                ]
+              }
+            }
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "getArchivedExecutionResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ArchivedExecutionDetail"
           },
           "meta": {
             "$ref": "#/components/schemas/Meta"

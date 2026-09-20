@@ -1,0 +1,17 @@
+{
+  "kind": "candidate-task-schema-upgrade/v1",
+  "passed": true,
+  "target": "dev_vue_m1_source_20260910_02",
+  "planHash": "7dfe11729f9203c6f8328f1c5cc72a8e8be8c23b9d31b0494dd7825900919ca7",
+  "ddlAttempted": 1,
+  "businessRowWrites": 0,
+  "ddlAckLossRecovered": true,
+  "replayNoDDL": true,
+  "oldDataUnchanged": true,
+  "oldChecksumsUnchanged": true,
+  "steps": 262,
+  "tableCount": 311,
+  "afterSnapshotHash": "132bbea2c4a621f2a4d1e713c8d2420f6e6fbbbe7d6a9c38501f89cbbb52fb28",
+  "backupReceiptSha256": "5c3901ad66471bc14618f285e0ce041091ed84639a9aee1d6b381843fb9aab9d",
+  "observedAt": "2026-09-11T06:16:20.923Z"
+}

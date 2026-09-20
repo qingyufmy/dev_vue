@@ -15,8 +15,8 @@ import { AuthTradeRequestAdapter } from './transport/http/trade-request-access.j
 import { AuthObserverAdminAdapter } from './transport/http/admin-request-access.js'
 export { assertMysqlAccountPrincipalReadSchema as assertAccountPrincipalReadSchema } from './infrastructure/mysql-account-principal-schema.js'
 
-export function createBrowserRequestAccess(service: AuthService): { trade: BrowserRequestAccess; admin: BrowserRequestAccess } {
-  return { trade: new AuthTradeRequestAdapter(service), admin: new AuthObserverAdminAdapter(service) }
+export function createBrowserRequestAccess(service: AuthService, secureCookies = true): { trade: BrowserRequestAccess; admin: BrowserRequestAccess } {
+  return { trade: new AuthTradeRequestAdapter(service), admin: new AuthObserverAdminAdapter(service, secureCookies) }
 }
 
 export function createAuthHttp(service: AuthService, secureCookies = true): FastifyPluginAsync {
@@ -65,3 +65,4 @@ export { createMysqlAdminPrincipalAccess as createAdminPrincipalAccess } from '.
 export { assertMysqlAccountPrincipalReadSchemaV2 as assertAccountPrincipalReadSchemaV2 } from './infrastructure/mysql-account-principal-schema-v2.js'
 
 export { createMysqlAccountPrincipalReader as createAccountPrincipalReader } from './infrastructure/mysql-account-principal-reader.js'
+export { createMysqlMarketProviders } from './infrastructure/mysql-market-providers.js'

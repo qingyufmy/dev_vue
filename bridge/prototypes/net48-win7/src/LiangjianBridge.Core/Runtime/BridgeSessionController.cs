@@ -16,6 +16,10 @@ namespace Liangjian.BridgeV4.Runtime
         public int? TimezoneOffsetMinutes { get; set; }
         public string ClockStatus { get; set; }
         public Func<long, IDictionary<string, object>> AccountFactsProvider { get; set; }
+        public Func<long, string> AccountStreamProvider { get; set; }
+        public Func<long, string[]> TradeStreamsProvider { get; set; }
+        public Func<long, string[]> MarketStreamsProvider { get; set; }
+        public Func<long, string[]> MarketQuotesProvider { get; set; }
     }
 
     public sealed class BridgeSessionController
@@ -112,6 +116,12 @@ namespace Liangjian.BridgeV4.Runtime
             }
             return profileSession.Handle(json, nowUtcMsc);
         }
+
+        public string[] ReadMarketQuotes(long nowUtcMsc) { return configuration.MarketQuotesProvider == null ? new string[0] : configuration.MarketQuotesProvider(nowUtcMsc); }
+        public string[] ReadMarketStreams(long nowUtcMsc) { return configuration.MarketStreamsProvider == null ? new string[0] : configuration.MarketStreamsProvider(nowUtcMsc); }
+        public string[] ReadTradeStreams(long nowUtcMsc) { return configuration.TradeStreamsProvider == null ? new string[0] : configuration.TradeStreamsProvider(nowUtcMsc); }
+
+        public string CreateAccountStream(long nowUtcMsc) { return State == "active" && configuration.AccountStreamProvider != null ? configuration.AccountStreamProvider(nowUtcMsc) : null; }
 
         public string CreateHeartbeat(long nowUtcMsc)
         {

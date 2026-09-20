@@ -175,6 +175,11 @@ class FakePool {
     const placeholders = (sql.match(/\?/g) ?? []).length
     if (placeholders !== params.length) throw sqlError(`fake_sql_params:${placeholders}:${params.length}`)
     this.calls.push({ sql, params })
+    // mysql2 serializes Date in UTC; raw ISO strings fail strict DATETIME writes.
+    if (/^(INSERT|UPDATE)/.test(sql) && params.some(value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value))) {
+      throw sqlError('invalid datetime parameter', 'ER_TRUNCATED_WRONG_VALUE')
+    }
+    params = params.map(value => value instanceof Date ? value.toISOString() : value)
     if (this.failOn && sql.includes(this.failOn)) {
       this.failOn = null
       throw sqlError('simulated storage failure', this.failureCode)
@@ -591,7 +596,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
     await expect(open(createRoutes(pool.asPool())))
       .rejects.toMatchObject({ code: 'bridge_route_account_not_found' })
     const cases = [
-      { currency: undefined }, { currency: '' }, { currency: 'USD\n' }, { currency: '1234567890123' }, { currency: '欧元' },
+      { currency: undefined }, { currency: '' }, { currency: 'USD\n' }, { currency: '1234567890123' }, { currency: '娆у厓' },
       { login: 'other' }, { broker_server: 'other' }, { observed_at_utc_msc: 0 },
       { observed_at_utc_msc: Number.MAX_SAFE_INTEGER + 1 }, { observed_at_utc_msc: Date.parse(NOW) - 60_001 },
       { observed_at_utc_msc: Date.parse(NOW) + 5_001 },
@@ -619,7 +624,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
     const schema = JSON.parse(readFileSync(new URL('../../contracts/bridge-v4.schema.json', import.meta.url), 'utf8'))
     const helloSchema = schema.$defs.SessionHelloPayload
     const pattern = new RegExp(helloSchema.properties.terminals.items.properties.account_facts.properties.currency.pattern)
-    for (const currency of ['USD', 'USC', 'EUR', 'a._-123456789', 'USD\n', '\nUSD', 'USD ', '', '-USD', '欧元', '1234567890123']) {
+    for (const currency of ['USD', 'USC', 'EUR', 'a._-123456789', 'USD\n', '\nUSD', 'USD ', '', '-USD', '娆у厓', '1234567890123']) {
       const input = firstInput()
       input.hello.payload.terminals[0]!.account_facts!.currency = currency
       if (pattern.test(currency)) expect(() => assertSessionHello(input.hello), currency).not.toThrow()
@@ -719,7 +724,7 @@ describe('MysqlBridgeGatewayRouteRepository P5A registration', () => {
     expect(names.every(sql => !/SELECT\s+\*/i.test(sql))).toBe(true)
     const credentialSql = names.find(sql => sql.includes('SELECT s.user_id,s.generation')) ?? ''
     expect(credentialSql).toMatch(/s\.credential_version=4/)
-    expect(credentialSql).toMatch(/u\.plan='pro'/)
+    expect(credentialSql).not.toMatch(/u\.plan='pro'/)
     expect(credentialSql).not.toMatch(/s\.expires_at\s*>/)
     const ownershipSql = names.find(sql => sql.includes('SELECT CAST(a.ownership_revision AS CHAR)')) ?? ''
     expect(ownershipSql).toMatch(/o\.role='owner'/)

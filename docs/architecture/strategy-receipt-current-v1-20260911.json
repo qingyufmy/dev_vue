@@ -1,0 +1,16 @@
+{
+  "kind": "strategy-receipt-schema-upgrade/v1",
+  "passed": true,
+  "target": "dev_vue",
+  "planHash": "6defdad6e582a64ffb2e76d226ea39f2404ca0a9cfc5294fe953872e0312c1e7",
+  "ddlAttempted": 1,
+  "businessRowWrites": 0,
+  "replayNoDDL": true,
+  "oldDataUnchanged": true,
+  "oldChecksumsUnchanged": true,
+  "steps": 241,
+  "tableCount": 295,
+  "afterSnapshotHash": "52d47d4a915deb986cce9878c58834cc3c7ec70f4bbd0c1a3789c6fd7c8b8aad",
+  "backupReceiptSha256": "5c3901ad66471bc14618f285e0ce041091ed84639a9aee1d6b381843fb9aab9d",
+  "observedAt": "2026-09-11T01:54:37.379Z"
+}

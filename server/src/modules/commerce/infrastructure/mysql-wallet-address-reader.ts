@@ -1,15 +1,6 @@
 import type { PoolConnection, RowDataPacket } from 'mysql2/promise'
 
-export type WalletChain = 'TRON' | 'ETH' | 'BSC' | 'SOL'
-export interface WalletAddress {
-  id: string
-  chain: WalletChain
-  addressIndex: string
-  address: string
-  createdAtUtc: string | null
-  revision: string
-  custody: { status: 'unverified' } | { status: 'verified'; reference: string; evidenceSha256: string; verifiedAtUtc: string }
-}
+import type { WalletAddress, WalletChain } from '../application/wallet-address-reader.js'
 interface WalletRow extends RowDataPacket {
   id: string; chain: WalletChain; address_index: string; address: string; created_at_utc: string | null
   revision: string; custody_reference: string | null; custody_evidence_sha256: string | null; custody_verified_at_utc: string | null

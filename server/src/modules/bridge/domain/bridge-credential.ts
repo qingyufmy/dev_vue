@@ -10,6 +10,8 @@ export type BridgeCredentialErrorCode =
   | 'bridge_credential_migration_conflict'
   | 'bridge_credential_migration_revoked'
   | 'bridge_credential_storage_failed'
+  | 'bridge_credential_result_unknown'
+  | 'bridge_credential_commit_unknown'
   | 'bridge_session_token_invalid'
   | 'bridge_session_token_expired'
 

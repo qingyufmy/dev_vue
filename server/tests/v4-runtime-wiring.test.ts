@@ -9,6 +9,19 @@ const baseEnv = {
 }
 
 describe('V4 runtime wiring', () => {
+  it('bounds protection fact ages consistently for the worker and gateway', () => {
+    const defaults = loadV4RuntimeConfig(baseEnv)
+    expect(defaults.positionProtectionMaxAgeMs).toBe(30_000)
+    expect(defaults.positionProtectionMaxInstrumentAgeMs).toBe(300_000)
+    const configured = loadV4RuntimeConfig({ ...baseEnv, V4_POSITION_PROTECTION_MAX_AGE_MS: '10000', V4_POSITION_PROTECTION_MAX_INSTRUMENT_AGE_MS: '60000' })
+    expect(configured.positionProtectionMaxAgeMs).toBe(10_000)
+    expect(configured.positionProtectionMaxInstrumentAgeMs).toBe(60_000)
+    for (const invalid of ['0', '-1', '60001', 'NaN']) {
+      expect(() => loadV4RuntimeConfig({ ...baseEnv, V4_POSITION_PROTECTION_MAX_AGE_MS: invalid })).toThrow()
+    }
+    expect(() => loadV4RuntimeConfig({ ...baseEnv, V4_POSITION_PROTECTION_MAX_INSTRUMENT_AGE_MS: '300001' })).toThrow()
+  })
+
   it('requires distinct cache and queue Redis configuration and remains disabled by default', () => {
     expect(() => loadV4RuntimeConfig({ ...baseEnv, QUEUE_REDIS_HOST: undefined })).toThrow('QUEUE_REDIS_HOST_required')
     expect(loadV4BaseRuntimeConfig({ ...baseEnv, QUEUE_REDIS_HOST: undefined }).cacheRedis.db).toBe(0)
@@ -27,6 +40,7 @@ describe('V4 runtime wiring', () => {
       'aurum-v4-scheduler-analysis', 'aurum-v4-worker-analysis',
       'aurum-v4-worker-trader', 'aurum-v4-worker-risk', 'aurum-v4-worker-review',
       'aurum-v4-scheduler-trade-history',
+      'aurum-v4-scheduler-execution',
     ])
     expect(ecosystem.apps.every(app => app.instances === 1 && app.exec_mode === 'fork' && app.watch === false)).toBe(true)
   })

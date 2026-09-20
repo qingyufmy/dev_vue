@@ -1,0 +1,37 @@
+{
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "syntheticPorts": [
+    "model-result"
+  ],
+  "omittedTraderContextPorts": [],
+  "remainingEvidenceLimits": [
+    "synthetic-analysis-input-and-model-response",
+    "synthetic-terminal-route-and-result",
+    "direct-dispatch-state-update",
+    "stub-http-authentication",
+    "empty-reference-inventory",
+    "absent-memory-library",
+    "analysis-worker-model-adapter-not-run"
+  ],
+  "foreignKeysVerified": false,
+  "checks": [
+    "actual-instrument-reader-requires-current-owner-binding-and-connection-epoch"
+  ],
+  "scheduleFailures": [
+    {
+      "code": "ER_TRUNCATED_WRONG_VALUE"
+    }
+  ],
+  "errorCode": "ERR_ASSERTION",
+  "locations": [
+    "    at file:///D:/dev_codex/dev_vue/scripts/verify-analysis-completion-reference-local.mjs:231:12",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)"
+  ],
+  "referenceQueueRemoved": true,
+  "referenceRiskQueueRemoved": true,
+  "referenceExecutionQueueRemoved": true,
+  "referenceGatewayRouteRemoved": true,
+  "referenceLeaseRemoved": true,
+  "referenceDatabaseRemoved": true
+}

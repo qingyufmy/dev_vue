@@ -2,6 +2,7 @@ import type { AccountRiskPolicyPatch, AccountRiskSummary, EffectiveRiskPolicy, R
 import type { ManualRiskRelease } from '../domain/manual-risk-release.js'
 
 export interface ReplaceAccountRiskPolicyInput {
+  idempotencyKey: string
   userId: number
   accountId: string
   expectedRevision: number
@@ -25,6 +26,7 @@ export interface CreateManualRiskReleaseInput {
 }
 
 export interface CompleteRiskReviewInput {
+  strategyBudgetContext?: RiskEvaluationInput['strategyBudgetContext']
   riskDecisionId: string
   decisionId: string
   decisionRevision: number
@@ -54,6 +56,7 @@ export interface RiskDecisionDetail extends RiskDecisionSummary {
 }
 
 export interface RiskRepository {
+  getPolicyReceipt(userId: number, accountId: string, idempotencyKey: string): Promise<import('../domain/risk-policy-receipt.js').RiskPolicyReceipt | null>
   getEffectivePolicy(userId: number, accountId: string): Promise<EffectiveRiskPolicy | null>
   replaceAccountPolicy(input: ReplaceAccountRiskPolicyInput): Promise<EffectiveRiskPolicy>
   getAccountSummary(userId: number, accountId: string): Promise<AccountRiskSummary | null>
@@ -65,4 +68,8 @@ export interface RiskRepository {
   completeReview(input: CompleteRiskReviewInput): Promise<RiskDecisionSummary>
   getDecision(userId: number, decisionId: string): Promise<RiskDecisionDetail | null>
   listDecisions(userId: number, accountId: string, limit: number): Promise<RiskDecisionSummary[]>
+}
+
+export interface RiskDispatchPolicyReader {
+  getEffectivePolicy(userId: number, accountId: string): Promise<EffectiveRiskPolicy>
 }

@@ -1,0 +1,67 @@
+{
+  "kind": "v4-local-configuration/v1",
+  "observedAt": "2026-09-11T04:17:51.818Z",
+  "source": "server/.env",
+  "processOverridesVerified": false,
+  "servicesStarted": false,
+  "checks": {
+    "runtime": {
+      "valid": true
+    },
+    "api": {
+      "valid": false,
+      "code": "AUTH_ORIGIN_required"
+    },
+    "realtime": {
+      "valid": false,
+      "code": "TRADE_ORIGIN_required"
+    },
+    "modelKeyring": {
+      "valid": true
+    }
+  },
+  "missingKeys": [
+    {
+      "group": "api",
+      "key": "AUTH_ORIGIN"
+    },
+    {
+      "group": "api",
+      "key": "WWW_ORIGIN"
+    },
+    {
+      "group": "api",
+      "key": "TRADE_ORIGIN"
+    },
+    {
+      "group": "api",
+      "key": "ADMIN_ORIGIN"
+    },
+    {
+      "group": "api",
+      "key": "AUTH_CSRF_SECRET"
+    },
+    {
+      "group": "api",
+      "key": "AUTH_BFF_EXCHANGE_SECRET"
+    },
+    {
+      "group": "api",
+      "key": "AUTH_ID_TOKEN_PRIVATE_KEY_PEM"
+    },
+    {
+      "group": "api",
+      "key": "AUTH_ID_TOKEN_KEY_ID"
+    }
+  ],
+  "ready": false,
+  "runtimeEnabled": false,
+  "targets": {
+    "mysqlHost": "192.168.1.254",
+    "mysqlDatabase": "dev_vue",
+    "cacheHost": "192.168.1.254",
+    "queueHost": "192.168.1.254",
+    "queueDb": 1,
+    "queuePrefix": "aurum-v4-dev-vue"
+  }
+}

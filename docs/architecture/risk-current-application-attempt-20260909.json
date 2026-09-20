@@ -1,0 +1,25 @@
+{
+  "kind": "risk-current-upgrade-application/v1",
+  "passed": false,
+  "code": "risk_structure_store_other_clients",
+  "trace": [
+    "    at check (file:///D:/dev_codex/dev_vue/scripts/lib/mysql-risk-structure-store.mjs:15:52)",
+    "    at assertRiskUpgradeConnection (file:///D:/dev_codex/dev_vue/scripts/lib/mysql-risk-structure-store.mjs:44:3)",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)",
+    "    at async mysqlRiskStructureStore (file:///D:/dev_codex/dev_vue/scripts/lib/mysql-risk-structure-store.mjs:54:3)",
+    "    at async file:///D:/dev_codex/dev_vue/scripts/apply-risk-current-upgrade-local.mjs:25:19"
+  ],
+  "ddlAttempted": 0,
+  "ddlAcknowledged": 0,
+  "journalAttempts": 0,
+  "outcome": "stopped",
+  "clients": [
+    {
+      "id": "691",
+      "user": "dev_vue",
+      "host": "192.168.31.162:62450",
+      "command": "Sleep",
+      "seconds": 4330
+    }
+  ]
+}

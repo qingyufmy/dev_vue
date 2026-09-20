@@ -117,8 +117,11 @@ namespace Liangjian.BridgeV4.Runtime
                 item["symbol"] = name;
                 object description;
                 item["description"] = source.TryGetValue("description", out description) ? description : string.Empty;
-                item["selected"] = true;
-                item["visible"] = true;
+                item["selected"] = Equals(Value(source, "selected"), true);
+                item["visible"] = Equals(Value(source, "visible"), true);
+                item["trade_mode"] = Value(source, "trade_mode");
+                item["currency_base"] = Value(source, "currency_base");
+                item["currency_profit"] = Value(source, "currency_profit");
                 items.Add(item);
             }
             return Page(items, parameters, payload.ObservedAtUtcMsc);
@@ -160,7 +163,7 @@ namespace Liangjian.BridgeV4.Runtime
                 {
                     { "symbol", Text(quote, "symbol") }, { "bid", Value(quote, "bid") },
                     { "ask", Value(quote, "ask") }, { "last", Value(quote, "last") },
-                    { "volume", null }, { "time_utc_msc", observed }
+                    { "volume", null }, { "time_utc_msc", Value(quote, "observed_at_utc_msc") }
                 };
                 items.Add(item);
             }

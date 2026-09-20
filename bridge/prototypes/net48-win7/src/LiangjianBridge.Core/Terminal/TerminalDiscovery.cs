@@ -14,6 +14,8 @@ namespace Liangjian.BridgeV4.Terminal
         public string TerminalInstanceId { get; set; }
         public string BrokerServer { get; set; }
         public string Login { get; set; }
+        public string DataPath { get; set; }
+        public bool Portable { get; set; }
 
         public override string ToString()
         {
@@ -24,10 +26,11 @@ namespace Liangjian.BridgeV4.Terminal
 
     public interface IMt5TerminalProbe
     {
-        string Read(string pythonPath, string workerPath, string terminalPath);
+        string Read(string pythonPath, string workerPath, string terminalPath, bool portable = false, string expectedDataPath = null);
     }
 
-    /// <summary>Discovery never creates a profile, grants ownership or starts a terminal.</summary>
+    /// <summary>Discovery verifies a running path and creates no profile or ownership.
+    /// The SDK may relaunch a terminal that exits between the process check and initialize.</summary>
     public sealed class TerminalDiscovery
     {
         private readonly Func<IList<string>> runningPaths;
@@ -68,13 +71,18 @@ namespace Liangjian.BridgeV4.Terminal
             return result;
         }
 
-        public DiscoveredTerminal Identify(DiscoveredTerminal selected, string pythonPath, string workerPath)
+        public DiscoveredTerminal Identify(DiscoveredTerminal selected, string pythonPath, string workerPath,
+            bool portable = false, string expectedDataPath = null)
         {
             if (selected == null) throw new InvalidDataException("bridge_discovery_selection_missing");
             DiscoveredTerminal current = FindCurrent(selected);
             if (current.Platform == "mt4") return current;
-            string body = probe.Read(pythonPath, workerPath, current.TerminalPath);
+            string body = probe.Read(pythonPath, workerPath, current.TerminalPath, portable, expectedDataPath);
             DiscoveredTerminal identified = ParseProbe(current, body);
+            if (!string.IsNullOrEmpty(expectedDataPath)
+                && !string.Equals(Path.GetFullPath(expectedDataPath).TrimEnd('\\'), identified.DataPath.TrimEnd('\\'), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("bridge_discovery_data_path_mismatch");
+            identified.Portable = portable;
             FindCurrent(current); // The terminal may have exited during the asynchronous probe.
             return identified;
         }
@@ -99,12 +107,14 @@ namespace Liangjian.BridgeV4.Terminal
                 if (string.IsNullOrWhiteSpace(body) || body.Length > 8192) throw new InvalidDataException();
                 JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 8192, RecursionLimit = 8 };
                 Dictionary<string, object> value = json.DeserializeObject(body) as Dictionary<string, object>;
-                object version, path, account;
-                if (value == null || value.Count != 3 || !value.TryGetValue("probe_version", out version)
+                object version, path, account, dataPath;
+                if (value == null || value.Count != 4 || !value.TryGetValue("probe_version", out version)
                     || !(version is int) || (int)version != 1
                     || !value.TryGetValue("terminal_path", out path) || !(path is string)
                     || !ValidTerminalPath((string)path)
                     || !string.Equals(Path.GetFullPath((string)path), selected.TerminalPath, StringComparison.OrdinalIgnoreCase)
+                    || !value.TryGetValue("data_path", out dataPath) || !Text(dataPath as string, 4096)
+                    || !Path.IsPathRooted((string)dataPath)
                     || !value.TryGetValue("account_ref", out account)) throw new InvalidDataException();
                 Dictionary<string, object> identity = account as Dictionary<string, object>;
                 object server, login;
@@ -114,6 +124,8 @@ namespace Liangjian.BridgeV4.Terminal
                 DiscoveredTerminal result = Copy(selected);
                 result.BrokerServer = (string)server;
                 result.Login = (string)login;
+                result.DataPath = Path.GetFullPath((string)dataPath);
+                result.TerminalInstanceId = InstanceId(selected.TerminalPath + "|" + result.DataPath.TrimEnd('\\'));
                 return result;
             }
             catch (Exception) { throw new InvalidDataException("bridge_discovery_probe_invalid"); }
@@ -142,7 +154,8 @@ namespace Liangjian.BridgeV4.Terminal
         private static DiscoveredTerminal Copy(DiscoveredTerminal item)
         {
             return new DiscoveredTerminal { Platform = item.Platform, TerminalPath = item.TerminalPath,
-                TerminalInstanceId = item.TerminalInstanceId, BrokerServer = item.BrokerServer, Login = item.Login };
+                TerminalInstanceId = item.TerminalInstanceId, BrokerServer = item.BrokerServer, Login = item.Login,
+                DataPath = item.DataPath, Portable = item.Portable };
         }
     }
 }

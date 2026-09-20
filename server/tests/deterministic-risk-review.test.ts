@@ -1,4 +1,9 @@
+import { evaluateTraderRisk } from '../src/modules/risk/application/trader-risk-review.js'
 import { riskRoutes } from '../src/modules/risk/transport/http/risk-routes.js'
+import { riskPolicyHash } from '../src/modules/risk/domain/risk.js'
+import { resolveStrategyRiskBudget } from '../src/modules/strategies/index.js'
+import { withPositionSizingContext } from '../src/modules/risk/application/position-sizing-context.js'
+import { contentHash, type ProposedDecisionEvidence, type ProposedDecisionEvidenceReader } from '../src/modules/inference/index.js'
 import { readFile } from 'node:fs/promises'
 import Fastify from 'fastify'
 import { describe, expect, it } from 'vitest'
@@ -77,6 +82,7 @@ function manualRelease(blocked = summary({ dailyLossPercent: 3.2 })): ManualRisk
 }
 
 class MemoryRiskRepository implements RiskRepository {
+  async getPolicyReceipt() { return null }
   candidate: RiskEvaluationInput | null = input()
   completeInput: CompleteRiskReviewInput | null = null
   replaceInput: ReplaceAccountRiskPolicyInput | null = null
@@ -101,10 +107,54 @@ class MemoryRiskRepository implements RiskRepository {
 
 function platformValues() {
   const { tradeSendEnabled: _tradeSendEnabled, accountKillSwitch: _accountKillSwitch, ...values } = DEFAULT_RISK_POLICY
-  return values
+  return { ...values, maxOrderVolume: 1 }
 }
 
 describe('Stage 12D deterministic risk review', () => {
+  it('resolves percentage closes in both reducing-only and mixed approved actions', () => {
+    const close = action({ actionId: 'partial-1', kind: 'close_position', parameters: { ticket: 'p-1', close_percent: '80' } })
+    for (const actions of [[close], [close, action()]]) {
+      const candidate = input({ result: decision(actions) }); candidate.positions[0]!.symbol = 'XAUUSD'
+      const evaluated = evaluateRisk(candidate, now)
+      expect(evaluated.status).toBe('approved')
+      expect(evaluated.approvedActions[0]!.parameters).toEqual({ ticket: 'p-1', volume: '0.08' })
+      expect(candidate.result.actions[0]!.parameters).toEqual({ ticket: 'p-1', close_percent: '80' })
+      expect(evaluated.rules).toContainEqual(expect.objectContaining({ code: 'RISK_PARTIAL_CLOSE_VOLUME_RESOLVED' }))
+    }
+  })
+  it('does not approve an impossible partial close or a conflicting explicit volume', () => {
+    const close = action({ kind: 'close_position', parameters: { ticket: 'p-1', close_percent: '80' } })
+    const candidate = input({ result: decision([close]) }); candidate.positions[0] = { ticket: 'p-1', symbol: 'XAUUSD', volume: '0.01' }
+    expect(evaluateRisk(candidate, now)).toMatchObject({ status: 'rejected', rejectCode: 'RISK_PARTIAL_CLOSE_BELOW_MINIMUM', approvedActions: [] })
+    close.parameters.volume = null
+    expect(evaluateRisk(candidate, now)).toMatchObject({ status: 'rejected', rejectCode: 'RISK_PARTIAL_CLOSE_MODE_CONFLICT' })
+  })
+  it('rejects opening in a direction excluded by the broker while retaining a permitted buy', () => {
+    const candidate = input()
+    for (const allowedOpenSides of [[], ['sell']] as Array<Array<'buy' | 'sell'>>) {
+      expect(evaluateRisk({ ...candidate, instrument: { ...candidate.instrument, allowedOpenSides } }, now).rejectCode)
+        .toBe('RISK_INSTRUMENT_DIRECTION_DISABLED')
+    }
+    expect(evaluateRisk({ ...candidate, instrument: { ...candidate.instrument, allowedOpenSides: ['buy'] } }, now).status).toBe('approved')
+  })
+  it('does not apply an otherwise valid historical release after the capability is disabled', () => {
+    const blocked = summary({ dailyLossPercent: 3.2 })
+    const disabled = policy()
+    disabled.values.manualReleaseEnabled = false
+    expect(assessManualRelease(disabled, blocked, now)).toEqual({ available: false, code: 'risk_manual_release_disabled' })
+    expect(evaluateRisk(input({ policy: disabled, summary: blocked, manualRelease: manualRelease(blocked) }), now)).toMatchObject({ status: 'rejected', rejectCode: 'RISK_DAILY_LOSS_LIMIT', manualReleaseId: null })
+  })
+
+  it('enforces each order volume independently from aggregate exposure', () => {
+    const limited = policy({ maxOrderVolume: 0.05 })
+    expect(evaluateRisk(input({ policy: limited }), now)).toMatchObject({ rejectCode: 'RISK_ORDER_VOLUME_LIMIT' })
+    const equal = action({ parameters: { ...action().parameters, volume: '0.05' } })
+    expect(evaluateRisk(input({ policy: limited, result: decision([equal]) }), now)).toMatchObject({ status: 'approved' })
+    const pending = action({ kind: 'pending_order', parameters: { ...action().parameters, price: '3530.20' } })
+    expect(evaluateRisk(input({ policy: limited, result: decision([pending]) }), now)).toMatchObject({ rejectCode: 'RISK_ORDER_VOLUME_LIMIT' })
+    expect(() => policy({ maxOrderVolume: 2 })).toThrow()
+  })
+
   it('keeps mandatory platform rules locked and rejects account relaxations outside the platform boundary', () => {
     expect(policy({ requireStopLoss: false } as never).values.requireStopLoss).toBe(true)
     expect(() => policy({ maxRiskPerTradePercent: 2 })).toThrowError(expect.objectContaining({ code: 'risk_policy_maxRiskPerTradePercent_relaxation_forbidden' }))
@@ -119,7 +169,7 @@ describe('Stage 12D deterministic risk review', () => {
 
   it('rejects empty account policy writes and entries without a frozen reference price', async () => {
     const repository = new MemoryRiskRepository()
-    await expect(new RiskService(repository).replacePolicy(42, '7', 3, {}, '没有实际变更')).rejects.toMatchObject({ code: 'risk_policy_changes_required' })
+    await expect(new RiskService(repository).replacePolicy(42, '7', 3, {}, '没有实际变更', 'original-policy-key')).rejects.toMatchObject({ code: 'risk_policy_changes_required' })
     const withoutReference = action({ parameters: { symbol: 'XAUUSD', side: 'buy', volume: '0.10', stop_loss: '3521' } })
     expect(evaluateRisk(input({ result: decision([withoutReference]) }), now)).toMatchObject({ status: 'rejected', rejectCode: 'RISK_REFERENCE_PRICE_REQUIRED' })
   })
@@ -135,6 +185,14 @@ describe('Stage 12D deterministic risk review', () => {
     expect(result).toMatchObject({ status: 'approved', rejectCode: null, approvedActions: [{ actionId: 'action-1' }] })
     expect(candidate.result).toEqual(original)
     expect(result.rules).toContainEqual(expect.objectContaining({ code: 'RISK_ACTION_APPROVED', details: expect.objectContaining({ risk_amount: 92, risk_percent: 0.92, volume: 0.1 }) }))
+  })
+
+  it('rejects explicit volume even when a sub-float equity difference exceeds the budget', () => {
+    const bounded = action({ parameters: { ...action().parameters, stop_loss: '3520.20' } })
+    const candidate = input({ result: decision([bounded]), policy: policy({ maxRiskPerTradePercent: 1 }) })
+    expect(evaluateRisk(candidate, now).status).toBe('approved')
+    candidate.summary.equity = '9999.999999999999999999'
+    expect(evaluateRisk(candidate, now)).toMatchObject({ status: 'rejected', rejectCode: 'RISK_PER_TRADE_LIMIT' })
   })
 
   it('rejects incomplete state, stale expected revisions and per-trade risk deterministically', () => {
@@ -192,6 +250,17 @@ describe('Stage 12D deterministic risk review', () => {
     await expect(service.manualRelease(9, '7')).rejects.toMatchObject({ code: 'risk_policy_not_found' })
   })
 
+  it.each([{ userId: 9 }, { accountId: '8' }])('rejects a replay receipt outside the request principal or account: %j', async (foreignScope) => {
+    const repository = new MemoryRiskRepository()
+    repository.currentSummary = summary({ dailyLossPercent: 3.2 })
+    const service = new RiskService(repository)
+    const request = { userId: 42, accountId: '7', expectedSummaryRevision: 6, idempotencyKey: 'release-scope-test', acknowledgeRisk: true, reason: '确认风险后恢复交易' }
+    const release = await service.createManualRelease(request, now)
+    repository.currentRelease = { ...release, ...foreignScope }
+    await expect(service.createManualRelease(request, now)).rejects.toMatchObject({ code: 'risk_account_forbidden', status: 403 })
+    expect(repository.currentRelease).toEqual({ ...release, ...foreignScope })
+  })
+
   it('allows exact close, cancel and tighter protection while risk-increasing actions remain halted', () => {
     const closed = action({ kind: 'close_position', parameters: { ticket: 'p-1' } })
     const halted = input({ policy: policy({ accountKillSwitch: true }), summary: summary({ dataComplete: false, incompleteReasons: ['history_gap'] }), result: decision([closed]) })
@@ -233,14 +302,14 @@ describe('Stage 12D deterministic risk review', () => {
     const current = await app.inject({ method: 'GET', url: '/api/v4/risk-accounts/7/policy' })
     expect(current.statusCode).toBe(200); expect(current.headers.etag).toBe('"3"')
     expect(current.json().data).toMatchObject({ fail_closed_on_incomplete_data: true, max_quote_age_seconds: 15, max_risk_summary_age_seconds: 30 })
-    const updated = await app.inject({ method: 'PUT', url: '/api/v4/risk-accounts/7/policy', headers: { 'if-match': '"3"' }, payload: { max_risk_per_trade_percent: '0.5', reason: '降低单笔风险' } })
+    const updated = await app.inject({ method: 'PUT', url: '/api/v4/risk-accounts/7/policy', headers: { 'if-match': '"3"', 'idempotency-key': 'original-policy-key', 'x-csrf-token': 'csrf-test-token-0123456789abcdef' }, payload: { max_risk_per_trade_percent: '0.5', reason: '降低单笔风险' } })
     expect(updated.statusCode).toBe(200); expect(repository.replaceInput).toMatchObject({ expectedRevision: 3, patch: { maxRiskPerTradePercent: 0.5 } })
     const missingCas = await app.inject({ method: 'PUT', url: '/api/v4/risk-accounts/7/policy', payload: { reason: '无版本' } })
     expect(missingCas.statusCode).toBe(428)
     repository.currentSummary = summary({ dailyLossPercent: 3.2 })
     const available = await app.inject({ method: 'GET', url: '/api/v4/risk-accounts/7/manual-release' })
     expect(available.json().data).toMatchObject({ release: null, availability: { available: true, rules: ['RISK_DAILY_LOSS_LIMIT'], policy_set_revision: '4', risk_state_revision: '6' } })
-    const released = await app.inject({ method: 'POST', url: '/api/v4/risk-accounts/7/manual-release', headers: { 'if-match': '"6"', 'idempotency-key': 'release-request-http-1' }, payload: { acknowledge_risk: true, reason: '确认风险后恢复交易' } })
+    const released = await app.inject({ method: 'POST', url: '/api/v4/risk-accounts/7/manual-release', headers: { 'if-match': '"6"', 'idempotency-key': 'release-request-http-1', 'x-csrf-token': 'csrf-test-token-0123456789abcdef' }, payload: { acknowledge_risk: true, reason: '确认风险后恢复交易' } })
     expect(released.statusCode).toBe(201); expect(released.json().data).toMatchObject({ status: 'active', released_rules: ['RISK_DAILY_LOSS_LIMIT'] })
     const currentRelease = await app.inject({ method: 'GET', url: '/api/v4/risk-accounts/7/manual-release' })
     expect(currentRelease.json().data.release).toMatchObject({ account_id: '7', risk_state_revision: '6' })
@@ -286,3 +355,276 @@ describe('Stage 12D deterministic risk review', () => {
     expect(realtime).not.toContain('released_rules')
   })
 })
+
+
+describe('server-owned position tier action resolution', () => {
+  function evidenceReader(value: RiskEvaluationInput, change?: (evidence: ProposedDecisionEvidence) => void): ProposedDecisionEvidenceReader {
+    const evidence: ProposedDecisionEvidence = { decisionId: value.decisionId, decisionRevision: value.decisionRevision,
+      userId: value.policy.userId, accountId: value.policy.accountId, analysisRevision: value.currentRevisions.analysis,
+      decisionHash: contentHash(value.result), confidence: 80, analysisId: 'analysis-1', snapshotId: 'snapshot-1', snapshotHash: 'a'.repeat(64),
+      symbol: 'XAUUSD', capturedAt: now.toISOString(), market: { candles: { H1: [{}] },
+        candle_coverage: { version: 1, status: 'complete', frames: [{ timeframe: 'H1', requested_bars: 1, available_bars: 1 }] } } }
+    change?.(evidence)
+    return { async read() { return evidence } }
+  }
+  it('builds trusted context from the public evidence port and retains its provenance', async () => {
+    const value = tierInput()
+    const prepared = await withPositionSizingContext(value, evidenceReader(value))
+    const evaluation = evaluateRisk(prepared, now)
+    expect(evaluation.status).toBe('approved')
+    expect(prepared.positionSizingContext!.actions[0]!.applyAddCap).toBe(false)
+    expect(evaluation.rules.find(rule => rule.code === 'RISK_POSITION_SIZE_RESOLVED')!.details.source_evidence)
+      .toEqual({ snapshotId: 'snapshot-1', snapshotHash: 'a'.repeat(64), decisionHash: contentHash(value.result) })
+  })
+  it('caps partial frozen coverage without using the model dataGaps claim', async () => {
+    const value = tierInput()
+    const prepared = await withPositionSizingContext(value, evidenceReader(value, evidence => {
+      evidence.market = { candles: { H1: [{}] }, candle_coverage: { version: 1, status: 'partial',
+        frames: [{ timeframe: 'H1', requested_bars: 2, available_bars: 1 }] } }
+    }))
+    expect(evaluateRisk(prepared, now).approvedActions[0]!.parameters.volume).toBe('0.02')
+  })
+  it('discards stale supplied context when frozen evidence is absent or mismatched', async () => {
+    const value = tierInput()
+    for (const change of [
+      (evidence: ProposedDecisionEvidence) => { delete evidence.market.candle_coverage },
+      (evidence: ProposedDecisionEvidence) => { evidence.decisionHash = 'mismatched' },
+      (evidence: ProposedDecisionEvidence) => { evidence.symbol = 'EURUSD' },
+      (evidence: ProposedDecisionEvidence) => { evidence.market.candles = { H1: [] } },
+    ]) {
+      const prepared = await withPositionSizingContext(value, evidenceReader(value, change))
+      expect(prepared.positionSizingContext).toBeUndefined()
+      expect(evaluateRisk(prepared, now).rejectCode).toBe('RISK_POSITION_SIZING_CONTEXT_MISSING')
+    }
+  })
+  function tierInput() {
+    const value = input()
+    delete value.result.actions[0]!.parameters.volume
+    value.result.actions[0]!.parameters.position_size_tier = 'standard'
+    value.positionSizingContext = { decisionId: value.decisionId, decisionRevision: value.decisionRevision,
+      userId: value.policy.userId, accountId: value.policy.accountId, policyHash: riskPolicyHash(value.policy),
+      revisions: { ...value.currentRevisions }, actions: [{ actionId: 'action-1', evidenceCap: 'standard', applyAddCap: false }] }
+    return value
+  }
+  it.each(['fixed', 'reversal', 'unknown', 'continuation'])('uses the trusted strategy ceiling for explicit volume and tier sizing: %s', regime => {
+    const value = tierInput()
+    const selected = resolveStrategyRiskBudget(regime === 'fixed' ? { version: 1, max_risk_per_trade_percent: '0.5' }
+      : { version: 2, max_risk_per_trade_percent: '1', default_risk_per_trade_percent: '0.5', market_regime_limits: { continuation: '1', reversal: '0.5' } }, regime)
+    value.strategyBudgetContext = { decisionId: value.decisionId, decisionRevision: value.decisionRevision,
+      userId: value.policy.userId, accountId: value.policy.accountId, subscriptionRevision: value.currentRevisions.subscription,
+      decisionHash: contentHash(value.result), snapshotId: 'snapshot', snapshotHash: 'a'.repeat(64), strategyId: '20', versionId: '21',
+      promptHash: 'b'.repeat(64), configHash: 'c'.repeat(64), strategyRiskCeilingPercent: selected.ceiling!,
+      ...(selected.selection ? { strategyRiskSelection: selected.selection } : {}) }
+    const evaluated = evaluateRisk(value, now)
+    expect(evaluated.status).toBe('approved')
+    expect(evaluated.approvedActions[0]!.parameters.volume).toBe(regime === 'continuation' ? '0.1' : '0.05')
+    expect(evaluated.rules).toContainEqual(expect.objectContaining({ code: 'RISK_STRATEGY_BUDGET_VERIFIED',
+      details: expect.objectContaining({ strategy_risk_ceiling_percent: selected.ceiling, config_hash: 'c'.repeat(64) }) }))
+    expect(evaluateRisk({ ...value, result: decision() }, now).rejectCode).toBe(regime === 'continuation' ? null : 'RISK_PER_TRADE_LIMIT')
+    const inflated = decision()
+    inflated.actions[0]!.parameters.risk_ceiling_percent = '100'
+    expect(evaluateRisk({ ...value, result: inflated }, now).rejectCode).toBe(regime === 'continuation' ? null : 'RISK_PER_TRADE_LIMIT')
+    value.strategyBudgetContext.subscriptionRevision++
+    expect(evaluateRisk(value, now).rejectCode).toBe('RISK_STRATEGY_BUDGET_CONTEXT_STALE')
+  })
+  it('applies an action ceiling after the tier and never relaxes the account cap', () => {
+    const value = tierInput()
+    value.result.actions[0]!.parameters.position_size_tier = 'light'
+    value.result.actions[0]!.parameters.risk_ceiling_percent = '0.5'
+    const reviewed = evaluateRisk(value, now)
+    expect(reviewed.status).toBe('approved')
+    expect(reviewed.approvedActions[0]!.parameters.volume).toBe('0.05')
+    expect(reviewed.rules).toContainEqual(expect.objectContaining({ code: 'RISK_ACTION_APPROVED',
+      details: expect.objectContaining({ action_risk_ceiling_percent: '0.5' }) }))
+    const fixed = input()
+    fixed.result.actions[0]!.parameters.risk_ceiling_percent = '0.5'
+    expect(evaluateRisk(fixed, now).rejectCode).toBe('RISK_PER_TRADE_LIMIT')
+    fixed.result.actions[0]!.parameters.risk_ceiling_percent = '100'
+    fixed.result.actions[0]!.parameters.volume = '1'
+    expect(evaluateRisk(fixed, now).rejectCode).toBe('RISK_PER_TRADE_LIMIT')
+    fixed.result.actions[0]!.parameters.risk_ceiling_percent = null
+    expect(evaluateRisk(fixed, now).rejectCode).toBe('RISK_ACTION_RISK_CEILING_INVALID')
+  })
+  it('returns a concrete approved volume without mutating the model proposal', () => {
+    const value = tierInput(), evaluated = evaluateRisk(value, now)
+    expect(evaluated.status).toBe('approved')
+    expect(evaluated.approvedActions[0]!.parameters.volume).toBe('0.1')
+    expect(evaluated.approvedActions[0]!.parameters.position_size_tier).toBeUndefined()
+    expect(value.result.actions[0]!.parameters.volume).toBeUndefined()
+    expect(value.result.actions[0]!.parameters.position_size_tier).toBe('standard')
+    expect(evaluateRisk({ ...value, result: { ...value.result, actions: evaluated.approvedActions } }, now).status).toBe('approved')
+    expect(evaluated.rules.some(rule => rule.code === 'RISK_POSITION_SIZE_RESOLVED')).toBe(true)
+  })
+  it('hands the resolved volume and audit rule to the persistence port', async () => {
+    const repository = new MemoryRiskRepository()
+    repository.candidate = tierInput()
+    const worker = new RiskReviewWorker(repository)
+    await worker.process('decision-1', now)
+    expect(repository.completeInput!.evaluation.status).toBe('approved')
+    expect(repository.completeInput!.evaluation.approvedActions[0]!.parameters.volume).toBe('0.1')
+    expect(repository.completeInput!.evaluation.approvedActions[0]!.parameters.position_size_tier).toBeUndefined()
+    expect(repository.completeInput!.evaluation.rules.find(rule => rule.code === 'RISK_POSITION_SIZE_RESOLVED')!.details.requested_tier).toBe('standard')
+    expect(repository.candidate.result.actions[0]!.parameters.volume).toBeUndefined()
+  })
+  it('uses the trusted evidence cap and add state instead of model parameters', () => {
+    const value = tierInput()
+    value.positionSizingContext!.actions[0]!.applyAddCap = true
+    value.result.actions[0]!.parameters.is_add = false
+    expect(evaluateRisk(value, now).approvedActions[0]!.parameters.volume).toBe('0.02')
+    value.positionSizingContext!.actions[0]!.applyAddCap = false
+    value.positionSizingContext!.actions[0]!.evidenceCap = 'light'
+    expect(evaluateRisk(value, now).approvedActions[0]!.parameters.volume).toBe('0.05')
+  })
+  it('rejects ambiguous sizing and missing server context', () => {
+    const value = tierInput()
+    value.result.actions[0]!.parameters.volume = '0.1'
+    expect(evaluateRisk(value, now).rejectCode).toBe('RISK_POSITION_SIZE_MODE_CONFLICT')
+    delete value.result.actions[0]!.parameters.volume
+    delete value.positionSizingContext
+    expect(evaluateRisk(value, now).rejectCode).toBe('RISK_POSITION_SIZING_CONTEXT_MISSING')
+  })
+  it('binds sizing evidence to the decision, policy and current revisions', () => {
+    for (const change of [
+      (value: RiskEvaluationInput) => { value.positionSizingContext!.decisionId = 'other' },
+      (value: RiskEvaluationInput) => { value.positionSizingContext!.policyHash = 'stale' },
+      (value: RiskEvaluationInput) => { value.positionSizingContext!.revisions.positions++ },
+    ]) {
+      const value = tierInput(); change(value)
+      expect(evaluateRisk(value, now).rejectCode).toBe('RISK_POSITION_SIZING_CONTEXT_STALE')
+    }
+  })
+  it('keeps aggregate exposure limits effective after sizing', () => {
+    const value = tierInput(); value.summary.totalVolume = '0.99'
+    const evaluated = evaluateRisk(value, now)
+    expect(evaluated.rejectCode).toBe('RISK_TOTAL_VOLUME_LIMIT')
+    expect(evaluated.approvedActions).toEqual([])
+  })
+  it('preserves the explicit volume path without requiring tier context', () => {
+    const value = input()
+    expect(evaluateRisk(value, now).approvedActions[0]!.parameters.volume).toBe('0.10')
+  })
+})
+
+
+it('rechecks a newer quote and binds only the approved copy to it', () => {
+  const candidate = input({ currentRevisions: { ...revisions, quote: 10 },
+    quote: { ...input().quote, revision: 10 } })
+  const frozen = structuredClone(candidate)
+  const evaluation = evaluateTraderRisk(candidate, now)
+  expect(evaluation.status).toBe('approved')
+  expect(evaluation.approvedActions[0]!.expectedState.quoteRevision).toBe(10)
+  expect(evaluation.rules.some(rule => rule.code === 'RISK_QUOTE_REVIEWED')).toBe(true)
+  expect(candidate).toEqual(frozen)
+})
+
+it('rejects an excessive spread in the new quote rather than merely rebinding revisions', () => {
+  const candidate = input({ currentRevisions: { ...revisions, quote: 10 },
+    quote: { ...input().quote, ask: '3540', revision: 10 } })
+  expect(evaluateTraderRisk(candidate, now)).toMatchObject({ status: 'rejected', rejectCode: 'RISK_SPREAD_LIMIT', approvedActions: [] })
+})
+
+it.each(['positions', 'pendingOrders', 'contract', 'risk', 'subscription'] as const)(
+  'still rejects changed %s during quote review', key => {
+    const candidate = input({ currentRevisions: { ...revisions, quote: 10, [key]: revisions[key] + 1 },
+      quote: { ...input().quote, revision: 10 } })
+    const evaluation = evaluateTraderRisk(candidate, now)
+    expect(evaluation.status).toBe('rejected')
+    expect(evaluation.approvedActions).toEqual([])
+  })
+
+it('rejects torn and regressed quote evidence', () => {
+  expect(() => evaluateTraderRisk(input({ currentRevisions: { ...revisions, quote: 10 } }), now))
+    .toThrow('risk_review_quote_revision_conflict')
+  expect(() => evaluateTraderRisk(input({ currentRevisions: { ...revisions, quote: 8 },
+    quote: { ...input().quote, revision: 8 } }), now)).toThrow('risk_review_quote_revision_conflict')
+})
+
+
+it('persists the freshly reviewed quote with the worker approval', async () => {
+  const repository = new MemoryRiskRepository()
+  repository.candidate = input({ currentRevisions: { ...revisions, quote: 10 },
+    quote: { ...input().quote, revision: 10 } })
+  expect(await new RiskReviewWorker(repository).process('decision-1', now)).toMatchObject({ status: 'approved' })
+  expect(repository.completeInput?.expectedRevisions.quote).toBe(10)
+  expect(repository.completeInput?.evaluation.approvedActions[0]?.expectedState.quoteRevision).toBe(10)
+  expect(repository.candidate.result.actions[0]?.expectedState.quoteRevision).toBe(9)
+})
+
+
+it('re-evaluates refreshed account and risk data and preserves the frozen proposal', async () => {
+  const repository = new MemoryRiskRepository()
+  repository.candidate = input({ currentRevisions: { ...revisions, account: 10, risk: 7 },
+    summary: summary({ revision: 7, equity: '11000', freeMargin: '10800' }) })
+  const frozen = structuredClone(repository.candidate.result)
+  expect(await new RiskReviewWorker(repository).process('decision-1', now)).toMatchObject({ status: 'approved' })
+  expect(repository.completeInput?.evaluation.approvedActions[0]?.expectedState)
+    .toMatchObject({ accountRevision: 10, riskRevision: 7 })
+  expect(repository.candidate.result).toEqual(frozen)
+})
+
+it.each([
+  [{ dailyLossPercent: 99 }, 'RISK_PLATFORM_DAILY_LOSS_LIMIT'],
+  [{ dataComplete: false }, 'RISK_DATA_INCOMPLETE'],
+  [{ observedAt: '2026-09-02T09:00:00.000Z' }, 'RISK_SUMMARY_STALE'],
+])('rejects newly unsafe or stale risk data', (change, code) => {
+  const evaluation = evaluateTraderRisk(input({ currentRevisions: { ...revisions, account: 10, risk: 7 },
+    summary: summary({ revision: 7, ...change }) }), now)
+  expect(evaluation).toMatchObject({ status: 'rejected', rejectCode: code, approvedActions: [] })
+})
+
+it.each(['account', 'risk'] as const)('rejects regressed or missing %s revisions', key => {
+  for (const value of [0, revisions[key] - 1]) {
+    expect(() => evaluateTraderRisk(input({ currentRevisions: { ...revisions, [key]: value } }), now))
+      .toThrow(`risk_review_${key}_revision_conflict`)
+  }
+})
+
+
+it('does not approve the original size after equity falls below its risk budget', () => {
+  expect(evaluateTraderRisk(input({ currentRevisions: { ...revisions, account: 10, risk: 7 },
+    summary: summary({ revision: 7, equity: '9000', freeMargin: '8800' }) }), now))
+    .toMatchObject({ status: 'rejected', approvedActions: [] })
+})
+
+
+it('re-reads and rejects deteriorated risk after a rolled-back review conflict', async () => {
+  const repository = new MemoryRiskRepository()
+  const save = repository.completeReview.bind(repository)
+  let calls = 0
+  repository.completeReview = async value => {
+    if (++calls === 1) {
+      repository.candidate = input({ currentRevisions: { ...revisions, risk: 7 }, summary: summary({ revision: 7, dailyLossPercent: 99 }) })
+      throw new RiskError('risk_summary_revision_conflict', 409)
+    }
+    return save(value)
+  }
+  expect(await new RiskReviewWorker(repository).process('decision-1', now)).toMatchObject({ status: 'rejected' })
+  expect(calls).toBe(2)
+  expect(repository.completeInput?.evaluation.approvedActions).toEqual([])
+})
+
+it('bounds repeated context conflicts to three fresh reviews', async () => {
+  const repository = new MemoryRiskRepository()
+  let calls = 0
+  repository.completeReview = async () => { calls++; throw new RiskError('risk_review_context_revision_conflict', 409) }
+  expect(await new RiskReviewWorker(repository).process('decision-1', now)).toMatchObject({ status: 'stale' })
+  expect(calls).toBe(3)
+})
+
+const capturedPosition = { accountId: '7', ticket: 'manual-1', symbol: 'XAUUSD.s', side: 'buy', volume: '0.01',
+  openPrice: '3500', stopLoss: '3490', takeProfit: null, revision: 12, currentPrice: '3529', floatingProfit: '29' }
+it('reviews unchanged manual positions and binds only the approved position revision', () => {
+  const candidate = input({ positions: [{ ...capturedPosition, revision: 13, currentPrice: '3530', floatingProfit: '30' }],
+    frozenPositions: { positions: [capturedPosition], revision: 12 }, currentRevisions: { ...revisions, positions: 13 } })
+  const original = structuredClone(candidate)
+  const evaluated = evaluateTraderRisk(candidate, now)
+  expect(evaluated.status).toBe('approved')
+  expect(evaluated.approvedActions[0]!.expectedState.positionsRevision).toBe(13)
+  expect(candidate).toEqual(original)
+})
+it.each([{ volume: '0.02' }, { stopLoss: '3480' }, { takeProfit: '3600' }, { revision: 14 }, { ticket: 'other' }])(
+  'rejects changed or inconsistent position evidence %j', change => {
+    const candidate = input({ positions: [{ ...capturedPosition, revision: 13, ...change }],
+      frozenPositions: { positions: [capturedPosition], revision: 12 }, currentRevisions: { ...revisions, positions: 13 } })
+    expect(evaluateTraderRisk(candidate, now).status).toBe('rejected')
+  })

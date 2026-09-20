@@ -1,0 +1,51 @@
+{
+  "kind": "history-archive-current-http/v1",
+  "passed": true,
+  "writes": 0,
+  "authentication": "injected-user-not-browser-session",
+  "checks": [
+    {
+      "kind": "signals",
+      "originalUser": 1,
+      "records": 455,
+      "allPagesMatchDatabaseCount": true,
+      "detailContractPassed": true,
+      "otherUserDenied": true,
+      "systemZeroDenied": true
+    },
+    {
+      "kind": "executions",
+      "originalUser": 1,
+      "records": 154,
+      "allPagesMatchDatabaseCount": true,
+      "detailContractPassed": true,
+      "otherUserDenied": true,
+      "systemZeroDenied": true
+    }
+  ],
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "dealChecks": [
+    {
+      "legacyIntentId": "406",
+      "records": 2,
+      "exactAmountsAndTickets": true,
+      "wrongUserDenied": true
+    },
+    {
+      "legacyIntentId": "404",
+      "records": 2,
+      "exactAmountsAndTickets": true,
+      "wrongUserDenied": true
+    },
+    {
+      "legacyIntentId": "398",
+      "records": 2,
+      "exactAmountsAndTickets": true,
+      "wrongUserDenied": true
+    }
+  ],
+  "observedAt": "2026-09-13T05:08:59.411Z"
+}

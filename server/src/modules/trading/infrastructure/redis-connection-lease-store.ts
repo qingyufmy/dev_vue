@@ -7,6 +7,7 @@ local accountKey = KEYS[2]
 local now = tonumber(ARGV[1])
 local expires = tonumber(ARGV[2])
 local capacity = tonumber(ARGV[3])
+if capacity <= 0 then return {0, redis.call('ZCARD', setKey), ''} end
 local member = ARGV[4]
 redis.call('ZREMRANGEBYSCORE', setKey, '-inf', now)
 local replaced = redis.call('GET', accountKey)

@@ -1,0 +1,362 @@
+{
+  "kind": "review-upgrade-source-inventory/v1",
+  "inspected": true,
+  "writes": 0,
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "present": [
+    {
+      "name": "strategy_memory_injection_logs_v4",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_libraries_v4",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_library_revisions_v4",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    }
+  ],
+  "missing": [
+    "review_cases_v4",
+    "review_case_sources_v4",
+    "review_evidence_payloads_v4",
+    "review_jobs_v4",
+    "review_model_attempts_v4",
+    "review_job_events_v4",
+    "review_versions_v4",
+    "review_version_payloads_v4",
+    "review_user_states_v4",
+    "manual_review_candidates_v4",
+    "strategy_memory_pending_updates_v4",
+    "review_write_receipts_v4"
+  ],
+  "sources": [
+    {
+      "name": "credential_migration_runs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "data_migration_batches",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "data_migration_checkpoints",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "data_migration_id_maps",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "data_migration_row_receipts",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "data_migration_runs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "data_migration_source_rows",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "experience_memory_items",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "experience_memory_summaries",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "manual_trade_review_aggregate_cases",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "manual_trade_review_aggregate_sources",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "manual_trade_review_aggregate_versions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "manual_trade_review_cases",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "manual_trade_review_counterfactual_points",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "manual_trade_review_jobs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "manual_trade_review_sources",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "manual_trade_review_stage_runs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "manual_trade_review_versions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "memory_compression_jobs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "memory_injection_logs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "period_review_cases",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "period_review_derivation_jobs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "period_review_job_events",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "period_review_jobs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "period_review_monthly_checkpoints",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "period_review_sources",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "period_review_user_states",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "period_review_versions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "schema_migrations",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_compression_jobs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_conflict_bindings",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_conflict_occurrences",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_conflicts",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_consistency_jobs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_injection_logs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_libraries",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_library_revisions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "strategy_memory_pending_updates",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "trade_history_migration_checkpoints_v4",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "trade_review_cases",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "trade_review_jobs",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "trade_review_versions",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    },
+    {
+      "name": "user_memory_settings",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    }
+  ],
+  "definitions": {
+    "ai_model_profiles": "CREATE TABLE `ai_model_profiles` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `owner_user_id` int NOT NULL,\n  `scope` enum('user','platform') NOT NULL,\n  `provider` varchar(64) NOT NULL,\n  `model_name` varchar(191) NOT NULL,\n  `api_base_url` varchar(512) DEFAULT NULL,\n  `api_key_encrypted` text,\n  `key_version` varchar(32) DEFAULT NULL,\n  `temperature` decimal(3,2) DEFAULT NULL,\n  `max_tokens` int unsigned DEFAULT NULL,\n  `thinking_enabled` tinyint NOT NULL DEFAULT '0',\n  `reasoning_effort` varchar(16) DEFAULT NULL,\n  `request_timeout_ms` int unsigned DEFAULT NULL,\n  `is_default` tinyint NOT NULL DEFAULT '0',\n  `status` varchar(16) NOT NULL DEFAULT 'inactive',\n  `created_at` datetime(3) NOT NULL,\n  `updated_at` datetime(3) NOT NULL,\n  `deleted_at` datetime(3) DEFAULT NULL,\n  `active_default_owner_key` int GENERATED ALWAYS AS ((case when ((`is_default` = 1) and (`status` = _utf8mb4'active') and (`deleted_at` is null)) then `owner_user_id` else NULL end)) STORED /*!80023 INVISIBLE */,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_model_active_default_owner` (`active_default_owner_key`),\n  KEY `idx_model_profiles_owner` (`owner_user_id`,`deleted_at`),\n  KEY `idx_model_profiles_scope` (`scope`,`status`,`deleted_at`),\n  KEY `idx_v4_model_profiles_owner` (`owner_user_id`,`scope`,`status`,`deleted_at`,`id`),\n  CONSTRAINT `chk_v4_model_profiles_owner` CHECK ((((`scope` = _utf8mb4'platform') and (`owner_user_id` = 0)) or ((`scope` = _utf8mb4'user') and (`owner_user_id` > 0))))\n) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "credential_migration_runs": "CREATE TABLE `credential_migration_runs` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `status` varchar(24) NOT NULL,\n  `migrated_count` int NOT NULL DEFAULT '0',\n  `rotated_count` int NOT NULL DEFAULT '0',\n  `failed_count` int NOT NULL DEFAULT '0',\n  `legacy_cleared` tinyint NOT NULL DEFAULT '0',\n  `error_code` varchar(128) DEFAULT NULL,\n  `started_at` datetime NOT NULL,\n  `completed_at` datetime DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_credential_migration_status` (`status`,`started_at`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "data_migration_batches": "CREATE TABLE `data_migration_batches` (\n  `run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `batch_id` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `stream_id` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `sequence_number` bigint unsigned NOT NULL,\n  `request_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `row_count` int unsigned NOT NULL,\n  `end_cursor_json` json NOT NULL,\n  `recorded_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`run_id`,`batch_id`),\n  UNIQUE KEY `uk_data_batch_sequence` (`run_id`,`stream_id`,`sequence_number`),\n  CONSTRAINT `fk_data_batch_run` FOREIGN KEY (`run_id`) REFERENCES `data_migration_runs` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "data_migration_checkpoints": "CREATE TABLE `data_migration_checkpoints` (\n  `run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `stream_id` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `sequence_number` bigint unsigned NOT NULL DEFAULT '0',\n  `cursor_json` json DEFAULT NULL,\n  `processed_rows` bigint unsigned NOT NULL DEFAULT '0',\n  `updated_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`run_id`,`stream_id`),\n  CONSTRAINT `fk_data_checkpoint_run` FOREIGN KEY (`run_id`) REFERENCES `data_migration_runs` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "data_migration_id_maps": "CREATE TABLE `data_migration_id_maps` (\n  `logical_source_id` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `entity_kind` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_pk_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_pk_json` json NOT NULL,\n  `target_json` json NOT NULL,\n  `created_run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`logical_source_id`,`entity_kind`,`source_table`,`source_pk_sha256`),\n  KEY `fk_data_id_map_run` (`created_run_id`),\n  CONSTRAINT `fk_data_id_map_run` FOREIGN KEY (`created_run_id`) REFERENCES `data_migration_runs` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "data_migration_row_receipts": "CREATE TABLE `data_migration_row_receipts` (\n  `run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `stream_id` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_pk_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `batch_id` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_pk_json` json NOT NULL,\n  `source_bytes_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `transformed_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `targets_json` json NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`run_id`,`stream_id`,`source_pk_sha256`),\n  KEY `fk_data_receipt_batch` (`run_id`,`batch_id`),\n  CONSTRAINT `fk_data_receipt_batch` FOREIGN KEY (`run_id`, `batch_id`) REFERENCES `data_migration_batches` (`run_id`, `batch_id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "data_migration_runs": "CREATE TABLE `data_migration_runs` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `bindings_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `bindings_json` json NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "data_migration_source_rows": "CREATE TABLE `data_migration_source_rows` (\n  `run_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `stream_id` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_pk_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_bytes_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_payload_json` json NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`run_id`,`stream_id`,`source_pk_sha256`),\n  CONSTRAINT `fk_data_source_row_receipt` FOREIGN KEY (`run_id`, `stream_id`, `source_pk_sha256`) REFERENCES `data_migration_row_receipts` (`run_id`, `stream_id`, `source_pk_sha256`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "experience_memory_items": "CREATE TABLE `experience_memory_items` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `review_case_id` bigint DEFAULT NULL,\n  `review_version_id` bigint DEFAULT NULL,\n  `period_review_case_id` bigint DEFAULT NULL,\n  `period_review_version_id` bigint DEFAULT NULL,\n  `period_key` varchar(16) DEFAULT NULL,\n  `strategy_id` int DEFAULT NULL,\n  `strategy_version` int NOT NULL DEFAULT '1',\n  `memory_tier` varchar(16) NOT NULL DEFAULT 'short',\n  `memory_category` varchar(32) NOT NULL DEFAULT 'general',\n  `symbol` varchar(64) DEFAULT NULL,\n  `timeframe` varchar(16) DEFAULT NULL,\n  `direction` varchar(20) DEFAULT NULL,\n  `entry_method` varchar(20) DEFAULT NULL,\n  `market_regime` varchar(64) DEFAULT NULL,\n  `scope_json` text NOT NULL,\n  `conditions_json` text NOT NULL,\n  `applicability_json` longtext,\n  `avoid_when_json` longtext,\n  `strategy_compatibility_hash` char(64) DEFAULT NULL,\n  `lesson_text` text NOT NULL,\n  `anti_pattern_text` text,\n  `evidence_refs_json` text NOT NULL,\n  `ancestor_memory_ids_json` text NOT NULL,\n  `content_hash` char(64) NOT NULL,\n  `token_count` int NOT NULL,\n  `confidence` decimal(8,6) NOT NULL DEFAULT '0.500000',\n  `status` varchar(24) NOT NULL DEFAULT 'active',\n  `confirmed_at` datetime NOT NULL,\n  `expires_at` datetime DEFAULT NULL,\n  `last_matched_at` datetime DEFAULT NULL,\n  `match_count` int NOT NULL DEFAULT '0',\n  `revoked_at` datetime DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  `updated_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_memory_review_version` (`review_version_id`),\n  UNIQUE KEY `uk_memory_period_review_content` (`period_review_version_id`,`content_hash`),\n  KEY `idx_memory_retrieval` (`user_id`,`status`,`strategy_id`,`symbol`,`timeframe`,`updated_at`),\n  KEY `idx_memory_hash` (`user_id`,`content_hash`),\n  KEY `idx_memory_tier_retrieval` (`user_id`,`status`,`memory_tier`,`strategy_id`,`strategy_version`,`expires_at`),\n  KEY `idx_memory_period_review_case` (`period_review_case_id`),\n  KEY `idx_memory_contextual_retrieval` (`user_id`,`status`,`strategy_id`,`memory_category`,`symbol`,`timeframe`,`updated_at`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "experience_memory_summaries": "CREATE TABLE `experience_memory_summaries` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `strategy_id` int DEFAULT NULL,\n  `memory_category` varchar(32) NOT NULL DEFAULT 'general',\n  `applicability_json` longtext,\n  `avoid_when_json` longtext,\n  `strategy_compatibility_hash` char(64) DEFAULT NULL,\n  `scope_key` varchar(191) NOT NULL,\n  `period_review_case_id` bigint DEFAULT NULL,\n  `period_review_version_id` bigint DEFAULT NULL,\n  `period_key` varchar(16) DEFAULT NULL,\n  `version_no` int NOT NULL,\n  `source_memory_ids_json` longtext NOT NULL,\n  `source_set_hash` char(64) NOT NULL,\n  `summary_text` longtext NOT NULL,\n  `token_count` int NOT NULL,\n  `status` varchar(20) NOT NULL DEFAULT 'active',\n  `model_profile_id` int DEFAULT NULL,\n  `credential_source` varchar(32) DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  `invalidated_at` datetime DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_memory_summary_version` (`user_id`,`scope_key`,`version_no`),\n  UNIQUE KEY `uk_memory_summary_period_review` (`period_review_version_id`),\n  KEY `idx_memory_summary_active` (`user_id`,`scope_key`,`status`,`created_at`),\n  KEY `idx_memory_summary_contextual` (`user_id`,`status`,`strategy_id`,`memory_category`,`created_at`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "manual_trade_review_aggregate_cases": "CREATE TABLE `manual_trade_review_aggregate_cases` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `client_request_id` varchar(191) NOT NULL,\n  `user_id` int NOT NULL,\n  `trading_account_id` int NOT NULL,\n  `strategy_id` bigint unsigned NOT NULL,\n  `strategy_versions_json` text NOT NULL,\n  `selection_hash` char(64) NOT NULL,\n  `frozen_source_set_json` mediumtext,\n  `frozen_source_set_hash` char(64) DEFAULT NULL,\n  `strategy_snapshot_json` mediumtext,\n  `strategy_snapshot_hash` char(64) DEFAULT NULL,\n  `input_hash` char(64) DEFAULT NULL,\n  `prompt_hash` char(64) DEFAULT NULL,\n  `output_contract_hash` char(64) DEFAULT NULL,\n  `status` varchar(24) NOT NULL DEFAULT 'queued',\n  `generation_no` int unsigned NOT NULL DEFAULT '1',\n  `attempt_count` int NOT NULL DEFAULT '0',\n  `max_attempts` int NOT NULL DEFAULT '3',\n  `lease_token` char(36) DEFAULT NULL,\n  `lease_expires_at` datetime DEFAULT NULL,\n  `task_deadline_at` datetime DEFAULT NULL,\n  `model_profile_id` bigint unsigned DEFAULT NULL,\n  `credential_source` varchar(32) DEFAULT NULL,\n  `model_task_id` varchar(128) DEFAULT NULL,\n  `progress_stage` varchar(32) NOT NULL DEFAULT 'queued',\n  `stage_updated_at` datetime DEFAULT NULL,\n  `current_version_id` bigint unsigned DEFAULT NULL,\n  `approved_version_id` bigint unsigned DEFAULT NULL,\n  `last_error_code` varchar(128) DEFAULT NULL,\n  `last_failure_generation_no` int unsigned DEFAULT NULL,\n  `last_failure_at` datetime DEFAULT NULL,\n  `next_attempt_at` datetime DEFAULT NULL,\n  `completed_at` datetime DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  `updated_at` datetime NOT NULL,\n  `model_runtime_json` mediumtext,\n  `model_runtime_hash` char(64) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_manual_trade_review_aggregate_client_request` (`user_id`,`client_request_id`),\n  KEY `idx_manual_trade_review_aggregate_owner_state` (`user_id`,`status`,`updated_at`),\n  KEY `idx_manual_trade_review_aggregate_account` (`trading_account_id`,`created_at`),\n  KEY `idx_manual_trade_review_aggregate_selection` (`selection_hash`),\n  KEY `idx_manual_trade_review_aggregate_claim` (`status`,`lease_expires_at`,`next_attempt_at`,`updated_at`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "manual_trade_review_aggregate_sources": "CREATE TABLE `manual_trade_review_aggregate_sources` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `aggregate_case_id` bigint unsigned NOT NULL,\n  `source_case_id` bigint unsigned NOT NULL,\n  `source_version_id` bigint unsigned NOT NULL,\n  `source_content_hash` char(64) NOT NULL,\n  `source_user_id` int NOT NULL,\n  `source_trading_account_id` int NOT NULL,\n  `source_strategy_id` bigint unsigned NOT NULL,\n  `source_strategy_version` int NOT NULL,\n  `confirmation_status` varchar(16) NOT NULL DEFAULT 'unconfirmed',\n  `created_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_manual_trade_review_aggregate_source` (`aggregate_case_id`,`source_case_id`,`source_version_id`),\n  KEY `idx_manual_trade_review_aggregate_source_case` (`aggregate_case_id`,`id`),\n  KEY `idx_manual_trade_review_aggregate_source_version` (`source_case_id`,`source_version_id`),\n  KEY `idx_manual_trade_review_aggregate_source_hash` (`source_content_hash`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "manual_trade_review_aggregate_versions": "CREATE TABLE `manual_trade_review_aggregate_versions` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `aggregate_case_id` bigint unsigned NOT NULL,\n  `generation_no` int unsigned NOT NULL,\n  `version_no` int NOT NULL,\n  `parent_version_id` bigint unsigned DEFAULT NULL,\n  `author_type` varchar(16) NOT NULL,\n  `author_user_id` int DEFAULT NULL,\n  `model_profile_id` bigint unsigned DEFAULT NULL,\n  `source_set_hash` char(64) NOT NULL,\n  `content_json` mediumtext NOT NULL,\n  `content_hash` char(64) NOT NULL,\n  `created_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_manual_trade_review_aggregate_version` (`aggregate_case_id`,`version_no`),\n  KEY `idx_manual_trade_review_aggregate_version_case` (`aggregate_case_id`,`created_at`),\n  KEY `idx_manual_trade_review_aggregate_version_generation` (`aggregate_case_id`,`generation_no`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "manual_trade_review_cases": "CREATE TABLE `manual_trade_review_cases` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `client_request_id` varchar(191) NOT NULL,\n  `user_id` int NOT NULL,\n  `trading_account_id` int NOT NULL,\n  `strategy_id` bigint unsigned NOT NULL,\n  `strategy_version` int NOT NULL,\n  `strategy_scope` varchar(16) NOT NULL DEFAULT 'platform',\n  `strategy_snapshot_json` mediumtext NOT NULL,\n  `strategy_snapshot_hash` char(64) NOT NULL,\n  `user_thesis_text` text,\n  `user_thesis_hash` char(64) DEFAULT NULL,\n  `selection_hash` char(64) NOT NULL,\n  `evidence_json` mediumtext,\n  `evidence_hash` char(64) DEFAULT NULL,\n  `evidence_status` varchar(24) NOT NULL DEFAULT 'pending',\n  `evidence_reason` varchar(128) DEFAULT NULL,\n  `status` varchar(24) NOT NULL DEFAULT 'evidence_pending',\n  `current_version_id` bigint unsigned DEFAULT NULL,\n  `approved_version_id` bigint unsigned DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  `updated_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_manual_review_client_request` (`user_id`,`client_request_id`),\n  KEY `idx_manual_review_owner_state` (`user_id`,`status`,`updated_at`),\n  KEY `idx_manual_review_account_created` (`trading_account_id`,`created_at`),\n  KEY `idx_manual_review_selection` (`selection_hash`)\n) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "manual_trade_review_counterfactual_points": "CREATE TABLE `manual_trade_review_counterfactual_points` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `case_id` bigint unsigned NOT NULL,\n  `job_id` bigint unsigned NOT NULL,\n  `generation_no` int unsigned NOT NULL,\n  `candidate_key` varchar(64) NOT NULL,\n  `decision_time_utc_msc` bigint unsigned NOT NULL,\n  `offset_bars` smallint NOT NULL,\n  `status` varchar(24) NOT NULL DEFAULT 'pending',\n  `model_task_id` varchar(128) DEFAULT NULL,\n  `market_snapshot_hash` char(64) DEFAULT NULL,\n  `input_hash` char(64) DEFAULT NULL,\n  `normalized_output_json` mediumtext,\n  `normalized_output_hash` char(64) DEFAULT NULL,\n  `last_error_code` varchar(128) DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  `updated_at` datetime NOT NULL,\n  `completed_at` datetime DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_manual_trade_review_counterfactual_generation` (`job_id`,`generation_no`,`candidate_key`),\n  UNIQUE KEY `uk_manual_trade_review_counterfactual_model_task` (`model_task_id`),\n  KEY `idx_manual_trade_review_counterfactual_status` (`status`,`updated_at`),\n  KEY `idx_manual_trade_review_counterfactual_case_generation` (`case_id`,`generation_no`),\n  KEY `idx_manual_trade_review_counterfactual_job_generation` (`job_id`,`generation_no`),\n  KEY `idx_manual_trade_review_counterfactual_decision_time` (`decision_time_utc_msc`)\n) ENGINE=InnoDB AUTO_INCREMENT=28 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "manual_trade_review_jobs": "CREATE TABLE `manual_trade_review_jobs` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `case_id` bigint unsigned NOT NULL,\n  `generation_no` int unsigned NOT NULL DEFAULT '1',\n  `idempotency_key` varchar(191) NOT NULL,\n  `status` varchar(24) NOT NULL DEFAULT 'queued',\n  `attempt_count` int NOT NULL DEFAULT '0',\n  `max_attempts` int NOT NULL DEFAULT '3',\n  `task_deadline_at` datetime DEFAULT NULL,\n  `lease_token` char(36) DEFAULT NULL,\n  `lease_expires_at` datetime DEFAULT NULL,\n  `model_profile_id` bigint unsigned DEFAULT NULL,\n  `credential_source` varchar(32) DEFAULT NULL,\n  `model_task_id` varchar(128) DEFAULT NULL,\n  `progress_stage` varchar(32) NOT NULL DEFAULT 'queued',\n  `stage_updated_at` datetime DEFAULT NULL,\n  `last_error_code` varchar(128) DEFAULT NULL,\n  `next_attempt_at` datetime DEFAULT NULL,\n  `completed_at` datetime DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  `updated_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_manual_review_job_key` (`idempotency_key`),\n  UNIQUE KEY `uk_manual_review_job_case` (`case_id`),\n  KEY `idx_manual_review_job_claim` (`status`,`lease_expires_at`,`next_attempt_at`,`updated_at`),\n  KEY `idx_manual_review_job_case` (`case_id`,`created_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "manual_trade_review_sources": "CREATE TABLE `manual_trade_review_sources` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `case_id` bigint unsigned NOT NULL,\n  `source_identity_hash` char(64) NOT NULL,\n  `trade_source_hash` char(64) NOT NULL,\n  `trading_account_id` int NOT NULL,\n  `terminal_instance_id` varchar(128) NOT NULL,\n  `broker_server` varchar(100) NOT NULL,\n  `login_account` varchar(50) NOT NULL,\n  `position_id` varchar(64) DEFAULT NULL,\n  `entry_order_ticket` varchar(64) DEFAULT NULL,\n  `entry_time_utc_msc` bigint DEFAULT NULL,\n  `close_time_utc_msc` bigint DEFAULT NULL,\n  `symbol` varchar(64) DEFAULT NULL,\n  `direction` varchar(8) DEFAULT NULL,\n  `normalized_trade_json` mediumtext NOT NULL,\n  `manual_classification_json` text NOT NULL,\n  `created_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_manual_review_source_identity` (`case_id`,`source_identity_hash`),\n  KEY `idx_manual_review_source_case` (`case_id`,`id`),\n  KEY `idx_manual_review_source_position` (`trading_account_id`,`position_id`),\n  KEY `idx_manual_review_source_account` (`case_id`,`broker_server`,`login_account`)\n) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "manual_trade_review_stage_runs": "CREATE TABLE `manual_trade_review_stage_runs` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `case_id` bigint unsigned NOT NULL,\n  `job_id` bigint unsigned NOT NULL,\n  `generation_no` int unsigned NOT NULL,\n  `stage` varchar(24) NOT NULL,\n  `status` varchar(24) NOT NULL DEFAULT 'pending',\n  `model_task_id` varchar(128) DEFAULT NULL,\n  `frozen_runtime_json` mediumtext NOT NULL,\n  `frozen_runtime_hash` char(64) NOT NULL,\n  `input_hash` char(64) DEFAULT NULL,\n  `normalized_output_json` mediumtext,\n  `normalized_output_hash` char(64) DEFAULT NULL,\n  `last_error_code` varchar(128) DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  `updated_at` datetime NOT NULL,\n  `completed_at` datetime DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_manual_trade_review_stage_generation` (`job_id`,`generation_no`,`stage`),\n  UNIQUE KEY `uk_manual_trade_review_stage_model_task` (`model_task_id`),\n  KEY `idx_manual_trade_review_stage_status` (`status`,`updated_at`),\n  KEY `idx_manual_trade_review_stage_case_generation` (`case_id`,`generation_no`),\n  KEY `idx_manual_trade_review_stage_job_generation` (`job_id`,`generation_no`)\n) ENGINE=InnoDB AUTO_INCREMENT=19 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "manual_trade_review_versions": "CREATE TABLE `manual_trade_review_versions` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `case_id` bigint unsigned NOT NULL,\n  `version_no` int NOT NULL,\n  `parent_version_id` bigint unsigned DEFAULT NULL,\n  `author_type` varchar(16) NOT NULL,\n  `author_user_id` int DEFAULT NULL,\n  `content_json` mediumtext NOT NULL,\n  `content_hash` char(64) NOT NULL,\n  `change_note` varchar(500) DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_manual_review_version` (`case_id`,`version_no`),\n  KEY `idx_manual_review_version_case` (`case_id`,`created_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "memory_compression_jobs": "CREATE TABLE `memory_compression_jobs` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `scope_key` varchar(191) NOT NULL,\n  `source_memory_ids_json` longtext NOT NULL,\n  `source_set_hash` char(64) NOT NULL,\n  `status` varchar(24) NOT NULL DEFAULT 'queued',\n  `attempt_count` int NOT NULL DEFAULT '0',\n  `max_attempts` int NOT NULL DEFAULT '3',\n  `lease_token` char(36) DEFAULT NULL,\n  `lease_expires_at` datetime DEFAULT NULL,\n  `last_error_code` varchar(128) DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  `updated_at` datetime NOT NULL,\n  `completed_at` datetime DEFAULT NULL,\n  `model_task_id` char(36) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_memory_compression_source` (`user_id`,`scope_key`,`source_set_hash`),\n  KEY `idx_memory_compression_claim` (`status`,`lease_expires_at`,`updated_at`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "memory_injection_logs": "CREATE TABLE `memory_injection_logs` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `signal_id` bigint DEFAULT NULL,\n  `inference_snapshot_id` bigint DEFAULT NULL,\n  `strategy_id` int DEFAULT NULL,\n  `strategy_version` int DEFAULT NULL,\n  `symbol` varchar(64) DEFAULT NULL,\n  `mode` varchar(16) NOT NULL,\n  `experiment_group` varchar(24) NOT NULL,\n  `selected_item_ids_json` text NOT NULL,\n  `selected_summary_ids_json` text NOT NULL,\n  `selected_long_memory_ids_json` text,\n  `token_count` int NOT NULL DEFAULT '0',\n  `retrieval_reasons_json` longtext NOT NULL,\n  `created_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_memory_injection_user` (`user_id`,`created_at`),\n  KEY `idx_memory_injection_signal` (`signal_id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "outbox_events": "CREATE TABLE `outbox_events` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `event_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `aggregate_type` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `aggregate_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `event_type` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `payload_json` json NOT NULL,\n  `status` enum('pending','dispatching','dispatched','failed','dead') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',\n  `attempts` int unsigned NOT NULL DEFAULT '0',\n  `available_at_utc` datetime(3) NOT NULL,\n  `lease_owner` varchar(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `lease_expires_at_utc` datetime(3) DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `dispatched_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_outbox_event_id` (`event_id`),\n  KEY `idx_outbox_dispatch` (`status`,`available_at_utc`,`id`)\n) ENGINE=InnoDB AUTO_INCREMENT=13 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "period_review_cases": "CREATE TABLE `period_review_cases` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `period_type` varchar(16) NOT NULL,\n  `period_key` varchar(16) NOT NULL,\n  `user_id` int NOT NULL,\n  `trading_account_id` int DEFAULT NULL,\n  `strategy_id` int NOT NULL,\n  `strategy_version` int NOT NULL DEFAULT '1',\n  `strategy_versions_json` text,\n  `strategy_compatibility_hash` char(64) DEFAULT NULL,\n  `strategy_scope` varchar(20) NOT NULL,\n  `timezone_offset_minutes` smallint NOT NULL,\n  `period_start_utc_msc` bigint NOT NULL,\n  `period_end_utc_msc` bigint NOT NULL,\n  `status` varchar(32) NOT NULL DEFAULT 'evidence_pending',\n  `evidence_status` varchar(24) NOT NULL DEFAULT 'pending',\n  `evidence_reason` varchar(255) DEFAULT NULL,\n  `evidence_json` longtext,\n  `evidence_hash` char(64) DEFAULT NULL,\n  `source_count` int NOT NULL DEFAULT '0',\n  `current_version_id` bigint DEFAULT NULL,\n  `approved_version_id` bigint DEFAULT NULL,\n  `superseded_by_case_id` bigint DEFAULT NULL,\n  `superseded_reason` varchar(64) DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  `updated_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_period_review_scope` (`period_type`,`period_key`,`user_id`,`trading_account_id`,`strategy_id`,`strategy_version`),\n  UNIQUE KEY `uk_period_review_compatibility` (`strategy_compatibility_hash`),\n  KEY `idx_period_review_owner` (`user_id`,`period_type`,`status`,`period_key`),\n  KEY `idx_period_review_jobs_source` (`period_type`,`evidence_status`,`updated_at`),\n  KEY `idx_period_review_superseded` (`superseded_by_case_id`,`status`)\n) ENGINE=InnoDB AUTO_INCREMENT=312 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "period_review_derivation_jobs": "CREATE TABLE `period_review_derivation_jobs` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `period_case_id` bigint NOT NULL,\n  `period_version_id` bigint NOT NULL,\n  `user_id` int NOT NULL,\n  `target_type` varchar(32) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,\n  `status` varchar(24) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL DEFAULT 'queued',\n  `attempt_count` int NOT NULL DEFAULT '0',\n  `max_attempts` int NOT NULL DEFAULT '5',\n  `next_attempt_at` datetime DEFAULT NULL,\n  `lease_token` varchar(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,\n  `lease_expires_at` datetime DEFAULT NULL,\n  `last_error_code` varchar(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT NULL,\n  `completed_at` datetime DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  `updated_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_period_review_derivation` (`period_case_id`,`period_version_id`,`target_type`),\n  KEY `idx_period_review_derivation_claim` (`status`,`next_attempt_at`,`lease_expires_at`,`updated_at`),\n  KEY `idx_period_review_derivation_user` (`user_id`,`status`,`updated_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=21 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci",
+    "period_review_job_events": "CREATE TABLE `period_review_job_events` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `job_id` bigint NOT NULL,\n  `period_case_id` bigint NOT NULL,\n  `attempt_no` int NOT NULL DEFAULT '0',\n  `stage` varchar(32) NOT NULL,\n  `event_status` varchar(16) NOT NULL DEFAULT 'info',\n  `message_code` varchar(128) DEFAULT NULL,\n  `metadata_json` json DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_period_review_events_job` (`job_id`,`id`),\n  KEY `idx_period_review_events_case` (`period_case_id`,`id`)\n) ENGINE=InnoDB AUTO_INCREMENT=8161 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "period_review_jobs": "CREATE TABLE `period_review_jobs` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `period_case_id` bigint NOT NULL,\n  `job_type` varchar(24) NOT NULL,\n  `job_slot` bigint NOT NULL DEFAULT '0',\n  `idempotency_key` varchar(191) NOT NULL,\n  `status` varchar(24) NOT NULL DEFAULT 'queued',\n  `progress_stage` varchar(32) NOT NULL DEFAULT 'queued',\n  `stage_updated_at` datetime DEFAULT NULL,\n  `attempt_count` int NOT NULL DEFAULT '0',\n  `max_attempts` int NOT NULL DEFAULT '3',\n  `lease_token` char(36) DEFAULT NULL,\n  `lease_expires_at` datetime DEFAULT NULL,\n  `next_attempt_at` datetime DEFAULT NULL,\n  `model_profile_id` int DEFAULT NULL,\n  `credential_source` varchar(32) DEFAULT NULL,\n  `last_error_code` varchar(128) DEFAULT NULL,\n  `evidence_retry_count` int NOT NULL DEFAULT '0',\n  `evidence_last_checked_at` datetime DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  `updated_at` datetime NOT NULL,\n  `completed_at` datetime DEFAULT NULL,\n  `model_task_id` char(36) DEFAULT NULL,\n  `memory_library_version_no` int DEFAULT NULL,\n  `memory_library_content_hash` char(64) DEFAULT NULL,\n  `memory_library_snapshot_text` longtext,\n  `memory_strategy_snapshot_text` longtext,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_period_review_job_key` (`idempotency_key`),\n  UNIQUE KEY `uk_period_review_case_job_slot` (`period_case_id`,`job_type`,`job_slot`),\n  KEY `idx_period_review_job_claim` (`job_type`,`status`,`lease_expires_at`,`updated_at`),\n  KEY `idx_period_review_job_case` (`period_case_id`,`created_at`),\n  KEY `idx_period_review_retry` (`job_type`,`status`,`next_attempt_at`),\n  KEY `idx_period_review_job_retry_due` (`job_type`,`status`,`next_attempt_at`,`period_case_id`)\n) ENGINE=InnoDB AUTO_INCREMENT=179 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "period_review_monthly_checkpoints": "CREATE TABLE `period_review_monthly_checkpoints` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `period_review_job_id` bigint NOT NULL,\n  `evidence_hash` char(64) NOT NULL,\n  `source_hash` char(64) NOT NULL,\n  `chunk_index` int NOT NULL,\n  `chunk_count` int NOT NULL,\n  `max_days` int NOT NULL DEFAULT '8',\n  `expected_period_case_ids_json` text NOT NULL,\n  `expected_ids_hash` char(64) NOT NULL,\n  `sources_json` longtext NOT NULL,\n  `status` varchar(24) NOT NULL DEFAULT 'queued',\n  `attempt_count` int NOT NULL DEFAULT '0',\n  `max_attempts` int NOT NULL DEFAULT '3',\n  `next_attempt_at_utc_msc` bigint DEFAULT NULL,\n  `model_task_id` char(36) DEFAULT NULL,\n  `lease_token` char(36) DEFAULT NULL,\n  `lease_owner` varchar(191) DEFAULT NULL,\n  `fencing_token` bigint NOT NULL DEFAULT '0',\n  `lease_expires_at_utc_msc` bigint DEFAULT NULL,\n  `content_json` longtext,\n  `content_hash` char(64) DEFAULT NULL,\n  `reused_from_checkpoint_id` bigint DEFAULT NULL,\n  `error_code` varchar(128) DEFAULT NULL,\n  `error_message` varchar(512) DEFAULT NULL,\n  `superseded_reason` varchar(128) DEFAULT NULL,\n  `completed_at_utc_msc` bigint DEFAULT NULL,\n  `created_at_utc_msc` bigint NOT NULL,\n  `updated_at_utc_msc` bigint NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_monthly_review_checkpoint_key` (`period_review_job_id`,`evidence_hash`,`chunk_index`),\n  KEY `idx_monthly_review_checkpoint_claim` (`period_review_job_id`,`status`,`lease_expires_at_utc_msc`,`chunk_index`),\n  KEY `idx_monthly_review_checkpoint_evidence` (`period_review_job_id`,`evidence_hash`,`chunk_index`),\n  KEY `idx_monthly_review_checkpoint_model_task` (`model_task_id`)\n) ENGINE=InnoDB AUTO_INCREMENT=11 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "period_review_sources": "CREATE TABLE `period_review_sources` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `period_case_id` bigint NOT NULL,\n  `outcome_id` bigint DEFAULT NULL,\n  `trade_review_case_id` bigint DEFAULT NULL,\n  `source_period_case_id` bigint DEFAULT NULL,\n  `source_hash` char(64) DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_period_review_source` (`period_case_id`,`outcome_id`),\n  UNIQUE KEY `uk_period_review_period_source` (`period_case_id`,`source_period_case_id`),\n  KEY `idx_period_review_source_outcome` (`outcome_id`),\n  KEY `idx_period_review_source_trade_case` (`trade_review_case_id`),\n  KEY `idx_period_review_source_period` (`source_period_case_id`)\n) ENGINE=InnoDB AUTO_INCREMENT=1594 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "period_review_user_states": "CREATE TABLE `period_review_user_states` (\n  `period_case_id` bigint NOT NULL,\n  `user_id` int NOT NULL,\n  `last_seen_version_id` bigint DEFAULT NULL,\n  `first_seen_at` datetime DEFAULT NULL,\n  `last_seen_at` datetime DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  `updated_at` datetime NOT NULL,\n  PRIMARY KEY (`period_case_id`,`user_id`),\n  KEY `idx_period_review_user_states_user` (`user_id`,`updated_at`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "period_review_versions": "CREATE TABLE `period_review_versions` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `period_case_id` bigint NOT NULL,\n  `version_no` int NOT NULL,\n  `parent_version_id` bigint DEFAULT NULL,\n  `author_type` varchar(16) NOT NULL,\n  `author_user_id` int DEFAULT NULL,\n  `content_json` longtext NOT NULL,\n  `content_hash` char(64) NOT NULL,\n  `change_note` varchar(500) DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_period_review_version` (`period_case_id`,`version_no`),\n  KEY `idx_period_review_version_case` (`period_case_id`,`created_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=174 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "schema_migrations": "CREATE TABLE `schema_migrations` (\n  `id` varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NOT NULL,\n  `applied_at` datetime DEFAULT CURRENT_TIMESTAMP,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci",
+    "strategies": "CREATE TABLE `strategies` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `kind` enum('analysis','trader') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `scope` enum('platform','user') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `owner_user_id` int DEFAULT NULL,\n  `name` varchar(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `description` varchar(2000) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '',\n  `status` enum('draft','active','retired') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'draft',\n  `active_version_id` bigint unsigned DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  `deleted_at_utc` datetime(3) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_strategies_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `idx_strategies_catalog` (`kind`,`status`,`scope`,`owner_user_id`,`deleted_at_utc`,`id`),\n  KEY `fk_strategies_owner` (`owner_user_id`),\n  KEY `fk_strategies_active_version` (`active_version_id`,`id`),\n  CONSTRAINT `fk_strategies_active_version` FOREIGN KEY (`active_version_id`, `id`) REFERENCES `strategy_versions` (`id`, `strategy_id`),\n  CONSTRAINT `fk_strategies_owner` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_strategies_owner` CHECK ((((`scope` = _utf8mb4'platform') and (`owner_user_id` is null)) or ((`scope` = _utf8mb4'user') and (`owner_user_id` is not null))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "strategy_memory_compression_jobs": "CREATE TABLE `strategy_memory_compression_jobs` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `strategy_id` int NOT NULL,\n  `trigger_type` varchar(32) NOT NULL,\n  `source_version_no` int NOT NULL,\n  `source_content_hash` char(64) NOT NULL,\n  `source_set_hash` char(64) NOT NULL,\n  `pending_update_ids_json` longtext NOT NULL,\n  `target_chars` int NOT NULL,\n  `status` varchar(24) NOT NULL DEFAULT 'queued',\n  `attempt_count` int NOT NULL DEFAULT '0',\n  `max_attempts` int NOT NULL DEFAULT '3',\n  `lease_token` char(36) DEFAULT NULL,\n  `lease_expires_at` datetime DEFAULT NULL,\n  `next_attempt_at` datetime DEFAULT NULL,\n  `model_task_id` char(36) DEFAULT NULL,\n  `last_error_code` varchar(128) DEFAULT NULL,\n  `result_revision_id` bigint unsigned DEFAULT NULL,\n  `result_content_hash` char(64) DEFAULT NULL,\n  `result_validation_status` varchar(24) DEFAULT NULL,\n  `result_validation_json` longtext,\n  `created_at` datetime NOT NULL,\n  `updated_at` datetime NOT NULL,\n  `completed_at` datetime DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_strategy_memory_compression_source` (`strategy_id`,`trigger_type`,`source_version_no`,`source_set_hash`),\n  KEY `idx_strategy_memory_compression_claim` (`status`,`lease_expires_at`,`next_attempt_at`,`updated_at`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "strategy_memory_conflict_bindings": "CREATE TABLE `strategy_memory_conflict_bindings` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `conflict_id` bigint unsigned NOT NULL,\n  `strategy_id` int NOT NULL,\n  `strategy_version` int NOT NULL,\n  `library_version_no` int NOT NULL,\n  `library_content_hash` char(64) NOT NULL,\n  `memory_block_id` char(64) NOT NULL,\n  `memory_block_hash` char(64) NOT NULL,\n  `memory_excerpt` text NOT NULL,\n  `memory_claim_hash` char(64) NOT NULL,\n  `strategy_excerpt` text NOT NULL,\n  `strategy_rule_hash` char(64) NOT NULL,\n  `location_status` varchar(24) NOT NULL DEFAULT 'matched',\n  `detector_contract_version` varchar(64) NOT NULL DEFAULT 'strategy-memory-consistency-v1',\n  `consistency_job_id` bigint unsigned DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  `validated_at` datetime DEFAULT NULL,\n  `superseded_at` datetime DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_strategy_memory_binding_snapshot` (`conflict_id`,`strategy_version`,`library_version_no`,`memory_block_id`),\n  KEY `idx_strategy_memory_binding_snapshot` (`strategy_id`,`strategy_version`,`library_version_no`,`location_status`),\n  KEY `idx_strategy_memory_binding_conflict` (`conflict_id`,`location_status`),\n  KEY `idx_strategy_memory_binding_job` (`consistency_job_id`,`created_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "strategy_memory_conflict_occurrences": "CREATE TABLE `strategy_memory_conflict_occurrences` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `conflict_id` bigint unsigned NOT NULL,\n  `strategy_id` int NOT NULL,\n  `period_review_case_id` bigint NOT NULL,\n  `period_review_version_id` bigint NOT NULL,\n  `evidence_json` longtext,\n  `created_at` datetime NOT NULL,\n  `binding_id` bigint unsigned DEFAULT NULL,\n  `strategy_version` int DEFAULT NULL,\n  `library_version_no` int DEFAULT NULL,\n  `library_content_hash` char(64) DEFAULT NULL,\n  `memory_block_id` char(64) DEFAULT NULL,\n  `memory_block_hash` char(64) DEFAULT NULL,\n  `memory_excerpt` text,\n  `conflict_kind` varchar(32) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_strategy_memory_conflict_review` (`conflict_id`,`period_review_version_id`),\n  KEY `idx_strategy_memory_conflict_occurrence` (`strategy_id`,`period_review_case_id`,`created_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "strategy_memory_conflicts": "CREATE TABLE `strategy_memory_conflicts` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `strategy_id` int NOT NULL,\n  `conflict_key` char(64) NOT NULL,\n  `conflict_category` varchar(32) NOT NULL DEFAULT 'general',\n  `conflict_summary` text NOT NULL,\n  `strategy_excerpt` text,\n  `suggested_change` text,\n  `evidence_count` int NOT NULL DEFAULT '0',\n  `alert_threshold` int NOT NULL DEFAULT '3',\n  `status` varchar(24) NOT NULL DEFAULT 'observing',\n  `first_observed_at` datetime NOT NULL,\n  `last_observed_at` datetime NOT NULL,\n  `resolved_at` datetime DEFAULT NULL,\n  `resolved_by_user_id` int DEFAULT NULL,\n  `resolution_note` text,\n  `created_at` datetime NOT NULL,\n  `updated_at` datetime NOT NULL,\n  `identity_version` smallint NOT NULL DEFAULT '1',\n  `conflict_kind` varchar(32) DEFAULT NULL,\n  `strategy_rule_hash` char(64) DEFAULT NULL,\n  `canonical_lineage_key` char(64) DEFAULT NULL,\n  `detection_count` int NOT NULL DEFAULT '0',\n  `verification_status` varchar(24) NOT NULL DEFAULT 'location_stale',\n  `last_detected_at` datetime DEFAULT NULL,\n  `last_validated_at` datetime DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_strategy_memory_conflict` (`strategy_id`,`conflict_key`),\n  KEY `idx_strategy_memory_conflict_status` (`strategy_id`,`status`,`evidence_count`,`updated_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=3 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "strategy_memory_consistency_jobs": "CREATE TABLE `strategy_memory_consistency_jobs` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `strategy_id` int NOT NULL,\n  `strategy_version` int NOT NULL,\n  `library_version_no` int NOT NULL,\n  `library_content_hash` char(64) NOT NULL,\n  `strategy_content_hash` char(64) NOT NULL,\n  `strategy_text_snapshot` longtext NOT NULL,\n  `memory_content_snapshot` longtext NOT NULL,\n  `trigger_type` varchar(32) NOT NULL,\n  `input_set_hash` char(64) NOT NULL,\n  `detector_contract_version` varchar(64) NOT NULL DEFAULT 'strategy-memory-consistency-v1',\n  `status` varchar(24) NOT NULL DEFAULT 'queued',\n  `attempt_count` int NOT NULL DEFAULT '0',\n  `max_attempts` int NOT NULL DEFAULT '3',\n  `next_attempt_at` datetime DEFAULT NULL,\n  `lease_token` char(36) DEFAULT NULL,\n  `lease_expires_at` datetime DEFAULT NULL,\n  `model_task_id` char(36) DEFAULT NULL,\n  `conflict_count` int NOT NULL DEFAULT '0',\n  `matched_count` int NOT NULL DEFAULT '0',\n  `stale_count` int NOT NULL DEFAULT '0',\n  `result_hash` char(64) DEFAULT NULL,\n  `result_json` longtext,\n  `last_error_code` varchar(128) DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  `updated_at` datetime NOT NULL,\n  `completed_at` datetime DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_strategy_memory_consistency_input` (`strategy_id`,`strategy_version`,`library_version_no`,`input_set_hash`),\n  KEY `idx_strategy_memory_consistency_claim` (`status`,`lease_expires_at`,`next_attempt_at`,`updated_at`),\n  KEY `idx_strategy_memory_consistency_strategy` (`strategy_id`,`strategy_version`,`library_version_no`,`updated_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=49 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "strategy_memory_injection_logs": "CREATE TABLE `strategy_memory_injection_logs` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `strategy_id` int NOT NULL,\n  `library_version_no` int NOT NULL,\n  `library_content_hash` char(64) NOT NULL,\n  `char_count` int NOT NULL DEFAULT '0',\n  `estimated_token_count` int NOT NULL DEFAULT '0',\n  `usage_kind` varchar(32) NOT NULL,\n  `user_id` int DEFAULT NULL,\n  `signal_id` bigint DEFAULT NULL,\n  `inference_snapshot_id` bigint DEFAULT NULL,\n  `period_review_case_id` bigint DEFAULT NULL,\n  `model_task_id` char(36) DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_strategy_memory_injection_signal` (`signal_id`),\n  KEY `idx_strategy_memory_injection_review` (`period_review_case_id`,`created_at`),\n  KEY `idx_strategy_memory_injection_library` (`strategy_id`,`library_version_no`,`created_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=5418 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "strategy_memory_injection_logs_v4": "CREATE TABLE `strategy_memory_injection_logs_v4` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `strategy_id` bigint unsigned NOT NULL,\n  `library_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `library_revision_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `runtime_kind` enum('analysis','review','memory_compression') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `runtime_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `injected` tinyint(1) NOT NULL,\n  `matched_context_json` json NOT NULL,\n  `token_count` int unsigned NOT NULL,\n  `occurred_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_strategy_memory_injection` (`runtime_kind`,`runtime_id`,`library_revision_id`),\n  KEY `idx_strategy_memory_injection_strategy` (`strategy_id`,`occurred_at_utc`,`id`),\n  KEY `fk_strategy_memory_injection_user` (`user_id`),\n  KEY `fk_strategy_memory_injection_library` (`library_id`),\n  KEY `fk_strategy_memory_injection_revision` (`library_revision_id`,`library_id`),\n  CONSTRAINT `fk_strategy_memory_injection_library` FOREIGN KEY (`library_id`) REFERENCES `strategy_memory_libraries_v4` (`id`),\n  CONSTRAINT `fk_strategy_memory_injection_revision` FOREIGN KEY (`library_revision_id`, `library_id`) REFERENCES `strategy_memory_library_revisions_v4` (`id`, `library_id`),\n  CONSTRAINT `fk_strategy_memory_injection_strategy` FOREIGN KEY (`strategy_id`) REFERENCES `strategies` (`id`),\n  CONSTRAINT `fk_strategy_memory_injection_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "strategy_memory_libraries": "CREATE TABLE `strategy_memory_libraries` (\n  `strategy_id` int NOT NULL,\n  `strategy_scope` varchar(16) NOT NULL,\n  `owner_user_id` int NOT NULL DEFAULT '0',\n  `content_text` longtext NOT NULL,\n  `version_no` int NOT NULL DEFAULT '0',\n  `content_hash` char(64) NOT NULL,\n  `char_count` int NOT NULL DEFAULT '0',\n  `estimated_token_count` int NOT NULL DEFAULT '0',\n  `capacity_chars` int NOT NULL DEFAULT '120000',\n  `compression_target_ratio` decimal(5,4) NOT NULL DEFAULT '0.6000',\n  `conflict_alert_threshold` int NOT NULL DEFAULT '3',\n  `pending_update_count` int NOT NULL DEFAULT '0',\n  `compression_status` varchar(24) NOT NULL DEFAULT 'idle',\n  `last_compacted_at` datetime DEFAULT NULL,\n  `updated_by_user_id` int DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  `updated_at` datetime NOT NULL,\n  PRIMARY KEY (`strategy_id`),\n  KEY `idx_strategy_memory_owner` (`owner_user_id`,`strategy_scope`,`updated_at`),\n  KEY `idx_strategy_memory_compression` (`compression_status`,`updated_at`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "strategy_memory_libraries_v4": "CREATE TABLE `strategy_memory_libraries_v4` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `strategy_id` bigint unsigned NOT NULL,\n  `owner_user_id` int DEFAULT NULL,\n  `mode` enum('off','shadow','active') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'shadow',\n  `status` enum('active','revalidating','retired') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',\n  `current_revision_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `max_context_tokens` int unsigned NOT NULL DEFAULT '800',\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_strategy_memory_strategy` (`strategy_id`),\n  UNIQUE KEY `uk_strategy_memory_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `idx_strategy_memory_owner` (`owner_user_id`,`updated_at_utc`,`id`),\n  KEY `fk_strategy_memory_current_revision` (`current_revision_id`,`id`),\n  CONSTRAINT `fk_strategy_memory_current_revision` FOREIGN KEY (`current_revision_id`, `id`) REFERENCES `strategy_memory_library_revisions_v4` (`id`, `library_id`),\n  CONSTRAINT `fk_strategy_memory_owner` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_strategy_memory_strategy` FOREIGN KEY (`strategy_id`) REFERENCES `strategies` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "strategy_memory_library_revisions": "CREATE TABLE `strategy_memory_library_revisions` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `strategy_id` int NOT NULL,\n  `version_no` int NOT NULL,\n  `change_reason` varchar(32) NOT NULL,\n  `source_type` varchar(32) DEFAULT NULL,\n  `source_id` bigint DEFAULT NULL,\n  `content_text` longtext NOT NULL,\n  `content_hash` char(64) NOT NULL,\n  `char_count` int NOT NULL,\n  `estimated_token_count` int NOT NULL,\n  `actor_user_id` int DEFAULT NULL,\n  `source_metadata_json` longtext,\n  `created_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_strategy_memory_revision` (`strategy_id`,`version_no`),\n  KEY `idx_strategy_memory_revision_created` (`strategy_id`,`created_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=21 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "strategy_memory_library_revisions_v4": "CREATE TABLE `strategy_memory_library_revisions_v4` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `library_id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `version_number` int unsigned NOT NULL,\n  `content_text` mediumtext COLLATE utf8mb4_unicode_ci NOT NULL,\n  `content_json` json DEFAULT NULL,\n  `content_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_kind` enum('bootstrap','review_merge','manual_edit','compression','migration','revoke') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `source_metadata_json` json NOT NULL,\n  `created_by_user_id` int DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_strategy_memory_revision_identity` (`id`,`library_id`),\n  UNIQUE KEY `uk_strategy_memory_revision_number` (`library_id`,`version_number`),\n  KEY `fk_strategy_memory_revision_actor` (`created_by_user_id`),\n  CONSTRAINT `fk_strategy_memory_revision_actor` FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_strategy_memory_revision_library` FOREIGN KEY (`library_id`) REFERENCES `strategy_memory_libraries_v4` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "strategy_memory_pending_updates": "CREATE TABLE `strategy_memory_pending_updates` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `strategy_id` int NOT NULL,\n  `update_kind` varchar(32) NOT NULL,\n  `source_period_case_id` bigint DEFAULT NULL,\n  `source_period_review_version_id` bigint NOT NULL,\n  `content_text` longtext NOT NULL,\n  `content_hash` char(64) NOT NULL,\n  `source_refs_json` longtext,\n  `status` varchar(24) NOT NULL DEFAULT 'pending',\n  `merged_revision_id` bigint unsigned DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  `updated_at` datetime NOT NULL,\n  `completed_at` datetime DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_strategy_memory_review_update` (`strategy_id`,`source_period_review_version_id`,`update_kind`),\n  KEY `idx_strategy_memory_pending` (`strategy_id`,`status`,`created_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=21 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "strategy_subscriptions": "CREATE TABLE `strategy_subscriptions` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `user_id` int NOT NULL,\n  `trading_account_id` int NOT NULL,\n  `strategy_id` int NOT NULL,\n  `risk_profile_id` int DEFAULT NULL,\n  `symbols_json` text,\n  `execution_enabled` tinyint NOT NULL DEFAULT '0',\n  `memory_mode` varchar(20) NOT NULL DEFAULT 'shared',\n  `conflicting_strategy_id` int DEFAULT NULL,\n  `is_deleted` tinyint NOT NULL DEFAULT '0',\n  `created_at` datetime NOT NULL DEFAULT (now()),\n  `updated_at` datetime NOT NULL DEFAULT (now()),\n  `schedule_enabled` tinyint NOT NULL DEFAULT '0',\n  `schedule_timezone` varchar(64) NOT NULL DEFAULT 'terminal_server',\n  `schedule_weekdays_json` varchar(64) NOT NULL DEFAULT '[1,2,3,4,5]',\n  `schedule_windows_json` text,\n  `outside_window_behavior` varchar(24) NOT NULL DEFAULT 'pause_all',\n  `take_profit_mode` varchar(24) NOT NULL DEFAULT 'ai_recommended',\n  `active_execution_user_key` int GENERATED ALWAYS AS ((case when ((`execution_enabled` = 1) and (`is_deleted` = 0)) then `user_id` else NULL end)) STORED /*!80023 INVISIBLE */,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_subscription_active_execution_user` (`active_execution_user_key`),\n  KEY `idx_ss_user_strategy` (`user_id`,`strategy_id`,`is_deleted`),\n  KEY `idx_ss_account_strategy` (`trading_account_id`,`strategy_id`,`is_deleted`),\n  KEY `idx_ss_account_exec` (`trading_account_id`,`execution_enabled`,`is_deleted`),\n  CONSTRAINT `fk_strategy_subscriptions_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts_legacy_v3` (`id`),\n  CONSTRAINT `fk_strategy_subscriptions_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB AUTO_INCREMENT=6 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "strategy_versions": "CREATE TABLE `strategy_versions` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `strategy_id` bigint unsigned NOT NULL,\n  `version_number` int unsigned NOT NULL,\n  `prompt_text` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `prompt_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `input_contract_version` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `output_contract_version` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `config_json` json NOT NULL,\n  `created_by_user_id` int NOT NULL,\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_strategy_versions_identity` (`id`,`strategy_id`),\n  UNIQUE KEY `uk_strategy_versions_number` (`strategy_id`,`version_number`),\n  UNIQUE KEY `uk_strategy_versions_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `idx_strategy_versions_created` (`strategy_id`,`created_at_utc`,`id`),\n  KEY `fk_strategy_versions_creator` (`created_by_user_id`),\n  CONSTRAINT `fk_strategy_versions_creator` FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_strategy_versions_strategy` FOREIGN KEY (`strategy_id`) REFERENCES `strategies` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "trade_history_migration_checkpoints_v4": "CREATE TABLE `trade_history_migration_checkpoints_v4` (\n  `source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_partition` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `last_source_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `source_count` bigint unsigned NOT NULL DEFAULT '0',\n  `migrated_count` bigint unsigned NOT NULL DEFAULT '0',\n  `reconciled_count` bigint unsigned NOT NULL DEFAULT '0',\n  `status` enum('pending','running','reconciling','complete','failed') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',\n  `last_error_code` varchar(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`source_table`,`source_partition`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "trade_review_cases": "CREATE TABLE `trade_review_cases` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `outcome_id` bigint NOT NULL,\n  `signal_id` bigint DEFAULT NULL,\n  `user_id` int NOT NULL,\n  `trading_account_id` int NOT NULL,\n  `status` varchar(32) NOT NULL DEFAULT 'evidence_pending',\n  `evidence_status` varchar(24) NOT NULL DEFAULT 'pending',\n  `evidence_reason` varchar(255) DEFAULT NULL,\n  `evidence_json` longtext,\n  `evidence_hash` char(64) DEFAULT NULL,\n  `path_evidence_status` varchar(24) NOT NULL DEFAULT 'pending',\n  `path_evidence_reason` varchar(255) DEFAULT NULL,\n  `path_evidence_hash` char(64) DEFAULT NULL,\n  `trade_process_issue_status` varchar(24) NOT NULL DEFAULT 'unreviewed',\n  `review_content_status` varchar(24) NOT NULL DEFAULT 'pending',\n  `current_version_id` bigint DEFAULT NULL,\n  `approved_version_id` bigint DEFAULT NULL,\n  `deferred_at` datetime DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  `updated_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_trade_review_outcome` (`outcome_id`),\n  KEY `idx_trade_review_owner` (`user_id`,`status`,`updated_at`),\n  KEY `idx_trade_review_health` (`status`,`evidence_status`,`updated_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=9960 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "trade_review_jobs": "CREATE TABLE `trade_review_jobs` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `case_id` bigint NOT NULL,\n  `idempotency_key` varchar(180) NOT NULL,\n  `status` varchar(24) NOT NULL DEFAULT 'queued',\n  `attempt_count` int NOT NULL DEFAULT '0',\n  `max_attempts` int NOT NULL DEFAULT '3',\n  `lease_token` char(36) DEFAULT NULL,\n  `lease_expires_at` datetime DEFAULT NULL,\n  `model_profile_id` int DEFAULT NULL,\n  `credential_source` varchar(32) DEFAULT NULL,\n  `last_error_code` varchar(128) DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  `updated_at` datetime NOT NULL,\n  `completed_at` datetime DEFAULT NULL,\n  `model_task_id` char(36) DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_trade_review_job_key` (`idempotency_key`),\n  KEY `idx_trade_review_job_claim` (`status`,`lease_expires_at`,`updated_at`),\n  KEY `idx_trade_review_job_case` (`case_id`,`created_at`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "trade_review_versions": "CREATE TABLE `trade_review_versions` (\n  `id` bigint NOT NULL AUTO_INCREMENT,\n  `case_id` bigint NOT NULL,\n  `version_no` int NOT NULL,\n  `parent_version_id` bigint DEFAULT NULL,\n  `author_type` varchar(16) NOT NULL,\n  `author_user_id` int DEFAULT NULL,\n  `content_json` longtext NOT NULL,\n  `content_hash` char(64) NOT NULL,\n  `change_note` varchar(500) DEFAULT NULL,\n  `created_at` datetime NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_trade_review_version` (`case_id`,`version_no`),\n  KEY `idx_trade_review_versions_case` (`case_id`,`created_at`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "trading_account_ownerships": "CREATE TABLE `trading_account_ownerships` (\n  `user_id` int NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `role` enum('owner','observer_source') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'owner',\n  `granted_at_utc` datetime(3) NOT NULL,\n  `revoked_at_utc` datetime(3) DEFAULT NULL,\n  `interval_id` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `open_owner_account_id` bigint unsigned GENERATED ALWAYS AS ((case when ((`role` = _utf8mb4'owner') and (`revoked_at_utc` is null)) then `trading_account_id` else NULL end)) STORED,\n  PRIMARY KEY (`user_id`,`trading_account_id`,`role`),\n  UNIQUE KEY `uk_account_owners_open_owner` (`open_owner_account_id`),\n  KEY `idx_account_owners_account` (`trading_account_id`,`revoked_at_utc`,`user_id`),\n  KEY `idx_account_owners_interval_fk` (`interval_id`,`user_id`,`trading_account_id`,`role`),\n  CONSTRAINT `fk_account_owners_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_account_owners_interval` FOREIGN KEY (`interval_id`, `user_id`, `trading_account_id`, `role`) REFERENCES `trading_account_ownership_intervals` (`id`, `user_id`, `trading_account_id`, `role`),\n  CONSTRAINT `fk_account_owners_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "trading_accounts": "CREATE TABLE `trading_accounts` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `platform` enum('mt4','mt5') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `broker_server` varchar(191) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NOT NULL,\n  `account_login` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `currency` varchar(12) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  `deleted_at_utc` datetime(3) DEFAULT NULL,\n  `margin_mode` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci DEFAULT NULL,\n  `ownership_revision` bigint unsigned NOT NULL DEFAULT '1',\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_trading_account_identity` (`platform`,`broker_server`,`account_login`),\n  KEY `idx_trading_accounts_active` (`deleted_at_utc`,`id`)\n) ENGINE=InnoDB AUTO_INCREMENT=7 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+    "user_memory_settings": "CREATE TABLE `user_memory_settings` (\n  `user_id` int NOT NULL,\n  `enabled` tinyint NOT NULL DEFAULT '1',\n  `runtime_token_budget` int NOT NULL DEFAULT '800',\n  `retrieval_mode` varchar(16) NOT NULL DEFAULT 'active',\n  `updated_at` datetime NOT NULL,\n  PRIMARY KEY (`user_id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci",
+    "users": "CREATE TABLE `users` (\n  `id` int NOT NULL AUTO_INCREMENT,\n  `uid` varchar(32) DEFAULT NULL,\n  `email` varchar(255) DEFAULT NULL,\n  `email_verified` tinyint DEFAULT NULL,\n  `auth_method` varchar(20) DEFAULT NULL,\n  `password` varchar(255) NOT NULL,\n  `nickname` varchar(100) NOT NULL DEFAULT '',\n  `avatar` varchar(500) NOT NULL DEFAULT '',\n  `role` varchar(20) NOT NULL DEFAULT 'user',\n  `plan` varchar(20) NOT NULL DEFAULT 'free',\n  `plan_period` varchar(20) DEFAULT NULL,\n  `plan_expires_at` datetime(3) DEFAULT NULL,\n  `telegram_id` varchar(100) DEFAULT NULL,\n  `telegram_username` varchar(100) DEFAULT NULL,\n  `telegram_name` varchar(100) DEFAULT NULL,\n  `telegram_chat_id` varchar(100) DEFAULT NULL,\n  `telegram_group_status` varchar(50) DEFAULT '',\n  `telegram_bot_started_at` datetime DEFAULT NULL,\n  `telegram_joined_at` datetime DEFAULT NULL,\n  `telegram_last_invite_sent_at` datetime DEFAULT NULL,\n  `referral_code` varchar(50) DEFAULT NULL,\n  `referral_credit` decimal(20,8) NOT NULL DEFAULT '0.00000000',\n  `referred_by` varchar(50) DEFAULT NULL,\n  `last_seen_at` datetime DEFAULT NULL,\n  `bridge_heartbeat` datetime DEFAULT NULL,\n  `created_at` datetime(3) NOT NULL DEFAULT (now(3)),\n  `updated_at` datetime(3) NOT NULL DEFAULT (now(3)),\n  `phone` varchar(20) DEFAULT NULL,\n  `phone_verified` tinyint DEFAULT NULL,\n  `changelog_seen_version` int DEFAULT NULL,\n  `token_version` int NOT NULL DEFAULT '0',\n  `plan_source` varchar(20) DEFAULT NULL,\n  `deleted_at` datetime(3) DEFAULT NULL,\n  `deletion_status` varchar(24) NOT NULL DEFAULT 'active',\n  `last_seen_at_utc` datetime(3) DEFAULT NULL,\n  `profile_revision` bigint unsigned NOT NULL DEFAULT '1',\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `email` (`email`),\n  UNIQUE KEY `uid` (`uid`),\n  UNIQUE KEY `referral_code` (`referral_code`),\n  UNIQUE KEY `idx_users_phone` (`phone`),\n  KEY `idx_users_last_seen` (`last_seen_at`),\n  KEY `idx_users_deletion_status` (`deletion_status`,`deleted_at`)\n) ENGINE=InnoDB AUTO_INCREMENT=33 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci"
+  },
+  "counts": {
+    "credential_migration_runs": 0,
+    "data_migration_batches": 17,
+    "data_migration_checkpoints": 7,
+    "data_migration_id_maps": 353,
+    "data_migration_row_receipts": 342,
+    "data_migration_runs": 7,
+    "data_migration_source_rows": 342,
+    "experience_memory_items": 0,
+    "experience_memory_summaries": 0,
+    "manual_trade_review_aggregate_cases": 0,
+    "manual_trade_review_aggregate_sources": 0,
+    "manual_trade_review_aggregate_versions": 0,
+    "manual_trade_review_cases": 3,
+    "manual_trade_review_counterfactual_points": 27,
+    "manual_trade_review_jobs": 3,
+    "manual_trade_review_sources": 3,
+    "manual_trade_review_stage_runs": 18,
+    "manual_trade_review_versions": 1,
+    "memory_compression_jobs": 0,
+    "memory_injection_logs": 0,
+    "period_review_cases": 25,
+    "period_review_derivation_jobs": 12,
+    "period_review_job_events": 7208,
+    "period_review_jobs": 25,
+    "period_review_monthly_checkpoints": 8,
+    "period_review_sources": 176,
+    "period_review_user_states": 33,
+    "period_review_versions": 33,
+    "schema_migrations": 214,
+    "strategy_memory_compression_jobs": 0,
+    "strategy_memory_conflict_bindings": 1,
+    "strategy_memory_conflict_occurrences": 2,
+    "strategy_memory_conflicts": 2,
+    "strategy_memory_consistency_jobs": 48,
+    "strategy_memory_injection_logs": 5417,
+    "strategy_memory_injection_logs_v4": 0,
+    "strategy_memory_libraries": 2,
+    "strategy_memory_libraries_v4": 0,
+    "strategy_memory_library_revisions": 20,
+    "strategy_memory_library_revisions_v4": 0,
+    "strategy_memory_pending_updates": 10,
+    "trade_history_migration_checkpoints_v4": 0,
+    "trade_review_cases": 155,
+    "trade_review_jobs": 0,
+    "trade_review_versions": 0,
+    "user_memory_settings": 0
+  },
+  "observedAt": "2026-09-09T10:37:39.192Z"
+}

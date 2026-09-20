@@ -6,6 +6,12 @@ const snapshot = Object.freeze({ id: 'account-a', revision: 10, timezoneOffsetMi
 const metrics = { balance: '100', equity: '100', margin: '0', free_margin: '100', floating_profit: '0', currency: 'USD', observed_at: '2026-09-06T08:00:00.000Z' }
 
 describe('account metrics clock updates', () => {
+  it('updates permissions and leverage without overwriting metadata omitted by old producers', () => {
+    const base = { ...snapshot, tradePermission: true, leverage: 100 }
+    expect(applyAccountMetrics(base, metrics, 11)).toMatchObject({ tradePermission: true, leverage: 100 })
+    expect(applyAccountMetrics(base, { ...metrics, leverage: 500, trade_permission: false }, 11)).toMatchObject({ tradePermission: false, leverage: 500 })
+  })
+
   it('preserves old-producer clock evidence and applies explicit stale, zero, and null updates', () => {
     expect(applyAccountMetrics(snapshot, metrics, 11).timezoneOffsetMinutes).toBe(120)
     const stale = applyAccountMetrics(snapshot, { ...metrics, timezone_offset_minutes: 120, clock_status: 'stale' }, 11)

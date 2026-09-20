@@ -13,9 +13,9 @@ const plan = [
 ]
 
 describe('V4 schema runner', () => {
-  it('loads all 28 files including reviewed DML in original order', async () => {
+  it('loads all 32 files including reviewed DML in original order', async () => {
     const actual = await loadMigrationPlan({ rootDirectory: process.cwd() })
-    expect(actual).toHaveLength(28)
+    expect(actual).toHaveLength(32)
     expect(actual[0].id).toBe(BOOTSTRAP_ID)
     expect(actual[19].id).toBe('20260905_019_account_ownership_intervals')
     expect(actual[20].id).toBe('20260905_020_account_projection_and_history_provenance')
@@ -27,7 +27,13 @@ describe('V4 schema runner', () => {
     expect(actual[26].id).toBe('20260906_026_trade_history_currency_evidence')
     expect(actual[27].id).toBe('20260907_027_subscription_execution_preferences')
     expect(actual.slice(0, 25).reduce((total, m) => total + m.statements.length, 0)).toBe(159)
-    expect(actual.reduce((total, m) => total + m.statements.length, 0)).toBe(167)
+    expect(actual.slice(28).map(m => m.id)).toEqual([
+      '20260914_028_bridge_installation_authorizations',
+      '20260914_029_market_source_selections',
+      '20260915_030_model_configuration_receipts',
+      '20260915_031_model_assignments',
+    ])
+    expect(actual.reduce((total, m) => total + m.statements.length, 0)).toBe(174)
   })
   it('applies real 018 only after 017 and skips its completed statements without replay', async () => {
     const actual = (await loadMigrationPlan({ rootDirectory: process.cwd() })).slice(0, 19)

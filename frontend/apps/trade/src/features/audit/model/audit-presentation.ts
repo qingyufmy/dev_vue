@@ -72,6 +72,7 @@ const statusLabels: Record<string, string> = {
   queued: '排队中',
   running: '处理中',
   succeeded: '已完成',
+  partially_succeeded: '部分完成',
   rejected: '已拒绝',
   failed: '失败',
   uncertain: '待核实',

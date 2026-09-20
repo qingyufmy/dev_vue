@@ -1,0 +1,17 @@
+{
+  "kind": "instrument-schema-reference/v1",
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "referenceDatabaseRemoved": true,
+  "checks": [
+    "real_user_and_account_foreign_keys",
+    "scope_uniqueness_and_case_sensitive_symbol",
+    "lease_and_success_constraints",
+    "concurrent_claim_and_stale_completion_fencing"
+  ],
+  "migrationSha256": "f1821bf57bbffac9f10dce3039cb016b8de073badb135251a49e144fe3342e90",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "serverVersion": "8.4.8",
+  "canonicalDdl": "CREATE TABLE `instrument_collection_requests_v4` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `user_id` int NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `symbol` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `request_bucket` bigint unsigned NOT NULL,\n  `status` enum('pending','running','succeeded','failed') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',\n  `attempts` int unsigned NOT NULL DEFAULT '0',\n  `lease_token` char(36) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `lease_expires_at_utc` datetime(3) DEFAULT NULL,\n  `result_revision` bigint unsigned DEFAULT NULL,\n  `error_code` varchar(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `requested_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  `completed_at_utc` datetime(3) DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_instrument_request_scope` (`user_id`,`trading_account_id`,`symbol`,`request_bucket`),\n  KEY `idx_instrument_request_recovery` (`status`,`lease_expires_at_utc`,`id`),\n  KEY `fk_instrument_request_account` (`trading_account_id`),\n  CONSTRAINT `fk_instrument_request_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_instrument_request_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_instrument_request_completion` CHECK ((((`status` in (_utf8mb4'pending',_utf8mb4'running')) and (`completed_at_utc` is null) and (`result_revision` is null)) or ((`status` = _utf8mb4'succeeded') and (`completed_at_utc` is not null) and (`result_revision` is not null) and (`result_revision` > 0)) or ((`status` = _utf8mb4'failed') and (`completed_at_utc` is not null) and (`result_revision` is null)))),\n  CONSTRAINT `chk_instrument_request_lease` CHECK ((((`status` = _utf8mb4'running') and (`lease_token` is not null) and (`lease_expires_at_utc` is not null)) or ((`status` <> _utf8mb4'running') and (`lease_token` is null) and (`lease_expires_at_utc` is null))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
+  "observedAt": "2026-09-09T03:37:24.035Z"
+}

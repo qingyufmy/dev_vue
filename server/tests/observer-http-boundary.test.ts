@@ -41,7 +41,7 @@ function fixture() {
 async function appFor(service: TradingService, contextCommands = contextCommandPort().port) {
   const app = Fastify()
   await app.register(tradingRoutes, { prefix: '/api/v4', service, contextCommands,
-    capacity: new ConnectionCapacityService({ getPurchasedCapacity: async () => 0 }, {} as ConnectionLeaseStore),
+    capacity: new ConnectionCapacityService({ getIncludedCapacity: async () => 1, getPurchasedCapacity: async () => 0 }, {} as ConnectionLeaseStore),
     auth: { authenticate: async () => ({ userId: 9 }), assertWrite: async () => ({ userId: 9 }) },
   })
   return app

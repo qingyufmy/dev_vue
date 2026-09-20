@@ -22,9 +22,9 @@ namespace Liangjian.BridgeV4.SmokeTests
 
         private static int Main(string[] arguments)
         {
-            if (arguments != null && arguments.Length == 4 && arguments[0].EndsWith(".probe-fixture", StringComparison.Ordinal)
+            if (arguments != null && (arguments.Length == 4 || (arguments.Length == 5 && arguments[4] == "--portable")) && arguments[0].EndsWith(".probe-fixture", StringComparison.Ordinal)
                 && arguments[1] == "--probe" && arguments[2] == "--terminal" && File.Exists(arguments[0]))
-                return TerminalDiscoverySmokeTests.RunFixture(arguments[0], arguments[3]);
+                return TerminalDiscoverySmokeTests.RunFixture(arguments[0], arguments[3], arguments.Length == 5);
             if (arguments != null && arguments.Length == 1 && File.Exists(arguments[0]))
             {
                 string[] fakeLines = File.ReadAllLines(arguments[0]);
@@ -35,6 +35,7 @@ namespace Liangjian.BridgeV4.SmokeTests
             }
 
             Run("runtime_release_threshold", TestRuntimeThreshold);
+            Run("administrator_market_state", MarketStateSmokeTests.RunAll);
             Run("envelope_accepts_v4", TestEnvelopeAcceptsV4);
             Run("envelope_rejects_unknown_field", TestEnvelopeRejectsUnknownField);
             Run("protocol_catalog_is_narrow", TestProtocolCatalog);
@@ -83,7 +84,11 @@ namespace Liangjian.BridgeV4.SmokeTests
             Run("uncertain_result_reconciles_without_replay", CommandSessionContractSmokeTests.TestUncertainResultCanReconcileWithoutReplay);
             Run("mt5_command_mapping_and_outcomes", TerminalCommandSourceSmokeTests.TestMt5MappingAndOutcomeClassification);
             Run("mt4_missing_session_is_pre_send_failure", TerminalCommandSourceSmokeTests.TestMt4MissingSessionIsPreSendFailure);
+            Run("market_stream_leases", SessionLifecycleSmokeTests.TestMarketStreams);
+            Run("trade_stream_snapshots", SessionLifecycleSmokeTests.TestTradeStreams);
+            Run("account_stream_snapshot", SessionLifecycleSmokeTests.TestAccountStream);
             Run("profile_session_hello_heartbeat_and_backoff", SessionLifecycleSmokeTests.TestHelloHeartbeatAndBackoff);
+            Run("profile_capacity_wait", SessionLifecycleSmokeTests.TestCapacityWait);
             Run("profile_worker_reconnects_independently", SessionLifecycleSmokeTests.TestWorkerReconnects);
             Run("profile_worker_stop_rejects_late_connect", SessionLifecycleSmokeTests.TestWorkerStopRejectsLateConnect);
             Run("profile_worker_pause_during_connect_resumes", SessionLifecycleSmokeTests.TestWorkerPauseDuringConnectResumes);
@@ -109,7 +114,15 @@ namespace Liangjian.BridgeV4.SmokeTests
             Run("legacy_v3_migration_snapshot", LegacyV3MigrationSmokeTests.RunAll);
             Run("legacy_v3_credential_exchange_and_import", LegacyV3CredentialExchangeSmokeTests.RunAll);
             Run("bridge_session_token_provider", BridgeSessionTokenProviderSmokeTests.RunAll);
+            Run("loopback_websocket_transport", LoopbackWebSocketSmokeTests.RunAll);
+            Run("terminal_heartbeat_deadline", TerminalHeartbeatSmokeTests.RunAll);
+            Run("websocket_length_boundaries", WebSocketLengthSmokeTests.RunAll);
             Run("bridge_pairing", BridgePairingSmokeTests.RunAll);
+            Run("bridge_installation_authorization", InstallationAuthorizationSmokeTests.RunAll);
+            Run("bridge_single_instance", ApplicationInstanceSmokeTests.RunAll);
+            Run("profile_connection_settings", ProfileConnectionSettingsSmokeTests.RunAll);
+            Run("mt4_manual_install", Mt4AdapterInstallerSmokeTests.RunAll);
+            Run("terminal_manual_location", TerminalLocationSmokeTests.RunAll);
             Run("bridge_pairing_durable_retry", BridgePairingDraftSmokeTests.RunAll);
             Run("terminal_discovery_readonly_selection", TerminalDiscoverySmokeTests.RunAll);
             Run("profile_account_data_isolation", ProfileAccountDataSmokeTests.RunAll);

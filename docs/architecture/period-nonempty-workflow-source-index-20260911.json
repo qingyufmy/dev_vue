@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "report": "period-nonempty-workflow-v4-20260911.json",
+  "reportSha256": "c634ea6cf126d5190ad2c2c82e1e477e2c04f657e59e8d0ba5a04892aaf005d2",
+  "sources": {
+    "scripts/lib/period-workflow-runtime-reference.mjs": "80b0b1d8a2d318f52fd248a0c3e40f60a6bedfc545c193eb0116be058226e230",
+    "scripts/lib/system-review-nonempty-reference.mjs": "0d1941c8a6ac736586242691ce35cccc95687bbb7f9fff3ebcc26548c1121735",
+    "server/src/bootstrap/period-review-workflow.ts": "013fa85c077fb5048bc37689db3a5fc788eec934f1c95ec7ff487684b212338b",
+    "server/src/bootstrap/period-review-collector.ts": "d8a1c4b1f20ac227c0a30c2caa8bd465981c9a1de86aa2c50808755033c6f35b",
+    "server/src/modules/reviews/infrastructure/mysql-period-review-writer.ts": "a56bd3b2d43e6384fe33a35b3f28d107c304cd00c8fd8ab6202a5e677129d056"
+  },
+  "scope": "Nonempty automatic daily collection to model worker and HTTP; synthetic terminal/model/clock and execution lineage, minimal parent schemas; separate existing confirmation-to-memory evidence, not one combined run."
+}

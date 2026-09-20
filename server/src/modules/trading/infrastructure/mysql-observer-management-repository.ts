@@ -644,21 +644,32 @@ function nextEntityRevision(currentRevision: number, code: string) {
 
 async function transaction<T>(pool: Pool, work: (connection: PoolConnection) => Promise<T>): Promise<T> {
   let connection: PoolConnection | null = null
+  let committing = false
+  let destroyed = false
   try {
     const tx = await pool.getConnection()
     connection = tx
     await tx.beginTransaction()
     const result = await work(tx)
+    committing = true
     await tx.commit()
     return result
   } catch (error) {
+    if (committing && connection) {
+      destroyed = true
+      connection.destroy()
+      throw managementError('observer_management_commit_unknown', 503)
+    }
     if (connection) {
-      try { await connection.rollback() } catch { /* preserve the original transaction error */ }
+      try { await connection.rollback() } catch {
+        destroyed = true
+        connection.destroy()
+      }
     }
     if (error instanceof ObserverManagementError) throw error
     throw translateStorageError(error)
   } finally {
-    connection?.release()
+    if (!destroyed) connection?.release()
   }
 }
 

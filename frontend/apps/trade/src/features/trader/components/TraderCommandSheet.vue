@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { tradingContext } from '~/features/trading-context'
 
-import { activeTerminalDisplayTimezone } from '~/lib/laboratory-display-time'
+import { accountInputTimezone } from '~/lib/account-input-timezone'
 
 import { terminalInputTime, terminalInputUtc } from '~/lib/terminal-input-time'
 import { computed, ref, watch } from 'vue'
@@ -70,10 +70,10 @@ const pendingPrice = ref('')
 const stopLimitPrice = ref('')
 const expirationEnabled = ref(false)
 const expiration = ref('')
-const expirationZone = ref(activeTerminalDisplayTimezone())
+const expirationZone = ref(accountInputTimezone())
 const expirationAccountId = ref(tradingContext.value?.accountId)
 function expirationUtc() {
-  const current = activeTerminalDisplayTimezone()
+  const current = accountInputTimezone()
   if (expirationZone.value.isDefault || current.isDefault || current.offsetMinutes !== expirationZone.value.offsetMinutes || expirationAccountId.value !== tradingContext.value?.accountId) return NaN
   return terminalInputUtc(expiration.value, expirationZone.value.offsetMinutes)
 }
@@ -105,7 +105,7 @@ const previewMissingResources = computed(() => {
 })
 
 function resetForm() {
-  expirationZone.value = activeTerminalDisplayTimezone()
+  expirationZone.value = accountInputTimezone()
   expirationAccountId.value = tradingContext.value?.accountId
   const initial = props.initial ?? {}
   commandType.value = initial.command_type ?? props.mode

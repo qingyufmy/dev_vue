@@ -1,0 +1,31 @@
+{
+  "kind": "chan-v8-foundation-parity/v1",
+  "passed": true,
+  "checked": 488,
+  "trials": 120,
+  "nonemptyBis": 71,
+  "inclusionCases": 75,
+  "referenceSha256": "b945ae29ab5df61648d5d8da86af27835ef7874be60bc7f43aa441820780b796",
+  "referencePureRangeSha256": "15d856e67afa444d15ddae5e0be87babb45ed7fcf48c9a56d238706950ddffa9",
+  "targetHashes": [
+    {
+      "path": "server/src/modules/market/domain/chan-v8/types.ts",
+      "sha256": "071547649f13ac2992e8f3b9f924b1e9476ea1766919e5b255c2ea0b862cad62"
+    },
+    {
+      "path": "server/src/modules/market/domain/chan-v8/bars.ts",
+      "sha256": "d1a2e7607566a9645e07628e2ca349c9ca73c633903a7f22befbb360e6281b26"
+    },
+    {
+      "path": "server/src/modules/market/domain/chan-v8/bis.ts",
+      "sha256": "48a84996b7f6afb9c8977217f491de0b73c104b268db75b28b67e3046c64d94d"
+    },
+    {
+      "path": "server/src/modules/market/domain/chan-v8/macd.ts",
+      "sha256": "4f9b5ec816fa0a294efeaa2ebd5ead2267290a9594b30f23a892e108e2a35d97"
+    }
+  ],
+  "scope": "pure MACD, inclusion, fractals and strokes only; not segments, centers, divergence, full v8 or Worker integration",
+  "databaseWrites": 0,
+  "observedAt": "2026-09-11T10:03:41.707Z"
+}

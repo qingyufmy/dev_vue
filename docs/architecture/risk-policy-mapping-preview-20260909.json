@@ -1,0 +1,541 @@
+{
+  "kind": "risk-policy-mapping-preview/v1",
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "tz": "+00:00"
+  },
+  "observedAt": "2026-09-09T01:28:08.593Z",
+  "sourceVersions": 10,
+  "activeVersions": 3,
+  "issueCounts": {
+    "per_order_volume_not_total_volume": 10,
+    "execution_dedup_window_unmapped": 5,
+    "execution_dedup_distance_unmapped": 5,
+    "platform_control_semantics_unmapped": 48
+  },
+  "versions": [
+    {
+      "id": "1",
+      "scope": "platform",
+      "accountMissing": true,
+      "activeVersion": false,
+      "sourceSha256": "17a9ecf55c84c9164455dbe99229cb2bdf8679bd2722770c4caad65ebd932d69",
+      "valid": true,
+      "activationReady": false,
+      "candidateFields": [
+        "allowedSymbols",
+        "requireStopLoss",
+        "pendingValidMinutes",
+        "maxRiskPerTradePercent",
+        "maxDecisionAgeSeconds",
+        "maxQuoteAgeSeconds",
+        "maxSpreadPoints",
+        "maxPriceDeviationPercent",
+        "weekendCloseMinutes",
+        "minOpenIntervalSeconds",
+        "maxDailyOpenCount",
+        "maxDailyLossPercent",
+        "consecutiveLossLimit",
+        "lossCooldownMinutes",
+        "maxDrawdownPercent"
+      ],
+      "retainedFields": [
+        "max_position_size",
+        "dedup_window_seconds",
+        "dedup_price_atr"
+      ],
+      "issues": [
+        {
+          "field": "max_position_size",
+          "code": "per_order_volume_not_total_volume"
+        },
+        {
+          "field": "dedup_window_seconds",
+          "code": "execution_dedup_window_unmapped"
+        },
+        {
+          "field": "dedup_price_atr",
+          "code": "execution_dedup_distance_unmapped"
+        }
+      ]
+    },
+    {
+      "id": "2",
+      "scope": "platform",
+      "accountMissing": true,
+      "activeVersion": false,
+      "sourceSha256": "3d5eb2cfce2ac11e03ddf31ff1dcb04d50e1dad71b79d4ea52c228126e49eb45",
+      "valid": true,
+      "activationReady": false,
+      "candidateFields": [
+        "allowedSymbols",
+        "requireStopLoss",
+        "pendingValidMinutes",
+        "maxRiskPerTradePercent",
+        "maxDecisionAgeSeconds",
+        "maxQuoteAgeSeconds",
+        "maxSpreadPoints",
+        "maxPriceDeviationPercent",
+        "weekendCloseMinutes",
+        "minOpenIntervalSeconds",
+        "maxDailyOpenCount",
+        "maxDailyLossPercent",
+        "consecutiveLossLimit",
+        "lossCooldownMinutes",
+        "maxDrawdownPercent"
+      ],
+      "retainedFields": [
+        "max_position_size",
+        "dedup_window_seconds",
+        "dedup_price_atr"
+      ],
+      "issues": [
+        {
+          "field": "max_position_size",
+          "code": "per_order_volume_not_total_volume"
+        },
+        {
+          "field": "dedup_window_seconds",
+          "code": "execution_dedup_window_unmapped"
+        },
+        {
+          "field": "dedup_price_atr",
+          "code": "execution_dedup_distance_unmapped"
+        },
+        {
+          "field": "pending_valid_minutes",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_position_size",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_risk_per_trade_pct",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_spread_points",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_execution_price_deviation_pct",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "weekend_close_minutes",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "min_open_interval_seconds",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_daily_open_count",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "daily_loss_limit_pct",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "consecutive_loss_limit",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "loss_cooldown_minutes",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_drawdown_pct",
+          "code": "platform_control_semantics_unmapped"
+        }
+      ]
+    },
+    {
+      "id": "3",
+      "scope": "account",
+      "accountMissing": false,
+      "activeVersion": false,
+      "sourceSha256": "48007121ee77405ce7f00b3aa135d3905bcbc5ea2df707b4f57a201aaa36c0ad",
+      "valid": true,
+      "activationReady": false,
+      "candidateFields": [],
+      "retainedFields": [
+        "max_position_size"
+      ],
+      "issues": [
+        {
+          "field": "max_position_size",
+          "code": "per_order_volume_not_total_volume"
+        }
+      ]
+    },
+    {
+      "id": "4",
+      "scope": "account",
+      "accountMissing": false,
+      "activeVersion": true,
+      "sourceSha256": "48007121ee77405ce7f00b3aa135d3905bcbc5ea2df707b4f57a201aaa36c0ad",
+      "valid": true,
+      "activationReady": false,
+      "candidateFields": [],
+      "retainedFields": [
+        "max_position_size"
+      ],
+      "issues": [
+        {
+          "field": "max_position_size",
+          "code": "per_order_volume_not_total_volume"
+        }
+      ]
+    },
+    {
+      "id": "5",
+      "scope": "platform",
+      "accountMissing": true,
+      "activeVersion": false,
+      "sourceSha256": "4e6286fc5d9f3832ce8b7e362fd84266687693888a7c319f49d13fc717b06179",
+      "valid": true,
+      "activationReady": false,
+      "candidateFields": [
+        "allowedSymbols",
+        "requireStopLoss",
+        "pendingValidMinutes",
+        "maxRiskPerTradePercent",
+        "maxDecisionAgeSeconds",
+        "maxQuoteAgeSeconds",
+        "maxSpreadPoints",
+        "maxPriceDeviationPercent",
+        "weekendCloseMinutes",
+        "minOpenIntervalSeconds",
+        "maxDailyOpenCount",
+        "maxDailyLossPercent",
+        "consecutiveLossLimit",
+        "lossCooldownMinutes",
+        "maxDrawdownPercent"
+      ],
+      "retainedFields": [
+        "max_position_size",
+        "dedup_window_seconds",
+        "dedup_price_atr"
+      ],
+      "issues": [
+        {
+          "field": "max_position_size",
+          "code": "per_order_volume_not_total_volume"
+        },
+        {
+          "field": "dedup_window_seconds",
+          "code": "execution_dedup_window_unmapped"
+        },
+        {
+          "field": "dedup_price_atr",
+          "code": "execution_dedup_distance_unmapped"
+        },
+        {
+          "field": "pending_valid_minutes",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_position_size",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_risk_per_trade_pct",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_spread_points",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_execution_price_deviation_pct",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "weekend_close_minutes",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "min_open_interval_seconds",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_daily_open_count",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "daily_loss_limit_pct",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "consecutive_loss_limit",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "loss_cooldown_minutes",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_drawdown_pct",
+          "code": "platform_control_semantics_unmapped"
+        }
+      ]
+    },
+    {
+      "id": "6",
+      "scope": "account",
+      "accountMissing": false,
+      "activeVersion": false,
+      "sourceSha256": "faafb87030e0774952e24bb46d078ed573030bee4db7b8708b4d1612f28bf3ae",
+      "valid": true,
+      "activationReady": false,
+      "candidateFields": [
+        "maxDailyLossPercent"
+      ],
+      "retainedFields": [
+        "max_position_size"
+      ],
+      "issues": [
+        {
+          "field": "max_position_size",
+          "code": "per_order_volume_not_total_volume"
+        }
+      ]
+    },
+    {
+      "id": "7",
+      "scope": "platform",
+      "accountMissing": true,
+      "activeVersion": false,
+      "sourceSha256": "0e7146623885e07dfac6aac90110aac9943571702a985635789a80648fea8804",
+      "valid": true,
+      "activationReady": false,
+      "candidateFields": [
+        "allowedSymbols",
+        "requireStopLoss",
+        "pendingValidMinutes",
+        "maxRiskPerTradePercent",
+        "maxDecisionAgeSeconds",
+        "maxQuoteAgeSeconds",
+        "maxSpreadPoints",
+        "maxPriceDeviationPercent",
+        "weekendCloseMinutes",
+        "minOpenIntervalSeconds",
+        "maxDailyOpenCount",
+        "maxDailyLossPercent",
+        "consecutiveLossLimit",
+        "lossCooldownMinutes",
+        "maxDrawdownPercent"
+      ],
+      "retainedFields": [
+        "max_position_size",
+        "dedup_window_seconds",
+        "dedup_price_atr"
+      ],
+      "issues": [
+        {
+          "field": "max_position_size",
+          "code": "per_order_volume_not_total_volume"
+        },
+        {
+          "field": "dedup_window_seconds",
+          "code": "execution_dedup_window_unmapped"
+        },
+        {
+          "field": "dedup_price_atr",
+          "code": "execution_dedup_distance_unmapped"
+        },
+        {
+          "field": "pending_valid_minutes",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_position_size",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_risk_per_trade_pct",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_spread_points",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_execution_price_deviation_pct",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "weekend_close_minutes",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "min_open_interval_seconds",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_daily_open_count",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "daily_loss_limit_pct",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "consecutive_loss_limit",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "loss_cooldown_minutes",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_drawdown_pct",
+          "code": "platform_control_semantics_unmapped"
+        }
+      ]
+    },
+    {
+      "id": "8",
+      "scope": "account",
+      "accountMissing": false,
+      "activeVersion": false,
+      "sourceSha256": "6067469b3d10a17095d4efdadf2096dbf4e99c57092dbd99c15ae01740e348d6",
+      "valid": true,
+      "activationReady": false,
+      "candidateFields": [
+        "maxDailyLossPercent",
+        "maxDrawdownPercent"
+      ],
+      "retainedFields": [
+        "max_position_size"
+      ],
+      "issues": [
+        {
+          "field": "max_position_size",
+          "code": "per_order_volume_not_total_volume"
+        }
+      ]
+    },
+    {
+      "id": "9",
+      "scope": "platform",
+      "accountMissing": true,
+      "activeVersion": true,
+      "sourceSha256": "18a7fcfd7b171d10838358cfb8246a26fda188754ee5a7b854809e2ae480cae0",
+      "valid": true,
+      "activationReady": false,
+      "candidateFields": [
+        "allowedSymbols",
+        "requireStopLoss",
+        "pendingValidMinutes",
+        "maxRiskPerTradePercent",
+        "maxDecisionAgeSeconds",
+        "maxQuoteAgeSeconds",
+        "maxSpreadPoints",
+        "maxPriceDeviationPercent",
+        "weekendCloseMinutes",
+        "minOpenIntervalSeconds",
+        "maxDailyOpenCount",
+        "maxDailyLossPercent",
+        "consecutiveLossLimit",
+        "lossCooldownMinutes",
+        "maxDrawdownPercent"
+      ],
+      "retainedFields": [
+        "max_position_size",
+        "dedup_window_seconds",
+        "dedup_price_atr"
+      ],
+      "issues": [
+        {
+          "field": "max_position_size",
+          "code": "per_order_volume_not_total_volume"
+        },
+        {
+          "field": "dedup_window_seconds",
+          "code": "execution_dedup_window_unmapped"
+        },
+        {
+          "field": "dedup_price_atr",
+          "code": "execution_dedup_distance_unmapped"
+        },
+        {
+          "field": "pending_valid_minutes",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_position_size",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_risk_per_trade_pct",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_spread_points",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_execution_price_deviation_pct",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "weekend_close_minutes",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "min_open_interval_seconds",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_daily_open_count",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "daily_loss_limit_pct",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "consecutive_loss_limit",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "loss_cooldown_minutes",
+          "code": "platform_control_semantics_unmapped"
+        },
+        {
+          "field": "max_drawdown_pct",
+          "code": "platform_control_semantics_unmapped"
+        }
+      ]
+    },
+    {
+      "id": "10",
+      "scope": "account",
+      "accountMissing": false,
+      "activeVersion": true,
+      "sourceSha256": "708246dccade8c3306af8e7002ce79b13ada238b46641788b7aefec322667ed3",
+      "valid": true,
+      "activationReady": false,
+      "candidateFields": [
+        "maxDailyLossPercent",
+        "maxDrawdownPercent",
+        "consecutiveLossLimit"
+      ],
+      "retainedFields": [
+        "max_position_size"
+      ],
+      "issues": [
+        {
+          "field": "max_position_size",
+          "code": "per_order_volume_not_total_volume"
+        }
+      ]
+    }
+  ],
+  "writes": 0
+}

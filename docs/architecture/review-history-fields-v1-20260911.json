@@ -1,0 +1,3840 @@
+{
+  "kind": "review-transition-inventory/v1",
+  "passed": true,
+  "writes": 0,
+  "cases": [],
+  "tables": [],
+  "schemas": {
+    "trade_review_cases": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "outcome_id",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "signal_id",
+        "type": "bigint",
+        "nullable": "YES"
+      },
+      {
+        "name": "user_id",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "trading_account_id",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "status",
+        "type": "varchar(32)",
+        "nullable": "NO"
+      },
+      {
+        "name": "evidence_status",
+        "type": "varchar(24)",
+        "nullable": "NO"
+      },
+      {
+        "name": "evidence_reason",
+        "type": "varchar(255)",
+        "nullable": "YES"
+      },
+      {
+        "name": "evidence_json",
+        "type": "longtext",
+        "nullable": "YES"
+      },
+      {
+        "name": "evidence_hash",
+        "type": "char(64)",
+        "nullable": "YES"
+      },
+      {
+        "name": "path_evidence_status",
+        "type": "varchar(24)",
+        "nullable": "NO"
+      },
+      {
+        "name": "path_evidence_reason",
+        "type": "varchar(255)",
+        "nullable": "YES"
+      },
+      {
+        "name": "path_evidence_hash",
+        "type": "char(64)",
+        "nullable": "YES"
+      },
+      {
+        "name": "trade_process_issue_status",
+        "type": "varchar(24)",
+        "nullable": "NO"
+      },
+      {
+        "name": "review_content_status",
+        "type": "varchar(24)",
+        "nullable": "NO"
+      },
+      {
+        "name": "current_version_id",
+        "type": "bigint",
+        "nullable": "YES"
+      },
+      {
+        "name": "approved_version_id",
+        "type": "bigint",
+        "nullable": "YES"
+      },
+      {
+        "name": "deferred_at",
+        "type": "datetime",
+        "nullable": "YES"
+      },
+      {
+        "name": "created_at",
+        "type": "datetime",
+        "nullable": "NO"
+      },
+      {
+        "name": "updated_at",
+        "type": "datetime",
+        "nullable": "NO"
+      }
+    ],
+    "trade_review_versions": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "case_id",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "version_no",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "parent_version_id",
+        "type": "bigint",
+        "nullable": "YES"
+      },
+      {
+        "name": "author_type",
+        "type": "varchar(16)",
+        "nullable": "NO"
+      },
+      {
+        "name": "author_user_id",
+        "type": "int",
+        "nullable": "YES"
+      },
+      {
+        "name": "content_json",
+        "type": "longtext",
+        "nullable": "NO"
+      },
+      {
+        "name": "content_hash",
+        "type": "char(64)",
+        "nullable": "NO"
+      },
+      {
+        "name": "change_note",
+        "type": "varchar(500)",
+        "nullable": "YES"
+      },
+      {
+        "name": "created_at",
+        "type": "datetime",
+        "nullable": "NO"
+      }
+    ],
+    "manual_trade_review_cases": [
+      {
+        "name": "id",
+        "type": "bigint unsigned",
+        "nullable": "NO"
+      },
+      {
+        "name": "client_request_id",
+        "type": "varchar(191)",
+        "nullable": "NO"
+      },
+      {
+        "name": "user_id",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "trading_account_id",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "strategy_id",
+        "type": "bigint unsigned",
+        "nullable": "NO"
+      },
+      {
+        "name": "strategy_version",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "strategy_scope",
+        "type": "varchar(16)",
+        "nullable": "NO"
+      },
+      {
+        "name": "strategy_snapshot_json",
+        "type": "mediumtext",
+        "nullable": "NO"
+      },
+      {
+        "name": "strategy_snapshot_hash",
+        "type": "char(64)",
+        "nullable": "NO"
+      },
+      {
+        "name": "user_thesis_text",
+        "type": "text",
+        "nullable": "YES"
+      },
+      {
+        "name": "user_thesis_hash",
+        "type": "char(64)",
+        "nullable": "YES"
+      },
+      {
+        "name": "selection_hash",
+        "type": "char(64)",
+        "nullable": "NO"
+      },
+      {
+        "name": "evidence_json",
+        "type": "mediumtext",
+        "nullable": "YES"
+      },
+      {
+        "name": "evidence_hash",
+        "type": "char(64)",
+        "nullable": "YES"
+      },
+      {
+        "name": "evidence_status",
+        "type": "varchar(24)",
+        "nullable": "NO"
+      },
+      {
+        "name": "evidence_reason",
+        "type": "varchar(128)",
+        "nullable": "YES"
+      },
+      {
+        "name": "status",
+        "type": "varchar(24)",
+        "nullable": "NO"
+      },
+      {
+        "name": "current_version_id",
+        "type": "bigint unsigned",
+        "nullable": "YES"
+      },
+      {
+        "name": "approved_version_id",
+        "type": "bigint unsigned",
+        "nullable": "YES"
+      },
+      {
+        "name": "created_at",
+        "type": "datetime",
+        "nullable": "NO"
+      },
+      {
+        "name": "updated_at",
+        "type": "datetime",
+        "nullable": "NO"
+      }
+    ],
+    "manual_trade_review_versions": [
+      {
+        "name": "id",
+        "type": "bigint unsigned",
+        "nullable": "NO"
+      },
+      {
+        "name": "case_id",
+        "type": "bigint unsigned",
+        "nullable": "NO"
+      },
+      {
+        "name": "version_no",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "parent_version_id",
+        "type": "bigint unsigned",
+        "nullable": "YES"
+      },
+      {
+        "name": "author_type",
+        "type": "varchar(16)",
+        "nullable": "NO"
+      },
+      {
+        "name": "author_user_id",
+        "type": "int",
+        "nullable": "YES"
+      },
+      {
+        "name": "content_json",
+        "type": "mediumtext",
+        "nullable": "NO"
+      },
+      {
+        "name": "content_hash",
+        "type": "char(64)",
+        "nullable": "NO"
+      },
+      {
+        "name": "change_note",
+        "type": "varchar(500)",
+        "nullable": "YES"
+      },
+      {
+        "name": "created_at",
+        "type": "datetime",
+        "nullable": "NO"
+      }
+    ],
+    "manual_trade_review_sources": [
+      {
+        "name": "id",
+        "type": "bigint unsigned",
+        "nullable": "NO"
+      },
+      {
+        "name": "case_id",
+        "type": "bigint unsigned",
+        "nullable": "NO"
+      },
+      {
+        "name": "source_identity_hash",
+        "type": "char(64)",
+        "nullable": "NO"
+      },
+      {
+        "name": "trade_source_hash",
+        "type": "char(64)",
+        "nullable": "NO"
+      },
+      {
+        "name": "trading_account_id",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "terminal_instance_id",
+        "type": "varchar(128)",
+        "nullable": "NO"
+      },
+      {
+        "name": "broker_server",
+        "type": "varchar(100)",
+        "nullable": "NO"
+      },
+      {
+        "name": "login_account",
+        "type": "varchar(50)",
+        "nullable": "NO"
+      },
+      {
+        "name": "position_id",
+        "type": "varchar(64)",
+        "nullable": "YES"
+      },
+      {
+        "name": "entry_order_ticket",
+        "type": "varchar(64)",
+        "nullable": "YES"
+      },
+      {
+        "name": "entry_time_utc_msc",
+        "type": "bigint",
+        "nullable": "YES"
+      },
+      {
+        "name": "close_time_utc_msc",
+        "type": "bigint",
+        "nullable": "YES"
+      },
+      {
+        "name": "symbol",
+        "type": "varchar(64)",
+        "nullable": "YES"
+      },
+      {
+        "name": "direction",
+        "type": "varchar(8)",
+        "nullable": "YES"
+      },
+      {
+        "name": "normalized_trade_json",
+        "type": "mediumtext",
+        "nullable": "NO"
+      },
+      {
+        "name": "manual_classification_json",
+        "type": "text",
+        "nullable": "NO"
+      },
+      {
+        "name": "created_at",
+        "type": "datetime",
+        "nullable": "NO"
+      }
+    ],
+    "manual_trade_review_jobs": [
+      {
+        "name": "id",
+        "type": "bigint unsigned",
+        "nullable": "NO"
+      },
+      {
+        "name": "case_id",
+        "type": "bigint unsigned",
+        "nullable": "NO"
+      },
+      {
+        "name": "generation_no",
+        "type": "int unsigned",
+        "nullable": "NO"
+      },
+      {
+        "name": "idempotency_key",
+        "type": "varchar(191)",
+        "nullable": "NO"
+      },
+      {
+        "name": "status",
+        "type": "varchar(24)",
+        "nullable": "NO"
+      },
+      {
+        "name": "attempt_count",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "max_attempts",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "task_deadline_at",
+        "type": "datetime",
+        "nullable": "YES"
+      },
+      {
+        "name": "lease_token",
+        "type": "char(36)",
+        "nullable": "YES"
+      },
+      {
+        "name": "lease_expires_at",
+        "type": "datetime",
+        "nullable": "YES"
+      },
+      {
+        "name": "model_profile_id",
+        "type": "bigint unsigned",
+        "nullable": "YES"
+      },
+      {
+        "name": "credential_source",
+        "type": "varchar(32)",
+        "nullable": "YES"
+      },
+      {
+        "name": "model_task_id",
+        "type": "varchar(128)",
+        "nullable": "YES"
+      },
+      {
+        "name": "progress_stage",
+        "type": "varchar(32)",
+        "nullable": "NO"
+      },
+      {
+        "name": "stage_updated_at",
+        "type": "datetime",
+        "nullable": "YES"
+      },
+      {
+        "name": "last_error_code",
+        "type": "varchar(128)",
+        "nullable": "YES"
+      },
+      {
+        "name": "next_attempt_at",
+        "type": "datetime",
+        "nullable": "YES"
+      },
+      {
+        "name": "completed_at",
+        "type": "datetime",
+        "nullable": "YES"
+      },
+      {
+        "name": "created_at",
+        "type": "datetime",
+        "nullable": "NO"
+      },
+      {
+        "name": "updated_at",
+        "type": "datetime",
+        "nullable": "NO"
+      }
+    ],
+    "manual_trade_review_stage_runs": [
+      {
+        "name": "id",
+        "type": "bigint unsigned",
+        "nullable": "NO"
+      },
+      {
+        "name": "case_id",
+        "type": "bigint unsigned",
+        "nullable": "NO"
+      },
+      {
+        "name": "job_id",
+        "type": "bigint unsigned",
+        "nullable": "NO"
+      },
+      {
+        "name": "generation_no",
+        "type": "int unsigned",
+        "nullable": "NO"
+      },
+      {
+        "name": "stage",
+        "type": "varchar(24)",
+        "nullable": "NO"
+      },
+      {
+        "name": "status",
+        "type": "varchar(24)",
+        "nullable": "NO"
+      },
+      {
+        "name": "model_task_id",
+        "type": "varchar(128)",
+        "nullable": "YES"
+      },
+      {
+        "name": "frozen_runtime_json",
+        "type": "mediumtext",
+        "nullable": "NO"
+      },
+      {
+        "name": "frozen_runtime_hash",
+        "type": "char(64)",
+        "nullable": "NO"
+      },
+      {
+        "name": "input_hash",
+        "type": "char(64)",
+        "nullable": "YES"
+      },
+      {
+        "name": "normalized_output_json",
+        "type": "mediumtext",
+        "nullable": "YES"
+      },
+      {
+        "name": "normalized_output_hash",
+        "type": "char(64)",
+        "nullable": "YES"
+      },
+      {
+        "name": "last_error_code",
+        "type": "varchar(128)",
+        "nullable": "YES"
+      },
+      {
+        "name": "created_at",
+        "type": "datetime",
+        "nullable": "NO"
+      },
+      {
+        "name": "updated_at",
+        "type": "datetime",
+        "nullable": "NO"
+      },
+      {
+        "name": "completed_at",
+        "type": "datetime",
+        "nullable": "YES"
+      }
+    ],
+    "manual_trade_review_counterfactual_points": [
+      {
+        "name": "id",
+        "type": "bigint unsigned",
+        "nullable": "NO"
+      },
+      {
+        "name": "case_id",
+        "type": "bigint unsigned",
+        "nullable": "NO"
+      },
+      {
+        "name": "job_id",
+        "type": "bigint unsigned",
+        "nullable": "NO"
+      },
+      {
+        "name": "generation_no",
+        "type": "int unsigned",
+        "nullable": "NO"
+      },
+      {
+        "name": "candidate_key",
+        "type": "varchar(64)",
+        "nullable": "NO"
+      },
+      {
+        "name": "decision_time_utc_msc",
+        "type": "bigint unsigned",
+        "nullable": "NO"
+      },
+      {
+        "name": "offset_bars",
+        "type": "smallint",
+        "nullable": "NO"
+      },
+      {
+        "name": "status",
+        "type": "varchar(24)",
+        "nullable": "NO"
+      },
+      {
+        "name": "model_task_id",
+        "type": "varchar(128)",
+        "nullable": "YES"
+      },
+      {
+        "name": "market_snapshot_hash",
+        "type": "char(64)",
+        "nullable": "YES"
+      },
+      {
+        "name": "input_hash",
+        "type": "char(64)",
+        "nullable": "YES"
+      },
+      {
+        "name": "normalized_output_json",
+        "type": "mediumtext",
+        "nullable": "YES"
+      },
+      {
+        "name": "normalized_output_hash",
+        "type": "char(64)",
+        "nullable": "YES"
+      },
+      {
+        "name": "last_error_code",
+        "type": "varchar(128)",
+        "nullable": "YES"
+      },
+      {
+        "name": "created_at",
+        "type": "datetime",
+        "nullable": "NO"
+      },
+      {
+        "name": "updated_at",
+        "type": "datetime",
+        "nullable": "NO"
+      },
+      {
+        "name": "completed_at",
+        "type": "datetime",
+        "nullable": "YES"
+      }
+    ],
+    "period_review_cases": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "period_type",
+        "type": "varchar(16)",
+        "nullable": "NO"
+      },
+      {
+        "name": "period_key",
+        "type": "varchar(16)",
+        "nullable": "NO"
+      },
+      {
+        "name": "user_id",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "trading_account_id",
+        "type": "int",
+        "nullable": "YES"
+      },
+      {
+        "name": "strategy_id",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "strategy_version",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "strategy_versions_json",
+        "type": "text",
+        "nullable": "YES"
+      },
+      {
+        "name": "strategy_compatibility_hash",
+        "type": "char(64)",
+        "nullable": "YES"
+      },
+      {
+        "name": "strategy_scope",
+        "type": "varchar(20)",
+        "nullable": "NO"
+      },
+      {
+        "name": "timezone_offset_minutes",
+        "type": "smallint",
+        "nullable": "NO"
+      },
+      {
+        "name": "period_start_utc_msc",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "period_end_utc_msc",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "status",
+        "type": "varchar(32)",
+        "nullable": "NO"
+      },
+      {
+        "name": "evidence_status",
+        "type": "varchar(24)",
+        "nullable": "NO"
+      },
+      {
+        "name": "evidence_reason",
+        "type": "varchar(255)",
+        "nullable": "YES"
+      },
+      {
+        "name": "evidence_json",
+        "type": "longtext",
+        "nullable": "YES"
+      },
+      {
+        "name": "evidence_hash",
+        "type": "char(64)",
+        "nullable": "YES"
+      },
+      {
+        "name": "source_count",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "current_version_id",
+        "type": "bigint",
+        "nullable": "YES"
+      },
+      {
+        "name": "approved_version_id",
+        "type": "bigint",
+        "nullable": "YES"
+      },
+      {
+        "name": "superseded_by_case_id",
+        "type": "bigint",
+        "nullable": "YES"
+      },
+      {
+        "name": "superseded_reason",
+        "type": "varchar(64)",
+        "nullable": "YES"
+      },
+      {
+        "name": "created_at",
+        "type": "datetime",
+        "nullable": "NO"
+      },
+      {
+        "name": "updated_at",
+        "type": "datetime",
+        "nullable": "NO"
+      }
+    ],
+    "period_review_versions": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "period_case_id",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "version_no",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "parent_version_id",
+        "type": "bigint",
+        "nullable": "YES"
+      },
+      {
+        "name": "author_type",
+        "type": "varchar(16)",
+        "nullable": "NO"
+      },
+      {
+        "name": "author_user_id",
+        "type": "int",
+        "nullable": "YES"
+      },
+      {
+        "name": "content_json",
+        "type": "longtext",
+        "nullable": "NO"
+      },
+      {
+        "name": "content_hash",
+        "type": "char(64)",
+        "nullable": "NO"
+      },
+      {
+        "name": "change_note",
+        "type": "varchar(500)",
+        "nullable": "YES"
+      },
+      {
+        "name": "created_at",
+        "type": "datetime",
+        "nullable": "NO"
+      }
+    ],
+    "period_review_sources": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "period_case_id",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "outcome_id",
+        "type": "bigint",
+        "nullable": "YES"
+      },
+      {
+        "name": "trade_review_case_id",
+        "type": "bigint",
+        "nullable": "YES"
+      },
+      {
+        "name": "source_period_case_id",
+        "type": "bigint",
+        "nullable": "YES"
+      },
+      {
+        "name": "source_hash",
+        "type": "char(64)",
+        "nullable": "YES"
+      },
+      {
+        "name": "created_at",
+        "type": "datetime",
+        "nullable": "NO"
+      }
+    ],
+    "period_review_jobs": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "period_case_id",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "job_type",
+        "type": "varchar(24)",
+        "nullable": "NO"
+      },
+      {
+        "name": "job_slot",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "idempotency_key",
+        "type": "varchar(191)",
+        "nullable": "NO"
+      },
+      {
+        "name": "status",
+        "type": "varchar(24)",
+        "nullable": "NO"
+      },
+      {
+        "name": "progress_stage",
+        "type": "varchar(32)",
+        "nullable": "NO"
+      },
+      {
+        "name": "stage_updated_at",
+        "type": "datetime",
+        "nullable": "YES"
+      },
+      {
+        "name": "attempt_count",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "max_attempts",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "lease_token",
+        "type": "char(36)",
+        "nullable": "YES"
+      },
+      {
+        "name": "lease_expires_at",
+        "type": "datetime",
+        "nullable": "YES"
+      },
+      {
+        "name": "next_attempt_at",
+        "type": "datetime",
+        "nullable": "YES"
+      },
+      {
+        "name": "model_profile_id",
+        "type": "int",
+        "nullable": "YES"
+      },
+      {
+        "name": "credential_source",
+        "type": "varchar(32)",
+        "nullable": "YES"
+      },
+      {
+        "name": "last_error_code",
+        "type": "varchar(128)",
+        "nullable": "YES"
+      },
+      {
+        "name": "evidence_retry_count",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "evidence_last_checked_at",
+        "type": "datetime",
+        "nullable": "YES"
+      },
+      {
+        "name": "created_at",
+        "type": "datetime",
+        "nullable": "NO"
+      },
+      {
+        "name": "updated_at",
+        "type": "datetime",
+        "nullable": "NO"
+      },
+      {
+        "name": "completed_at",
+        "type": "datetime",
+        "nullable": "YES"
+      },
+      {
+        "name": "model_task_id",
+        "type": "char(36)",
+        "nullable": "YES"
+      },
+      {
+        "name": "memory_library_version_no",
+        "type": "int",
+        "nullable": "YES"
+      },
+      {
+        "name": "memory_library_content_hash",
+        "type": "char(64)",
+        "nullable": "YES"
+      },
+      {
+        "name": "memory_library_snapshot_text",
+        "type": "longtext",
+        "nullable": "YES"
+      },
+      {
+        "name": "memory_strategy_snapshot_text",
+        "type": "longtext",
+        "nullable": "YES"
+      }
+    ],
+    "period_review_job_events": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "job_id",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "period_case_id",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "attempt_no",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "stage",
+        "type": "varchar(32)",
+        "nullable": "NO"
+      },
+      {
+        "name": "event_status",
+        "type": "varchar(16)",
+        "nullable": "NO"
+      },
+      {
+        "name": "message_code",
+        "type": "varchar(128)",
+        "nullable": "YES"
+      },
+      {
+        "name": "metadata_json",
+        "type": "json",
+        "nullable": "YES"
+      },
+      {
+        "name": "created_at",
+        "type": "datetime",
+        "nullable": "NO"
+      }
+    ],
+    "period_review_derivation_jobs": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "period_case_id",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "period_version_id",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "user_id",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "target_type",
+        "type": "varchar(32)",
+        "nullable": "NO"
+      },
+      {
+        "name": "status",
+        "type": "varchar(24)",
+        "nullable": "NO"
+      },
+      {
+        "name": "attempt_count",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "max_attempts",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "next_attempt_at",
+        "type": "datetime",
+        "nullable": "YES"
+      },
+      {
+        "name": "lease_token",
+        "type": "varchar(64)",
+        "nullable": "YES"
+      },
+      {
+        "name": "lease_expires_at",
+        "type": "datetime",
+        "nullable": "YES"
+      },
+      {
+        "name": "last_error_code",
+        "type": "varchar(128)",
+        "nullable": "YES"
+      },
+      {
+        "name": "completed_at",
+        "type": "datetime",
+        "nullable": "YES"
+      },
+      {
+        "name": "created_at",
+        "type": "datetime",
+        "nullable": "NO"
+      },
+      {
+        "name": "updated_at",
+        "type": "datetime",
+        "nullable": "NO"
+      }
+    ],
+    "period_review_monthly_checkpoints": [
+      {
+        "name": "id",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "period_review_job_id",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "evidence_hash",
+        "type": "char(64)",
+        "nullable": "NO"
+      },
+      {
+        "name": "source_hash",
+        "type": "char(64)",
+        "nullable": "NO"
+      },
+      {
+        "name": "chunk_index",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "chunk_count",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "max_days",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "expected_period_case_ids_json",
+        "type": "text",
+        "nullable": "NO"
+      },
+      {
+        "name": "expected_ids_hash",
+        "type": "char(64)",
+        "nullable": "NO"
+      },
+      {
+        "name": "sources_json",
+        "type": "longtext",
+        "nullable": "NO"
+      },
+      {
+        "name": "status",
+        "type": "varchar(24)",
+        "nullable": "NO"
+      },
+      {
+        "name": "attempt_count",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "max_attempts",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "next_attempt_at_utc_msc",
+        "type": "bigint",
+        "nullable": "YES"
+      },
+      {
+        "name": "model_task_id",
+        "type": "char(36)",
+        "nullable": "YES"
+      },
+      {
+        "name": "lease_token",
+        "type": "char(36)",
+        "nullable": "YES"
+      },
+      {
+        "name": "lease_owner",
+        "type": "varchar(191)",
+        "nullable": "YES"
+      },
+      {
+        "name": "fencing_token",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "lease_expires_at_utc_msc",
+        "type": "bigint",
+        "nullable": "YES"
+      },
+      {
+        "name": "content_json",
+        "type": "longtext",
+        "nullable": "YES"
+      },
+      {
+        "name": "content_hash",
+        "type": "char(64)",
+        "nullable": "YES"
+      },
+      {
+        "name": "reused_from_checkpoint_id",
+        "type": "bigint",
+        "nullable": "YES"
+      },
+      {
+        "name": "error_code",
+        "type": "varchar(128)",
+        "nullable": "YES"
+      },
+      {
+        "name": "error_message",
+        "type": "varchar(512)",
+        "nullable": "YES"
+      },
+      {
+        "name": "superseded_reason",
+        "type": "varchar(128)",
+        "nullable": "YES"
+      },
+      {
+        "name": "completed_at_utc_msc",
+        "type": "bigint",
+        "nullable": "YES"
+      },
+      {
+        "name": "created_at_utc_msc",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "updated_at_utc_msc",
+        "type": "bigint",
+        "nullable": "NO"
+      }
+    ],
+    "period_review_user_states": [
+      {
+        "name": "period_case_id",
+        "type": "bigint",
+        "nullable": "NO"
+      },
+      {
+        "name": "user_id",
+        "type": "int",
+        "nullable": "NO"
+      },
+      {
+        "name": "last_seen_version_id",
+        "type": "bigint",
+        "nullable": "YES"
+      },
+      {
+        "name": "first_seen_at",
+        "type": "datetime",
+        "nullable": "YES"
+      },
+      {
+        "name": "last_seen_at",
+        "type": "datetime",
+        "nullable": "YES"
+      },
+      {
+        "name": "created_at",
+        "type": "datetime",
+        "nullable": "NO"
+      },
+      {
+        "name": "updated_at",
+        "type": "datetime",
+        "nullable": "NO"
+      }
+    ]
+  },
+  "caseFields": {
+    "trade_review_cases": [
+      {
+        "id": "1534",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-07 05:30:42",
+        "updated_at": "2026-08-07 08:58:43"
+      },
+      {
+        "id": "1535",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-07 05:30:43",
+        "updated_at": "2026-08-07 08:58:43"
+      },
+      {
+        "id": "1536",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-07 05:30:43",
+        "updated_at": "2026-08-11 10:59:30"
+      },
+      {
+        "id": "1537",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-07 05:30:43",
+        "updated_at": "2026-08-11 10:59:30"
+      },
+      {
+        "id": "1538",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-07 05:30:43",
+        "updated_at": "2026-08-11 10:59:30"
+      },
+      {
+        "id": "1539",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-07 05:30:43",
+        "updated_at": "2026-08-11 10:59:30"
+      },
+      {
+        "id": "1540",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-07 05:30:43",
+        "updated_at": "2026-08-11 10:59:30"
+      },
+      {
+        "id": "1541",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-07 05:30:43",
+        "updated_at": "2026-08-11 10:59:30"
+      },
+      {
+        "id": "1542",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-07 05:30:43",
+        "updated_at": "2026-08-11 10:59:30"
+      },
+      {
+        "id": "1660",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-08 05:30:36",
+        "updated_at": "2026-08-10 06:54:24"
+      },
+      {
+        "id": "1661",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-08 05:30:36",
+        "updated_at": "2026-08-10 06:54:24"
+      },
+      {
+        "id": "1662",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-08 05:30:36",
+        "updated_at": "2026-08-10 06:54:24"
+      },
+      {
+        "id": "1663",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-08 05:30:37",
+        "updated_at": "2026-08-10 06:54:25"
+      },
+      {
+        "id": "1664",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-08 05:30:37",
+        "updated_at": "2026-08-10 06:54:25"
+      },
+      {
+        "id": "1665",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-08 05:30:37",
+        "updated_at": "2026-08-10 06:54:25"
+      },
+      {
+        "id": "1666",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-08 05:30:37",
+        "updated_at": "2026-08-09 04:59:16"
+      },
+      {
+        "id": "1667",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-08 05:30:37",
+        "updated_at": "2026-08-09 04:59:16"
+      },
+      {
+        "id": "1668",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-08 05:30:37",
+        "updated_at": "2026-08-09 04:59:16"
+      },
+      {
+        "id": "1669",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-08 05:30:37",
+        "updated_at": "2026-08-09 04:59:16"
+      },
+      {
+        "id": "1670",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-08 05:30:37",
+        "updated_at": "2026-08-09 04:59:16"
+      },
+      {
+        "id": "7224",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-10 06:54:23",
+        "updated_at": "2026-08-10 06:54:23"
+      },
+      {
+        "id": "7225",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-10 06:54:24",
+        "updated_at": "2026-08-10 06:54:24"
+      },
+      {
+        "id": "7232",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-11 10:54:10",
+        "updated_at": "2026-08-12 05:00:15"
+      },
+      {
+        "id": "7233",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-11 10:54:10",
+        "updated_at": "2026-08-12 05:00:15"
+      },
+      {
+        "id": "7234",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-11 10:54:10",
+        "updated_at": "2026-08-12 05:00:15"
+      },
+      {
+        "id": "7235",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-11 10:54:10",
+        "updated_at": "2026-08-12 05:00:15"
+      },
+      {
+        "id": "7236",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-11 10:54:10",
+        "updated_at": "2026-08-12 05:00:15"
+      },
+      {
+        "id": "7237",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-11 10:54:10",
+        "updated_at": "2026-08-12 05:00:15"
+      },
+      {
+        "id": "7238",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-11 10:54:10",
+        "updated_at": "2026-08-12 05:00:15"
+      },
+      {
+        "id": "7239",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-11 10:54:10",
+        "updated_at": "2026-08-12 05:00:15"
+      },
+      {
+        "id": "7240",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-11 10:54:10",
+        "updated_at": "2026-08-12 05:00:15"
+      },
+      {
+        "id": "7241",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-11 10:54:10",
+        "updated_at": "2026-08-12 05:00:15"
+      },
+      {
+        "id": "7242",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-11 10:54:10",
+        "updated_at": "2026-08-12 05:00:15"
+      },
+      {
+        "id": "7243",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-11 10:54:10",
+        "updated_at": "2026-08-12 05:00:15"
+      },
+      {
+        "id": "7244",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-11 10:59:29",
+        "updated_at": "2026-08-11 10:59:29"
+      },
+      {
+        "id": "7245",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-11 10:59:29",
+        "updated_at": "2026-08-11 10:59:29"
+      },
+      {
+        "id": "7246",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-11 10:59:30",
+        "updated_at": "2026-08-11 10:59:30"
+      },
+      {
+        "id": "8094",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-12 05:30:15",
+        "updated_at": "2026-08-13 05:00:24"
+      },
+      {
+        "id": "8095",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-12 05:30:15",
+        "updated_at": "2026-08-13 05:00:24"
+      },
+      {
+        "id": "8096",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-12 05:30:15",
+        "updated_at": "2026-08-13 05:00:24"
+      },
+      {
+        "id": "8097",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-12 05:30:15",
+        "updated_at": "2026-08-13 05:00:24"
+      },
+      {
+        "id": "8470",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-13 05:30:24",
+        "updated_at": "2026-08-13 13:05:48"
+      },
+      {
+        "id": "8471",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-13 05:30:24",
+        "updated_at": "2026-08-13 13:05:48"
+      },
+      {
+        "id": "8472",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-13 05:30:24",
+        "updated_at": "2026-08-13 13:05:48"
+      },
+      {
+        "id": "8473",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-13 05:30:24",
+        "updated_at": "2026-08-13 13:05:48"
+      },
+      {
+        "id": "8474",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-13 05:30:24",
+        "updated_at": "2026-08-13 13:05:48"
+      },
+      {
+        "id": "8475",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-13 05:30:24",
+        "updated_at": "2026-08-13 13:05:48"
+      },
+      {
+        "id": "8476",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-13 05:30:24",
+        "updated_at": "2026-08-13 13:05:49"
+      },
+      {
+        "id": "8477",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-13 05:30:24",
+        "updated_at": "2026-08-13 13:05:49"
+      },
+      {
+        "id": "8478",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-13 05:30:24",
+        "updated_at": "2026-08-13 13:05:49"
+      },
+      {
+        "id": "8479",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-13 05:30:24",
+        "updated_at": "2026-08-13 13:05:49"
+      },
+      {
+        "id": "8480",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-13 05:30:24",
+        "updated_at": "2026-08-13 13:05:49"
+      },
+      {
+        "id": "8481",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-13 05:30:24",
+        "updated_at": "2026-08-13 13:05:49"
+      },
+      {
+        "id": "8482",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-13 05:30:24",
+        "updated_at": "2026-08-13 13:05:50"
+      },
+      {
+        "id": "8483",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-13 05:30:24",
+        "updated_at": "2026-08-13 13:05:50"
+      },
+      {
+        "id": "8484",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-13 05:30:24",
+        "updated_at": "2026-08-13 13:05:50"
+      },
+      {
+        "id": "8935",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-14 05:30:42",
+        "updated_at": "2026-08-14 15:37:56"
+      },
+      {
+        "id": "8936",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-14 05:30:42",
+        "updated_at": "2026-08-14 15:37:56"
+      },
+      {
+        "id": "8937",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-14 05:30:42",
+        "updated_at": "2026-08-14 15:37:56"
+      },
+      {
+        "id": "8938",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-14 05:30:42",
+        "updated_at": "2026-08-14 15:37:56"
+      },
+      {
+        "id": "8939",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-14 05:30:42",
+        "updated_at": "2026-08-14 15:37:56"
+      },
+      {
+        "id": "8940",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-14 05:30:43",
+        "updated_at": "2026-08-14 15:37:55"
+      },
+      {
+        "id": "8941",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-14 05:30:43",
+        "updated_at": "2026-08-14 15:37:55"
+      },
+      {
+        "id": "8942",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-14 05:30:43",
+        "updated_at": "2026-08-14 15:37:55"
+      },
+      {
+        "id": "8943",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-14 05:30:43",
+        "updated_at": "2026-08-14 15:37:55"
+      },
+      {
+        "id": "8944",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-14 05:30:43",
+        "updated_at": "2026-08-14 15:37:55"
+      },
+      {
+        "id": "8945",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-14 05:30:43",
+        "updated_at": "2026-08-14 15:37:54"
+      },
+      {
+        "id": "8946",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-14 05:30:43",
+        "updated_at": "2026-08-14 15:37:54"
+      },
+      {
+        "id": "8947",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-14 05:30:44",
+        "updated_at": "2026-08-14 15:37:54"
+      },
+      {
+        "id": "8948",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-14 05:30:44",
+        "updated_at": "2026-08-14 15:37:54"
+      },
+      {
+        "id": "8949",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-14 05:30:44",
+        "updated_at": "2026-08-14 15:37:54"
+      },
+      {
+        "id": "8950",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-14 05:30:44",
+        "updated_at": "2026-08-14 15:37:53"
+      },
+      {
+        "id": "8951",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-14 05:30:44",
+        "updated_at": "2026-08-14 15:37:53"
+      },
+      {
+        "id": "9122",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:54",
+        "updated_at": "2026-08-15 14:15:56"
+      },
+      {
+        "id": "9123",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:55",
+        "updated_at": "2026-08-15 14:15:56"
+      },
+      {
+        "id": "9124",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:55",
+        "updated_at": "2026-08-15 14:15:55"
+      },
+      {
+        "id": "9125",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:56",
+        "updated_at": "2026-08-15 14:15:54"
+      },
+      {
+        "id": "9126",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:57",
+        "updated_at": "2026-08-15 14:15:59"
+      },
+      {
+        "id": "9127",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:57",
+        "updated_at": "2026-08-15 14:15:59"
+      },
+      {
+        "id": "9128",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:57",
+        "updated_at": "2026-08-15 14:15:59"
+      },
+      {
+        "id": "9129",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:57",
+        "updated_at": "2026-08-15 14:15:59"
+      },
+      {
+        "id": "9130",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:57",
+        "updated_at": "2026-08-15 14:15:59"
+      },
+      {
+        "id": "9131",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:57",
+        "updated_at": "2026-08-15 14:15:59"
+      },
+      {
+        "id": "9132",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:58",
+        "updated_at": "2026-08-15 14:15:59"
+      },
+      {
+        "id": "9133",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:58",
+        "updated_at": "2026-08-15 14:15:58"
+      },
+      {
+        "id": "9134",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:58",
+        "updated_at": "2026-08-15 14:15:58"
+      },
+      {
+        "id": "9135",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:58",
+        "updated_at": "2026-08-15 14:15:58"
+      },
+      {
+        "id": "9136",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:58",
+        "updated_at": "2026-08-15 14:15:58"
+      },
+      {
+        "id": "9137",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:58",
+        "updated_at": "2026-08-15 14:15:58"
+      },
+      {
+        "id": "9138",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:59",
+        "updated_at": "2026-08-15 14:15:58"
+      },
+      {
+        "id": "9139",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:59",
+        "updated_at": "2026-08-15 14:15:57"
+      },
+      {
+        "id": "9140",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:59",
+        "updated_at": "2026-08-15 14:15:57"
+      },
+      {
+        "id": "9141",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:59",
+        "updated_at": "2026-08-15 14:15:57"
+      },
+      {
+        "id": "9142",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:59",
+        "updated_at": "2026-08-15 14:15:57"
+      },
+      {
+        "id": "9143",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:59",
+        "updated_at": "2026-08-15 14:15:57"
+      },
+      {
+        "id": "9804",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-18 05:30:10",
+        "updated_at": "2026-08-18 05:30:10"
+      },
+      {
+        "id": "9805",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-18 05:30:11",
+        "updated_at": "2026-08-18 05:30:11"
+      },
+      {
+        "id": "9806",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-18 05:30:11",
+        "updated_at": "2026-08-18 05:30:11"
+      },
+      {
+        "id": "9807",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-18 05:30:12",
+        "updated_at": "2026-08-18 05:30:12"
+      },
+      {
+        "id": "9808",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-18 05:30:12",
+        "updated_at": "2026-08-18 05:30:12"
+      },
+      {
+        "id": "9809",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-18 05:30:13",
+        "updated_at": "2026-08-18 05:30:13"
+      },
+      {
+        "id": "9810",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-18 05:30:13",
+        "updated_at": "2026-08-18 05:30:13"
+      },
+      {
+        "id": "9811",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-18 05:30:14",
+        "updated_at": "2026-08-18 05:30:14"
+      },
+      {
+        "id": "9812",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-18 05:30:14",
+        "updated_at": "2026-08-18 05:30:14"
+      },
+      {
+        "id": "9813",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-18 05:30:15",
+        "updated_at": "2026-08-18 05:30:15"
+      },
+      {
+        "id": "9814",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-18 05:30:15",
+        "updated_at": "2026-08-18 05:30:15"
+      },
+      {
+        "id": "9815",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-18 05:30:15",
+        "updated_at": "2026-08-18 05:30:15"
+      },
+      {
+        "id": "9816",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-18 05:30:15",
+        "updated_at": "2026-08-18 05:30:15"
+      },
+      {
+        "id": "9817",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-18 05:30:15",
+        "updated_at": "2026-08-18 05:30:15"
+      },
+      {
+        "id": "9818",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-18 05:30:16",
+        "updated_at": "2026-08-18 05:30:16"
+      },
+      {
+        "id": "9819",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:30:53",
+        "updated_at": "2026-08-19 11:34:28"
+      },
+      {
+        "id": "9820",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:30:54",
+        "updated_at": "2026-08-19 11:34:27"
+      },
+      {
+        "id": "9821",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:30:54",
+        "updated_at": "2026-08-19 11:34:27"
+      },
+      {
+        "id": "9822",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:30:55",
+        "updated_at": "2026-08-19 11:34:26"
+      },
+      {
+        "id": "9823",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:30:56",
+        "updated_at": "2026-08-19 11:34:25"
+      },
+      {
+        "id": "9824",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:30:56",
+        "updated_at": "2026-08-19 11:34:25"
+      },
+      {
+        "id": "9825",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:30:57",
+        "updated_at": "2026-08-19 11:34:24"
+      },
+      {
+        "id": "9826",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:30:57",
+        "updated_at": "2026-08-19 11:34:24"
+      },
+      {
+        "id": "9827",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:30:58",
+        "updated_at": "2026-08-19 11:34:23"
+      },
+      {
+        "id": "9828",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:30:58",
+        "updated_at": "2026-08-19 11:34:23"
+      },
+      {
+        "id": "9829",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:30:59",
+        "updated_at": "2026-08-19 11:34:22"
+      },
+      {
+        "id": "9830",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:30:59",
+        "updated_at": "2026-08-19 11:34:22"
+      },
+      {
+        "id": "9831",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:31:00",
+        "updated_at": "2026-08-19 10:35:04"
+      },
+      {
+        "id": "9832",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:31:00",
+        "updated_at": "2026-08-19 10:35:04"
+      },
+      {
+        "id": "9833",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:31:00",
+        "updated_at": "2026-08-19 10:35:03"
+      },
+      {
+        "id": "9834",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:31:01",
+        "updated_at": "2026-08-19 10:35:03"
+      },
+      {
+        "id": "9835",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:31:01",
+        "updated_at": "2026-08-19 10:35:03"
+      },
+      {
+        "id": "9836",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:31:01",
+        "updated_at": "2026-08-19 10:35:03"
+      },
+      {
+        "id": "9837",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:31:01",
+        "updated_at": "2026-08-19 10:35:03"
+      },
+      {
+        "id": "9838",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:31:01",
+        "updated_at": "2026-08-19 10:35:03"
+      },
+      {
+        "id": "9839",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:31:01",
+        "updated_at": "2026-08-19 10:35:03"
+      },
+      {
+        "id": "9840",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:31:02",
+        "updated_at": "2026-08-19 10:35:02"
+      },
+      {
+        "id": "9841",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:31:02",
+        "updated_at": "2026-08-19 10:35:02"
+      },
+      {
+        "id": "9842",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:31:02",
+        "updated_at": "2026-08-19 10:35:02"
+      },
+      {
+        "id": "9939",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-20 05:30:30",
+        "updated_at": "2026-08-20 05:30:30"
+      },
+      {
+        "id": "9940",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-20 05:30:30",
+        "updated_at": "2026-08-20 05:30:30"
+      },
+      {
+        "id": "9941",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-21 05:30:19",
+        "updated_at": "2026-08-21 05:30:19"
+      },
+      {
+        "id": "9942",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-21 05:30:19",
+        "updated_at": "2026-08-21 05:30:19"
+      },
+      {
+        "id": "9943",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-21 05:30:19",
+        "updated_at": "2026-08-21 05:30:19"
+      },
+      {
+        "id": "9944",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-21 05:30:20",
+        "updated_at": "2026-08-21 05:30:20"
+      },
+      {
+        "id": "9945",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-22 05:30:07",
+        "updated_at": "2026-08-22 05:30:07"
+      },
+      {
+        "id": "9946",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-22 05:30:07",
+        "updated_at": "2026-08-22 05:30:07"
+      },
+      {
+        "id": "9947",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-22 05:30:07",
+        "updated_at": "2026-08-22 05:30:07"
+      },
+      {
+        "id": "9948",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-25 05:30:37",
+        "updated_at": "2026-08-25 05:30:37"
+      },
+      {
+        "id": "9949",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-25 05:30:37",
+        "updated_at": "2026-08-25 05:30:37"
+      },
+      {
+        "id": "9950",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-26 05:30:12",
+        "updated_at": "2026-08-26 05:30:12"
+      },
+      {
+        "id": "9951",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-26 05:30:12",
+        "updated_at": "2026-08-26 05:30:12"
+      },
+      {
+        "id": "9952",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-26 05:30:12",
+        "updated_at": "2026-08-26 05:30:12"
+      },
+      {
+        "id": "9953",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-26 05:30:12",
+        "updated_at": "2026-08-26 05:30:12"
+      },
+      {
+        "id": "9954",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-27 05:30:15",
+        "updated_at": "2026-08-27 05:30:15"
+      },
+      {
+        "id": "9955",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-09-01 05:30:20",
+        "updated_at": "2026-09-01 05:30:20"
+      },
+      {
+        "id": "9956",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-09-01 05:30:21",
+        "updated_at": "2026-09-01 05:30:21"
+      },
+      {
+        "id": "9957",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-09-01 05:30:22",
+        "updated_at": "2026-09-01 05:30:22"
+      },
+      {
+        "id": "9958",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-09-01 05:30:23",
+        "updated_at": "2026-09-01 05:30:23"
+      },
+      {
+        "id": "9959",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "status": "ready",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-09-02 05:30:11",
+        "updated_at": "2026-09-02 05:30:11"
+      }
+    ],
+    "manual_trade_review_cases": [
+      {
+        "id": "1",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "strategy_id": "1",
+        "strategy_version": "25",
+        "evidence_status": "partial",
+        "status": "failed",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-24 14:00:19",
+        "updated_at": "2026-08-24 14:02:46"
+      },
+      {
+        "id": "2",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "strategy_id": "1",
+        "strategy_version": "25",
+        "evidence_status": "complete",
+        "status": "failed",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-24 14:41:15",
+        "updated_at": "2026-08-24 21:48:05"
+      },
+      {
+        "id": "3",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "strategy_id": "1",
+        "strategy_version": "25",
+        "evidence_status": "complete",
+        "status": "draft",
+        "current_version_id": "1",
+        "approved_version_id": null,
+        "created_at": "2026-08-24 21:36:28",
+        "updated_at": "2026-08-24 23:05:32"
+      }
+    ],
+    "period_review_cases": [
+      {
+        "id": "213",
+        "period_type": "daily",
+        "period_key": "2026-08-06",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "strategy_id": "1",
+        "strategy_version": "8",
+        "status": "approved",
+        "evidence_status": "complete",
+        "current_version_id": "141",
+        "approved_version_id": "141",
+        "created_at": "2026-08-07 05:30:43",
+        "updated_at": "2026-08-07 09:12:37"
+      },
+      {
+        "id": "214",
+        "period_type": "daily",
+        "period_key": "2026-08-06",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "strategy_id": "3",
+        "strategy_version": "10",
+        "status": "draft",
+        "evidence_status": "complete",
+        "current_version_id": "146",
+        "approved_version_id": null,
+        "created_at": "2026-08-07 05:30:43",
+        "updated_at": "2026-08-11 11:16:11"
+      },
+      {
+        "id": "215",
+        "period_type": "daily",
+        "period_key": "2026-08-07",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "strategy_id": "1",
+        "strategy_version": "8",
+        "status": "draft",
+        "evidence_status": "complete",
+        "current_version_id": "145",
+        "approved_version_id": null,
+        "created_at": "2026-08-08 05:30:37",
+        "updated_at": "2026-08-10 06:54:49"
+      },
+      {
+        "id": "216",
+        "period_type": "daily",
+        "period_key": "2026-08-07",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "strategy_id": "3",
+        "strategy_version": "10",
+        "status": "approved",
+        "evidence_status": "complete",
+        "current_version_id": "143",
+        "approved_version_id": "143",
+        "created_at": "2026-08-08 05:30:37",
+        "updated_at": "2026-08-13 14:35:46"
+      },
+      {
+        "id": "266",
+        "period_type": "daily",
+        "period_key": "2026-08-10",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "strategy_id": "3",
+        "strategy_version": "10",
+        "status": "approved",
+        "evidence_status": "complete",
+        "current_version_id": "148",
+        "approved_version_id": "148",
+        "created_at": "2026-08-11 10:54:10",
+        "updated_at": "2026-08-13 14:31:04"
+      },
+      {
+        "id": "269",
+        "period_type": "daily",
+        "period_key": "2026-08-11",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "strategy_id": "3",
+        "strategy_version": "10",
+        "status": "approved",
+        "evidence_status": "complete",
+        "current_version_id": "150",
+        "approved_version_id": "150",
+        "created_at": "2026-08-12 05:30:15",
+        "updated_at": "2026-08-13 13:11:17"
+      },
+      {
+        "id": "271",
+        "period_type": "daily",
+        "period_key": "2026-08-12",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "strategy_id": "3",
+        "strategy_version": "10",
+        "status": "approved",
+        "evidence_status": "complete",
+        "current_version_id": "151",
+        "approved_version_id": "151",
+        "created_at": "2026-08-13 05:30:24",
+        "updated_at": "2026-08-13 13:11:00"
+      },
+      {
+        "id": "272",
+        "period_type": "daily",
+        "period_key": "2026-08-13",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "strategy_id": "3",
+        "strategy_version": "10",
+        "status": "approved",
+        "evidence_status": "complete",
+        "current_version_id": "152",
+        "approved_version_id": "152",
+        "created_at": "2026-08-14 05:30:45",
+        "updated_at": "2026-08-14 15:50:35"
+      },
+      {
+        "id": "283",
+        "period_type": "daily",
+        "period_key": "2026-08-14",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "strategy_id": "1",
+        "strategy_version": "15",
+        "status": "draft",
+        "evidence_status": "complete",
+        "current_version_id": "155",
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:30:56",
+        "updated_at": "2026-08-16 15:42:42"
+      },
+      {
+        "id": "284",
+        "period_type": "daily",
+        "period_key": "2026-08-14",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "strategy_id": "3",
+        "strategy_version": "10",
+        "status": "draft",
+        "evidence_status": "complete",
+        "current_version_id": "156",
+        "approved_version_id": null,
+        "created_at": "2026-08-15 05:31:00",
+        "updated_at": "2026-08-16 15:43:00"
+      },
+      {
+        "id": "289",
+        "period_type": "daily",
+        "period_key": "2026-08-17",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "strategy_id": "1",
+        "strategy_version": "18",
+        "status": "approved",
+        "evidence_status": "complete",
+        "current_version_id": "159",
+        "approved_version_id": "159",
+        "created_at": "2026-08-18 05:30:14",
+        "updated_at": "2026-08-18 11:37:39"
+      },
+      {
+        "id": "290",
+        "period_type": "daily",
+        "period_key": "2026-08-17",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "strategy_id": "3",
+        "strategy_version": "10",
+        "status": "draft",
+        "evidence_status": "complete",
+        "current_version_id": "157",
+        "approved_version_id": null,
+        "created_at": "2026-08-18 05:30:16",
+        "updated_at": "2026-08-18 05:38:20"
+      },
+      {
+        "id": "291",
+        "period_type": "daily",
+        "period_key": "2026-08-18",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "strategy_id": "1",
+        "strategy_version": "18",
+        "status": "approved",
+        "evidence_status": "complete",
+        "current_version_id": "162",
+        "approved_version_id": "162",
+        "created_at": "2026-08-19 05:31:00",
+        "updated_at": "2026-08-19 11:45:38"
+      },
+      {
+        "id": "292",
+        "period_type": "daily",
+        "period_key": "2026-08-18",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "strategy_id": "3",
+        "strategy_version": "10",
+        "status": "draft",
+        "evidence_status": "complete",
+        "current_version_id": "160",
+        "approved_version_id": null,
+        "created_at": "2026-08-19 05:31:02",
+        "updated_at": "2026-08-19 10:47:50"
+      },
+      {
+        "id": "301",
+        "period_type": "daily",
+        "period_key": "2026-08-19",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "strategy_id": "1",
+        "strategy_version": "18",
+        "status": "approved",
+        "evidence_status": "complete",
+        "current_version_id": "164",
+        "approved_version_id": "164",
+        "created_at": "2026-08-20 05:30:31",
+        "updated_at": "2026-08-20 09:07:21"
+      },
+      {
+        "id": "302",
+        "period_type": "daily",
+        "period_key": "2026-08-20",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "strategy_id": "1",
+        "strategy_version": "21",
+        "status": "failed",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-08-21 05:30:20",
+        "updated_at": "2026-08-21 09:52:46"
+      },
+      {
+        "id": "303",
+        "period_type": "daily",
+        "period_key": "2026-08-20",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "strategy_id": "3",
+        "strategy_version": "10",
+        "status": "draft",
+        "evidence_status": "complete",
+        "current_version_id": "165",
+        "approved_version_id": null,
+        "created_at": "2026-08-21 05:30:20",
+        "updated_at": "2026-08-21 05:38:54"
+      },
+      {
+        "id": "304",
+        "period_type": "daily",
+        "period_key": "2026-08-21",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "strategy_id": "1",
+        "strategy_version": "21",
+        "status": "approved",
+        "evidence_status": "complete",
+        "current_version_id": "167",
+        "approved_version_id": "167",
+        "created_at": "2026-08-22 05:30:07",
+        "updated_at": "2026-08-24 12:10:28"
+      },
+      {
+        "id": "305",
+        "period_type": "daily",
+        "period_key": "2026-08-24",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "strategy_id": "1",
+        "strategy_version": "25",
+        "status": "approved",
+        "evidence_status": "complete",
+        "current_version_id": "169",
+        "approved_version_id": "169",
+        "created_at": "2026-08-25 05:30:37",
+        "updated_at": "2026-08-25 10:35:55"
+      },
+      {
+        "id": "306",
+        "period_type": "daily",
+        "period_key": "2026-08-25",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "strategy_id": "3",
+        "strategy_version": "10",
+        "status": "draft",
+        "evidence_status": "complete",
+        "current_version_id": "170",
+        "approved_version_id": null,
+        "created_at": "2026-08-26 05:30:12",
+        "updated_at": "2026-08-26 05:35:24"
+      },
+      {
+        "id": "307",
+        "period_type": "daily",
+        "period_key": "2026-08-26",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "strategy_id": "1",
+        "strategy_version": "25",
+        "status": "draft",
+        "evidence_status": "complete",
+        "current_version_id": "171",
+        "approved_version_id": null,
+        "created_at": "2026-08-27 05:30:15",
+        "updated_at": "2026-08-27 05:40:35"
+      },
+      {
+        "id": "308",
+        "period_type": "daily",
+        "period_key": "2026-08-31",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "strategy_id": "1",
+        "strategy_version": "42",
+        "status": "draft",
+        "evidence_status": "complete",
+        "current_version_id": "172",
+        "approved_version_id": null,
+        "created_at": "2026-09-01 05:30:24",
+        "updated_at": "2026-09-01 05:34:49"
+      },
+      {
+        "id": "309",
+        "period_type": "monthly",
+        "period_key": "2026-08",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "strategy_id": "1",
+        "strategy_version": "42",
+        "status": "generating",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-09-01 07:00:19",
+        "updated_at": "2026-09-01 07:05:18"
+      },
+      {
+        "id": "310",
+        "period_type": "monthly",
+        "period_key": "2026-08",
+        "user_id": "29",
+        "trading_account_id": "2",
+        "strategy_id": "3",
+        "strategy_version": "10",
+        "status": "generating",
+        "evidence_status": "complete",
+        "current_version_id": null,
+        "approved_version_id": null,
+        "created_at": "2026-09-01 07:00:19",
+        "updated_at": "2026-09-01 07:05:36"
+      },
+      {
+        "id": "311",
+        "period_type": "daily",
+        "period_key": "2026-09-01",
+        "user_id": "1",
+        "trading_account_id": "1",
+        "strategy_id": "1",
+        "strategy_version": "42",
+        "status": "draft",
+        "evidence_status": "complete",
+        "current_version_id": "173",
+        "approved_version_id": null,
+        "created_at": "2026-09-02 05:30:11",
+        "updated_at": "2026-09-02 05:30:44"
+      }
+    ]
+  },
+  "versionFields": {
+    "trade_review_versions": [],
+    "manual_trade_review_versions": [
+      {
+        "id": "1",
+        "case_id": "3",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "model",
+        "author_user_id": null,
+        "created_at": "2026-08-24 23:05:32",
+        "raw_sha256": "5d832dab5d45644af26e430ab99f630ce88a43dbc31a836637b1c64db3af2a4a",
+        "raw_bytes": 46940
+      }
+    ],
+    "period_review_versions": [
+      {
+        "id": "141",
+        "period_case_id": "213",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-07 05:31:03",
+        "raw_sha256": "e3c66c8b6513434d68dd9879f57f6fb2d794126979d97aa7b718a76f078f5e3e",
+        "raw_bytes": 3786
+      },
+      {
+        "id": "142",
+        "period_case_id": "214",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-07 05:31:35",
+        "raw_sha256": "8537a8df93a537f758a02bcf451450cb207af2c03e4846fb5f708a522fc7172d",
+        "raw_bytes": 7770
+      },
+      {
+        "id": "143",
+        "period_case_id": "216",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-08 05:30:59",
+        "raw_sha256": "840797de21873446cc4acc375f5e8493b279ed1122e9cb1847a37c564751ec17",
+        "raw_bytes": 3863
+      },
+      {
+        "id": "144",
+        "period_case_id": "215",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-10 06:07:55",
+        "raw_sha256": "10a4efb6ec93701b371cba73ac2c2aa8111f380e71aca59bbb39674626b71335",
+        "raw_bytes": 5479
+      },
+      {
+        "id": "145",
+        "period_case_id": "215",
+        "version_no": "2",
+        "parent_version_id": "144",
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-10 06:54:49",
+        "raw_sha256": "f6c018109ee2bb331627a1d748f8d638f06bdfc502c1a35ffc0d2936f9beeb91",
+        "raw_bytes": 7162
+      },
+      {
+        "id": "146",
+        "period_case_id": "214",
+        "version_no": "2",
+        "parent_version_id": "142",
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-11 11:16:11",
+        "raw_sha256": "93b6edf32e5084b5e413e456f45652d3fd4b69e9c202a9230b01928a8e25c3ee",
+        "raw_bytes": 8331
+      },
+      {
+        "id": "147",
+        "period_case_id": "266",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-11 11:18:20",
+        "raw_sha256": "0a545f71eb35405bd50e1010ae1453c91234cba8f466051127748ec701affaf6",
+        "raw_bytes": 7645
+      },
+      {
+        "id": "148",
+        "period_case_id": "266",
+        "version_no": "2",
+        "parent_version_id": "147",
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-12 05:00:43",
+        "raw_sha256": "f8c9aba10f6b8f4bdae0f8f1906bfd3536807bd434835143f57fe20e71e1eb47",
+        "raw_bytes": 7735
+      },
+      {
+        "id": "149",
+        "period_case_id": "269",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-12 05:33:41",
+        "raw_sha256": "e21901ae7b5e5ae22ad118919fa230bf22e40394f18af28baddd8b4549ea1f72",
+        "raw_bytes": 6091
+      },
+      {
+        "id": "150",
+        "period_case_id": "269",
+        "version_no": "2",
+        "parent_version_id": "149",
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-13 05:00:47",
+        "raw_sha256": "04340d895e9b428eb3ac33931eef36a6408fa7e98a829ecd0d38715ac2e6ffa6",
+        "raw_bytes": 4206
+      },
+      {
+        "id": "151",
+        "period_case_id": "271",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-13 05:31:02",
+        "raw_sha256": "e17004ac61ca922cd99e94b02144d50f6c152cc37c8ec81cbf5981726d2bcebc",
+        "raw_bytes": 9542
+      },
+      {
+        "id": "152",
+        "period_case_id": "272",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-14 15:38:45",
+        "raw_sha256": "beaabd7134ceebdee8385d5ac2966b48d79bafea9f9b53ce806f09308a18de20",
+        "raw_bytes": 5937
+      },
+      {
+        "id": "153",
+        "period_case_id": "283",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-15 05:31:16",
+        "raw_sha256": "68ba8ccf9958f4d8ec9a6de0902a23aff294b78d49026630a193b77082d4abed",
+        "raw_bytes": 3335
+      },
+      {
+        "id": "154",
+        "period_case_id": "284",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-15 05:31:48",
+        "raw_sha256": "6f02324ab115ca84a2fece66296fec263fb65286d07c0b3138369014638fea75",
+        "raw_bytes": 5263
+      },
+      {
+        "id": "155",
+        "period_case_id": "283",
+        "version_no": "2",
+        "parent_version_id": "153",
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-16 15:42:42",
+        "raw_sha256": "c504c29fa7c4a59fd49d49cd8c035a57defa7c14a03438af3ee75f4c8ff0b9ba",
+        "raw_bytes": 3339
+      },
+      {
+        "id": "156",
+        "period_case_id": "284",
+        "version_no": "2",
+        "parent_version_id": "154",
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-16 15:43:00",
+        "raw_sha256": "79bcc2adb5b2f596a393c19fd93af4ae7ed924d098a06eb8cfb55be0c2b9c4a6",
+        "raw_bytes": 7401
+      },
+      {
+        "id": "157",
+        "period_case_id": "290",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-18 05:38:20",
+        "raw_sha256": "38d9afcc9ccb71d0195d83720468db5bf54e41e7ee79ca7052d3dc5bc81a5e4a",
+        "raw_bytes": 13160
+      },
+      {
+        "id": "158",
+        "period_case_id": "289",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-18 10:08:56",
+        "raw_sha256": "f8ba50c0bfb337a1daf3fbfc50709b0b01d3bd393e082fde7178970bbe35e0d3",
+        "raw_bytes": 22437
+      },
+      {
+        "id": "159",
+        "period_case_id": "289",
+        "version_no": "2",
+        "parent_version_id": "158",
+        "author_type": "user",
+        "author_user_id": "1",
+        "created_at": "2026-08-18 11:37:39",
+        "raw_sha256": "247993874326472a45b80340ce80624b6e7bf088e14672c1414f22fc878bc0db",
+        "raw_bytes": 22538
+      },
+      {
+        "id": "160",
+        "period_case_id": "292",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-19 10:47:50",
+        "raw_sha256": "04211225c2135b169e1b5f890a0312f4807ae449495970c4d4d066d66a2bec0f",
+        "raw_bytes": 31806
+      },
+      {
+        "id": "161",
+        "period_case_id": "291",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-19 11:39:30",
+        "raw_sha256": "93c22f95543b926ddf6cbcc4c3a3547c94a4ebba5eff7a036f55e5dfeca9bc72",
+        "raw_bytes": 27744
+      },
+      {
+        "id": "162",
+        "period_case_id": "291",
+        "version_no": "2",
+        "parent_version_id": "161",
+        "author_type": "user",
+        "author_user_id": "1",
+        "created_at": "2026-08-19 11:45:38",
+        "raw_sha256": "743acdfb3daa255813406e277356ac700f4ae64d508f341401e3a3d4065b7083",
+        "raw_bytes": 27813
+      },
+      {
+        "id": "163",
+        "period_case_id": "301",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-20 05:41:48",
+        "raw_sha256": "b666282e0f171971f187aa75439edc5901bde6c65637acc9dcd768323e2b7c12",
+        "raw_bytes": 11787
+      },
+      {
+        "id": "164",
+        "period_case_id": "301",
+        "version_no": "2",
+        "parent_version_id": "163",
+        "author_type": "user",
+        "author_user_id": "1",
+        "created_at": "2026-08-20 09:07:21",
+        "raw_sha256": "1bf6c2a6fcf0b2c31f671fa722fb5ea13e2c83728e0f560b1676b2c4223625d9",
+        "raw_bytes": 11747
+      },
+      {
+        "id": "165",
+        "period_case_id": "303",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-21 05:38:54",
+        "raw_sha256": "bb576125367b27f2e4ac46a7fec3868ae6d5b3a7f068fec1bc95a57605009258",
+        "raw_bytes": 7297
+      },
+      {
+        "id": "166",
+        "period_case_id": "304",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-24 11:50:28",
+        "raw_sha256": "394c363c8da5c658e3cba119db8091add1a37b9de7c3ea7d07118f264c11e91a",
+        "raw_bytes": 14308
+      },
+      {
+        "id": "167",
+        "period_case_id": "304",
+        "version_no": "2",
+        "parent_version_id": "166",
+        "author_type": "user",
+        "author_user_id": "1",
+        "created_at": "2026-08-24 12:10:28",
+        "raw_sha256": "bf498d611117a102dac79925ab3492d45f62643f637109c6b844ced1168717ef",
+        "raw_bytes": 14368
+      },
+      {
+        "id": "168",
+        "period_case_id": "305",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-25 05:45:58",
+        "raw_sha256": "908788f892aad49861c10ebb7f3fdfcab0e4ea2f4b444b29b29a74841542bdfb",
+        "raw_bytes": 12143
+      },
+      {
+        "id": "169",
+        "period_case_id": "305",
+        "version_no": "2",
+        "parent_version_id": "168",
+        "author_type": "user",
+        "author_user_id": "1",
+        "created_at": "2026-08-25 10:35:55",
+        "raw_sha256": "c03ef0950f964b11f53178c4e81ba76b863fe5fc4b7ebced3aaba528c34ad926",
+        "raw_bytes": 12243
+      },
+      {
+        "id": "170",
+        "period_case_id": "306",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-26 05:35:24",
+        "raw_sha256": "3f5f5bbfee44c4b4dcbd8323bdc597dbb97d426e2d8f56bf5526f20c29d7a669",
+        "raw_bytes": 18345
+      },
+      {
+        "id": "171",
+        "period_case_id": "307",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-08-27 05:40:35",
+        "raw_sha256": "793cff299cc9524b20a995c931388ac29db3f7dda7430865f66964d27a8a6afb",
+        "raw_bytes": 7871
+      },
+      {
+        "id": "172",
+        "period_case_id": "308",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-09-01 05:34:49",
+        "raw_sha256": "96d2c0813a47154acd4bdda20556025165eaae4f9dc70395e552462715d6d291",
+        "raw_bytes": 13958
+      },
+      {
+        "id": "173",
+        "period_case_id": "311",
+        "version_no": "1",
+        "parent_version_id": null,
+        "author_type": "ai",
+        "author_user_id": null,
+        "created_at": "2026-09-02 05:30:44",
+        "raw_sha256": "895d0c153259a7f662eba8d7d249ae3283172cd7f7539d880017207d55849b1c",
+        "raw_bytes": 5946
+      }
+    ]
+  },
+  "observedAt": "2026-09-11T03:10:43.506Z"
+}

@@ -1,0 +1,30 @@
+{
+  "kind": "trade-history-schema-inventory/v1",
+  "inspected": true,
+  "writes": 0,
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "present": [
+    {
+      "name": "trade_history_migration_checkpoints_v4",
+      "kind": "BASE TABLE",
+      "engine": "InnoDB"
+    }
+  ],
+  "missing": [
+    "trade_history_sync_states_v4",
+    "terminal_history_orders_v4",
+    "terminal_history_deals_v4",
+    "account_trade_records_v4",
+    "account_trade_record_deals_v4",
+    "account_trade_attributions_v4",
+    "account_trade_daily_summaries_v4",
+    "terminal_history_order_provenance_v4"
+  ],
+  "definitions": {
+    "trade_history_migration_checkpoints_v4": "CREATE TABLE `trade_history_migration_checkpoints_v4` (\n  `source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `source_partition` varchar(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `last_source_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `source_count` bigint unsigned NOT NULL DEFAULT '0',\n  `migrated_count` bigint unsigned NOT NULL DEFAULT '0',\n  `reconciled_count` bigint unsigned NOT NULL DEFAULT '0',\n  `status` enum('pending','running','reconciling','complete','failed') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'pending',\n  `last_error_code` varchar(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`source_table`,`source_partition`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+  },
+  "observedAt": "2026-09-09T05:09:04.949Z"
+}

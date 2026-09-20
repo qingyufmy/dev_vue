@@ -1,0 +1,71 @@
+{
+  "kind": "review-business-reference/v1",
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "referenceDatabaseRemoved": true,
+  "checks": [
+    "manual_creation_concurrent_receipt_replay",
+    "six_business_write_paths_with_original_cas_replays_and_actual_foreign_keys",
+    "manual_replay_denied_after_actual_owner_revocation"
+  ],
+  "scope": "Actual six review write repositories with original migration 012 and 049; scaffold prerequisite domains; not current database upgrade or historical restoration.",
+  "migrationSha256": "c02eef5973761396b7c25721a89ea3b99bebae37ea6980e5e7dbea4cbbbe8a13",
+  "artifacts": [
+    {
+      "path": "scripts/verify-review-business-reference-local.mjs",
+      "sha256": "5f0a66f2616fc7cae8f287e38e57601e124364f7bf0a4e25032bda32b5ee3827"
+    },
+    {
+      "path": "scripts/run-review-business-reference-local.py",
+      "sha256": "555dd493718a566c2045dc561b661462a4b9bd61bdd3d39fb2c3b83f849a1a75"
+    },
+    {
+      "path": "server/dist-v4/modules/reviews/application/review-write-command.js",
+      "sha256": "289987e0e6152d6e39cd33eab75ab59002ab678760cdf58b776e376652be451f"
+    },
+    {
+      "path": "server/dist-v4/modules/reviews/infrastructure/mysql-review-write-receipts.js",
+      "sha256": "1fd784493a0df71c8ed253747db27e0d2bef4eae1d89224d74a966675293807f"
+    },
+    {
+      "path": "server/dist-v4/modules/reviews/infrastructure/review-transaction.js",
+      "sha256": "88e84147e7431d96a3b5756c253d78bbe349531e403498e7f158bfef84f97a4e"
+    },
+    {
+      "path": "server/dist-v4/modules/reviews/infrastructure/mysql-review-repository.js",
+      "sha256": "49d883bb6b6094cea733c4e05b63ff7522496d8fd291bac833263abef0a28abc"
+    },
+    {
+      "path": "server/dist-v4/modules/reviews/infrastructure/mysql-review-case-write.js",
+      "sha256": "72bec0f3a4e857e27e0b9b5096be73cda8dcca7161042041ceaafa5e167fce24"
+    },
+    {
+      "path": "server/dist-v4/modules/reviews/infrastructure/mysql-review-memory-write.js",
+      "sha256": "eef95aaab3f6428b7d0322d2ccafe4a81bb4c36d36cf92daf7688b9290d1b613"
+    },
+    {
+      "path": "server/dist-v4/modules/reviews/infrastructure/mysql-manual-review-write.js",
+      "sha256": "40345f6ea34f8fc2378c048701d22a9c779f11c8802a41c093ca87f676d14cbc"
+    },
+    {
+      "path": "server/dist-v4/modules/reviews/application/review-service.js",
+      "sha256": "8ef90c50f14e8b2e2aebba46682a9726be0856a819f7941d7ba9952e0b05195b"
+    },
+    {
+      "path": "server/dist-v4/modules/reviews/domain/review-result.js",
+      "sha256": "86d10616ff0f0c33f0f6c80e548057afd0375a4be0536643eb190649b15b9264"
+    }
+  ],
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "serverVersion": "8.4.8",
+  "referenceDatabase": "dev_vue_review_business_ref_bcded0812da64b0594c74bb49aa5036c",
+  "reviewMigrationSha256": "2586fb4a5b9a36a0bd0e4a2e213ff60d6026888eaebe9c83b75840ea99db5b53",
+  "stage": "memory_revoke",
+  "counts": {
+    "receipts": 8,
+    "cases": 1,
+    "versions": 3,
+    "memoryVersions": 2
+  },
+  "observedAt": "2026-09-09T10:34:42.404Z"
+}

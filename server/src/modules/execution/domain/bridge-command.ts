@@ -1,5 +1,5 @@
+import type { ExecutionJsonObject } from './execution-input.js'
 import { createHash } from 'node:crypto'
-import type { JsonObject } from '../../inference/domain/inference.js'
 
 export const BRIDGE_COMMAND_ACTIONS = [
   'order.place', 'position.protection.set', 'position.close',
@@ -79,7 +79,7 @@ export interface BridgeCommandResultEnvelope {
     action: BridgeCommandAction
     status: BridgeCommandResultStatus
     completed_at_utc_msc: number
-    result: JsonObject | null
+    result: ExecutionJsonObject | null
     error_code: string | null
     terminal_code?: string | number | null
   }
@@ -117,8 +117,8 @@ export interface BridgeCommandSpec {
   action: BridgeCommandAction
   issued_at_utc_msc: number
   deadline_utc_msc: number
-  params: JsonObject
-  expected_state: JsonObject | null
+  params: ExecutionJsonObject
+  expected_state: ExecutionJsonObject | null
 }
 
 export interface CreateBridgeCommandInput {
@@ -129,8 +129,8 @@ export interface CreateBridgeCommandInput {
   terminalProfileId: string
   route: BridgeRoute
   action: BridgeCommandAction
-  params: JsonObject
-  expectedState: JsonObject | null
+  params: ExecutionJsonObject
+  expectedState: ExecutionJsonObject | null
   deadlineAt: string
 }
 
@@ -285,7 +285,7 @@ function assertRoute(route: BridgeRoute) {
   if (!safeText(route.brokerServer, 128) || !safeText(route.login, 64)) fail('bridge_command_route_invalid')
   assertUtcMsc(route.connectionEpoch, 'bridge_command_epoch_invalid')
 }
-function assertCommandShape(action: BridgeCommandAction, params: JsonObject, expected: JsonObject | null) {
+function assertCommandShape(action: BridgeCommandAction, params: ExecutionJsonObject, expected: ExecutionJsonObject | null) {
   const ticket = (value: unknown) => typeof value === 'string' && /^[1-9][0-9]{0,19}$/.test(value)
   const positive = (value: unknown) => typeof value === 'string' && /^(?:0\.[0-9]*[1-9][0-9]*|[1-9][0-9]*(?:\.[0-9]+)?)$/.test(value)
   const integer = (value: unknown, max = 100_000) => Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= max
@@ -330,7 +330,7 @@ function assertCommandShape(action: BridgeCommandAction, params: JsonObject, exp
   }
   if (expected !== null) assertExpectedTradeState(expected)
 }
-function assertExpectedTradeState(value: JsonObject) {
+function assertExpectedTradeState(value: ExecutionJsonObject) {
   const keys = ['ticket', 'symbol', 'direction', 'order_type', 'magic', 'volume', 'open_price', 'stop_limit_price', 'stop_loss', 'take_profit', 'expiration_utc_msc']
   const decimalOrNull = (item: unknown) => item === null || (typeof item === 'string' && /^(?:0\.[0-9]*[1-9][0-9]*|[1-9][0-9]*(?:\.[0-9]+)?)$/.test(item))
   if (Object.keys(value).length !== keys.length || !keys.every(key => key in value)
@@ -345,7 +345,7 @@ function assertExpectedTradeState(value: JsonObject) {
 function assertUtcMsc(value: number, code: string) { if (!Number.isSafeInteger(value) || value < 1) fail(code) }
 function assertOpaque(value: string, field: string) { if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{7,190}$/.test(String(value ?? ''))) fail(`bridge_command_${field}_invalid`) }
 function assertInternalId(value: string, field: string) { if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,190}$/.test(String(value ?? ''))) fail(`bridge_command_${field}_invalid`) }
-function assertObject(value: JsonObject, max: number, code: string) { if (!value || Array.isArray(value) || typeof value !== 'object' || Object.keys(value).length > max) fail(code) }
+function assertObject(value: ExecutionJsonObject, max: number, code: string) { if (!value || Array.isArray(value) || typeof value !== 'object' || Object.keys(value).length > max) fail(code) }
 function safeText(value: string, max: number) { return typeof value === 'string' && value.length > 0 && value.length <= max && !/[\r\n]/.test(value) }
 function assertDate(value: Date) { if (!(value instanceof Date) || !Number.isFinite(value.getTime()) || value.getTime() < 1) fail('bridge_command_time_invalid') }
 function fail(code: string, status = 422): never { throw new BridgeCommandError(code, status) }

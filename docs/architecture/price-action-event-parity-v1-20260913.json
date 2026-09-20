@@ -1,0 +1,15 @@
+{
+  "kind": "price-action-event-parity/v1",
+  "observedAt": "2026-09-13T06:31:17.191Z",
+  "passed": true,
+  "referencePath": "D:/dev_codex/wall-street-skill-local/server/routes/ai/market-data.js",
+  "referenceSha256": "b945ae29ab5df61648d5d8da86af27835ef7874be60bc7f43aa441820780b796",
+  "checks": 500,
+  "breakouts": 251,
+  "reclaims": 81,
+  "boundedWindowParity": true,
+  "databaseWrites": 0,
+  "modelCalls": 0,
+  "terminalCalls": 0,
+  "scope": "Objective breakout/reclaim parity only; event usage ledger and independent-opportunity admission are not covered."
+}

@@ -1,12 +1,18 @@
 param(
     [ValidateSet('x86', 'x64')]
-    [string]$Platform = 'x86'
+    [string]$Platform = 'x86',
+    [ValidateSet('artifacts', 'artifacts-review')]
+    [string]$BuildDirectoryName = 'artifacts',
+    [string]$ClientConfigPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $prototypeRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-$artifactsRoot = Join-Path $prototypeRoot 'artifacts'
+$artifactsRoot = Join-Path $prototypeRoot $BuildDirectoryName
 $packagesRoot = Join-Path $prototypeRoot '.packages'
+if ($ClientConfigPath) {
+    & (Join-Path $prototypeRoot 'prepare-client-config.ps1') -ClientConfigPath $ClientConfigPath | Out-Host
+}
 $coreOutput = Join-Path $artifactsRoot 'LiangjianBridge.Core.dll'
 $appOutput = Join-Path $artifactsRoot 'LiangjianBridge.exe'
 $launcherOutput = Join-Path $artifactsRoot 'LiangjianBridge.Launcher.exe'
@@ -52,10 +58,16 @@ if (-not (Test-Path -LiteralPath $sqliteManaged) -or -not (Test-Path -LiteralPat
 New-Item -ItemType Directory -Path $artifactsRoot -Force | Out-Null
 $resolvedPrototypeRoot = [IO.Path]::GetFullPath($prototypeRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
 $resolvedArtifactsRoot = [IO.Path]::GetFullPath($artifactsRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
-$expectedArtifactsRoot = Join-Path $resolvedPrototypeRoot 'artifacts'
+$expectedArtifactsRoot = Join-Path $resolvedPrototypeRoot $BuildDirectoryName
 if (-not [string]::Equals($resolvedArtifactsRoot, $expectedArtifactsRoot, [StringComparison]::OrdinalIgnoreCase)) {
     throw "bridge_artifacts_root_invalid: $resolvedArtifactsRoot"
 }
+# An archive/live worker can still execute from artifacts-review even when the GUI is elsewhere.
+# Check before deleting any output, otherwise a failed cleanup leaves a partial Python runtime.
+$activeBuildProcesses = Get-CimInstance Win32_Process | Where-Object {
+    $_.ExecutablePath -and $_.ExecutablePath.StartsWith($resolvedArtifactsRoot + '\', [StringComparison]::OrdinalIgnoreCase)
+}
+if ($activeBuildProcesses) { throw 'bridge_build_output_in_use' }
 $buildOutputs = @(
     $coreOutput,
     $appOutput,
@@ -69,6 +81,9 @@ $buildOutputs = @(
     $signedStageFixtureOutput,
     (Join-Path $resolvedArtifactsRoot 'x86'),
     (Join-Path $resolvedArtifactsRoot 'x64')
+    (Join-Path $resolvedArtifactsRoot 'runtime')
+    (Join-Path $resolvedArtifactsRoot 'workers')
+    (Join-Path $resolvedArtifactsRoot 'bridge-client.json')
 )
 foreach ($buildOutput in $buildOutputs) {
     if (Test-Path -LiteralPath $buildOutput) {
@@ -96,12 +111,13 @@ $nativeOutput = Join-Path $artifactsRoot $Platform
 New-Item -ItemType Directory -Path $nativeOutput -Force | Out-Null
 Copy-Item -LiteralPath $sqliteNative -Destination (Join-Path $nativeOutput 'SQLite.Interop.dll') -Force
 
+$applicationIcon = Join-Path $prototypeRoot '..\..\assets\liangjian-bridge.ico'
 $appSources = Get-ChildItem -LiteralPath (Join-Path $prototypeRoot 'src\LiangjianBridge') -Filter '*.cs' -Recurse | ForEach-Object FullName
-& $compiler @common @references "/reference:$coreOutput" "/reference:$frameworkRoot\System.Drawing.dll" "/reference:$frameworkRoot\System.Windows.Forms.dll" /target:winexe "/out:$appOutput" @appSources
+& $compiler @common @references "/reference:$coreOutput" "/reference:$frameworkRoot\System.Drawing.dll" "/reference:$frameworkRoot\System.Windows.Forms.dll" /target:winexe "/win32icon:$applicationIcon" "/resource:$applicationIcon,LiangjianBridge.ico" "/out:$appOutput" @appSources
 if ($LASTEXITCODE -ne 0) { throw 'bridge_app_build_failed' }
 
 $launcherSources = Get-ChildItem -LiteralPath (Join-Path $prototypeRoot 'src\LiangjianBridge.Launcher') -Filter '*.cs' | ForEach-Object FullName
-& $compiler @common @references /target:winexe "/out:$launcherOutput" @launcherSources
+& $compiler @common @references /target:winexe "/win32icon:$applicationIcon" "/out:$launcherOutput" @launcherSources
 if ($LASTEXITCODE -ne 0) { throw 'bridge_launcher_build_failed' }
 
 $smokeSources = Get-ChildItem -LiteralPath (Join-Path $prototypeRoot 'tests\LiangjianBridge.SmokeTests') -Filter '*.cs' | ForEach-Object FullName
@@ -121,6 +137,23 @@ if ($LASTEXITCODE -ne 0) { throw 'bridge_update_fixture_build_failed' }
 if ($LASTEXITCODE -ne 0) { throw 'bridge_signed_stage_fixture_build_failed' }
 
 Write-Host "Built Bridge V4 prototype ($Platform): $artifactsRoot"
+if ($ClientConfigPath) {
+    & (Join-Path $prototypeRoot 'prepare-client-config.ps1') -ClientConfigPath $ClientConfigPath -OutputRoot $artifactsRoot | Out-Host
+}
+
+$runtimeOutput = Join-Path $artifactsRoot 'runtime\python'
+& (Join-Path $prototypeRoot 'prepare-runtime.ps1') -OutputRoot $runtimeOutput | Out-Host
+$workerOutput = Join-Path $artifactsRoot 'workers\mt5'
+New-Item -ItemType Directory -Path $workerOutput -Force | Out-Null
+foreach ($module in @('worker.py', 'trade.py', 'order_completion.py')) {
+    Copy-Item -LiteralPath (Join-Path $prototypeRoot "..\..\native\workers\mt5\$module") -Destination (Join-Path $workerOutput $module)
+}
+$workerVerification = Join-Path $runtimeOutput 'verify_worker.py'
+Set-Content -LiteralPath $workerVerification -Encoding ASCII -Value 'import sys, runpy; runpy.run_path(sys.argv[1], run_name="bridge_import_check")'
+& (Join-Path $runtimeOutput 'python.exe') -I $workerVerification (Join-Path $workerOutput 'worker.py')
+if ($LASTEXITCODE -ne 0) { throw 'bridge_worker_python38_import_failed' }
+& (Join-Path $prototypeRoot 'prepare-mt4-adapter.ps1') -OutputRoot (Join-Path $artifactsRoot 'adapters\mt4') | Out-Host
+& (Join-Path $prototypeRoot 'prepare-mt4-adapter.ps1') -OutputRoot (Join-Path $artifactsRoot 'adapters\mt4') -VerifyOnly | Out-Host
 
 if ($Platform -eq 'x86') {
     $vcVars = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvarsall.bat'

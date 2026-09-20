@@ -1,0 +1,51 @@
+{
+  "kind": "core-data-read-evidence-index/v1",
+  "scope": "current source hashes plus separately dated migration reports and current compiled-runtime readonly probes; not a full data reconciliation",
+  "sources": [
+    {
+      "path": "server/src/modules/trading/infrastructure/mysql-trading-repository.ts",
+      "sha256": "f2575a0d3987438b83840810f0c8c1aa95e144c4936c2eaabffdbbd3121f30b1"
+    },
+    {
+      "path": "server/src/modules/strategies/infrastructure/mysql-strategy-catalog.ts",
+      "sha256": "aa04e94eb5191d51e18fd5f0713a3dd230faa310d7e600ce54b4da180f943952"
+    },
+    {
+      "path": "server/src/modules/strategies/infrastructure/mysql-analysis-schedule-store.ts",
+      "sha256": "3e38b9411dd601b9224f1abdacff21a9d580c6a64dc10bd0ad85651cb983cdeb"
+    },
+    {
+      "path": "server/src/modules/risk/infrastructure/mysql-risk-repository.ts",
+      "sha256": "3291bd7e74f7215dcfbfa14c16c9c998fec052ff87e3f71b807f77c7777c8ce7"
+    },
+    {
+      "path": "server/src/modules/reviews/infrastructure/mysql-review-repository.ts",
+      "sha256": "944322efb94e9ffa9210ea6d97455e6cfd0d4240abacc887cf7a6b89888e2912"
+    },
+    {
+      "path": "server/src/modules/reviews/infrastructure/mysql-runtime-strategy-memory-reader.ts",
+      "sha256": "0d9a5d99347136db4ecf6c94700ed259342d38b87b7c41df162dba41024f4ac9"
+    },
+    {
+      "path": "scripts/lib/v4-strategy-role-config-conversion.mjs",
+      "sha256": "5a04bf723c143e85bccbdde1f2a536fa8d5561d742582da3ff855ab85a25c19c"
+    }
+  ],
+  "currentReadonlyReports": [
+    {
+      "path": "docs/architecture/core-read-cutover-current-v1-20260911.json",
+      "sha256": "85bf968873efe1eec45e5a426e8f53a1095717757c30ea23c7230eaf036b044d",
+      "observedAt": "2026-09-11T09:54:09.891Z"
+    },
+    {
+      "path": "docs/architecture/core-risk-read-current-v1-20260911.json",
+      "sha256": "408d596c028653ea480f678b160bc0d3c262b0219e97a92dc7c5060882eaacf8",
+      "observedAt": "2026-09-11T09:54:48.801Z"
+    },
+    {
+      "path": "docs/architecture/core-review-read-current-v1-20260911.json",
+      "sha256": "8226f3e37678332e54dda6ec8487bcb6b8703077eaf393d9292b406837b2a9d5",
+      "observedAt": "2026-09-11T09:54:49.578Z"
+    }
+  ]
+}

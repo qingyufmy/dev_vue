@@ -1,10 +1,13 @@
 import type { OutboxTaskPublisher, ClaimedOutboxEvent } from '../application/outbox-ports.js'
 import type { RuntimeTaskQueues } from '../../queue/task-queues.js'
+import type { PartialCloseWorkflowTaskQueue } from '../../queue/partial-close-workflow-queue.js'
+import { publishPartialCloseWorkflow } from './partial-close-outbox-task.js'
 
 export class BullMqOutboxTaskPublisher implements OutboxTaskPublisher {
-  constructor(private readonly queues: RuntimeTaskQueues) {}
+  constructor(private readonly queues: RuntimeTaskQueues, private readonly partialClose?: PartialCloseWorkflowTaskQueue) {}
 
   async publish(event: ClaimedOutboxEvent) {
+    if (await publishPartialCloseWorkflow(event,this.partialClose)) return
     if (event.eventType === 'analysis.requested') {
       const analysisId = requiredId(event.payload.analysis_id, 'outbox_analysis_id_invalid')
       await this.queues.analysis.add('analysis.run', { analysisId }, { jobId: event.eventId })
@@ -43,22 +46,33 @@ export class BullMqOutboxTaskPublisher implements OutboxTaskPublisher {
       await this.queues.execution.add('execution.distribution.target', { distributionTargetId }, { jobId: event.eventId })
       return
     }
+    if (event.eventType === 'bridge.command.reconcile.requested') {
+      const commandId = requiredId(event.payload.command_id, 'outbox_command_id_invalid')
+      if (Object.keys(event.payload).length !== 1) throw new Error('outbox_reconcile_payload_invalid')
+      await this.queues.bridgeDispatch.add('bridge.command.reconcile', { commandId }, { jobId: event.eventId })
+      return
+    }
     if (event.eventType === 'bridge.command.queued') {
       const commandId = requiredId(event.payload.command_id, 'outbox_command_id_invalid')
       await this.queues.bridgeDispatch.add('bridge.command.dispatch', { commandId }, { jobId: event.eventId })
       return
     }
-    if (event.eventType === 'trade.history.requested') {
-      const accountId = requiredAccountId(event.payload.account_id)
-      await this.queues.bridgeHistory.add('trade.history.collect', { accountId }, { jobId: event.eventId })
+    if (event.eventType === 'trade.history.task.requested' || event.eventType === 'trade.history.task.completed') {
+      const taskId = event.payload.task_id
+      if (typeof taskId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(taskId)
+        || Object.keys(event.payload).length !== 1) throw Error('outbox_history_task_id_invalid')
+      if (event.eventType === 'trade.history.task.completed') {
+        await this.queues.manualCandidates.add('review.candidates.collect', { taskId }, { jobId: event.eventId })
+      } else await this.queues.bridgeHistoryTask.add('trade.history.task.collect', { taskId }, { jobId: event.eventId })
+      return
+    }
+    if (event.eventType === 'trade.history.requested') throw Error('outbox_history_legacy_event_retired')
+    if (event.eventType === 'instrument.collection.requested') {
+      const requestId = requiredId(event.payload.request_id, 'outbox_instrument_request_id_invalid')
+      await this.queues.bridgeInstrument.add('instrument.collection.collect', { requestId }, { jobId: event.eventId })
+      return
     }
   }
-}
-
-function requiredAccountId(value: unknown) {
-  if (typeof value !== 'string' || !/^[1-9]\d{0,19}$/.test(value)
-    || BigInt(value) > 18_446_744_073_709_551_615n) throw new Error('outbox_account_id_invalid')
-  return value
 }
 
 function requiredUserId(value: unknown) {

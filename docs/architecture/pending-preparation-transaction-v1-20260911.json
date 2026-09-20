@@ -1,0 +1,21 @@
+{
+  "kind": "pending-command-mysql-reference/v1",
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "dataCopied": false,
+  "foreignKeysVerified": false,
+  "syntheticPorts": [
+    "policy",
+    "analysis",
+    "instrument",
+    "pending-projection",
+    "historical-origin"
+  ],
+  "checks": [],
+  "errorCode": "ER_NO_SUCH_TABLE",
+  "locations": [
+    "    at file:///D:/dev_codex/dev_vue/scripts/verify-pending-preparation-reference-local.mjs:42:30",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)"
+  ],
+  "observedAt": "2026-09-11T04:33:21.742Z"
+}

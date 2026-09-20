@@ -1,26 +1,30 @@
+import { riskErrorMessage } from '../model/risk-presentation'
+import { usePolicyWriteRecovery } from './use-policy-write-recovery'
 import { runContextCommand, recoverContextCommand, contextCommandState } from '~/features/trading-context'
 import { tradingAccounts, tradingContext, applyTradingContext, applyTradingAccounts } from '~/features/trading-context'
 import type { ManualReleaseState, RiskDecisionDetail, RiskDecisionSummary, RiskPolicy, RiskPolicyPatchBody, RiskSummary, TradingAccount } from '@aurum/contracts'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Ref } from 'vue'
 import { useTradeSession } from '~/features/auth'
+import { ApiClientError } from '@aurum/api-client'
 
 import { riskApi } from '../api/risk-api'
 import { createRiskRealtime, type RiskChangeKind, type RiskRealtimeState } from '../realtime/risk-realtime'
 import type { NumericPolicyKey } from '../model/risk-presentation'
+import { createManualReleaseRecovery, readPendingRelease, type PendingManualRelease } from '../model/manual-release-recovery'
 
 export function useRiskWorkspace(selectedDecisionId: Ref<string>, selectDecision: (id: string) => void) {
   const { session } = useTradeSession()
   const loading = ref(false)
   const refreshing = ref(false)
   const switching = ref(false)
-  const savingPolicy = ref(false)
   const releasing = ref(false)
   const error = ref('')
   const summaryError = ref('')
   const decisionsError = ref('')
-  const policyError = ref('')
   const releaseError = ref('')
+  const pendingRelease = ref<PendingManualRelease | null>(null)
+  const releaseRecoveryMessage = ref('')
   const detailError = ref('')
   const detailLoading = ref(false)
   const realtime = ref<RiskRealtimeState>('idle')
@@ -31,6 +35,7 @@ export function useRiskWorkspace(selectedDecisionId: Ref<string>, selectDecision
   const decisions = ref<RiskDecisionSummary[]>([])
   const detail = ref<RiskDecisionDetail | null>(null)
   let generation = 0
+  let releaseOperation: symbol | null = null
   let realtimeController: ReturnType<typeof createRiskRealtime> | null = null
 
   const account = computed<TradingAccount | null>(() => tradingAccounts.value.find((item) => item.id === activeAccountId.value) ?? null)
@@ -125,40 +130,83 @@ export function useRiskWorkspace(selectedDecisionId: Ref<string>, selectDecision
     }
   }
 
+  const policyRecovery = usePolicyWriteRecovery(() => session.value && activeAccountId.value && policy.value && !isObserver.value
+    ? { userId: String(session.value.user.id), accountId: activeAccountId.value, csrfToken: session.value.csrf_token,
+      revision: policy.value.revision, readOnly: readOnly.value, generation } : null,
+    async () => { await Promise.all([refreshPolicy(), refreshSummaryAndRelease(), refreshDecisions()]);
+      if (summaryError.value || releaseError.value || decisionsError.value) throw Error('partial refresh failed') })
+  const savingPolicy = policyRecovery.busy, policyError = policyRecovery.error
   async function savePolicy(input: { patch: Partial<Record<NumericPolicyKey, string>> & { tradeSendEnabled?: boolean; accountKillSwitch?: boolean }; reason: string }) {
-    if (!session.value || !activeAccountId.value || !policy.value || readOnly.value || savingPolicy.value) return false
-    const accountId = activeAccountId.value, userId = session.value.user.id, currentGeneration = generation
-    const isCurrent = () => currentGeneration === generation && activeAccountId.value === accountId && session.value?.user.id === userId
-    savingPolicy.value = true
-    policyError.value = ''
-    try {
-      const body = policyPatchBody(input.patch, input.reason)
-      const response = await riskApi.replacePolicy(session.value.csrf_token, accountId, body, policy.value.revision)
-      if (!isCurrent()) return false
-      policy.value = response.data
-      await Promise.all([refreshSummaryAndRelease(), refreshDecisions()])
-      return isCurrent()
-    } catch (reason) {
-      if (isCurrent()) policyError.value = readableError(reason, '风控规则保存失败')
-      return false
-    } finally { savingPolicy.value = false }
+    return policyRecovery.run('create', policyPatchBody(input.patch, input.reason))
   }
 
   async function createManualRelease(reason: string) {
-    if (!session.value || !activeAccountId.value || !summary.value || readOnly.value || releasing.value) return false
+    return runReleaseRecovery('create', reason)
+  }
+
+  function syncPendingRelease() {
+    pendingRelease.value = null
+    if (!session.value || !activeAccountId.value || isObserver.value) return
+    try { pendingRelease.value = readPendingRelease(localStorage, { userId: String(session.value.user.id), accountId: activeAccountId.value }) }
+    catch { releaseRecoveryMessage.value = '无法读取待确认操作，请检查浏览器存储后再操作。' }
+  }
+
+  async function runReleaseRecovery(action: 'create' | 'query' | 'retry', reason = '') {
+    if (!session.value || !activeAccountId.value || readOnly.value || releasing.value || (action === 'create' && !summary.value)) return false
     const accountId = activeAccountId.value, userId = session.value.user.id, currentGeneration = generation
     const isCurrent = () => currentGeneration === generation && activeAccountId.value === accountId && session.value?.user.id === userId
+    const operation = Symbol('manual-release')
+    releaseOperation = operation
     releasing.value = true
     releaseError.value = ''
+    releaseRecoveryMessage.value = ''
+    let confirmed = false
     try {
-      await riskApi.createManualRelease(session.value.csrf_token, accountId, { acknowledge_risk: true, reason }, summary.value.revision, crypto.randomUUID())
+      const recovery = createManualReleaseRecovery({ storage: localStorage, key: () => crypto.randomUUID(),
+        current: () => isCurrent() && !readOnly.value,
+        knownPreWriteRejection: failure => failure instanceof ApiClientError && [400, 412, 422, 428].includes(failure.status)
+          && ['api_request_invalid', 'if_match_required', 'risk_manual_release_revision_invalid', 'idempotency_key_invalid',
+            'risk_manual_release_acknowledgement_required', 'risk_manual_release_reason_invalid', 'risk_summary_revision_conflict']
+            .includes(failure.problem?.code ?? ''),
+        lock: async (name, work) => {
+          if (!navigator.locks) throw Error('release_storage_lock_unavailable')
+          return navigator.locks.request(name, work)
+        },
+        query: async request => (await riskApi.getManualReleaseReceipt(request.accountId, request.key)).data.state,
+        send: async request => { await riskApi.createManualRelease(session.value!.csrf_token, request.accountId, request.body, request.revision, request.key) },
+      })
+      const result = await recovery.run({ userId: String(userId), accountId }, action,
+        action === 'create' ? { reason, revision: summary.value!.revision } : undefined)
       if (!isCurrent()) return false
+      syncPendingRelease()
+      if (result !== 'confirmed') {
+        releaseRecoveryMessage.value = result === 'rejected' ? '本次请求已被拒绝，未创建解除记录。请刷新风险状态并检查输入后再提交。'
+          : result === 'absent' ? '当前账户没有待确认的解除操作。' : '服务端尚未确认原操作。可以继续查询，或使用下方按钮重试原请求。'
+        if (result === 'rejected') releaseError.value = releaseRecoveryMessage.value
+        return false
+      }
+      confirmed = true
+      releaseRecoveryMessage.value = '原解除操作已确认，正在更新账户状态。'
       await Promise.all([refreshSummaryAndRelease(), refreshDecisions()])
+      if (isCurrent()) releaseRecoveryMessage.value = summaryError.value || releaseError.value || decisionsError.value
+        ? '原解除操作已确认，但部分账户状态未能更新，请刷新页面。' : '原解除操作已确认，账户状态已更新。'
       return isCurrent()
-    } catch (failure) {
-      if (isCurrent()) releaseError.value = readableError(failure, '手动解除限制失败')
+    } catch {
+      if (isCurrent()) {
+        syncPendingRelease()
+        releaseError.value = confirmed ? '原解除操作已确认，但账户状态更新失败，请刷新页面。'
+          : pendingRelease.value ? '操作尚未确认，原请求已保留。请查询结果后再决定是否重试。'
+            : '无法安全保存或读取操作，未创建新的解除请求。请检查浏览器存储后重试。'
+        releaseRecoveryMessage.value = releaseError.value
+      }
       return false
-    } finally { releasing.value = false }
+    } finally {
+      if (releaseOperation === operation) {
+        releaseOperation = null
+        releasing.value = false
+        syncPendingRelease()
+      }
+    }
   }
 
   async function refreshSummaryAndRelease() {
@@ -246,13 +294,24 @@ export function useRiskWorkspace(selectedDecisionId: Ref<string>, selectDecision
     for (const message of [error, summaryError, decisionsError, policyError, releaseError, detailError]) message.value = ''
     if (session.value) void load()
   }, { flush: 'sync' })
-  onMounted(load)
-  onBeforeUnmount(() => { generation += 1; stopRealtime() })
+  watch(() => [session.value?.user.id, activeAccountId.value, isObserver.value], () => {
+    releaseOperation = null
+    releasing.value = false
+    releaseRecoveryMessage.value = ''
+    syncPendingRelease()
+  }, { flush: 'sync' })
+  const onReleaseStorage = (event: StorageEvent) => {
+    if (event.key === null || event.key.startsWith('aurum:risk-release:v1:')) syncPendingRelease()
+  }
+  onMounted(() => { window.addEventListener('storage', onReleaseStorage); void load() })
+  onBeforeUnmount(() => { generation += 1; releaseOperation = null; stopRealtime(); window.removeEventListener('storage', onReleaseStorage) })
 
   return {
     loading, refreshing, switching, savingPolicy, releasing, error, summaryError, decisionsError, policyError, releaseError, detailError, detailLoading, realtime,
     activeAccountId, accounts: tradingAccounts, context: tradingContext, account, policy, summary, manualRelease, decisions, detail,
     isObserver, readOnly, load, refresh, selectAccount, savePolicy, createManualRelease, loadDetail,
+    pendingRelease, releaseRecoveryMessage, runReleaseRecovery,
+    pendingPolicy: policyRecovery.pending, policyRecoveryMessage: policyRecovery.message, runPolicyRecovery: policyRecovery.run,
   }
 }
 
@@ -263,6 +322,7 @@ function policyPatchBody(patch: Partial<Record<NumericPolicyKey, string>> & { tr
   if (patch.maxDrawdownPercent !== undefined) body.max_drawdown_percent = patch.maxDrawdownPercent
   if (patch.maxOpenPositions !== undefined) body.max_open_positions = Number(patch.maxOpenPositions)
   if (patch.maxPendingOrders !== undefined) body.max_pending_orders = Number(patch.maxPendingOrders)
+  if (patch.maxOrderVolume !== undefined) body.max_order_volume = patch.maxOrderVolume
   if (patch.maxTotalVolume !== undefined) body.max_total_volume = patch.maxTotalVolume
   if (patch.maxSpreadPoints !== undefined) body.max_spread_points = patch.maxSpreadPoints
   if (patch.minOpenIntervalSeconds !== undefined) body.min_open_interval_seconds = Number(patch.minOpenIntervalSeconds)
@@ -277,5 +337,5 @@ function policyPatchBody(patch: Partial<Record<NumericPolicyKey, string>> & { tr
 }
 
 function readableError(reason: unknown, fallback: string) {
-  return reason instanceof Error && reason.message ? reason.message : fallback
+  return riskErrorMessage(reason, fallback)
 }

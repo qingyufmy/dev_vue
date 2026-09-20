@@ -35,6 +35,7 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
   const decisions = ref<TraderDecisionSummary[]>([])
   const detail = ref<TraderDecisionDetail | null>(null)
   const operationNotice = ref('')
+  const executionRefreshVersion = ref(0)
   let generation = 0
   let realtimeController: ReturnType<typeof createTraderRealtime> | null = null
   let queuedAccountId: string | null = null
@@ -130,7 +131,7 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
     resourceRevisions.value.pendingOrders = workspace.data.pendingOrders.revision
   }
 
-  async function refreshDecisions(preferredId = '') {
+  async function refreshDecisions() {
     if (!activeAccountId.value || observerChannelId.value) return
     const current = requests.begin('decisions')
     decisionsLoading.value = true
@@ -138,8 +139,10 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
     try {
       const response = await traderApi.listDecisions(activeAccountId.value, 50)
       if (!current()) return
+      const followLatest = !selectedDecisionId.value || selectedDecisionId.value === decisions.value[0]?.decisionId
       decisions.value = response.data.items
-      if (preferredId && decisions.value.some((item) => item.decisionId === preferredId)) selectDecision(preferredId)
+      const latest = decisions.value[0]?.decisionId
+      if (followLatest && latest && latest !== selectedDecisionId.value) selectDecision(latest)
       else normalizeDecisionSelection()
     } catch (reason) {
       if (current()) decisionsError.value = readableError(reason, 'AI 交易员记录暂时无法读取')
@@ -222,14 +225,19 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
           lastSeenAt: data.last_seen_at,
         })
       },
-      onDecisionChanged: (decisionId) => { if (!current()) return; void refreshDecisions(decisionId) },
+      onDecisionChanged: () => { if (!current()) return; executionRefreshVersion.value++; void refreshDecisions() },
       onOperationChanged: (operationId) => {
         if (!current()) return
+        executionRefreshVersion.value++
         operationNotice.value = '交易执行状态已变化，账户资源已重新同步。'
         operationChanged?.(operationId)
         void Promise.all([syncWorkspace(), refreshDecisions()])
       },
-      resync: () => current() ? Promise.all([syncWorkspace(), refreshDecisions()]) : Promise.resolve(),
+      resync: () => {
+        if (!current()) return Promise.resolve()
+        executionRefreshVersion.value++
+        return Promise.all([syncWorkspace(), refreshDecisions()])
+      },
     })
   }
 
@@ -277,7 +285,7 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
     selectDecision('')
   }
 
-  watch(() => session.value, () => {
+  watch(() => JSON.stringify([session.value?.user.id, session.value?.authenticated_at]), () => {
     generation += 1
     queuedAccountId = null
     stopRealtime()
@@ -298,6 +306,7 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
   onBeforeUnmount(() => { generation += 1; stopRealtime() })
 
   return {
+    executionRefreshVersion,
     accounts: tradingAccounts,
     context: tradingContext,
     account: currentAccount,

@@ -11,3 +11,21 @@ export * from './application/analysis-window-guard.js'
 export * from './application/model-task-recovery.js'
 export type { AnalysisTradingReader, TraderAccountReader } from './application/trading-read-capabilities.js'
 export type * from './application/model-usage-ledger.js'
+export type { TradeDecisionRiskWriter } from './application/trade-decision-risk-writer.js'
+export type { TradeDecisionOrigin, TradeDecisionOriginReader } from './application/trade-decision-origin-reader.js'
+export type { TradeDecisionAnalysis, TradeDecisionAnalysisReader } from './application/trade-decision-analysis-reader.js'
+export type { ProposedDecisionEvidence, ProposedDecisionEvidenceScope, ProposedDecisionEvidenceReader } from './application/proposed-decision-evidence-reader.js'
+export type { StrategyReferenceScope, StrategyReferenceItem, StrategyReferencePendingItem, StrategyReferencePortfolio, StrategyReferencePortfolioReader } from './application/strategy-reference-portfolio.js'
+
+export type * from './application/reference-position-evidence.js'
+export { readReferencePositionLifecycles } from './application/reference-position-lifecycle.js'
+
+export { ReadStrategyReferencePortfolio } from './application/read-strategy-reference-portfolio.js'
+export type { DecisionStrategyEvidenceReader, DecisionStrategyEvidenceScope, DecisionStrategyEvidence } from './application/decision-strategy-evidence-reader.js'
+
+export type * from './application/archived-signal-reader.js'
+
+export { readAccountPositionEntries, unavailableAccountPositionEntries } from './application/account-position-entry-evidence.js'
+export type { AccountPositionEntryReader } from './application/account-position-entry-evidence.js'
+
+export type { TradeDecisionReapprovalWriter } from './application/trade-decision-reapproval-writer.js'

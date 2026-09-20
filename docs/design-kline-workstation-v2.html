@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>K 线工作台 v2 — MT5 风格设计稿</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg-base: #1a1a2e;
+    --bg-panel: #16213e;
+    --bg-surface: #0f3460;
+    --bg-hover: #1a3a6a;
+    --bg-input: #0d1b3e;
+    --border: #233554;
+    --border-active: #e94560;
+    --text: #eaeaea;
+    --text-dim: #8892a4;
+    --text-muted: #5a6478;
+    --green: #26de81;
+    --green-dim: rgba(38,222,129,0.12);
+    --red: #fc5c65;
+    --red-dim: rgba(252,92,101,0.12);
+    --blue: #45aaf2;
+    --blue-dim: rgba(69,170,242,0.12);
+    --yellow: #fed330;
+    --yellow-dim: rgba(254,211,48,0.12);
+    --purple: #a55eea;
+    --accent: #e94560;
+    --header-h: 28px;
+    --toolbar-h: 32px;
+    --status-h: 22px;
+    --market-watch-w: 180px;
+    --toolbox-h: 180px;
+  }
+  body { font-family: 'Segoe UI', -apple-system, sans-serif; background: var(--bg-base); color: var(--text); height: 100vh; overflow: hidden; font-size: 12px; }
+
+  /* ===== MENU BAR ===== */
+  .menu-bar { height: var(--header-h); background: var(--bg-panel); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 4px; }
+  .menu-bar .app-logo { padding: 0 10px; font-weight: 700; font-size: 12px; color: var(--accent); white-space: nowrap; border-right: 1px solid var(--border); height: 100%; display: flex; align-items: center; gap: 6px; }
+  .menu-bar .app-logo span { color: var(--text-dim); font-weight: 400; }
+  .menu-items { display: flex; height: 100%; }
+  .menu-item { padding: 0 10px; display: flex; align-items: center; cursor: pointer; font-size: 12px; color: var(--text-dim); height: 100%; }
+  .menu-item:hover { background: var(--bg-hover); color: var(--text); }
+  .menu-right { margin-left: auto; display: flex; align-items: center; gap: 12px; padding-right: 8px; }
+  .menu-right .status-pill { display: flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 3px; font-size: 10px; }
+  .menu-right .status-pill.online { background: var(--green-dim); color: var(--green); }
+  .menu-right .status-pill.trading { background: var(--yellow-dim); color: var(--yellow); }
+  .menu-right .clock { color: var(--text-dim); font-variant-numeric: tabular-nums; font-size: 11px; }
+
+  /* ===== TOOLBAR ===== */
+  .toolbar { height: var(--toolbar-h); background: var(--bg-panel); border-bottom: 1px solid var(--border); display: flex; align-items: center; padding: 0 6px; gap: 2px; }
+  .toolbar-group { display: flex; align-items: center; gap: 1px; padding: 0 4px; border-right: 1px solid var(--border); height: 100%; }
+  .toolbar-group:last-child { border-right: none; }
+  .tb-btn { width: 26px; height: 24px; display: flex; align-items: center; justify-content: center; border-radius: 3px; cursor: pointer; font-size: 13px; color: var(--text-dim); }
+  .tb-btn:hover { background: var(--bg-hover); color: var(--text); }
+  .tb-btn.active { background: var(--accent); color: #fff; }
+  .tb-sep { width: 1px; height: 18px; background: var(--border); margin: 0 2px; }
+  .tb-label { font-size: 10px; color: var(--text-dim); padding: 0 4px; white-space: nowrap; }
+  .tb-dropdown { background: var(--bg-input); border: 1px solid var(--border); border-radius: 3px; padding: 2px 6px; color: var(--text); font-size: 11px; cursor: pointer; }
+
+  /* Account bar in toolbar */
+  .account-bar { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+  .account-bar .acc-select { background: var(--bg-input); border: 1px solid var(--border); border-radius: 3px; padding: 2px 8px; color: var(--text); font-size: 11px; }
+  .account-bar .acc-metrics { display: flex; gap: 12px; font-size: 11px; font-variant-numeric: tabular-nums; }
+  .account-bar .acc-metric { display: flex; gap: 4px; }
+  .account-bar .acc-label { color: var(--text-muted); }
+  .account-bar .positive { color: var(--green); }
+  .account-bar .negative { color: var(--red); }
+
+  /* ===== MAIN AREA ===== */
+  .main-area { display: flex; height: calc(100vh - var(--header-h) - var(--toolbar-h) - var(--status-h)); }
+
+  /* ===== LEFT: MARKET WATCH ===== */
+  .market-watch { width: var(--market-watch-w); background: var(--bg-panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
+  .mw-header { padding: 4px 8px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-muted); font-weight: 600; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+  .mw-header .search-icon { cursor: pointer; color: var(--text-dim); }
+  .mw-list { flex: 1; overflow-y: auto; }
+  .mw-symbol { display: grid; grid-template-columns: 1fr auto auto; gap: 4px; padding: 3px 8px; cursor: pointer; font-size: 11px; align-items: center; border-bottom: 1px solid rgba(35,53,84,0.5); }
+  .mw-symbol:hover { background: var(--bg-hover); }
+  .mw-symbol.active { background: var(--bg-surface); border-left: 2px solid var(--accent); }
+  .mw-symbol .sym-name { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .mw-symbol .sym-bid { text-align: right; font-variant-numeric: tabular-nums; }
+  .mw-symbol .sym-ask { text-align: right; font-variant-numeric: tabular-nums; }
+  .mw-symbol .sym-spread { font-size: 9px; color: var(--text-muted); text-align: right; grid-column: 3; }
+
+  /* ===== CENTER: CHART ===== */
+  .chart-center { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .chart-tabs { display: flex; background: var(--bg-panel); border-bottom: 1px solid var(--border); }
+  .chart-tab { padding: 4px 14px; font-size: 11px; cursor: pointer; color: var(--text-dim); border-right: 1px solid var(--border); display: flex; align-items: center; gap: 6px; }
+  .chart-tab.active { background: var(--bg-base); color: var(--text); border-bottom: 2px solid var(--accent); }
+  .chart-tab .tab-close { font-size: 9px; opacity: 0.5; }
+  .chart-tab .tab-close:hover { opacity: 1; color: var(--red); }
+  .chart-tab .new-tab { padding: 4px 8px; color: var(--text-muted); cursor: pointer; }
+  .chart-tab .new-tab:hover { color: var(--green); }
+
+  .chart-toolbar { display: flex; align-items: center; padding: 2px 8px; background: var(--bg-panel); border-bottom: 1px solid var(--border); gap: 8px; font-size: 11px; }
+  .chart-toolbar .tf-group { display: flex; gap: 1px; }
+  .chart-toolbar .tf-btn { padding: 2px 6px; border-radius: 2px; cursor: pointer; color: var(--text-dim); font-size: 10px; }
+  .chart-toolbar .tf-btn:hover { background: var(--bg-hover); color: var(--text); }
+  .chart-toolbar .tf-btn.active { background: var(--accent); color: #fff; }
+  .chart-toolbar .sep { width: 1px; height: 14px; background: var(--border); }
+  .chart-toolbar .indicator-btn { padding: 2px 6px; border-radius: 2px; cursor: pointer; color: var(--text-dim); }
+  .chart-toolbar .indicator-btn:hover { background: var(--bg-hover); color: var(--text); }
+  .chart-toolbar .quote-live { margin-left: auto; display: flex; gap: 12px; font-variant-numeric: tabular-nums; }
+  .chart-toolbar .bid-price { color: var(--green); font-weight: 600; }
+  .chart-toolbar .ask-price { color: var(--red); font-weight: 600; }
+  .chart-toolbar .spread-val { color: var(--text-muted); }
+
+  .chart-area { flex: 1; position: relative; background: var(--bg-base); overflow: hidden; }
+
+  /* Right side panel overlay in chart */
+  .chart-side-panel { position: absolute; top: 0; right: 0; width: 240px; height: 100%; background: rgba(22,33,62,0.95); border-left: 1px solid var(--border); display: flex; flex-direction: column; z-index: 5; backdrop-filter: blur(4px); }
+  .csp-header { padding: 6px 8px; border-bottom: 1px solid var(--border); display: flex; gap: 4px; }
+  .csp-tab { padding: 3px 8px; border-radius: 3px; font-size: 10px; cursor: pointer; color: var(--text-dim); }
+  .csp-tab.active { background: var(--bg-surface); color: var(--text); font-weight: 600; }
+  .csp-content { flex: 1; overflow-y: auto; padding: 6px; }
+
+  /* AI Signal mini card */
+  .ai-signal-mini { background: var(--bg-surface); border-radius: 4px; padding: 8px; margin-bottom: 6px; border: 1px solid var(--border); }
+  .ai-signal-mini .sig-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .ai-signal-mini .sig-badge { padding: 1px 6px; border-radius: 3px; font-size: 9px; font-weight: 600; }
+  .ai-signal-mini .sig-badge.bull { background: var(--green-dim); color: var(--green); }
+  .ai-signal-mini .sig-conf { font-size: 18px; font-weight: 700; }
+  .ai-signal-mini .sig-bar { height: 4px; border-radius: 2px; background: var(--bg-base); overflow: hidden; display: flex; margin: 4px 0; }
+  .ai-signal-mini .sig-bar .bull-fill { background: var(--green); }
+  .ai-signal-mini .sig-bar .bear-fill { background: var(--red); }
+  .ai-signal-mini .sig-text { font-size: 10px; color: var(--text-dim); line-height: 1.4; }
+  .ai-signal-mini .sig-meta { font-size: 9px; color: var(--text-muted); margin-top: 4px; }
+
+  /* Quick position card in side panel */
+  .pos-card { background: var(--bg-surface); border-radius: 4px; padding: 6px 8px; margin-bottom: 4px; border: 1px solid var(--border); cursor: pointer; }
+  .pos-card:hover { border-color: var(--blue); }
+  .pos-card .pos-head { display: flex; justify-content: space-between; align-items: center; }
+  .pos-card .pos-ticket { font-size: 9px; color: var(--text-muted); }
+  .pos-card .pos-pnl { font-weight: 700; font-size: 12px; }
+  .pos-card .pos-pnl.pos { color: var(--green); }
+  .pos-card .pos-pnl.neg { color: var(--red); }
+  .pos-card .pos-info { display: flex; gap: 6px; font-size: 10px; color: var(--text-dim); margin-top: 2px; }
+  .pos-card .pos-actions { display: flex; gap: 3px; margin-top: 4px; }
+  .pos-card .pos-actions button { flex: 1; padding: 2px; border-radius: 2px; font-size: 9px; border: 1px solid var(--border); background: transparent; color: var(--text-dim); cursor: pointer; }
+  .pos-card .pos-actions button:hover { border-color: var(--blue); color: var(--text); }
+  .pos-card .pos-actions button.close-btn { color: var(--red); }
+  .pos-card .pos-actions button.close-btn:hover { border-color: var(--red); background: var(--red-dim); }
+
+  /* ===== RIGHT: NAVIGATOR ===== */
+  .navigator { width: 200px; background: var(--bg-panel); border-left: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
+  .nav-header { padding: 4px 8px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--text-muted); font-weight: 600; border-bottom: 1px solid var(--border); }
+  .nav-tabs { display: flex; border-bottom: 1px solid var(--border); }
+  .nav-tab { flex: 1; padding: 4px 0; text-align: center; font-size: 10px; cursor: pointer; color: var(--text-dim); border-bottom: 2px solid transparent; }
+  .nav-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .nav-content { flex: 1; overflow-y: auto; padding: 4px 0; }
+  .nav-group { padding: 0 8px; }
+  .nav-group-title { font-size: 10px; color: var(--text-muted); padding: 4px 0; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 4px; }
+  .nav-group-title .arrow { font-size: 8px; }
+  .nav-item { padding: 3px 0 3px 16px; font-size: 11px; cursor: pointer; color: var(--text-dim); display: flex; align-items: center; gap: 6px; }
+  .nav-item:hover { color: var(--text); background: var(--bg-hover); margin: 0 -8px; padding-left: 24px; padding-right: 8px; }
+  .nav-item .icon { font-size: 10px; width: 14px; text-align: center; }
+  .nav-item.active { color: var(--accent); }
+
+  /* ===== BOTTOM: TOOLBOX ===== */
+  .toolbox { height: var(--toolbox-h); background: var(--bg-panel); border-top: 1px solid var(--border); display: flex; flex-direction: column; }
+  .toolbox-tabs { display: flex; border-bottom: 1px solid var(--border); padding: 0 4px; }
+  .toolbox-tab { padding: 4px 12px; font-size: 10px; cursor: pointer; color: var(--text-dim); border-bottom: 2px solid transparent; white-space: nowrap; }
+  .toolbox-tab.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+  .toolbox-tab .count { background: var(--bg-surface); padding: 0 4px; border-radius: 8px; font-size: 9px; margin-left: 4px; }
+  .toolbox-content { flex: 1; overflow-y: auto; }
+  .toolbox-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  .toolbox-table th { padding: 3px 8px; text-align: left; font-weight: 600; color: var(--text-muted); font-size: 10px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg-panel); }
+  .toolbox-table td { padding: 3px 8px; border-bottom: 1px solid rgba(35,53,84,0.3); font-variant-numeric: tabular-nums; }
+  .toolbox-table tr:hover td { background: var(--bg-hover); }
+  .toolbox-table .green { color: var(--green); }
+  .toolbox-table .red { color: var(--red); }
+  .toolbox-table .dim { color: var(--text-dim); }
+
+  /* ===== STATUS BAR ===== */
+  .status-bar { height: var(--status-h); background: var(--bg-panel); border-top: 1px solid var(--border); display: flex; align-items: center; padding: 0 8px; gap: 16px; font-size: 10px; color: var(--text-dim); }
+  .status-bar .conn-status { display: flex; align-items: center; gap: 4px; }
+  .status-bar .conn-dot { width: 6px; height: 6px; border-radius: 50%; }
+  .status-bar .conn-dot.ok { background: var(--green); }
+  .status-bar .sep { width: 1px; height: 12px; background: var(--border); }
+  .status-bar .right-info { margin-left: auto; display: flex; gap: 12px; }
+
+  /* SVG Chart elements */
+  .chart-svg { width: 100%; height: 100%; }
+
+  /* Overlay markers */
+  .chart-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; }
+  .chart-overlay > * { pointer-events: auto; }
+
+  /* OHLC data strip */
+  .ohlc-strip { position: absolute; top: 4px; left: 8px; display: flex; gap: 10px; font-size: 10px; font-variant-numeric: tabular-nums; z-index: 3; }
+  .ohlc-strip .label { color: var(--text-muted); margin-right: 2px; }
+  .ohlc-strip .up { color: var(--green); }
+  .ohlc-strip .dn { color: var(--red); }
+
+  /* Context menu */
+  .ctx-menu { position: absolute; background: var(--bg-panel); border: 1px solid var(--border); border-radius: 4px; padding: 3px; box-shadow: 0 4px 16px rgba(0,0,0,0.5); z-index: 20; min-width: 170px; }
+  .ctx-item { padding: 5px 10px; border-radius: 3px; font-size: 11px; cursor: pointer; display: flex; align-items: center; gap: 6px; color: var(--text-dim); }
+  .ctx-item:hover { background: var(--bg-hover); color: var(--text); }
+  .ctx-divider { height: 1px; background: var(--border); margin: 2px 0; }
+
+  /* Position tooltip */
+  .pos-tooltip { position: absolute; background: var(--bg-panel); border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; box-shadow: 0 4px 16px rgba(0,0,0,0.5); z-index: 15; min-width: 180px; }
+  .pos-tooltip .tt-title { font-weight: 600; font-size: 11px; margin-bottom: 4px; display: flex; justify-content: space-between; }
+  .pos-tooltip .tt-row { display: flex; justify-content: space-between; font-size: 10px; padding: 1px 0; }
+  .pos-tooltip .tt-lbl { color: var(--text-muted); }
+  .pos-tooltip .tt-btns { display: flex; gap: 3px; margin-top: 6px; }
+  .pos-tooltip .tt-btn { padding: 3px 8px; border-radius: 3px; font-size: 9px; border: 1px solid var(--border); background: transparent; color: var(--text-dim); cursor: pointer; }
+  .pos-tooltip .tt-btn:hover { border-color: var(--blue); color: var(--text); }
+  .pos-tooltip .tt-btn.red { color: var(--red); }
+</style>
+</head>
+<body>
+
+<!-- MENU BAR -->
+<div class="menu-bar">
+  <div class="app-logo">量见 <span>AI 交易终端</span></div>
+  <div class="menu-items">
+    <div class="menu-item">文件</div>
+    <div class="menu-item">视图</div>
+    <div class="menu-item">插入</div>
+    <div class="menu-item">图表</div>
+    <div class="menu-item">工具</div>
+    <div class="menu-item">窗口</div>
+    <div class="menu-item" style="color:var(--accent)">AI 助手</div>
+    <div class="menu-item">帮助</div>
+  </div>
+  <div class="menu-right">
+    <span class="status-pill online">● 桥接在线</span>
+    <span class="status-pill trading">● 允许交易</span>
+    <span class="clock">11:58:30 MT5</span>
+  </div>
+</div>
+
+<!-- TOOLBAR -->
+<div class="toolbar">
+  <div class="toolbar-group">
+    <div class="tb-btn" title="新图表">📊</div>
+    <div class="tb-btn" title="删除图表">✕</div>
+  </div>
+  <div class="toolbar-group">
+    <div class="tb-btn" title="K线图" class="active">🕯️</div>
+    <div class="tb-btn" title="折线图">📈</div>
+    <div class="tb-btn" title="柱状图">📊</div>
+  </div>
+  <div class="toolbar-group">
+    <div class="tb-btn" title="放大">🔍</div>
+    <div class="tb-btn" title="缩小">🔎</div>
+    <div class="tb-btn" title="自动滚动">⇾</div>
+  </div>
+  <div class="toolbar-group">
+    <div class="tb-btn" title="指标">📐</div>
+    <div class="tb-btn" title="缠论叠加">🔀</div>
+    <div class="tb-btn" title="画线工具">✏️</div>
+  </div>
+  <div class="toolbar-group">
+    <div class="tb-btn" title="新订单" style="color:var(--green);font-weight:700">✚</div>
+  </div>
+  <div class="toolbar-group">
+    <div class="tb-btn" title="自动交易" style="color:var(--yellow)">⚡</div>
+  </div>
+
+  <!-- Account bar -->
+  <div class="account-bar">
+    <select class="acc-select">
+      <option>MT5 · 860058 · DooTechnology-Demo</option>
+    </select>
+    <div class="acc-metrics">
+      <div class="acc-metric"><span class="acc-label">净值</span><span>18,483.48</span></div>
+      <div class="acc-metric"><span class="acc-label">浮盈</span><span class="positive">+589.44</span></div>
+      <div class="acc-metric"><span class="acc-label">可用</span><span>17,627.67</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- MAIN AREA -->
+<div class="main-area">
+
+  <!-- LEFT: MARKET WATCH -->
+  <div class="market-watch">
+    <div class="mw-header">
+      <span>市场报价</span>
+      <span class="search-icon">🔍</span>
+    </div>
+    <div class="mw-list">
+      <div class="mw-symbol active">
+        <span class="sym-name">XAUUSD.s</span>
+        <span class="sym-bid" style="color:var(--green)">4324.50</span>
+        <span class="sym-spread">30</span>
+      </div>
+      <div class="mw-symbol">
+        <span class="sym-name">EURUSD.s</span>
+        <span class="sym-bid" style="color:var(--green)">1.10842</span>
+        <span class="sym-spread">12</span>
+      </div>
+      <div class="mw-symbol">
+        <span class="sym-name">GBPUSD.s</span>
+        <span class="sym-bid" style="color:var(--red)">1.30421</span>
+        <span class="sym-spread">15</span>
+      </div>
+      <div class="mw-symbol">
+        <span class="sym-name">USDJPY.s</span>
+        <span class="sym-bid" style="color:var(--green)">149.823</span>
+        <span class="sym-spread">11</span>
+      </div>
+      <div class="mw-symbol">
+        <span class="sym-name">AUDUSD.s</span>
+        <span class="sym-bid" style="color:var(--red)">0.66542</span>
+        <span class="sym-spread">14</span>
+      </div>
+      <div class="mw-symbol">
+        <span class="sym-name">USDCAD.s</span>
+        <span class="sym-bid" style="color:var(--green)">1.35891</span>
+        <span class="sym-spread">16</span>
+      </div>
+      <div class="mw-symbol">
+        <span class="sym-name">NZDUSD.s</span>
+        <span class="sym-bid" style="color:var(--red)">0.61234</span>
+        <span class="sym-spread">18</span>
+      </div>
+      <div class="mw-symbol">
+        <span class="sym-name">USDCHF.s</span>
+        <span class="sym-bid" style="color:var(--green)">0.87654</span>
+        <span class="sym-spread">13</span>
+      </div>
+      <div class="mw-symbol">
+        <span class="sym-name">BTCUSD</span>
+        <span class="sym-bid" style="color:var(--green)">112,450</span>
+        <span class="sym-spread">320</span>
+      </div>
+      <div class="mw-symbol">
+        <span class="sym-name">USOIL</span>
+        <span class="sym-bid" style="color:var(--red)">62.341</span>
+        <span class="sym-spread">25</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- CENTER: CHART -->
+  <div class="chart-center">
+    <!-- Chart tabs -->
+    <div class="chart-tabs">
+      <div class="chart-tab active">
+        <span>XAUUSD · M15</span>
+        <span class="tab-close">✕</span>
+      </div>
+      <div class="chart-tab">
+        <span>EURUSD · H1</span>
+        <span class="tab-close">✕</span>
+      </div>
+      <div class="chart-tab">
+        <span>BTCUSD · D1</span>
+        <span class="tab-close">✕</span>
+      </div>
+      <div class="chart-tab"><span class="new-tab">+</span></div>
+    </div>
+
+    <!-- Chart toolbar -->
+    <div class="chart-toolbar">
+      <div class="tf-group">
+        <span class="tf-btn">M1</span>
+        <span class="tf-btn">M5</span>
+        <span class="tf-btn active">M15</span>
+        <span class="tf-btn">M30</span>
+        <span class="tf-btn">H1</span>
+        <span class="tf-btn">H4</span>
+        <span class="tf-btn">D1</span>
+        <span class="tf-btn">W1</span>
+        <span class="tf-btn">MN</span>
+      </div>
+      <div class="sep"></div>
+      <span class="indicator-btn" title="MA">MA</span>
+      <span class="indicator-btn" title="Bollinger">BOLL</span>
+      <span class="indicator-btn" title="MACD">MACD</span>
+      <span class="indicator-btn" title="缠论">缠论</span>
+      <div class="sep"></div>
+      <span class="indicator-btn" title="持仓显示">📍持仓</span>
+      <span class="indicator-btn" title="信号显示">🔔信号</span>
+      <div class="quote-live">
+        <span class="bid-price">Bid 4324.50</span>
+        <span class="ask-price">Ask 4324.80</span>
+        <span class="spread-val">Spread 30</span>
+      </div>
+    </div>
+
+    <!-- Chart area -->
+    <div class="chart-area">
+      <svg class="chart-svg" preserveAspectRatio="none">
+        <!-- Grid -->
+        <defs>
+          <pattern id="grid" width="100" height="60" patternUnits="userSpaceOnUse">
+            <path d="M 100 0 L 0 0 0 60" fill="none" stroke="#1a2744" stroke-width="0.5"/>
+          </pattern>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#grid)"/>
+
+        <!-- Price scale (right) -->
+        <text x="97%" y="15%" fill="#5a6478" font-size="10" text-anchor="end">4345.00</text>
+        <text x="97%" y="30%" fill="#5a6478" font-size="10" text-anchor="end">4335.00</text>
+        <text x="97%" y="45%" fill="#5a6478" font-size="10" text-anchor="end">4325.00</text>
+        <text x="97%" y="60%" fill="#5a6478" font-size="10" text-anchor="end">4315.00</text>
+        <text x="97%" y="75%" fill="#5a6478" font-size="10" text-anchor="end">4305.00</text>
+        <text x="97%" y="90%" fill="#5a6478" font-size="10" text-anchor="end">4295.00</text>
+
+        <!-- Time scale (bottom) -->
+        <text x="10%" y="97%" fill="#5a6478" font-size="9" text-anchor="middle">10:00</text>
+        <text x="25%" y="97%" fill="#5a6478" font-size="9" text-anchor="middle">10:30</text>
+        <text x="40%" y="97%" fill="#5a6478" font-size="9" text-anchor="middle">11:00</text>
+        <text x="55%" y="97%" fill="#5a6478" font-size="9" text-anchor="middle">11:30</text>
+        <text x="70%" y="97%" fill="#5a6478" font-size="9" text-anchor="middle">12:00</text>
+        <text x="85%" y="97%" fill="#5a6478" font-size="9" text-anchor="middle">12:30</text>
+
+        <!-- Volume bars (bottom, semi-transparent) -->
+        <g opacity="0.25">
+          <rect x="8%" y="88%" width="5" height="8%" fill="#3fb950" rx="0.5"/>
+          <rect x="11%" y="85%" width="5" height="11%" fill="#f85149" rx="0.5"/>
+          <rect x="14%" y="87%" width="5" height="9%" fill="#3fb950" rx="0.5"/>
+          <rect x="17%" y="84%" width="5" height="12%" fill="#3fb950" rx="0.5"/>
+          <rect x="20%" y="86%" width="5" height="10%" fill="#f85149" rx="0.5"/>
+          <rect x="23%" y="83%" width="5" height="13%" fill="#3fb950" rx="0.5"/>
+          <rect x="26%" y="85%" width="5" height="11%" fill="#3fb950" rx="0.5"/>
+          <rect x="29%" y="82%" width="5" height="14%" fill="#f85149" rx="0.5"/>
+          <rect x="32%" y="84%" width="5" height="12%" fill="#3fb950" rx="0.5"/>
+          <rect x="35%" y="86%" width="5" height="10%" fill="#3fb950" rx="0.5"/>
+          <rect x="38%" y="83%" width="5" height="13%" fill="#f85149" rx="0.5"/>
+          <rect x="41%" y="85%" width="5" height="11%" fill="#3fb950" rx="0.5"/>
+          <rect x="44%" y="81%" width="5" height="15%" fill="#3fb950" rx="0.5"/>
+          <rect x="47%" y="84%" width="5" height="12%" fill="#f85149" rx="0.5"/>
+          <rect x="50%" y="86%" width="5" height="10%" fill="#3fb950" rx="0.5"/>
+          <rect x="53%" y="83%" width="5" height="13%" fill="#3fb950" rx="0.5"/>
+          <rect x="56%" y="85%" width="5" height="11%" fill="#f85149" rx="0.5"/>
+          <rect x="59%" y="82%" width="5" height="14%" fill="#3fb950" rx="0.5"/>
+          <rect x="62%" y="84%" width="5" height="12%" fill="#3fb950" rx="0.5"/>
+          <rect x="65%" y="86%" width="5" height="10%" fill="#f85149" rx="0.5"/>
+          <rect x="68%" y="83%" width="5" height="13%" fill="#3fb950" rx="0.5"/>
+          <rect x="71%" y="85%" width="5" height="11%" fill="#3fb950" rx="0.5"/>
+          <rect x="74%" y="81%" width="5" height="15%" fill="#f85149" rx="0.5"/>
+          <rect x="77%" y="84%" width="5" height="12%" fill="#3fb950" rx="0.5"/>
+          <rect x="80%" y="86%" width="5" height="10%" fill="#3fb950" rx="0.5"/>
+        </g>
+
+        <!-- Candles -->
+        <g>
+          <!-- Green candles (uptrend start) -->
+          <line x1="8.5%" y1="62%" x2="8.5%" y2="70%" stroke="#26de81" stroke-width="1"/>
+          <rect x="7.5%" y="63%" width="7" height="6%" fill="#26de81" rx="0.5"/>
+
+          <line x1="11.5%" y1="58%" x2="11.5%" y2="68%" stroke="#26de81" stroke-width="1"/>
+          <rect x="10.5%" y="59%" width="7" height="7%" fill="#26de81" rx="0.5"/>
+
+          <line x1="14.5%" y1="55%" x2="14.5%" y2="64%" stroke="#26de81" stroke-width="1"/>
+          <rect x="13.5%" y="56%" width="7" height="6%" fill="#26de81" rx="0.5"/>
+
+          <!-- Red pullback -->
+          <line x1="17.5%" y1="52%" x2="17.5%" y2="62%" stroke="#fc5c65" stroke-width="1"/>
+          <rect x="16.5%" y="53%" width="7" height="6%" fill="#fc5c65" rx="0.5"/>
+
+          <line x1="20.5%" y1="54%" x2="20.5%" y2="61%" stroke="#fc5c65" stroke-width="1"/>
+          <rect x="19.5%" y="55%" width="7" height="4%" fill="#fc5c65" rx="0.5"/>
+
+          <!-- Green continuation -->
+          <line x1="23.5%" y1="48%" x2="23.5%" y2="58%" stroke="#26de81" stroke-width="1"/>
+          <rect x="22.5%" y="49%" width="7" height="7%" fill="#26de81" rx="0.5"/>
+
+          <line x1="26.5%" y1="44%" x2="26.5%" y2="54%" stroke="#26de81" stroke-width="1"/>
+          <rect x="25.5%" y="45%" width="7" height="6%" fill="#26de81" rx="0.5"/>
+
+          <line x1="29.5%" y1="42%" x2="29.5%" y2="50%" stroke="#26de81" stroke-width="1"/>
+          <rect x="28.5%" y="43%" width="7" height="5%" fill="#26de81" rx="0.5"/>
+
+          <!-- Consolidation -->
+          <line x1="32.5%" y1="44%" x2="32.5%" y2="52%" stroke="#fc5c65" stroke-width="1"/>
+          <rect x="31.5%" y="45%" width="7" height="5%" fill="#fc5c65" rx="0.5"/>
+
+          <line x1="35.5%" y1="46%" x2="35.5%" y2="53%" stroke="#fc5c65" stroke-width="1"/>
+          <rect x="34.5%" y="47%" width="7" height="4%" fill="#fc5c65" rx="0.5"/>
+
+          <line x1="38.5%" y1="48%" x2="38.5%" y2="55%" stroke="#26de81" stroke-width="1"/>
+          <rect x="37.5%" y="49%" width="7" height="4%" fill="#26de81" rx="0.5"/>
+
+          <line x1="41.5%" y1="46%" x2="41.5%" y2="52%" stroke="#26de81" stroke-width="1"/>
+          <rect x="40.5%" y="47%" width="7" height="4%" fill="#26de81" rx="0.5"/>
+
+          <line x1="44.5%" y1="43%" x2="44.5%" y2="50%" stroke="#26de81" stroke-width="1"/>
+          <rect x="43.5%" y="44%" width="7" height="4%" fill="#26de81" rx="0.5"/>
+
+          <line x1="47.5%" y1="41%" x2="47.5%" y2="48%" stroke="#26de81" stroke-width="1"/>
+          <rect x="46.5%" y="42%" width="7" height="4%" fill="#26de81" rx="0.5"/>
+
+          <!-- Breakout -->
+          <line x1="50.5%" y1="38%" x2="50.5%" y2="46%" stroke="#26de81" stroke-width="1"/>
+          <rect x="49.5%" y="39%" width="7" height="5%" fill="#26de81" rx="0.5"/>
+
+          <line x1="53.5%" y1="36%" x2="53.5%" y2="44%" stroke="#26de81" stroke-width="1"/>
+          <rect x="52.5%" y="37%" width="7" height="4%" fill="#26de81" rx="0.5"/>
+
+          <line x1="56.5%" y1="38%" x2="56.5%" y2="45%" stroke="#fc5c65" stroke-width="1"/>
+          <rect x="55.5%" y="39%" width="7" height="4%" fill="#fc5c65" rx="0.5"/>
+
+          <line x1="59.5%" y1="40%" x2="59.5%" y2="46%" stroke="#fc5c65" stroke-width="1"/>
+          <rect x="58.5%" y="41%" width="7" height="3%" fill="#fc5c65" rx="0.5"/>
+
+          <line x1="62.5%" y1="42%" x2="62.5%" y2="48%" stroke="#26de81" stroke-width="1"/>
+          <rect x="61.5%" y="43%" width="7" height="3%" fill="#26de81" rx="0.5"/>
+
+          <line x1="65.5%" y1="40%" x2="65.5%" y2="46%" stroke="#26de81" stroke-width="1"/>
+          <rect x="64.5%" y="41%" width="7" height="3%" fill="#26de81" rx="0.5"/>
+
+          <line x1="68.5%" y1="42%" x2="68.5%" y2="49%" stroke="#fc5c65" stroke-width="1"/>
+          <rect x="67.5%" y="43%" width="7" height="4%" fill="#fc5c65" rx="0.5"/>
+
+          <line x1="71.5%" y1="44%" x2="71.5%" y2="50%" stroke="#fc5c65" stroke-width="1"/>
+          <rect x="70.5%" y="45%" width="7" height="3%" fill="#fc5c65" rx="0.5"/>
+
+          <line x1="74.5%" y1="45%" x2="74.5%" y2="50%" stroke="#26de81" stroke-width="1"/>
+          <rect x="73.5%" y="46%" width="7" height="3%" fill="#26de81" rx="0.5"/>
+
+          <line x1="77.5%" y1="43%" x2="77.5%" y2="49%" stroke="#26de81" stroke-width="1"/>
+          <rect x="76.5%" y="44%" width="7" height="3%" fill="#26de81" rx="0.5"/>
+
+          <line x1="80.5%" y1="42%" x2="80.5%" y2="47%" stroke="#26de81" stroke-width="1"/>
+          <rect x="79.5%" y="43%" width="7" height="3%" fill="#26de81" rx="0.5"/>
+        </g>
+
+        <!-- Chan theory: segment (yellow line) -->
+        <polyline points="8%,63% 17%,53% 26%,45% 35%,47% 44%,44% 53%,37% 62%,43% 71%,45% 80%,43%" fill="none" stroke="#fed330" stroke-width="1.2" opacity="0.6"/>
+
+        <!-- Chan theory: center box (grey dashed) -->
+        <rect x="30%" y="43%" width="18%" height="6%" fill="none" stroke="#5a6478" stroke-width="0.8" stroke-dasharray="3,2" opacity="0.5"/>
+
+        <!-- Position entry line (green solid) -->
+        <line x1="0" y1="52%" x2="83%" y2="52%" stroke="#26de81" stroke-width="1"/>
+        <rect x="83%" y="51%" width="72" height="13" rx="2" fill="rgba(38,222,129,0.15)" stroke="rgba(38,222,129,0.3)" stroke-width="0.5"/>
+        <text x="83.5%" y="52%" fill="#26de81" font-size="8" font-weight="600">多 1.00 #833191449</text>
+
+        <!-- SL line (red dashed) -->
+        <line x1="0" y1="72%" x2="83%" y2="72%" stroke="#fc5c65" stroke-width="1" stroke-dasharray="4,3"/>
+        <rect x="86%" y="71%" width="42" height="12" rx="2" fill="rgba(252,92,101,0.15)" stroke="rgba(252,92,101,0.3)" stroke-width="0.5"/>
+        <text x="86.3%" y="71.8%" fill="#fc5c65" font-size="8" font-weight="600">SL 4307</text>
+
+        <!-- TP line (green dashed) -->
+        <line x1="0" y1="18%" x2="83%" y2="18%" stroke="#26de81" stroke-width="1" stroke-dasharray="4,3"/>
+        <rect x="86%" y="17%" width="42" height="12" rx="2" fill="rgba(38,222,129,0.15)" stroke="rgba(38,222,129,0.3)" stroke-width="0.5"/>
+        <text x="86.3%" y="17.8%" fill="#26de81" font-size="8" font-weight="600">TP 4380</text>
+
+        <!-- Pending order line (blue dashed) -->
+        <line x1="0" y1="16%" x2="83%" y2="16%" stroke="#45aaf2" stroke-width="1" stroke-dasharray="2,3"/>
+        <rect x="83%" y="14.5%" width="72" height="12" rx="2" fill="rgba(69,170,242,0.15)" stroke="rgba(69,170,242,0.3)" stroke-width="0.5"/>
+        <text x="83.3%" y="15.3%" fill="#45aaf2" font-size="8" font-weight="600">挂 4380 #833454485</text>
+
+        <!-- AI Signal markers -->
+        <polygon points="23%,44% 22.5%,40% 23.5%,40%" fill="#26de81"/>
+        <text x="24%" y="39%" fill="#26de81" font-size="8" font-weight="700">92%</text>
+
+        <polygon points="44%,42% 43.5%,38% 44.5%,38%" fill="#26de81"/>
+        <text x="45%" y="37%" fill="#26de81" font-size="8" font-weight="700">78%</text>
+      </svg>
+
+      <!-- OHLC data strip -->
+      <div class="ohlc-strip">
+        <span><span class="label">O</span><span class="dn">4326.12</span></span>
+        <span><span class="label">H</span><span class="dn">4328.45</span></span>
+        <span><span class="label">L</span><span class="up">4322.80</span></span>
+        <span><span class="label">C</span><span class="dn">4324.50</span></span>
+        <span><span class="label">V</span>1,247</span>
+      </div>
+
+      <!-- Context menu (demo) -->
+      <div class="ctx-menu" style="right:260px;top:45%;">
+        <div class="ctx-item">📊 分析此处价格</div>
+        <div class="ctx-divider"></div>
+        <div class="ctx-item" style="color:var(--green)">🟢 在此价位买入限价单</div>
+        <div class="ctx-item" style="color:var(--red)">🔴 在此价位卖出限价单</div>
+        <div class="ctx-divider"></div>
+        <div class="ctx-item">✏️ 画水平线</div>
+        <div class="ctx-item">📐 添加指标</div>
+        <div class="ctx-divider"></div>
+        <div class="ctx-item">⚙ 图表设置</div>
+      </div>
+
+      <!-- Position tooltip (demo) -->
+      <div class="pos-tooltip" style="left:18%;top:38%;">
+        <div class="tt-title">
+          <span style="color:var(--green)">多头持仓</span>
+          <span style="font-size:9px;color:var(--text-muted)">#833191449</span>
+        </div>
+        <div class="tt-row"><span class="tt-lbl">开仓</span><span>4322.29</span></div>
+        <div class="tt-row"><span class="tt-lbl">当前</span><span style="color:var(--green)">4324.50</span></div>
+        <div class="tt-row"><span class="tt-lbl">手数</span><span>1.00</span></div>
+        <div class="tt-row"><span class="tt-lbl">止损</span><span style="color:var(--red)">4307</span></div>
+        <div class="tt-row"><span class="tt-lbl">止盈</span><span style="color:var(--green)">4380</span></div>
+        <div class="tt-row"><span class="tt-lbl">浮盈</span><span style="color:var(--green);font-weight:700">+$589.44</span></div>
+        <div class="tt-btns">
+          <button class="tt-btn">修改 SL/TP</button>
+          <button class="tt-btn red">平仓</button>
+        </div>
+      </div>
+
+      <!-- Right side panel (AI + Positions) -->
+      <div class="chart-side-panel">
+        <div class="csp-header">
+          <span class="csp-tab active">AI 信号</span>
+          <span class="csp-tab">持仓</span>
+          <span class="csp-tab">挂单</span>
+        </div>
+        <div class="csp-content">
+          <!-- AI Signal -->
+          <div class="ai-signal-mini">
+            <div class="sig-row">
+              <span class="sig-badge bull">观望偏多</span>
+              <span class="sig-conf" style="color:var(--green)">60%</span>
+            </div>
+            <div class="sig-bar">
+              <div class="bull-fill" style="width:60%"></div>
+              <div class="bear-fill" style="width:40%"></div>
+            </div>
+            <div class="sig-text">当前无新入场机会。持仓与挂单均无明确结构失配，维持现有保护不变。</div>
+            <div class="sig-meta">道诚策略 · 11:45:48</div>
+          </div>
+
+          <!-- Chan status -->
+          <div style="background:var(--bg-surface);border-radius:4px;padding:6px 8px;margin-bottom:6px;border:1px solid var(--border);font-size:10px;">
+            <div style="color:var(--text-muted);margin-bottom:4px;font-weight:600;">缠论 · M15</div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:2px;"><span style="color:var(--text-dim)">趋势</span><span style="color:var(--green)">↑ 向上</span></div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:2px;"><span style="color:var(--text-dim)">笔</span><span>上升笔进行中</span></div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:2px;"><span style="color:var(--text-dim)">段</span><span>第3段</span></div>
+            <div style="display:flex;justify-content:space-between;"><span style="color:var(--text-dim)">中枢</span><span>4310-4330</span></div>
+          </div>
+
+          <div style="font-size:10px;color:var(--text-muted);margin-bottom:4px;font-weight:600;">持仓 (2)</div>
+
+          <!-- Position 1 -->
+          <div class="pos-card">
+            <div class="pos-head">
+              <span style="font-weight:600">XAUUSD.s <span class="pos-ticket">#833191449</span></span>
+              <span class="pos-pnl pos">+$589.44</span>
+            </div>
+            <div class="pos-info">
+              <span style="color:var(--green)">多</span>
+              <span>1.00手</span>
+              <span>4322.29</span>
+            </div>
+            <div class="pos-actions">
+              <button>改 SL/TP</button>
+              <button>详情</button>
+              <button class="close-btn">平仓</button>
+            </div>
+          </div>
+
+          <!-- Position 2 -->
+          <div class="pos-card">
+            <div class="pos-head">
+              <span style="font-weight:600">XAUUSD.s <span class="pos-ticket">#824050887</span></span>
+              <span class="pos-pnl pos">+$0.46</span>
+            </div>
+            <div class="pos-info">
+              <span style="color:var(--red)">空</span>
+              <span>0.01手</span>
+              <span>4328.79</span>
+            </div>
+            <div class="pos-actions">
+              <button>改 SL/TP</button>
+              <button>详情</button>
+              <button class="close-btn">平仓</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: NAVIGATOR -->
+  <div class="navigator">
+    <div class="nav-header">导航</div>
+    <div class="nav-tabs">
+      <div class="nav-tab active">AI 团队</div>
+      <div class="nav-tab">品种</div>
+      <div class="nav-tab">指标</div>
+    </div>
+    <div class="nav-content">
+      <div class="nav-group">
+        <div class="nav-group-title"><span class="arrow">▾</span> AI 交易团队</div>
+        <div class="nav-item active"><span class="icon">📊</span>市场行情</div>
+        <div class="nav-item"><span class="icon">🧠</span>AI 分析师</div>
+        <div class="nav-item"><span class="icon">💹</span>AI 交易员</div>
+        <div class="nav-item"><span class="icon">🛡️</span>AI 风控师</div>
+        <div class="nav-item"><span class="icon">📈</span>AI 策略师</div>
+        <div class="nav-item"><span class="icon">🔍</span>AI 复盘师</div>
+      </div>
+      <div class="nav-group">
+        <div class="nav-group-title"><span class="arrow">▾</span> 记录</div>
+        <div class="nav-item"><span class="icon">📋</span>交易记录</div>
+        <div class="nav-item"><span class="icon">📝</span>系统审计</div>
+      </div>
+      <div class="nav-group">
+        <div class="nav-group-title"><span class="arrow">▾</span> 连接</div>
+        <div class="nav-item"><span class="icon">🔗</span>量见智桥</div>
+      </div>
+      <div class="nav-group">
+        <div class="nav-group-title"><span class="arrow">▾</span> 经济日历</div>
+        <div style="padding:4px 16px;font-size:10px;">
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:4px;color:var(--text-dim)">
+            <span style="color:var(--red)">●</span>
+            <span>20:30 🇺🇸 CPI 年率</span>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;color:var(--text-dim)">
+            <span style="color:var(--red)">●</span>
+            <span>22:00 🇺🇸 消费者信心</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- BOTTOM: TOOLBOX -->
+<div class="toolbox">
+  <div class="toolbox-tabs">
+    <div class="toolbox-tab active">交易 <span class="count">3</span></div>
+    <div class="toolbox-tab">挂单 <span class="count">1</span></div>
+    <div class="toolbox-tab">执行记录</div>
+    <div class="toolbox-tab">AI 决策</div>
+    <div class="toolbox-tab">警报</div>
+    <div class="toolbox-tab">策略状态</div>
+  </div>
+  <div class="toolbox-content">
+    <table class="toolbox-table">
+      <thead>
+        <tr>
+          <th>Ticket</th>
+          <th>品种</th>
+          <th>类型</th>
+          <th>手数</th>
+          <th>开仓价</th>
+          <th>当前价</th>
+          <th>止损</th>
+          <th>止盈</th>
+          <th>盈亏</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>833191449</td>
+          <td style="font-weight:600">XAUUSD.s</td>
+          <td style="color:var(--green)">买入</td>
+          <td>1.00</td>
+          <td>4322.29</td>
+          <td style="color:var(--green)">4324.50</td>
+          <td style="color:var(--red)">4307.00</td>
+          <td style="color:var(--green)">4380.00</td>
+          <td style="color:var(--green);font-weight:600">+589.44</td>
+          <td><span style="color:var(--blue);cursor:pointer">改</span> <span style="color:var(--red);cursor:pointer">平</span></td>
+        </tr>
+        <tr>
+          <td>824050887</td>
+          <td style="font-weight:600">XAUUSD.s</td>
+          <td style="color:var(--red)">卖出</td>
+          <td>0.01</td>
+          <td>4328.79</td>
+          <td>4324.50</td>
+          <td class="dim">--</td>
+          <td class="dim">--</td>
+          <td style="color:var(--green)">+0.46</td>
+          <td><span style="color:var(--blue);cursor:pointer">改</span> <span style="color:var(--red);cursor:pointer">平</span></td>
+        </tr>
+        <tr>
+          <td>833454485</td>
+          <td style="font-weight:600">XAUUSD.s</td>
+          <td style="color:var(--blue)">卖出限价</td>
+          <td>1.00</td>
+          <td>4380.00</td>
+          <td class="dim">--</td>
+          <td class="dim">--</td>
+          <td class="dim">--</td>
+          <td class="dim">--</td>
+          <td><span style="color:var(--blue);cursor:pointer">改</span> <span style="color:var(--red);cursor:pointer">撤</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- STATUS BAR -->
+<div class="status-bar">
+  <div class="conn-status">
+    <span class="conn-dot ok"></span>
+    <span>DooTechnology-Demo · 已连接</span>
+  </div>
+  <div class="sep"></div>
+  <span>延迟: 12ms</span>
+  <div class="sep"></div>
+  <span>账户: 860058 · 1:500</span>
+  <div class="right-info">
+    <span>AI 分析 02:37 后更新</span>
+    <div class="sep"></div>
+    <span style="color:var(--green)">✓ 挂单 4380 保留</span>
+    <div class="sep"></div>
+    <span style="color:var(--green)">✓ 修改 SL 4307 完成</span>
+  </div>
+</div>
+
+</body>
+</html>

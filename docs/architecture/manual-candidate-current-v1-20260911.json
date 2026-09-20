@@ -1,0 +1,16 @@
+{
+  "kind": "manual-candidate-schema-upgrade/v1",
+  "passed": true,
+  "target": "dev_vue",
+  "planHash": "ba5726467ee7d4d0c00b1028856e64a8e5b34bdd6c2079d4e3a798454ddabc4d",
+  "ddlAttempted": 1,
+  "businessRowWrites": 0,
+  "replayNoDDL": true,
+  "oldDataUnchanged": true,
+  "oldChecksumsUnchanged": true,
+  "steps": 261,
+  "tableCount": 310,
+  "afterSnapshotHash": "7cd7007509eb0380044c67c8ee82454bd0464adbbd4d1392bd64d35a40616d03",
+  "backupReceiptSha256": "5c3901ad66471bc14618f285e0ce041091ed84639a9aee1d6b381843fb9aab9d",
+  "observedAt": "2026-09-11T05:44:51.970Z"
+}

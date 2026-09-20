@@ -1,0 +1,71 @@
+{
+  "kind": "memory-audit-restored-upgrade/v1",
+  "passed": false,
+  "mode": "--inject-ddl-loss",
+  "target": "dev_vue_m1_source_20260910_01",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "currentDevVueWrites": 0,
+  "ddlAttempted": 1,
+  "ddlAcknowledged": 0,
+  "planHash": "b9847b473bd53d84f2ab2daf55a29a592c405305da933b684fe89fb987a30a5e",
+  "tools": [
+    {
+      "path": "scripts/rehearse-memory-audit-upgrade-local.mjs",
+      "sha256": "4fac7a898d5d605fcbaab4142f4205d7bfb861efc161300dd47bd74fec1baf37"
+    },
+    {
+      "path": "scripts/run-memory-audit-rehearsal-local.py",
+      "sha256": "6abd98c9bddfcea218603ed241158c1501c1b2aa3018040d74f4d0205466bc58"
+    },
+    {
+      "path": "scripts/lib/memory-runtime-audit-upgrade.mjs",
+      "sha256": "e5c58ceee269c1d8c553190c0efbd08b672844c40d8d112d6b4bf5ce5371e2cb"
+    },
+    {
+      "path": "scripts/lib/inplace-schema-coordinator.mjs",
+      "sha256": "d75cdb60b00307918fcbda998a406f69f1c7b98ab3aadec99a7be5e808e0376b"
+    },
+    {
+      "path": "scripts/lib/mysql-inplace-column-store.mjs",
+      "sha256": "c42cfe0811296007b6a9f7fb46270b44b4f22614e0948af499293d95ce1cdafc"
+    },
+    {
+      "path": "scripts/lib/dev-vue-column-upgrade.mjs",
+      "sha256": "b20ab4ba86a9b9b40ef9ea5ea559c812f3db8166db6b117c3bd94d49b40a41ac"
+    },
+    {
+      "path": "scripts/lib/mysql-account-root-snapshot.mjs",
+      "sha256": "af96d52b976a484e2b79ac7b079fe9e2a7e5a38e77df938f1d9a62c483481318"
+    },
+    {
+      "path": "scripts/lib/inplace-column-evidence.mjs",
+      "sha256": "7f62a4fae29a8e3ce12c84b6f704aa04f32c4ab324b53a2bf9bc706e66b67349"
+    },
+    {
+      "path": "scripts/lib/inplace-foundation-upgrade.mjs",
+      "sha256": "9b024fc4ca674cc8ac5cec70754aeeb4c873cf6878d27b312e0876bf74a46f6d"
+    },
+    {
+      "path": "scripts/lib/v4-backfill-contract.mjs",
+      "sha256": "4dff263678f769cc2f733861446b9e50d4a0a2d1d2b9f3e1dc1e278d2c3d8810"
+    },
+    {
+      "path": "server/db/migrations/inplace/050_strategy_memory_runtime_audit.sql",
+      "sha256": "fecf4433e0800b26cf2e64de33c6e975ee52763de373425d2eb544aec25b363b"
+    }
+  ],
+  "referenceHash": "3e0ab567bde943dc12e83814c72756f6de35ff81681442860c75c1b8ecc11eb1",
+  "inventoryHash": "cf36d93dd160f4c11a55246793c37da7c3ecbb9a672321877cd981396bc156c8",
+  "restoredReceiptSha256": "3b29735c9d033a5695974e31b8a52222c1096709b61678401ce6b23a9215b6de",
+  "beforeState": "pending",
+  "error": {
+    "code": "memory_audit_rehearsal_failed",
+    "trace": [
+      "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)",
+      "    at async file:///D:/dev_codex/dev_vue/scripts/rehearse-memory-audit-upgrade-local.mjs:105:38",
+      "    at async withInplaceUpgradeLock (file:///D:/dev_codex/dev_vue/scripts/lib/mysql-inplace-column-store.mjs:58:12)",
+      "    at async file:///D:/dev_codex/dev_vue/scripts/rehearse-memory-audit-upgrade-local.mjs:41:3"
+    ]
+  },
+  "observedAt": "2026-09-10T08:39:52.479Z"
+}

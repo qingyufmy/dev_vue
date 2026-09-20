@@ -20,6 +20,7 @@ function deferred<T>() {
   return { promise, resolve }
 }
 let wrapper: ReturnType<typeof mount> | undefined
+const selection = ref('')
 let state: ReturnType<typeof useTraderWorkspace>
 beforeEach(() => {
   Object.values(mocks.api).forEach(mock => mock.mockReset())
@@ -33,7 +34,7 @@ beforeEach(() => {
   mocks.stop.mockReset()
   mocks.realtime.mockReset().mockReturnValue({ stop: mocks.stop })
   wrapper = mount(defineComponent({ setup() {
-    const selection = ref('')
+    selection.value = ''
     state = useTraderWorkspace(selection, id => { selection.value = id })
     return () => null
   } }))
@@ -88,3 +89,35 @@ vi.mock('~/features/trading-context', async importOriginal => ({
   recoverContextCommand: async () => null,
   runContextCommand: async (session: any, _action: string, target: string | null, revision: number) => mocks.api.selectAccount(session.csrf_token, target, revision),
 }))
+
+
+it('keeps the workspace and realtime session when navigation refreshes the same login', async () => {
+  await flushPromises()
+  const requests = mocks.api.getWorkspace.mock.calls.length
+  const connections = mocks.realtime.mock.calls.length
+  mocks.session.value = { ...mocks.session.value, user: { ...mocks.session.value.user }, csrf_token: 'refreshed' }
+  await flushPromises()
+  expect(state.activeAccountId.value).toBe('a')
+  expect(state.positions.value[0]?.ticket).toBe('1')
+  expect(mocks.api.getWorkspace).toHaveBeenCalledTimes(requests)
+  expect(mocks.realtime).toHaveBeenCalledTimes(connections)
+  expect(mocks.stop).not.toHaveBeenCalled()
+})
+
+it('follows new decisions at the head but preserves a historical selection during an in-flight refresh', async () => {
+  await flushPromises()
+  mocks.api.getDecision.mockResolvedValue({ data: {} })
+  mocks.api.listDecisions.mockResolvedValue({ data: { items: [{ decisionId: 'd1' }, { decisionId: 'old' }] } })
+  await state.refresh(); await flushPromises()
+  expect(selection.value).toBe('d1')
+  mocks.api.listDecisions.mockResolvedValue({ data: { items: [{ decisionId: 'd2' }, { decisionId: 'd1' }, { decisionId: 'old' }] } })
+  await state.refresh(); await flushPromises()
+  expect(selection.value).toBe('d2')
+  const pending = deferred<any>()
+  mocks.api.listDecisions.mockReturnValueOnce(pending.promise)
+  const refreshing = state.refresh()
+  selection.value = 'old'
+  pending.resolve({ data: { items: [{ decisionId: 'd3' }, { decisionId: 'd2' }, { decisionId: 'old' }] } })
+  await refreshing; await flushPromises()
+  expect(selection.value).toBe('old')
+})

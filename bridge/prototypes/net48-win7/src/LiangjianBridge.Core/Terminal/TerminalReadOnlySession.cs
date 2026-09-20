@@ -13,6 +13,28 @@ namespace Liangjian.BridgeV4.Terminal
         private readonly TerminalPipeServer pipe;
         private readonly object queryLock = new object();
         private bool disposed;
+        private long permissionObservation;
+        private int[] permissionFlags;
+
+        public int[] CurrentPermissionFlags
+        {
+            get
+            {
+                int[] flags = permissionFlags;
+                return CurrentTradePermission.HasValue && flags != null ? (int[])flags.Clone() : null;
+            }
+        }
+
+        public bool? CurrentTradePermission
+        {
+            get
+            {
+                long observation = Interlocked.Read(ref permissionObservation);
+                long observedTicks = observation & ~3L;
+                if (disposed || observedTicks == 0 || DateTime.UtcNow.Ticks - observedTicks > TimeSpan.FromSeconds(25).Ticks) return null;
+                return (observation & 1L) != 0;
+            }
+        }
 
         private TerminalReadOnlySession(TerminalPipeServer connectedPipe, TerminalHello hello, string terminalInstanceId, long sessionEpoch)
         {
@@ -25,6 +47,54 @@ namespace Liangjian.BridgeV4.Terminal
         public TerminalHello Hello { get; private set; }
         public string TerminalInstanceId { get; private set; }
         public long SessionEpoch { get; private set; }
+
+        public void CheckHeartbeat()
+        {
+            // Skip while a query/command owns the pipe; never interleave frames.
+            if (!Monitor.TryEnter(queryLock)) return;
+            try
+            {
+                EnsureOpen();
+                object deadlineGate = new object();
+                bool completed = false;
+                using (Timer deadline = new Timer(delegate
+                {
+                    lock (deadlineGate) if (!completed) pipe.Dispose();
+                }, null, 5000, Timeout.Infinite))
+                {
+                    try
+                    {
+                        pipe.WritePayload(BitConverter.GetBytes((int)TerminalWireMessageType.Ping));
+                        byte[] pong = pipe.ReadPayload();
+                        if ((pong.Length != 12 && pong.Length != 20 && pong.Length != 36) || BitConverter.ToInt32(pong, 0) != (int)TerminalWireMessageType.Pong)
+                            throw new InvalidDataException("bridge_terminal_heartbeat_invalid");
+                        Interlocked.Exchange(ref permissionObservation, 0);
+                        permissionFlags = null;
+                        if (pong.Length >= 20)
+                        {
+                            int connected = BitConverter.ToInt32(pong, 12);
+                            int allowed = BitConverter.ToInt32(pong, 16);
+                            if ((connected != 0 && connected != 1) || (allowed != 0 && allowed != 1))
+                                throw new InvalidDataException("bridge_terminal_heartbeat_permissions_invalid");
+                            if (pong.Length == 36)
+                            {
+                                int[] flags = new int[4];
+                                for (int i = 0; i < flags.Length; i++)
+                                {
+                                    flags[i] = BitConverter.ToInt32(pong, 20 + i * 4);
+                                    if (flags[i] != 0 && flags[i] != 1) throw new InvalidDataException("bridge_terminal_heartbeat_permissions_invalid");
+                                }
+                                permissionFlags = flags;
+                            }
+                            if (connected == 1) Interlocked.Exchange(ref permissionObservation,
+                                (DateTime.UtcNow.Ticks & ~3L) | (long)(uint)allowed);
+                        }
+                    }
+                    finally { lock (deadlineGate) completed = true; }
+                }
+            }
+            finally { Monitor.Exit(queryLock); }
+        }
 
         public static TerminalReadOnlySession Accept(TerminalPipeServer server, int timeoutMilliseconds)
         {

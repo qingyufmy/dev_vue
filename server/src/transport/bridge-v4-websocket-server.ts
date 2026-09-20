@@ -13,7 +13,9 @@ export interface BridgeGatewayOpener {
 }
 
 const MAX_FRAME_BYTES = 512 * 1024
-const MAX_PENDING_MESSAGES = 8
+// A market refresh may send multiple candles for each of seven periods at once.
+const MAX_PENDING_MESSAGES = 64
+const MAX_PENDING_BYTES = 4 * 1024 * 1024
 const HELLO_TIMEOUT_MS = 10_000
 
 export class BridgeV4WebSocketServer {
@@ -21,7 +23,8 @@ export class BridgeV4WebSocketServer {
   private accepting = false
   private readonly upgrade = (request: IncomingMessage, socket: Duplex, head: Buffer) => this.handleUpgrade(request, socket, head)
 
-  constructor(private readonly server: HttpServer, private readonly gateway: BridgeGatewayOpener) {}
+  constructor(private readonly server: HttpServer, private readonly gateway: BridgeGatewayOpener,
+    private readonly reportRejection: (code: string, storageCode?: string) => void = () => undefined) {}
 
   start() {
     if (this.accepting) return
@@ -62,6 +65,7 @@ export class BridgeV4WebSocketServer {
   private bind(socket: WebSocket, ticket: string) {
     let session: BridgeGatewaySessionLike | null = null
     let pending = 0
+    let pendingBytes = 0
     let chain = Promise.resolve()
     let closed = false
     const helloTimer = setTimeout(() => socket.close(4408, 'bridge_session_hello_timeout'), HELLO_TIMEOUT_MS)
@@ -80,13 +84,18 @@ export class BridgeV4WebSocketServer {
       await session?.close(reason).catch(() => undefined)
     }
     socket.on('message', (data, isBinary) => {
-      if (isBinary || bytes(data) > MAX_FRAME_BYTES || pending >= MAX_PENDING_MESSAGES) {
-        socket.close(4400, isBinary ? 'bridge_binary_unsupported' : 'bridge_message_backpressure')
+      if (closed || socket.readyState !== WebSocket.OPEN) return
+      const frameBytes = bytes(data)
+      if (isBinary || frameBytes > MAX_FRAME_BYTES || pending >= MAX_PENDING_MESSAGES || pendingBytes + frameBytes > MAX_PENDING_BYTES) {
+        const code = isBinary ? 'bridge_binary_unsupported' : 'bridge_message_backpressure'
+        this.reportRejection(code)
+        socket.close(4400, code)
         return
       }
       pending += 1
+      pendingBytes += frameBytes
       chain = chain.then(async () => {
-        if (closed) throw new Error('bridge_socket_closed')
+        if (closed || socket.readyState !== WebSocket.OPEN) return
         const message = parseMessage(data)
         if (!session) {
           if (!isHello(message)) throw new Error('bridge_session_hello_required')
@@ -101,8 +110,12 @@ export class BridgeV4WebSocketServer {
         }
         await session.receive(message)
       }).catch(error => {
+        if (closed || socket.readyState !== WebSocket.OPEN) return
+        const storageCode = error instanceof Error && error.cause && typeof error.cause === 'object'
+          && 'code' in error.cause ? String(error.cause.code) : ''
+        this.reportRejection(publicCode(error), /^ER_[A-Z0-9_]{1,80}$/.test(storageCode) ? storageCode : undefined)
         socket.close(closeCode(error), publicCode(error))
-      }).finally(() => { pending -= 1 })
+      }).finally(() => { pending -= 1; pendingBytes -= frameBytes })
     })
     socket.once('close', () => { void closeSession('bridge_socket_closed') })
     socket.once('error', () => { void closeSession('bridge_socket_error') })

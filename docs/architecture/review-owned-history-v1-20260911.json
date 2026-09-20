@@ -1,0 +1,48 @@
+{
+  "kind": "review-trade-evidence-reference/v1",
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "foreignKeysVerified": false,
+  "checks": [
+    "actual-SQL-owned-facts-UTC-cross-user-and-revision"
+  ],
+  "tables": [
+    {
+      "table": "users",
+      "sha256": "128b1d75942e67edebdfd679d06590817ec744c1223a0fd0bf0906e64b4d1bb3"
+    },
+    {
+      "table": "trading_accounts",
+      "sha256": "216f7f7cd8151e7dd296f8ce3b6e17eb8f97a48060cf78050f66eecbe44899ac"
+    },
+    {
+      "table": "trading_account_ownerships",
+      "sha256": "cf8a69ef08b8f29ea405796838bc8abcf347fec3a4f0e9ffab3cfb39e62e54d1"
+    },
+    {
+      "table": "trading_account_ownership_intervals",
+      "sha256": "e827fad29157bb609d8cfe080370e89c6b9b3fcf1bcb9fda297d4995e582a8d1"
+    },
+    {
+      "table": "account_trade_records_v4",
+      "sha256": "bf95fd479f9763c1800c8a7d12d0c8e28dce98e149b84d44fd2ed3a0e5716b4b"
+    },
+    {
+      "table": "account_trade_record_deals_v4",
+      "sha256": "9eaade8b8c534ca8802f8a024b01c486910b44fefba25270b64e616f9a985532"
+    },
+    {
+      "table": "terminal_history_deals_v4",
+      "sha256": "4e183512090e9f26e4f9bc2f9c6ae5ae7a62ee69ce7407f6dfdbfa268b281a0b"
+    }
+  ],
+  "fixtureTable": "trading_account_ownership_intervals",
+  "errorCode": "ER_DUP_ENTRY",
+  "locations": [
+    "    at insert (file:///D:/dev_codex/dev_vue/scripts/verify-review-trade-evidence-reference-local.mjs:55:14)",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)",
+    "    at async file:///D:/dev_codex/dev_vue/scripts/verify-review-trade-evidence-reference-local.mjs:105:5"
+  ],
+  "referenceDatabaseRemoved": true,
+  "observedAt": "2026-09-11T05:48:43.791Z"
+}

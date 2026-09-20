@@ -1,0 +1,35 @@
+{
+  "kind": "review-worker-mysql-reference/v1",
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "foreignKeysVerified": false,
+  "modelCalls": "synthetic-only",
+  "checks": [
+    "claim-and-complete-use-schema-compatible-status",
+    "unexpired-lease-not-stolen",
+    "expired-lease-reclaimed-and-attempt-expired",
+    "stale-worker-cannot-write-after-takeover",
+    "archived-case-never-calls-model",
+    "retry_wait-not-claimed-before-due-and-accepted-at-boundary",
+    "queued-not-claimed-before-due-and-accepted-at-boundary",
+    "completed-ignored-wake-can-be-enqueued-again-with-same-id",
+    "real-redis-repeated-scans-deduplicate-and-complete-due-and-expired-jobs",
+    "tampered-evidence-rejected-before-model-or-claim-state-writes"
+  ],
+  "redisConfigurationSource": "QUEUE_REDIS",
+  "runtimeQueueConfigurationVerified": true,
+  "recoveryResults": [
+    {
+      "status": "succeeded",
+      "versionId": "92bcaf63-6be2-48c8-bbb3-9e90b3adc4a6"
+    },
+    {
+      "status": "succeeded",
+      "versionId": "66face0a-b8de-4b5c-aa91-ff0ab746eae2"
+    }
+  ],
+  "redisVerified": true,
+  "referenceQueueRemoved": true,
+  "referenceDatabaseRemoved": true,
+  "observedAt": "2026-09-11T05:03:27.817Z"
+}

@@ -2,7 +2,7 @@ import ts from 'typescript'
 
 // Source evidence only: no database access and no inference of business ownership.
 // Tokenizing quotes/comments prevents SET values and comments from becoming writes.
-function tokens(sql) {
+export function sqlTokens(sql) {
   return [...sql.matchAll(/\/\*[\s\S]*?\*\/|--[^\r\n]*|#[^\r\n]*|'(?:''|\\.|[^'\\])*'|"(?:""|\\.|[^"\\])*"|`(?:``|[^`])*`|[a-zA-Z_][a-zA-Z_0-9$]*|[^\s]/g)]
     .map(match => match[0])
     .filter(token => !token.startsWith('/*') && !token.startsWith('--') && !token.startsWith('#'))
@@ -12,7 +12,7 @@ const dynamicToken = '__SQL_INTERPOLATION__'
 const identifier = token => token && (/^[a-zA-Z_][a-zA-Z_0-9$]*$/.test(token) || /^`[^`]+`$/.test(token))
 
 export function inspectSqlWrite(sql) {
-  const parts = tokens(sql)
+  const parts = sqlTokens(sql)
   const upper = parts.map(part => part.toUpperCase())
   const operation = upper[0]
   if (!['INSERT', 'UPDATE', 'DELETE', 'REPLACE', 'WITH', 'TRUNCATE', 'ALTER', 'CREATE', 'DROP', 'CALL'].includes(operation)) return null
@@ -66,7 +66,7 @@ export function inventorySource(source, file) {
       && ['execute', 'query'].includes(node.expression.name.text)) {
       const argument = node.arguments[0]
       const argumentSql = argument ? literalSql(argument) : null
-      if (argumentSql === null || tokens(argumentSql)[0]?.includes(dynamicToken)) {
+      if (argumentSql === null || sqlTokens(argumentSql)[0]?.includes(dynamicToken)) {
         indirectCalls.push({ ...location(node), method: node.expression.name.text })
       }
     }

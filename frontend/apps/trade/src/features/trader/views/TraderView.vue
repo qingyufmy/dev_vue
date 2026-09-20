@@ -1,12 +1,13 @@
 <script setup lang="ts">
+import { AccountExecutionHistory } from '~/features/audit'
 import { contextCommandState } from '~/features/trading-context'
 import type { ExecutionCommand, ExecutionDistribution, OpenPosition, PendingOrder } from '@aurum/contracts'
-import { AlertCircle, Bot, Cable, Eye, HandCoins, Plus, RefreshCw } from '@lucide/vue'
+import { AlertCircle, Cable, Eye, HandCoins, Plus, RefreshCw } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Alert, AlertDescription, AlertTitle } from '@aurum/ui/alert'
-import { Badge } from '@aurum/ui/badge'
 import { Button } from '@aurum/ui/button'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@aurum/ui/tabs'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@aurum/ui/empty'
 import InventoryDetailSheet from '../components/InventoryDetailSheet.vue'
 import InventoryWorkspace from '../components/InventoryWorkspace.vue'
@@ -16,7 +17,7 @@ import TraderDangerConfirm from '../components/TraderDangerConfirm.vue'
 import TraderDecisionDetail from '../components/TraderDecisionDetail.vue'
 import TraderDecisionHistory from '../components/TraderDecisionHistory.vue'
 import TraderOperationCenter from '../components/TraderOperationCenter.vue'
-import TraderResourceEditSheet from '../components/TraderResourceEditSheet.vue'
+import TraderResourceEditDialog from '../components/TraderResourceEditDialog.vue'
 import { useTraderCommands } from '../composables/use-trader-commands'
 import { useTraderWorkspace } from '../composables/use-trader-workspace'
 import type { TraderEntryCommandDraft, TraderResourceEditDraft } from '../model/trader-command-drafts'
@@ -38,9 +39,25 @@ type PendingAction =
   | { kind: 'distribution'; payload: ExecutionDistribution; summary: ConfirmSummary }
   | { kind: 'distribution_close'; distributionId: string; expectedRevision: string; summary: ConfirmSummary }
 const pendingAction = ref<PendingAction | null>(null)
+const activeTab = computed({
+  get: () => ['decisions','inventory','operations'].includes(String(route.query.tab)) ? String(route.query.tab) : 'decisions',
+  set: (value: string) => {
+    if (route.path !== '/trader') return
+    const query = { ...route.query }
+    if (value === 'decisions') delete query.tab
+    else query.tab = value
+    void router.replace({ path: '/trader', query })
+  },
+})
+const executionDecisionId = ref('')
+function navigateDecision(tab: 'operations' | 'inventory') {
+  executionDecisionId.value = tab === 'operations' ? selectedDecisionId.value : ''
+  activeTab.value = tab
+}
 const selectedDecisionId = computed(() => typeof route.query.decision_id === 'string' ? route.query.decision_id : '')
 
 function selectDecision(id: string) {
+  if (route.path !== '/trader' || id === selectedDecisionId.value) return
   const query = { ...route.query }
   if (id) query.decision_id = id
   else delete query.decision_id
@@ -56,9 +73,6 @@ const selectedResource = computed(() => {
     ? workspace.positions.value.find((item) => item.ticket === selection.ticket) ?? null
     : workspace.pendingOrders.value.find((item) => item.ticket === selection.ticket) ?? null
 })
-const realtimeLabel = computed(() => ({
-  idle: '未连接', connecting: '连接中', live: '实时同步', recovering: '正在恢复', offline: '快照模式',
-})[workspace.realtime.value])
 const surfaceReadOnly = computed(() => Boolean(contextCommandState.value.intent) || workspace.isObserver.value || workspace.context.value?.readOnly !== false)
 const readOnly = computed(() => surfaceReadOnly.value || workspace.account.value?.tradePermission !== true)
 const traderStrategies = computed(() => workspace.strategies.value.filter((item) => item.kind === 'trader' && item.status === 'active' && item.activeVersionId))
@@ -165,6 +179,7 @@ async function confirmAction() {
   commandOpen.value = false
   distributionOpen.value = false
   resourceEditOpen.value = false
+  activeTab.value = 'operations'
   await workspace.refresh()
 }
 
@@ -173,6 +188,7 @@ function failAction(message: string) {
 }
 
 watch(workspace.activeAccountId, () => {
+  executionDecisionId.value = ''
   commandOpen.value = false
   distributionOpen.value = false
   resourceOpen.value = false
@@ -187,15 +203,15 @@ watch(workspace.activeAccountId, () => {
 
 <template>
   <div class="mx-auto grid w-full max-w-[1680px] gap-4 p-3 sm:p-5 lg:p-6">
-    <header class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <header class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
       <div>
-        <div class="flex items-center gap-2 text-xs font-medium text-primary"><Bot aria-hidden="true" />AI 交易团队</div>
+
         <h1 class="mt-1 text-2xl font-semibold tracking-tight">AI 交易员</h1>
-        <p class="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">围绕当前交易账户查看持仓、挂单与 AI 交易决定。行情判断来自 AI 分析师，账户动作仍需通过服务端风控与执行链确认。</p>
+        <p class="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">查看交易建议，管理当前账户的持仓与执行记录。</p>
       </div>
       <div class="flex flex-wrap items-center gap-2">
-        <Badge variant="outline">{{ realtimeLabel }}</Badge>
-        <Button size="lg" :disabled="readOnly || !defaultSymbol" @click="openCommand(false)"><Plus />手动下单</Button>
+
+        <Button variant="outline" size="lg" :disabled="readOnly || !defaultSymbol" @click="openCommand(false)"><Plus />手动下单</Button>
         <Button v-if="commands.administrator.value" variant="outline" size="lg" :disabled="surfaceReadOnly || !defaultSymbol || !traderStrategies.length" @click="openCommand(true)"><HandCoins />策略分发</Button>
         <Button variant="outline" size="lg" :disabled="workspace.loading.value || workspace.refreshing.value" @click="workspace.refresh">
           <RefreshCw :class="workspace.refreshing.value ? 'animate-spin motion-reduce:animate-none' : ''" aria-hidden="true" />
@@ -251,17 +267,16 @@ watch(workspace.activeAccountId, () => {
     </Empty>
 
     <template v-else-if="workspace.activeAccountId.value">
-      <InventoryWorkspace
-        :positions="workspace.positions.value"
-        :orders="workspace.pendingOrders.value"
-        :loading="workspace.loading.value"
-        :read-only="readOnly"
-        :timezone-offset-minutes="workspace.snapshot.value?.timezoneOffsetMinutes ?? null"
-        @inspect="inspectResource"
-      />
-
-      <div class="grid min-w-0 gap-4 xl:grid-cols-[21rem_minmax(0,1fr)]">
+      <Tabs v-model="activeTab" class="min-w-0 flex-col gap-4">
+        <TabsList variant="line" class="h-auto min-h-11 w-full justify-start border-b">
+          <TabsTrigger value="decisions" class="min-h-11 flex-none rounded-none border-b-2 border-transparent px-4 data-[state=active]:border-primary data-[state=active]:text-primary">AI 决策</TabsTrigger>
+          <TabsTrigger value="inventory" class="min-h-11 flex-none rounded-none border-b-2 border-transparent px-4 data-[state=active]:border-primary data-[state=active]:text-primary">持仓挂单 <span class="font-mono text-xs text-muted-foreground">{{ workspace.positions.value.length + workspace.pendingOrders.value.length }}</span></TabsTrigger>
+          <TabsTrigger value="operations" class="min-h-11 flex-none rounded-none border-b-2 border-transparent px-4 data-[state=active]:border-primary data-[state=active]:text-primary">执行记录</TabsTrigger>
+        </TabsList>
+        <TabsContent value="decisions" class="min-w-0 m-0">
+      <div class="grid min-w-0 gap-4" :class="workspace.decisions.value.length ? 'lg:grid-cols-[18rem_minmax(0,1fr)]' : ''">
         <TraderDecisionHistory
+          :account-id="workspace.isObserver.value ? null : workspace.activeAccountId.value"
           :items="workspace.decisions.value"
           :strategies="workspace.strategies.value"
           :selected-id="selectedDecisionId"
@@ -271,8 +286,9 @@ watch(workspace.activeAccountId, () => {
           :timezone-offset-minutes="workspace.snapshot.value?.timezoneOffsetMinutes ?? null"
           @select="selectDecision"
         />
-        <section class="min-w-0" aria-label="AI 交易员决定详情">
+        <section v-if="workspace.decisions.value.length || selectedDecisionId" class="min-w-0" aria-label="AI 交易员决定详情">
           <TraderDecisionDetail
+            @navigate="navigateDecision"
             :detail="workspace.detail.value"
             :strategies="workspace.strategies.value"
             :loading="workspace.detailLoading.value"
@@ -282,13 +298,29 @@ watch(workspace.activeAccountId, () => {
         </section>
       </div>
 
-      <TraderOperationCenter
+        </TabsContent>
+        <TabsContent value="inventory" class="min-w-0 m-0">
+      <InventoryWorkspace
+        :positions="workspace.positions.value"
+        :orders="workspace.pendingOrders.value"
+        :loading="workspace.loading.value"
+        :read-only="readOnly"
+        :timezone-offset-minutes="workspace.snapshot.value?.timezoneOffsetMinutes ?? null"
+        @inspect="inspectResource"
+      />
+
+        </TabsContent>
+        <TabsContent value="operations" class="min-w-0 m-0 space-y-4">
+          <AccountExecutionHistory @detail-close="executionDecisionId = ''" :refresh-version="workspace.executionRefreshVersion.value" :decision-id="executionDecisionId" :account-id="workspace.activeAccountId.value" :read-only="workspace.isObserver.value" />
+      <TraderOperationCenter v-if="commands.operations.value.length || commands.activeDistribution.value"
         :operations="commands.operations.value"
         :distribution="commands.activeDistribution.value"
         :loading="commands.submitting.value"
         :timezone-offset-minutes="workspace.snapshot.value?.timezoneOffsetMinutes ?? null"
         @close-distribution="requestDistributionClose"
       />
+        </TabsContent>
+      </Tabs>
     </template>
 
     <InventoryDetailSheet
@@ -332,7 +364,7 @@ watch(workspace.activeAccountId, () => {
       @submit="requestEntryConfirmation($event, true)"
     />
 
-    <TraderResourceEditSheet
+    <TraderResourceEditDialog
       v-model:open="resourceEditOpen"
       :resource="editingResource"
       :read-only="readOnly"
@@ -353,7 +385,8 @@ watch(workspace.activeAccountId, () => {
       :scope="pendingAction?.summary.scope"
       :detail="pendingAction?.summary.detail"
       :submitting="commands.submitting.value"
-      @update:open="!$event && (pendingAction = null)"
+      :error="commands.error.value"
+      @update:open="!commands.submitting.value && !$event && (pendingAction = null)"
       @confirm="confirmAction"
     />
   </div>

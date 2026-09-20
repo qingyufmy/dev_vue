@@ -103,7 +103,7 @@ export function assessManualRelease(policy: EffectiveRiskPolicy, summary: Accoun
 }
 
 export function manualReleaseApplies(release: ManualRiskRelease | null | undefined, rule: ManualReleaseRuleCode, policy: EffectiveRiskPolicy, summary: AccountRiskSummary, now: Date) {
-  return Boolean(release
+  return Boolean(policy.values.manualReleaseEnabled && release
     && release.platformPolicyVersionId === policy.platformPolicyVersionId
     && release.accountPolicyVersionId === policy.accountPolicyVersionId
     && release.policySetRevision === policy.policySetRevision

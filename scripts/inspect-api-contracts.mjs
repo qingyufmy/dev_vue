@@ -1,7 +1,9 @@
 import { createRiskHttp } from '../server/dist-v4/modules/risk/composition.js'
+import { createReferralRuleHttp } from '../server/dist-v4/modules/commerce/composition.js'
+import { createExecutionHttp } from '../server/dist-v4/modules/execution/composition.js'
 import { createMarketHttp } from '../server/dist-v4/modules/market/composition.js'
 import { createTradeHistoryHttp } from '../server/dist-v4/modules/trade-history/composition.js'
-import { createReviewHttp } from '../server/dist-v4/modules/reviews/composition.js'
+import { createMysqlReviewHttp } from '../server/dist-v4/modules/reviews/composition.js'
 import { createStrategyHttp } from '../server/dist-v4/modules/strategies/composition.js'
 import { createInferenceHttp } from '../server/dist-v4/modules/inference/composition.js'
 import { createBridgeHttp } from '../server/dist-v4/modules/bridge/composition.js'
@@ -15,6 +17,7 @@ import { createLearningHttp } from '../server/dist-v4/modules/learning/compositi
 import { createSettingsHttp } from '../server/dist-v4/modules/settings/composition.js'
 import { createAuditModule } from '../server/dist-v4/modules/audit/composition.js'
 import { compareApiRoutes } from './lib/api-route-coverage.mjs'
+import { compareProtocolRoutes } from './lib/api-protocol-routes.mjs'
 
 const document = JSON.parse(await readFile(new URL('../contracts/openapi-v4.json', import.meta.url), 'utf8'))
 const app = Fastify({ exposeHeadRoutes: false }), routes = []
@@ -31,11 +34,13 @@ const services = Object.fromEntries([
   'inference', 'strategies', 'risk', 'reviews', 'execution', 'userExecution', 'executionDistribution',
   'tradeHistory', 'tradeAuth', 'referralRules', 'observerManagement', 'observerAdminAuth',
 ].map(name => [name, stub]))
-services.inferenceHttp = createInferenceHttp(stub, stub, stub)
+services.inferenceHttp = createInferenceHttp(stub, stub, stub, stub)
 services.strategiesHttp = createStrategyHttp(stub, stub)
-services.reviewsHttp = createReviewHttp(stub, stub)
-services.tradeHistoryHttp = createTradeHistoryHttp(stub, stub)
+services.reviewsHttp = createMysqlReviewHttp(stub, stub)
+services.tradeHistoryHttp = createTradeHistoryHttp(stub, stub, stub)
 services.riskHttp = createRiskHttp(stub, stub)
+services.referralRulesHttp = createReferralRuleHttp(stub, stub)
+services.executionHttp = createExecutionHttp(stub, stub, stub, stub, stub)
 services.marketHttp = createMarketHttp(stub, stub, stub, stub)
 services.bridgeHttp = createBridgeHttp(stub, stub, stub)
 services.tradingHttp = createTradingHttp(stub, stub, stub, stub)
@@ -49,6 +54,9 @@ try {
   await registerApiV4Routes(app, services, { tradeOrigin: 'https://trade.example.test', adminOrigin: 'https://admin.example.test' })
   await app.ready()
   const result = compareApiRoutes(document, routes)
+  result.protocolRoutes = compareProtocolRoutes(result.outsideBusinessPrefix,
+    JSON.parse(await readFile(new URL('../contracts/http/protocol-route-exceptions.json', import.meta.url), 'utf8')).routes)
+  if (!result.protocolRoutes.passed) process.exitCode = 1
   console.log(JSON.stringify({ ...result, scope: 'Actual Fastify registration with offline adapters; no request/response equivalence or business readiness claim.' }, null, 2))
   if (['missing', 'undocumented', 'parameterNameDifferences', 'duplicateContractRoutes', 'duplicateRuntimeRoutes',
     'missingOperationIds', 'duplicateOperationIds'].some(field => result[field].length)) process.exitCode = 1

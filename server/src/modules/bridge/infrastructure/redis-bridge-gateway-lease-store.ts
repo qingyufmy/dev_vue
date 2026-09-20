@@ -11,6 +11,7 @@ local now=tonumber(ARGV[1])
 local expires=tonumber(ARGV[2])
 local ttl=expires-now
 local capacity=tonumber(ARGV[3])
+if capacity <= 0 then return {0,''} end
 local member=ARGV[4]
 local connectionId=ARGV[5]
 local routeJson=ARGV[6]
@@ -82,6 +83,11 @@ export class RedisBridgeGatewayLeaseStore implements BridgeGatewayLeaseStore {
     await this.redis.eval(RELEASE, 4,
       this.userKey(route.userId), this.profileKey(route.userId, route.terminalProfileId), this.accountKey(route.accountId), this.connectionKey(route.connectionId),
       route.connectionId, this.member(route))
+  }
+
+  async count(userId: number) {
+    // Same authoritative lease set used by claim/renew; expired entries do not consume capacity.
+    return this.redis.zcount(this.userKey(userId), `(${Date.now()}`, '+inf')
   }
 
   async current(accountId: string) {

@@ -1,0 +1,10 @@
+{
+  "routes": [
+    { "method": "GET", "path": "/.well-known/openid-configuration", "reason": "OIDC discovery uses its standard protocol path" },
+    { "method": "GET", "path": "/oauth/jwks", "reason": "OIDC public signing keys" },
+    { "method": "GET", "path": "/oauth/authorize", "reason": "OIDC authorization redirect endpoint" },
+    { "method": "POST", "path": "/oauth/token", "reason": "OIDC token exchange endpoint" },
+    { "method": "GET", "path": "/auth/start", "reason": "Application login redirect entry" },
+    { "method": "GET", "path": "/auth/callback", "reason": "Application authorization callback" }
+  ]
+}

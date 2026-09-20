@@ -246,6 +246,420 @@
           }
         }
       }
+    },
+    "/bridge/installation-authorizations": {
+      "post": {
+        "operationId": "startBridgeInstallationAuthorization",
+        "tags": [
+          "Bridge"
+        ],
+        "summary": "startBridgeInstallationAuthorization",
+        "responses": {
+          "200": {
+            "description": "Authoritative installation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BridgeInstallationStartedResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "410": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BridgeInstallationStart"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bridge/installation-authorizations/{authorization_id}": {
+      "get": {
+        "operationId": "getBridgeInstallationAuthorization",
+        "tags": [
+          "Bridge"
+        ],
+        "summary": "getBridgeInstallationAuthorization",
+        "responses": {
+          "200": {
+            "description": "Authoritative installation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BridgeInstallationConfirmationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "410": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "name": "authorization_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/bridge/installation-authorizations/{authorization_id}/decision": {
+      "post": {
+        "operationId": "decideBridgeInstallationAuthorization",
+        "tags": [
+          "Bridge"
+        ],
+        "summary": "decideBridgeInstallationAuthorization",
+        "responses": {
+          "200": {
+            "description": "Authoritative installation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BridgeInstallationConfirmationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "410": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "name": "authorization_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BridgeInstallationDecision"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bridge/installation-authorizations/{authorization_id}/poll": {
+      "post": {
+        "operationId": "pollBridgeInstallationAuthorization",
+        "tags": [
+          "Bridge"
+        ],
+        "summary": "pollBridgeInstallationAuthorization",
+        "responses": {
+          "200": {
+            "description": "Authoritative installation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BridgeInstallationPolledResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "410": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "parameters": [
+          {
+            "name": "authorization_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BridgeInstallationPoll"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bridge/installations/status": {
+      "post": {
+        "operationId": "getBridgeInstallationStatus",
+        "tags": [
+          "Bridge"
+        ],
+        "summary": "getBridgeInstallationStatus",
+        "responses": {
+          "200": {
+            "description": "Authoritative installation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BridgeInstallationStatusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "410": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BridgeInstallationProof"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bridge/installations/profiles": {
+      "post": {
+        "operationId": "registerBridgeInstallationProfile",
+        "tags": [
+          "Bridge"
+        ],
+        "summary": "registerBridgeInstallationProfile",
+        "responses": {
+          "200": {
+            "description": "Authoritative installation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BridgeInstallationProfileResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "410": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BridgeInstallationProfileRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/bridge/installations/revoke": {
+      "post": {
+        "operationId": "revokeBridgeInstallation",
+        "tags": [
+          "Bridge"
+        ],
+        "summary": "revokeBridgeInstallation",
+        "responses": {
+          "200": {
+            "description": "Authoritative installation result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BridgeInstallationRevokedResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "409": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "410": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "429": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
+            "$ref": "#/components/responses/Problem"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BridgeInstallationProof"
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -565,6 +979,492 @@
             "$ref": "#/components/schemas/Meta"
           }
         }
+      },
+      "BridgeInstallationUser": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          },
+          "display_name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "display_name"
+        ]
+      },
+      "BridgeInstallationStart": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "installation_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "device_name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+          },
+          "poll_secret_hash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "installation_token_hash": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "request_key": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{16,128}$"
+          }
+        },
+        "required": [
+          "installation_id",
+          "device_name",
+          "poll_secret_hash",
+          "installation_token_hash",
+          "request_key"
+        ]
+      },
+      "BridgeInstallationStarted": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "authorization_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "confirmation_path": {
+            "type": "string",
+            "pattern": "^/bridge/authorize\\?request=[a-f0-9-]{36}$"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "poll_interval_seconds": {
+            "const": 5
+          }
+        },
+        "required": [
+          "authorization_id",
+          "confirmation_path",
+          "expires_at",
+          "poll_interval_seconds"
+        ]
+      },
+      "BridgeInstallationProof": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "installation_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "installation_token": {
+            "type": "string",
+            "pattern": "^bi4_[A-Za-z0-9_-]{64}$"
+          }
+        },
+        "required": [
+          "installation_id",
+          "installation_token"
+        ]
+      },
+      "BridgeInstallationConfirmation": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "authorization_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "installation_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "device_name": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "denied",
+              "expired",
+              "revoked"
+            ]
+          },
+          "revision": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "current_user": {
+            "$ref": "#/components/schemas/BridgeInstallationUser"
+          }
+        },
+        "required": [
+          "authorization_id",
+          "installation_id",
+          "device_name",
+          "status",
+          "revision",
+          "created_at",
+          "expires_at",
+          "current_user"
+        ]
+      },
+      "BridgeInstallationDecision": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "decision": {
+            "enum": [
+              "approved",
+              "denied"
+            ]
+          },
+          "expected_revision": {
+            "type": "string",
+            "pattern": "^[0-9]+$"
+          },
+          "current_user_id": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]*$"
+          }
+        },
+        "required": [
+          "decision",
+          "expected_revision",
+          "current_user_id"
+        ]
+      },
+      "BridgeInstallationPoll": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "poll_secret": {
+            "type": "string",
+            "pattern": "^bip_[A-Za-z0-9_-]{43}$"
+          },
+          "installation_token": {
+            "type": "string",
+            "pattern": "^bi4_[A-Za-z0-9_-]{64}$"
+          }
+        },
+        "required": [
+          "poll_secret",
+          "installation_token"
+        ]
+      },
+      "BridgeInstallationPolled": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "enum": [
+                  "pending",
+                  "denied",
+                  "expired",
+                  "revoked"
+                ]
+              },
+              "poll_interval_seconds": {
+                "const": 5
+              }
+            },
+            "required": [
+              "status",
+              "poll_interval_seconds"
+            ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "const": "approved"
+              },
+              "poll_interval_seconds": {
+                "const": 5
+              },
+              "installation_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+              },
+              "user": {
+                "$ref": "#/components/schemas/BridgeInstallationUser"
+              },
+              "generation": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "authorized": {
+                "const": true
+              }
+            },
+            "required": [
+              "status",
+              "poll_interval_seconds",
+              "installation_id",
+              "user",
+              "generation",
+              "authorized"
+            ]
+          }
+        ]
+      },
+      "BridgeInstallationStatus": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "installation_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "user": {
+            "$ref": "#/components/schemas/BridgeInstallationUser"
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "authorized": {
+            "const": true
+          },
+          "capacity": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "included": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "purchased": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "total": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "active": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "available": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "included",
+              "purchased",
+              "total",
+              "active",
+              "available"
+            ]
+          }
+        },
+        "required": [
+          "installation_id",
+          "user",
+          "generation",
+          "authorized",
+          "capacity"
+        ]
+      },
+      "BridgeInstallationProfileRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "installation_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "installation_token": {
+            "type": "string",
+            "pattern": "^bi4_[A-Za-z0-9_-]{64}$"
+          },
+          "request_key": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._:-]{16,128}$"
+          },
+          "refresh_token": {
+            "type": "string",
+            "pattern": "^br4_[A-Za-z0-9_-]{64}$"
+          }
+        },
+        "required": [
+          "installation_id",
+          "installation_token",
+          "request_key",
+          "refresh_token"
+        ]
+      },
+      "BridgeInstallationProfile": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "credential_type": {
+            "const": "bridge_refresh"
+          },
+          "installation_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "profile_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "session_token_path": {
+            "const": "/api/v4/bridge/session-tokens"
+          },
+          "websocket_path": {
+            "const": "/bridge/v4/ws"
+          }
+        },
+        "required": [
+          "credential_type",
+          "installation_id",
+          "profile_id",
+          "generation",
+          "session_token_path",
+          "websocket_path"
+        ]
+      },
+      "BridgeInstallationRevoked": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "installation_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+          },
+          "revoked": {
+            "const": true
+          }
+        },
+        "required": [
+          "installation_id",
+          "revoked"
+        ]
+      },
+      "BridgeInstallationStartedResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/BridgeInstallationStarted"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ]
+      },
+      "BridgeInstallationConfirmationResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/BridgeInstallationConfirmation"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ]
+      },
+      "BridgeInstallationPolledResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/BridgeInstallationPolled"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ]
+      },
+      "BridgeInstallationStatusResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/BridgeInstallationStatus"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ]
+      },
+      "BridgeInstallationProfileResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/BridgeInstallationProfile"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ]
+      },
+      "BridgeInstallationRevokedResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/BridgeInstallationRevoked"
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        },
+        "required": [
+          "data",
+          "meta"
+        ]
       }
     }
   }

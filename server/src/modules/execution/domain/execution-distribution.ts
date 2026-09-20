@@ -1,4 +1,4 @@
-import type { JsonObject } from '../../inference/domain/inference.js'
+import type { ExecutionJsonObject } from './execution-input.js'
 import type { Operation } from './execution.js'
 import type {
   UserExecutionCommandInput,
@@ -180,10 +180,10 @@ export interface ExecutionDistribution {
   sourceDistributionId: string | null
   idempotencyKey: string
   requestHash: string
-  command: JsonObject
+  command: ExecutionJsonObject
   status: DistributionStatus
   targetCount: number
-  resultSummary: JsonObject
+  resultSummary: ExecutionJsonObject
   createdAt: string
   updatedAt: string
   completedAt: string | null
@@ -205,7 +205,7 @@ export class ExecutionDistributionError extends Error {
   constructor(
     public readonly code: string,
     public readonly status: number,
-    public readonly details: JsonObject = {},
+    public readonly details: ExecutionJsonObject = {},
   ) {
     super(code)
     this.name = 'ExecutionDistributionError'
@@ -256,7 +256,7 @@ export function normalizeCreateDistributionCloseInput(input: CreateDistributionC
   return { actorUserId, actorRole, sourceDistributionId, idempotencyKey, expectedRevision, targetIds, requestHash }
 }
 
-export function freezeDistributionTarget(candidate: DistributionTargetCandidate, distributionId: string, targetId: string, now: string, command: JsonObject, source?: { outcomeId: string; ticket: string; sourceTargetId: string }): FrozenDistributionTarget {
+export function freezeDistributionTarget(candidate: DistributionTargetCandidate, distributionId: string, targetId: string, now: string, command: ExecutionJsonObject, source?: { outcomeId: string; ticket: string; sourceTargetId: string }): FrozenDistributionTarget {
   const frozenContext: FrozenDistributionContext = {
     strategy: { id: candidate.traderStrategyId, versionId: candidate.traderStrategyVersionId },
     subscription: { id: candidate.subscriptionId, revision: candidate.subscriptionRevision, symbol: candidate.symbol,
@@ -305,7 +305,7 @@ export function freezeDistributionTarget(candidate: DistributionTargetCandidate,
  * retained in the frozen context and the account command will fail closed
  * during its own deterministic server-side review.
  */
-export function freezeEligibleDistributionTargets(candidates: DistributionTargetCandidate[], strategyId: string, strategyVersionId: string, symbol: string, distributionId: string, command: JsonObject, now: string, idFactory: () => string): FrozenDistributionTarget[] {
+export function freezeEligibleDistributionTargets(candidates: DistributionTargetCandidate[], strategyId: string, strategyVersionId: string, symbol: string, distributionId: string, command: ExecutionJsonObject, now: string, idFactory: () => string): FrozenDistributionTarget[] {
   const normalizedSymbol = normalizeSymbol(symbol)
   const eligible = candidates
     .filter((candidate) => candidate.traderStrategyId === strategyId
@@ -426,4 +426,4 @@ function opaque(value: unknown, code: string) { const normalized = String(value 
 function idempotency(value: unknown) { const normalized = String(value ?? '').trim(); if (!idempotencyPattern.test(normalized)) throw distributionError('distribution_idempotency_key_invalid', 422); return normalized }
 function userId(value: unknown) { if (!Number.isSafeInteger(value) || Number(value) < 1) throw distributionError('distribution_actor_invalid', 422); return Number(value) }
 function positiveRevision(value: unknown, code: string) { const number = typeof value === 'number' ? value : Number(String(value ?? '').trim()); if (!Number.isSafeInteger(number) || number < 1) throw distributionError(code, 422); return number }
-function distributionError(code: string, status: number, details: JsonObject = {}) { return new ExecutionDistributionError(code, status, details) }
+function distributionError(code: string, status: number, details: ExecutionJsonObject = {}) { return new ExecutionDistributionError(code, status, details) }

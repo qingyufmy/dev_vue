@@ -61,16 +61,17 @@ function toneClass(value: string) {
           </div>
         </div>
         <div class="mt-4 rounded-lg border bg-background p-4">
-          <p class="text-xs font-medium text-muted-foreground">复盘结论</p>
+          <p v-if="detail.legacy" class="text-sm leading-6">历史原文：保留旧版正文供查阅，暂不支持修订、确认或写入新版记忆。</p>
+          <p v-else class="text-xs font-medium text-muted-foreground">复盘结论</p>
           <p class="mt-2 text-base font-medium leading-7">{{ detail.conclusion || '暂无结构化结论。' }}</p>
         </div>
       </CardHeader>
       <CardFooter class="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
         <p class="text-xs text-muted-foreground">证据修订 {{ detail.evidenceRevision }} · {{ detail.evidenceHash ? `输入 ${detail.evidenceHash.slice(0, 12)}…` : '未提供输入哈希' }}</p>
         <div class="flex flex-wrap gap-2">
-          <Button v-if="canEdit && detail.currentVersionId && ['awaiting_confirmation', 'needs_changes'].includes(detail.status)" variant="outline" class="min-h-11" :disabled="Boolean(action)" @click="emit('edit')"><Undo2 data-icon="inline-start" />修订复盘</Button>
-          <Button v-if="detail.status === 'awaiting_confirmation' && detail.currentVersionId" variant="outline" class="min-h-11" :disabled="Boolean(action)" @click="emit('return')"><ArrowDownToLine data-icon="inline-start" />退回复核</Button>
-          <Button v-if="detail.status === 'awaiting_confirmation' && detail.currentVersionId" class="min-h-11" :disabled="Boolean(action)" @click="emit('confirm')"><CheckCircle2 data-icon="inline-start" />确认复盘</Button>
+          <Button v-if="!detail.legacy && canEdit && detail.currentVersionId && ['awaiting_confirmation', 'needs_changes'].includes(detail.status)" variant="outline" class="min-h-11" :disabled="Boolean(action)" @click="emit('edit')"><Undo2 data-icon="inline-start" />修订复盘</Button>
+          <Button v-if="!detail.legacy && detail.status === 'awaiting_confirmation' && detail.currentVersionId" variant="outline" class="min-h-11" :disabled="Boolean(action)" @click="emit('return')"><ArrowDownToLine data-icon="inline-start" />退回复核</Button>
+          <Button v-if="!detail.legacy && detail.status === 'awaiting_confirmation' && detail.currentVersionId" class="min-h-11" :disabled="Boolean(action)" @click="emit('confirm')"><CheckCircle2 data-icon="inline-start" />确认复盘</Button>
         </div>
       </CardFooter>
     </Card>

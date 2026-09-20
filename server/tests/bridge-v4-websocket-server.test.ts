@@ -17,6 +17,31 @@ afterEach(async () => {
 })
 
 describe('BridgeV4WebSocketServer', () => {
+  it('accepts a normal multi-period market burst while earlier frames are being persisted', async () => {
+    const received: number[] = []
+    httpServer = createServer()
+    bridgeServer = new BridgeV4WebSocketServer(httpServer, {
+      open: async input => {
+        await input.sink.send({ type: 'session.welcome' })
+        return { close: async () => undefined, receive: async message => {
+          await new Promise(resolve => setTimeout(resolve, 5))
+          received.push((message as { index: number }).index)
+          if (received.length === 20) await input.sink.send({ type: 'burst.complete' })
+        } }
+      },
+    })
+    bridgeServer.start()
+    const port = await listen(httpServer)
+    const client = new WebSocket(`ws://127.0.0.1:${port}/bridge/v4/ws`, { headers: { Authorization: `Bearer ${ticket}` } })
+    clients.push(client)
+    await openedSocket(client)
+    client.send(JSON.stringify({ type: 'session.hello' }))
+    await nextMessage(client)
+    const outcome = Promise.race([nextMessage(client), closedSocket(client)])
+    for (let index = 0; index < 20; index++) client.send(JSON.stringify({ type: 'stream.event', index }))
+    await expect(outcome).resolves.toMatchObject({ type: 'burst.complete' })
+    expect(received).toEqual(Array.from({ length: 20 }, (_, index) => index))
+  })
   it('accepts only a bearer ticket and requires session.hello before binding the gateway', async () => {
     const opened: unknown[] = []
     httpServer = createServer()
@@ -35,6 +60,25 @@ describe('BridgeV4WebSocketServer', () => {
     client.send(JSON.stringify({ v: 4, type: 'session.hello', payload: {} }))
     await expect(nextMessage(client)).resolves.toMatchObject({ v: 4, type: 'session.welcome' })
     expect(opened).toHaveLength(1)
+  })
+
+  it.each(['count', 'bytes'])('still bounds queued market traffic by %s', async limit => {
+    httpServer = createServer()
+    bridgeServer = new BridgeV4WebSocketServer(httpServer, {
+      open: async input => {
+        await input.sink.send({ type: 'session.welcome' })
+        return { close: async () => undefined, receive: async () => { await new Promise(resolve => setTimeout(resolve, 100)) } }
+      },
+    })
+    bridgeServer.start()
+    const port = await listen(httpServer)
+    const client = new WebSocket(`ws://127.0.0.1:${port}/bridge/v4/ws`, { headers: { Authorization: `Bearer ${ticket}` } })
+    clients.push(client); await openedSocket(client)
+    client.send(JSON.stringify({ type: 'session.hello' })); await nextMessage(client)
+    const outcome = closedSocket(client)
+    const message = JSON.stringify({ type: 'stream.event', padding: limit === 'bytes' ? 'x'.repeat(500_000) : '' })
+    for (let index = 0; index < (limit === 'bytes' ? 12 : 70); index++) client.send(message)
+    await expect(outcome).resolves.toEqual({ code: 4400, reason: 'bridge_message_backpressure' })
   })
 
   it('rejects query credentials before upgrading', async () => {

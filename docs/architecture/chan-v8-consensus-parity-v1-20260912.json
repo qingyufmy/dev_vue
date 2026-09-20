@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "checks": 475,
+  "nonemptyChains": 24,
+  "nonemptyCenters": 10,
+  "referenceSha256": "b945ae29ab5df61648d5d8da86af27835ef7874be60bc7f43aa441820780b796",
+  "sources": {
+    "window-evidence": "99f13fb8853bac1afca6129d6caaa88551cb34e970d391fc28471ae419cae98a",
+    "segment-consensus": "902b748542c6c761d6912a1ea9e0b14d344732b776e4c5939c9b142e16243451",
+    "center-consensus-evidence": "bf3e8ca0f6b256508db547199516318102d9872a6a9ae8b27df724f777a8f2ef",
+    "center-consensus": "7b4a78a7c26737f62be8a57984c792b41ca31cc4d1925612470cdc90359d1c8e",
+    "bootstrap-consensus": "5a0e0d50cfef569666ac08e241a10713cf96510616e69be659ada9a21bc2390e"
+  },
+  "scope": "Synthetic quorum/authority/context and distinct-observation parity; pure modules only. Final evidence remapping/selection and Worker not wired."
+}

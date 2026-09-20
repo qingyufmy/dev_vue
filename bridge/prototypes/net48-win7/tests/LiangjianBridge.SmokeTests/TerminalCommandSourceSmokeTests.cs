@@ -67,6 +67,7 @@ namespace Liangjian.BridgeV4.SmokeTests
                     result = source.Execute(runtime, Request("0"), Now);
                     Assert(result.Status == "rejected" && host.Calls == calls,
                         "mt5_invalid_command_reached_terminal");
+                    TestNullableManagementState(runtime, source, host);
                 }
             }
             finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
@@ -111,13 +112,57 @@ namespace Liangjian.BridgeV4.SmokeTests
 
         private static BridgeCommandRequest Request(IDictionary<string, object> parameters)
         {
+            return Request(parameters, "order.place", null);
+        }
+
+        private static void TestNullableManagementState(ProfileRuntime runtime,
+            Mt5TerminalCommandSource source, FakeMt5Host host)
+        {
+            IDictionary<string, object> state = new Dictionary<string, object>
+            {
+                { "ticket", "501" }, { "symbol", "XAUUSD" }, { "direction", "buy" },
+                { "order_type", "market" }, { "magic", 234000 }, { "volume", "0.01" },
+                { "open_price", "100.00" }, { "stop_limit_price", null },
+                { "stop_loss", null }, { "take_profit", null }, { "expiration_utc_msc", null }
+            };
+            string[] actions = { "position.close", "position.protection.set", "pending_order.modify", "pending_order.cancel" };
+            foreach (string action in actions)
+            {
+                state["order_type"] = action.StartsWith("pending_order.") ? "buy_limit" : "market";
+                IDictionary<string, object> parameters = new Dictionary<string, object> { { "ticket", "501" } };
+                if (action == "position.close") parameters["deviation"] = 20;
+                if (action == "position.protection.set") parameters["stop_loss"] = "90.00";
+                if (action == "pending_order.modify") parameters["price"] = "95.00";
+                int calls = host.Calls;
+                Assert(source.Execute(runtime, Request(parameters, action, state), Now).Status == "succeeded"
+                    && host.Calls == calls + 1, "mt5_nullable_management_state_rejected_" + action);
+                Assert(Object(host.Payload, "params").ContainsKey("expected_state"), "mt5_expected_state_dropped");
+                foreach (string field in new[] { "stop_limit_price", "stop_loss", "take_profit", "expiration_utc_msc" })
+                {
+                    state.Remove(field);
+                    calls = host.Calls;
+                    Assert(source.Execute(runtime, Request(parameters, action, state), Now).Status == "rejected"
+                        && host.Calls == calls, "mt5_missing_nullable_field_accepted_" + field);
+                    state[field] = null;
+                }
+                state["volume"] = null;
+                calls = host.Calls;
+                Assert(source.Execute(runtime, Request(parameters, action, state), Now).Status == "rejected"
+                    && host.Calls == calls, "mt5_required_nonnull_field_accepted");
+                state["volume"] = "0.01";
+            }
+        }
+
+        private static BridgeCommandRequest Request(IDictionary<string, object> parameters,
+            string action, IDictionary<string, object> expectedState)
+        {
             IDictionary<string, object> payload = new Dictionary<string, object>
             {
                 { "command_id", "command-0001" }, { "idempotency_key", "idempotency-command-0001" },
-                { "action", "order.place" }, { "issued_at_utc_msc", Now },
+                { "action", action }, { "issued_at_utc_msc", Now },
                 { "deadline_utc_msc", Now + 10000 },
                 { "params", parameters },
-                { "expected_state", null }
+                { "expected_state", expectedState }
             };
             JavaScriptSerializer serializer = new JavaScriptSerializer();
             string envelope = serializer.Serialize(new Dictionary<string, object>

@@ -1,0 +1,46 @@
+{
+  "kind": "risk-control-backfill-reference/v1",
+  "passed": true,
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "checks": [
+    "archive_failure_real_transaction_rollback",
+    "commit_response_loss_exact_replay_one_row_each",
+    "control_actor_and_utc_roundtrip",
+    "replay_preserves_subsequent_v4_update",
+    "different_run_cannot_overwrite_target",
+    "source_drift_rejects_and_rolls_back_new_run",
+    "archived_source_preserved_after_legacy_change"
+  ],
+  "artifacts": [
+    {
+      "file": "server/db/migrations/inplace/003_identity_migration_tables.sql",
+      "sha256": "158e5283b3e0fa99545c59ae66ed013db4b54ffdaa6c173013c234b2630a51ee"
+    },
+    {
+      "file": "server/db/migrations/inplace/005_source_row_evidence.sql",
+      "sha256": "4d7b0151f8ab3bc68228b1cd644435d6d7d4810c58e24678439e45432ba60183"
+    },
+    {
+      "file": "server/db/migrations/20260903_007_deterministic_risk_review.sql",
+      "sha256": "ed697bb67c7c87d389575f00462a961011cd45d115287cc018bf6e40fbef7d3e"
+    },
+    {
+      "file": "scripts/lib/risk-control-backfill.mjs",
+      "sha256": "1f435032824e01fa0d98daae1b1ab6a23cac19716e2963dd5db75e843c322306"
+    },
+    {
+      "file": "scripts/lib/risk-legacy-control-mapping.mjs",
+      "sha256": "2bf6088fa4b5ecff72a8aef3ae04228f27435dd7c11a73fee38004461f0e797e"
+    },
+    {
+      "file": "scripts/lib/v4-backfill-mysql-repository.mjs",
+      "sha256": "c10905a49e99e8c12dabcb9e86434634eeb34344f4c0769f0fb88f543eb31c92"
+    },
+    {
+      "file": "scripts/verify-risk-control-backfill-local.mjs",
+      "sha256": "a0429408de5b09ab7d652eaf86639bb8cbf4a5e744d0eb9d24b2daf802b8967a"
+    }
+  ],
+  "temporaryDatabaseRemoved": true,
+  "currentDatabaseWrites": 0
+}

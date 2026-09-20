@@ -1,0 +1,29 @@
+{
+  "kind": "history-provenance-parent-prerequisites/v1",
+  "passed": false,
+  "writes": 0,
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "parents": [
+    {
+      "tableName": "trading_accounts",
+      "columnType": "bigint unsigned",
+      "collationName": null,
+      "nullable": "NO",
+      "engine": "InnoDB",
+      "columnKey": "PRI"
+    },
+    {
+      "tableName": "users",
+      "columnType": "int",
+      "collationName": null,
+      "nullable": "NO",
+      "engine": "InnoDB",
+      "columnKey": "PRI"
+    }
+  ],
+  "errorCode": "ERR_ASSERTION",
+  "observedAt": "2026-09-09T05:06:56.394Z"
+}

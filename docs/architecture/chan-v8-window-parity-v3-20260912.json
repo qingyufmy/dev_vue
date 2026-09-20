@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "checks": 320,
+  "nonemptySegments": 96,
+  "nonemptyCenters": 96,
+  "statuses": [
+    "insufficient_klines",
+    "insufficient_bis",
+    "unreliable_segments",
+    "partial"
+  ],
+  "referenceSha256": "b945ae29ab5df61648d5d8da86af27835ef7874be60bc7f43aa441820780b796",
+  "sources": {
+    "compute-window": "f359d92ddb4c8e4b77344317fae8ac94be397f7d90a585a8ba01fd62cd9732bc",
+    "evidence-capabilities": "b42250ff9a4670ab3a5b9a62485d3e4a3f75b927a0265cce85c443562206050b",
+    "empty-result": "c276da04321fb68ce547a1e6d6cf49d271bd8dce9e44284846863449d420d6f8"
+  },
+  "scope": "Pure single-window v8 parity with synthetic prices and quality metadata; includes nonenumerable consensus inputs and input immutability. No cross-window consensus, Worker wiring or terminal/runtime validation."
+}

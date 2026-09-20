@@ -1,0 +1,16 @@
+{
+  "kind": "review-worker-mysql-reference/v1",
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "foreignKeysVerified": false,
+  "modelCalls": "synthetic-only",
+  "checks": [],
+  "errorCode": "ER_NO_DEFAULT_FOR_FIELD",
+  "errorLocations": [
+    "    at seed (file:///D:/dev_codex/dev_vue/scripts/verify-review-worker-reference-local.mjs:39:14)",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)",
+    "    at async file:///D:/dev_codex/dev_vue/scripts/verify-review-worker-reference-local.mjs:50:38"
+  ],
+  "referenceDatabaseRemoved": true,
+  "observedAt": "2026-09-11T03:42:51.001Z"
+}

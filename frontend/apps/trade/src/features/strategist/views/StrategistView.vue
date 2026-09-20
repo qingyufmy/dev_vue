@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { AlertCircle, BrainCircuit, CheckCircle2, Library, Network, ShieldAlert } from '@lucide/vue'
+import { AlertCircle, BrainCircuit, CheckCircle2, Library, Network } from '@lucide/vue'
 import type { StrategyKind, StrategySummary } from '@aurum/contracts'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Alert, AlertDescription, AlertTitle } from '@aurum/ui/alert'
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@aurum/ui/alert-dialog'
-import { Badge } from '@aurum/ui/badge'
+import { AlertDialog, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@aurum/ui/alert-dialog'
+import { Button } from '@aurum/ui/button'
+import { currentAccount } from '~/features/trading-context'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@aurum/ui/tabs'
 import StrategyCatalog from '../components/StrategyCatalog.vue'
 import StrategyDetail from '../components/StrategyDetail.vue'
@@ -20,6 +21,8 @@ const route = useRoute()
 const router = useRouter()
 const workspace = useStrategistWorkspace()
 const editorOpen = ref(false)
+let editorGeneration = 0
+watch(editorOpen, () => { editorGeneration++ }, { flush: 'sync' })
 const editorMode = ref<'create' | 'version'>('create')
 const editorKind = ref<StrategyKind>('analysis')
 const editorBase = ref<StrategyDetailView | null>(null)
@@ -35,7 +38,7 @@ const section = computed<StrategySection>(() => route.query.section === 'subscri
 const kind = computed<StrategyKind>(() => route.query.kind === 'trader' ? 'trader' : 'analysis')
 const selectedStrategyId = computed(() => typeof route.query.strategy_id === 'string' ? route.query.strategy_id : '')
 const selectedAccountId = computed(() => typeof route.query.account_id === 'string' ? route.query.account_id : '')
-const latestVersion = computed(() => workspace.detail.value?.versions.reduce((latest, item) => !latest || item.versionNumber > latest.versionNumber ? item : latest, undefined as StrategyDetailView['versions'][number] | undefined) ?? null)
+const latestVersion = computed(() => editorBase.value?.versions.reduce((latest, item) => !latest || item.versionNumber > latest.versionNumber ? item : latest, undefined as StrategyDetailView['versions'][number] | undefined) ?? null)
 
 function updateQuery(patch: Record<string, string | undefined>) {
   const query = { ...route.query }
@@ -77,6 +80,11 @@ function openVersion(value: StrategyDetailView) {
 function openMetadata(value: StrategySummary) { metadataStrategy.value = value; metadataOpen.value = true }
 
 async function saveStrategy(draft: StrategyDraft) {
+  if (workspace.compiling.value || workspace.submitting.value) return
+  const generation = editorGeneration
+  const target = editorBase.value?.strategy.id
+  if (!await workspace.compile(draft)) return
+  if (generation !== editorGeneration || !editorOpen.value || target !== editorBase.value?.strategy.id || (target && target !== workspace.detail.value?.strategy.id)) return
   if (editorMode.value === 'create') {
     const id = await workspace.createStrategy(draft)
     if (id) { editorOpen.value = false; updateQuery({ kind: draft.kind === 'analysis' ? undefined : draft.kind, strategy_id: id }) }
@@ -102,10 +110,11 @@ watch([() => workspace.loading.value, () => workspace.strategies.value, kind], (
   const visible = workspace.strategies.value.filter((item) => item.kind === kind.value)
   if (!visible.some((item) => item.id === selectedStrategyId.value)) updateQuery({ strategy_id: visible[0]?.id })
 }, { immediate: true })
+watch(selectedAccountId, () => { subscriptionOpen.value = false; editingSubscription.value = null; endingSubscription.value = null })
 watch(selectedStrategyId, (id) => { void workspace.loadDetail(id) }, { immediate: true })
 watch([() => workspace.loading.value, () => workspace.accounts.value, selectedAccountId, section], ([loading]) => {
   if (loading || section.value !== 'subscriptions') return
-  const id = workspace.accounts.value.some((item) => item.id === selectedAccountId.value) ? selectedAccountId.value : workspace.accounts.value[0]?.id ?? ''
+  const id = workspace.accounts.value.some((item) => item.id === selectedAccountId.value) ? selectedAccountId.value : workspace.accounts.value.find(item => item.id === currentAccount.value?.id)?.id ?? workspace.accounts.value[0]?.id ?? ''
   if (id !== selectedAccountId.value) updateQuery({ account_id: id || undefined })
   else void workspace.loadSubscriptions(id)
 }, { immediate: true })
@@ -117,25 +126,25 @@ watch([() => workspace.loading.value, () => workspace.accounts.value, selectedAc
       <div>
         <div class="flex items-center gap-2 text-xs font-medium text-primary"><BrainCircuit class="size-4" aria-hidden="true" />AI 交易团队</div>
         <h1 class="mt-1 text-2xl font-semibold tracking-tight">AI 策略师</h1>
-        <p class="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">管理行情分析与交易执行两类策略。提示词版本保持不可变，账户订阅只绑定已发布版本。</p>
+        <p class="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">选择策略、查看版本，再为交易账户配置订阅。</p>
       </div>
-      <Badge variant="outline"><ShieldAlert />策略不能绕过平台安全边界</Badge>
+
     </header>
 
     <Alert v-if="workspace.error.value" variant="destructive"><AlertCircle /><AlertTitle>策略工作区读取失败</AlertTitle><AlertDescription>{{ workspace.error.value }}</AlertDescription></Alert>
     <Alert v-if="workspace.actionError.value" variant="destructive"><AlertCircle /><AlertTitle>策略操作没有完成</AlertTitle><AlertDescription>{{ workspace.actionError.value }}</AlertDescription></Alert>
     <Alert v-if="workspace.notice.value"><CheckCircle2 /><AlertTitle>操作已完成</AlertTitle><AlertDescription>{{ workspace.notice.value }}</AlertDescription></Alert>
 
-    <Tabs :model-value="section" @update:model-value="changeSection">
+    <Tabs class="flex min-w-0 flex-col" :model-value="section" @update:model-value="changeSection">
       <TabsList class="h-auto w-full justify-start overflow-x-auto sm:w-auto">
-        <TabsTrigger value="library" class="min-h-11"><Library />策略库与版本</TabsTrigger>
+        <TabsTrigger value="library" class="min-h-11"><Library />策略库</TabsTrigger>
         <TabsTrigger value="subscriptions" class="min-h-11"><Network />账户订阅</TabsTrigger>
       </TabsList>
 
       <TabsContent value="library" class="mt-4">
-        <div class="grid min-w-0 gap-4 xl:grid-cols-[21rem_minmax(0,1fr)]">
+        <div class="grid min-w-0 gap-4 lg:grid-cols-[19rem_minmax(0,1fr)]">
           <StrategyCatalog :items="workspace.strategies.value" :selected-id="selectedStrategyId" :loading="workspace.loading.value" :kind="kind" @select="selectStrategy" @create="openCreate" @kind-change="changeKind" />
-          <StrategyDetail :detail="workspace.detail.value" :loading="workspace.detailLoading.value" :busy="workspace.submitting.value" @edit-meta="openMetadata" @new-version="openVersion" @publish="pendingPublishVersionId = $event" @retire="retireOpen = true" />
+          <StrategyDetail :detail="workspace.detail.value" :loading="workspace.detailLoading.value" :busy="workspace.submitting.value" @subscriptions="changeSection('subscriptions')" @edit-meta="openMetadata" @new-version="openVersion" @publish="pendingPublishVersionId = $event" @retire="retireOpen = true" />
         </div>
       </TabsContent>
 
@@ -161,12 +170,14 @@ watch([() => workspace.loading.value, () => workspace.accounts.value, selectedAc
       :mode="editorMode"
       :kind="editorKind"
       :strategy-name="editorBase?.strategy.name"
+      :strategy-description="editorBase?.strategy.description"
+      :strategy-status="editorBase?.strategy.status"
+      :platform="editorBase?.strategy.scope === 'platform'"
       :base-version="editorMode === 'version' ? latestVersion : null"
       :compile-result="workspace.compileResult.value"
       :compiling="workspace.compiling.value"
       :submitting="workspace.submitting.value"
       :error="workspace.actionError.value"
-      @compile="workspace.compile"
       @submit="saveStrategy"
     />
     <StrategyMetadataSheet v-model:open="metadataOpen" :strategy="metadataStrategy" :submitting="workspace.submitting.value" :error="workspace.actionError.value" @submit="saveMetadata" />
@@ -182,14 +193,14 @@ watch([() => workspace.loading.value, () => workspace.accounts.value, selectedAc
       @submit="saveSubscription"
     />
 
-    <AlertDialog :open="retireOpen" @update:open="retireOpen = $event">
-      <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>确认退役这条策略？</AlertDialogTitle><AlertDialogDescription>退役后不能再创建版本或作为新订阅使用，现有订阅也会停止生成新任务；订阅本身、历史版本、运行记录和审计证据都会保留。此操作不会自动平仓或撤单。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction variant="destructive" :disabled="workspace.submitting.value" @click="retire">确认退役</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+    <AlertDialog :open="retireOpen" @update:open="!workspace.submitting.value && (retireOpen = $event)">
+      <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>确认退役这条策略？</AlertDialogTitle><AlertDialogDescription>退役后不能再创建版本或作为新订阅使用，现有订阅也会停止生成新任务；订阅本身、历史版本、运行记录和审计证据都会保留。此操作不会自动平仓或撤单。</AlertDialogDescription></AlertDialogHeader><p v-if="workspace.actionError.value" role="alert" class="text-sm text-destructive">{{ workspace.actionError.value }}</p><AlertDialogFooter><AlertDialogCancel :disabled="workspace.submitting.value">取消</AlertDialogCancel><Button variant="destructive" :disabled="workspace.submitting.value" @click="retire">确认退役</Button></AlertDialogFooter></AlertDialogContent>
     </AlertDialog>
-    <AlertDialog :open="Boolean(pendingPublishVersionId)" @update:open="!$event && (pendingPublishVersionId = '')">
-      <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>发布这个策略版本？</AlertDialogTitle><AlertDialogDescription>发布后，它会成为当前生效版本；引用这条策略且尚未结束的账户订阅会切换到该版本。已经保存的历史分析、决定和执行记录不会改变。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction :disabled="workspace.submitting.value" @click="publish">确认发布</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+    <AlertDialog :open="Boolean(pendingPublishVersionId)" @update:open="!$event && !workspace.submitting.value && (pendingPublishVersionId = '')">
+      <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>发布这个策略版本？</AlertDialogTitle><AlertDialogDescription>发布后，它会成为当前生效版本。{{ workspace.detail.value?.strategy.scope === 'platform' ? '平台策略不会自动替换已有订阅绑定的版本。' : '引用这条策略且尚未结束的账户订阅会切换到该版本。' }}已经保存的历史分析、决定和执行记录不会改变。</AlertDialogDescription></AlertDialogHeader><p v-if="workspace.actionError.value" role="alert" class="text-sm text-destructive">{{ workspace.actionError.value }}</p><AlertDialogFooter><AlertDialogCancel :disabled="workspace.submitting.value">取消</AlertDialogCancel><Button :disabled="workspace.submitting.value" @click="publish">确认发布</Button></AlertDialogFooter></AlertDialogContent>
     </AlertDialog>
-    <AlertDialog :open="Boolean(endingSubscription)" @update:open="!$event && (endingSubscription = null)">
-      <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>结束 {{ endingSubscription?.symbol }} 的账户订阅？</AlertDialogTitle><AlertDialogDescription>结束后不再生成新的自动分析或账户级交易判断；历史分析、决定和执行记录会保留。此操作不会自动平仓或撤单。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction variant="destructive" :disabled="workspace.submitting.value" @click="endSubscription">确认结束</AlertDialogAction></AlertDialogFooter></AlertDialogContent>
+    <AlertDialog :open="Boolean(endingSubscription)" @update:open="!$event && !workspace.submitting.value && (endingSubscription = null)">
+      <AlertDialogContent><AlertDialogHeader><AlertDialogTitle>结束 {{ endingSubscription?.symbol }} 的账户订阅？</AlertDialogTitle><AlertDialogDescription>结束后不再生成新的自动分析或账户级交易判断；历史分析、决定和执行记录会保留。此操作不会自动平仓或撤单。</AlertDialogDescription></AlertDialogHeader><p v-if="workspace.actionError.value" role="alert" class="text-sm text-destructive">{{ workspace.actionError.value }}</p><AlertDialogFooter><AlertDialogCancel :disabled="workspace.submitting.value">取消</AlertDialogCancel><Button variant="destructive" :disabled="workspace.submitting.value" @click="endSubscription">确认结束</Button></AlertDialogFooter></AlertDialogContent>
     </AlertDialog>
   </div>
 </template>

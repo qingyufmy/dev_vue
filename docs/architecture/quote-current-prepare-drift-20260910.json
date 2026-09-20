@@ -1,0 +1,70 @@
+{
+  "kind": "quote-provenance-current-upgrade/v1",
+  "passed": false,
+  "mode": "--prepare",
+  "target": "dev_vue",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "planHash": "4fe6ef4674bb54f3fe1cd4c726d7cf1e5685d703cfb00b0869937455e3285944",
+  "referenceHash": "bcc66faa04545a8bb0c0226813224f4a3af677a06c6ec7526d721e53f1c86fe0",
+  "quoteEvidenceHash": "5b2f612d256e0043ad6450a622a3ceb73408b6054cab6e191413f7ac908f5c7b",
+  "priorEvidenceHash": "7a66c62d92fc0de7fc6681ebc8af1e4647afe84dddc17e1f9ef61b727beea40f",
+  "receiptSha256": "5c3901ad66471bc14618f285e0ce041091ed84639a9aee1d6b381843fb9aab9d",
+  "tools": [
+    {
+      "path": "scripts/lib/quote-provenance-rehearsal-evidence.mjs",
+      "sha256": "6866ea542c2426913d614bec28c32eaedcc076a5118945b0f86b1b95f6831258"
+    },
+    {
+      "path": "scripts/apply-quote-provenance-local.mjs",
+      "sha256": "02de760ba6362485b24186fb8902abcac42fa8d7445c98f2ddfeb164a4b4fba4"
+    },
+    {
+      "path": "scripts/run-quote-current-local.py",
+      "sha256": "aacae5b77a8a2b2ec1b124b1157dfb7b74110bdec99224aac5d5a57f13ae6f6b"
+    },
+    {
+      "path": "scripts/lib/quote-provenance-upgrade.mjs",
+      "sha256": "3928f9c8f03c702c9a3a4c129b81a0444da266c7c3796f7ecdfb20e9be9c2b28"
+    },
+    {
+      "path": "scripts/lib/inplace-schema-coordinator.mjs",
+      "sha256": "d75cdb60b00307918fcbda998a406f69f1c7b98ab3aadec99a7be5e808e0376b"
+    },
+    {
+      "path": "scripts/lib/mysql-inplace-column-store.mjs",
+      "sha256": "c42cfe0811296007b6a9f7fb46270b44b4f22614e0948af499293d95ce1cdafc"
+    },
+    {
+      "path": "scripts/lib/mysql-account-root-snapshot.mjs",
+      "sha256": "af96d52b976a484e2b79ac7b079fe9e2a7e5a38e77df938f1d9a62c483481318"
+    },
+    {
+      "path": "scripts/lib/dev-vue-column-upgrade.mjs",
+      "sha256": "b20ab4ba86a9b9b40ef9ea5ea559c812f3db8166db6b117c3bd94d49b40a41ac"
+    },
+    {
+      "path": "scripts/lib/inplace-column-evidence.mjs",
+      "sha256": "7f62a4fae29a8e3ce12c84b6f704aa04f32c4ab324b53a2bf9bc706e66b67349"
+    },
+    {
+      "path": "scripts/lib/inplace-foundation-upgrade.mjs",
+      "sha256": "9b024fc4ca674cc8ac5cec70754aeeb4c873cf6878d27b312e0876bf74a46f6d"
+    },
+    {
+      "path": "server/db/migrations/inplace/057_market_quote_provenance.sql",
+      "sha256": "09c812648cce5e882cb40e402a506e1d3b2b800859cffdb6c1bee1b476017bd2"
+    }
+  ],
+  "restoredDatabaseWrites": 0,
+  "businessDataWrites": 0,
+  "ddlAttempted": 0,
+  "ddlAcknowledged": 0,
+  "currentDrift": [],
+  "error": "ERR_ASSERTION",
+  "trace": [
+    "    at file:///D:/dev_codex/dev_vue/scripts/apply-quote-provenance-local.mjs:74:14",
+    "    at async withInplaceUpgradeLock (file:///D:/dev_codex/dev_vue/scripts/lib/mysql-inplace-column-store.mjs:58:12)",
+    "    at async file:///D:/dev_codex/dev_vue/scripts/apply-quote-provenance-local.mjs:48:3"
+  ],
+  "observedAt": "2026-09-10T12:10:48.545Z"
+}

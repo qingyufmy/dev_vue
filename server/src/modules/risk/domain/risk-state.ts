@@ -7,6 +7,7 @@ export interface RiskPolicyValues {
   maxDrawdownPercent: number
   maxOpenPositions: number
   maxPendingOrders: number
+  maxOrderVolume: number
   maxTotalVolume: number
   maxSpreadPoints: number
   maxQuoteAgeSeconds: number
@@ -23,6 +24,7 @@ export interface RiskPolicyValues {
   consecutiveLossLimit: number
   lossCooldownMinutes: number
   pendingValidMinutes: number
+  pendingDedupAtrMultiplier: number
   weekendCloseMinutes: number
   tradeSendEnabled: boolean
   accountKillSwitch: boolean
@@ -30,18 +32,27 @@ export interface RiskPolicyValues {
 
 export type AccountRiskPolicyPatch = Partial<Pick<RiskPolicyValues,
   'maxRiskPerTradePercent' | 'maxDailyLossPercent' | 'maxDrawdownPercent' |
-  'maxOpenPositions' | 'maxPendingOrders' | 'maxTotalVolume' | 'maxSpreadPoints' |
+  'maxOpenPositions' | 'maxPendingOrders' | 'maxOrderVolume' | 'maxTotalVolume' | 'maxSpreadPoints' |
   'minOpenIntervalSeconds' | 'maxDailyOpenCount' | 'consecutiveLossLimit' |
   'lossCooldownMinutes' | 'pendingValidMinutes' | 'weekendCloseMinutes' |
   'tradeSendEnabled' | 'accountKillSwitch'>>
 
 export interface RiskPolicyBoundary {
   values: Omit<RiskPolicyValues, 'tradeSendEnabled' | 'accountKillSwitch'>
+  controls?: Partial<Record<keyof RiskPolicyValues, RiskNumericControl>>
   globalKillSwitch: boolean
   revision: number
 }
 
+export interface RiskNumericControl {
+  allowedMin: number
+  allowedMax: number
+  lockedValue: number | null
+  userEditable: boolean
+}
+
 export interface EffectiveRiskPolicy {
+  numericControls?: NonNullable<RiskPolicyBoundary['controls']>
   accountId: string
   userId: number
   platformPolicyVersionId: string

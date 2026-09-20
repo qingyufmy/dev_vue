@@ -1,0 +1,16 @@
+{
+  "kind": "system-review-task-schema-upgrade/v1",
+  "passed": true,
+  "target": "dev_vue",
+  "planHash": "f477248b1947dfcc1437686128f0442cdb010988df509aa34cd052308c4f66ae",
+  "ddlAttempted": 1,
+  "businessRowWrites": 0,
+  "replayNoDDL": true,
+  "oldDataUnchanged": true,
+  "oldChecksumsUnchanged": true,
+  "steps": 263,
+  "tableCount": 312,
+  "afterSnapshotHash": "07e741c2febf4baacce87df87365f22fcc6c5dd2b53a27dba40de404e78a6a94",
+  "backupReceiptSha256": "5c3901ad66471bc14618f285e0ce041091ed84639a9aee1d6b381843fb9aab9d",
+  "observedAt": "2026-09-11T07:28:57.405Z"
+}

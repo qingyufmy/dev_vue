@@ -1,0 +1,28 @@
+{
+  "passed": true,
+  "scope": "temporary_table_sequential_lease_transitions",
+  "persistentWrites": 0,
+  "checks": [
+    "pending_claim_and_active_lease_exclusion",
+    "exact_symbol_user_and_account_scope_fenced",
+    "expired_and_replaced_lease_cannot_complete_or_release",
+    "release_reclaim_and_terminal_result_immutable",
+    "migration_check_rejects_running_without_lease",
+    "fifth_active_attempt_preserved_then_expired_attempt_terminalized",
+    "recovery_cooldown_pending_outbox_exclusion_and_fresh_event_identity"
+  ],
+  "sources": {
+    "server/db/migrations/inplace/045_instrument_collection_requests.sql": "f1821bf57bbffac9f10dce3039cb016b8de073badb135251a49e144fe3342e90",
+    "server/src/modules/trading/infrastructure/mysql-instrument-collection-tasks.ts": "a78d8fbb8cfae0222a412f801966497ce8bbf6a39cd2e78e345b3f70fe0ef135",
+    "server/dist-v4/modules/trading/infrastructure/mysql-instrument-collection-tasks.js": "8f368e378a90026cebac1c18bc6e57ac36c65a55faa7a1f45d5bce91241db87e",
+    "server/src/modules/trading/infrastructure/mysql-instrument-collection-recovery.ts": "064be647250a9279e320800f819a9fd72203510a1e37d9160da550c0eb3689b5",
+    "server/dist-v4/modules/trading/infrastructure/mysql-instrument-collection-recovery.js": "4f2b4872d46499e11ba1106095c1cc5be5e68064d944851d0693599c0019bd35"
+  },
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "tz": "+00:00",
+    "version": "8.4.8"
+  },
+  "finishedAt": "2026-09-09T03:30:15.866Z"
+}

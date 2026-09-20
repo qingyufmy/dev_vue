@@ -1,3 +1,4 @@
+import type { AccountInventorySummaryReader } from '../../trading/index.js'
 import { randomUUID } from 'node:crypto'
 import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise'
 import type { ModelTaskRecoveryRepository } from '../application/model-task-recovery.js'
@@ -19,22 +20,22 @@ interface RunRow extends RowDataPacket {
 }
 
 export class MysqlModelTaskRecoveryRepository implements ModelTaskRecoveryRepository {
-  constructor(private readonly pool: Pool) {}
+  constructor(private readonly pool: Pool, private readonly accounts: (connection: PoolConnection) => Pick<AccountInventorySummaryReader, 'lockAccount'>) {}
 
   async expireOverdue(now: Date, limit: number) {
     const [candidates] = await this.pool.execute<CandidateRow[]>(`SELECT id,purpose,CAST(trading_account_id AS CHAR) trading_account_id
       FROM ai_model_tasks WHERE status='running' AND deadline_at_utc<=? ORDER BY deadline_at_utc,id LIMIT ${limit}`, [now])
     let expired = 0
     for (const candidate of candidates) {
-      expired += await transaction(this.pool, connection => expireOne(connection, candidate, now))
+      expired += await transaction(this.pool, connection => expireOne(connection, candidate, now, this.accounts(connection)))
     }
     return expired
   }
 }
 
-async function expireOne(connection: PoolConnection, candidate: CandidateRow, now: Date) {
+async function expireOne(connection: PoolConnection, candidate: CandidateRow, now: Date, accounts: Pick<AccountInventorySummaryReader, 'lockAccount'>) {
   if (candidate.purpose === 'trader' && candidate.trading_account_id) {
-    await connection.execute('SELECT id FROM trading_accounts WHERE id=? FOR UPDATE', [candidate.trading_account_id])
+    await accounts.lockAccount(candidate.trading_account_id)
   }
   const table = candidate.purpose === 'analysis' ? 'ai_analysis_runs' : 'ai_trader_runs'
   const [runs] = await connection.execute<RunRow[]>(`SELECT id FROM ${table} WHERE model_task_id=? FOR UPDATE`, [candidate.id])

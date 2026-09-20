@@ -1,0 +1,20 @@
+{
+  "kind": "execution-workflow-current-preflight/v1",
+  "passed": true,
+  "writes": 0,
+  "planHash": "73fa3775367561d51a538ae728eedd8159989f92e5a544001bf91aac25fe412f",
+  "baselineSha256": "1a122319c09fa2b39930112a48a33e6c5e2f04bfb8e59cd28118760dac6d09f2",
+  "receiptSha256": "5c3901ad66471bc14618f285e0ce041091ed84639a9aee1d6b381843fb9aab9d",
+  "backupCiphertextVerified": true,
+  "completedSteps": 205,
+  "tableCount": 270,
+  "businessRows": 338557,
+  "snapshotHash": "58f4ac91b8f482b62573e3a404fe3b9abdf07227ade1670756a362f93d5c94f2",
+  "checks": [
+    "encrypted-backup-bytes-and-hash-verified",
+    "current-205-history-and-complete-schema-match",
+    "all-business-row-digests-match-restored-baseline"
+  ],
+  "writeFreezeVerified": false,
+  "observedAt": "2026-09-10T15:02:17.624Z"
+}

@@ -2,23 +2,8 @@ import type { AnalysisRun } from '../domain/inference.js'
 import type { InferenceService } from './inference-service.js'
 import { evaluateSubscriptionWindow, type SubscriptionWindowClock } from '../../strategies/index.js'
 
-export interface DueAnalysisSchedule {
-  subscriptionId: string
-  userId: number
-  marketSourceAccountId: string
-  strategyId: string
-  strategyVersionId: string
-  symbol: string
-  cadenceSeconds: number
-  nextDueAt: string
-  receiveTimezone: string
-  receiveWindow: unknown
-}
-
-export interface AnalysisScheduleRepository {
-  listDue(now: string, limit: number): Promise<DueAnalysisSchedule[]>
-  advance(subscriptionId: string, expectedDueAt: string, nextDueAt: string): Promise<boolean>
-}
+import type { AnalysisScheduleStore, DueAnalysisSchedule } from '../../strategies/index.js'
+export type { AnalysisScheduleStore as AnalysisScheduleRepository, DueAnalysisSchedule } from '../../strategies/index.js'
 
 export function scheduleSlotUtc(now: Date, cadenceSeconds: number) {
   if (!Number.isSafeInteger(cadenceSeconds) || cadenceSeconds < 60) throw new Error('analysis_cadence_invalid')
@@ -30,7 +15,7 @@ export function nextScheduleSlotUtc(now: Date, cadenceSeconds: number) {
 }
 
 export class AnalysisScheduler {
-  constructor(private readonly schedules: AnalysisScheduleRepository, private readonly inference: InferenceService,
+  constructor(private readonly schedules: AnalysisScheduleStore, private readonly inference: InferenceService,
     private readonly readClock: (accountId: string, userId: number) => Promise<SubscriptionWindowClock | null> = async () => null) {}
 
   async tick(now = new Date(), limit = 100) {

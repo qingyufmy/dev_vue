@@ -82,7 +82,7 @@ describe('Stage 11 trading vertical slice', () => {
       resolve: async command => ({ userId: 42, mode: command.action === 'enter_observer' ? 'observer' : 'full',
         accountId: command.action === 'enter_observer' ? null : '7', observerChannelId: command.action === 'enter_observer' ? command.targetId : null, readOnly: command.action === 'enter_observer' }) })
     const app = Fastify({ logger: false })
-    await app.register(tradingRoutes, { prefix: '/api/v4', service: new TradingService(store), contextCommands: commands.port, capacity: new ConnectionCapacityService({ async getPurchasedCapacity() { return 0 } }, leases), auth: { async authenticate() { return { userId: 42 } }, async assertWrite() { return { userId: 42 } } } })
+    await app.register(tradingRoutes, { prefix: '/api/v4', service: new TradingService(store), contextCommands: commands.port, capacity: new ConnectionCapacityService({ async getIncludedCapacity() { return 1 }, async getPurchasedCapacity() { return 0 } }, leases), auth: { async authenticate() { return { userId: 42 } }, async assertWrite() { return { userId: 42 } } } })
     const result = await app.inject({ method: 'GET', url: '/api/v4/trading-accounts/7/snapshot' })
     expect(result.statusCode).toBe(200)
     expect(result.json().data).toMatchObject({ account: { terminal_profile_id: 'profile-1', bridge_state: 'online' }, snapshot: { free_margin: '9920.00', clock_status: 'calibrated' }, pending_orders: { revision: '4' } })
@@ -96,7 +96,7 @@ describe('Stage 11 trading vertical slice', () => {
 
   it('counts distinct online accounts, replaces the same account route, and rejects a second account without quota', async () => {
     const leases = new MemoryLeases()
-    const service = new ConnectionCapacityService({ async getPurchasedCapacity() { return 0 } }, leases)
+    const service = new ConnectionCapacityService({ async getIncludedCapacity() { return 1 }, async getPurchasedCapacity() { return 0 } }, leases)
     await expect(service.connect({ userId: 42, accountId: '7', terminalProfileId: 'p1', terminalInstanceId: 't1', connectionEpoch: 'e1' })).resolves.toEqual({ active: 1, replacedEpoch: null })
     await expect(service.connect({ userId: 42, accountId: '7', terminalProfileId: 'p2', terminalInstanceId: 't2', connectionEpoch: 'e2' })).resolves.toEqual({ active: 1, replacedEpoch: 'e1' })
     await expect(service.connect({ userId: 42, accountId: '8', terminalProfileId: 'p3', terminalInstanceId: 't3', connectionEpoch: 'e3' })).rejects.toMatchObject({ code: 'bridge_capacity_exceeded', status: 409 })
@@ -104,7 +104,7 @@ describe('Stage 11 trading vertical slice', () => {
       async claim() { throw new Error('redis unavailable') },
       renew: leases.renew.bind(leases), release: leases.release.bind(leases), count: leases.count.bind(leases),
     }
-    const unavailable = new ConnectionCapacityService({ async getPurchasedCapacity() { return 0 } }, unavailableStore)
+    const unavailable = new ConnectionCapacityService({ async getIncludedCapacity() { return 1 }, async getPurchasedCapacity() { return 0 } }, unavailableStore)
     await expect(unavailable.connect({ userId: 42, accountId: '7', terminalProfileId: 'p1', terminalInstanceId: 't1', connectionEpoch: 'e1' })).rejects.toThrow('redis unavailable')
   })
 

@@ -1,0 +1,16 @@
+{
+  "kind": "review-history-chunk-archive/v1",
+  "passed": true,
+  "target": "dev_vue_m1_source_20260910_02",
+  "runId": "1c2e3dd7-afa6-f810-96a4-f5f97febc668",
+  "manifestHash": "bfe22a5187d4836230ae62e8d2a35338ed167814786a2dfcf89cc2d109d4f5df",
+  "businessRowWrites": 0,
+  "cases": 183,
+  "chunks": 563,
+  "rollbackVerified": true,
+  "replayNoAdditionalRows": true,
+  "oldDataAndLedgerUnchanged": true,
+  "allChunksRestored": true,
+  "afterHash": "e3b3508e371fdbd0627836c61b68380079e2edfedf1cd47d954835ae5f022dcd",
+  "observedAt": "2026-09-11T03:22:23.329Z"
+}

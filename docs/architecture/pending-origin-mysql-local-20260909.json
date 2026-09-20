@@ -1,0 +1,25 @@
+{
+  "passed": true,
+  "scope": "connection_local_temporary_tables_sql_semantics",
+  "persistentWrites": 0,
+  "checks": [
+    "raw_order_ticket_and_historical_epoch_with_real_inference_join",
+    "user_account_terminal_epoch_and_position_ticket_isolation",
+    "mismatched_inference_version_rejected",
+    "failure_and_result_hash_mismatch_not_owned",
+    "distribution_target_ownership_and_operation_join"
+  ],
+  "sources": {
+    "server/src/modules/execution/infrastructure/mysql-pending-origin-reader.ts": "e7181322fa3ae1948e5c19416d4df0ff5b0b2c14281451ccf46c51fcf36edbdc",
+    "server/src/modules/inference/infrastructure/mysql-trade-decision-origin-reader.ts": "4a7e5c2efdf8d33096c6fd4008f93e0f816009f004287050e367b66d1b4d8908",
+    "server/dist-v4/modules/execution/infrastructure/mysql-pending-origin-reader.js": "6899ac00a163114eec92b34db076f4757ac999dc30af9db695da3f9c5b83b383",
+    "server/dist-v4/modules/inference/infrastructure/mysql-trade-decision-origin-reader.js": "ae7da7be2b78109eb90c37a3609807b1e66d0388c47e322f93a5152b1eb3a529"
+  },
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "tz": "+00:00",
+    "version": "8.4.8"
+  },
+  "finishedAt": "2026-09-09T02:29:45.344Z"
+}

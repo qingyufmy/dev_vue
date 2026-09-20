@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Diagnostics;
 using System.IO;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using Liangjian.BridgeV4.Configuration;
 using Liangjian.BridgeV4.Compatibility;
@@ -13,7 +14,7 @@ using Liangjian.BridgeV4.Update;
 
 namespace Liangjian.BridgeV4.App
 {
-    internal sealed class MainForm : Form
+    internal sealed partial class MainForm : Form
     {
         private readonly object stateGate = new object();
         private readonly HashSet<string> starting = new HashSet<string>(StringComparer.Ordinal);
@@ -21,20 +22,23 @@ namespace Liangjian.BridgeV4.App
         private readonly Dictionary<string, string> operationErrors = new Dictionary<string, string>(StringComparer.Ordinal);
         private readonly string dataRoot;
         private readonly BridgeProfileStore profileStore;
+        private readonly InstallationAuthorizationStore authorization;
+        private readonly BridgeClientOptions clientOptions;
+        private readonly Button authorizeButton = ActionButton("连接账号");
+        private readonly Button revokeButton = ActionButton("退出账号");
+        private readonly Label accountStatus = new Label { AutoSize = true, Padding = new Padding(0, 10, 0, 0) };
+        private bool accountRequest;
+        private bool accountDialogOpen;
+        private DateTime nextAccountRefresh = DateTime.MinValue;
         private readonly TerminalSessionHost terminalHost;
         private readonly BridgeProfileConnectionManager connections;
         private readonly BridgeProfileRemovalService removals;
         private readonly BridgeUpdateService updates;
         private readonly string installRoot;
         private LegacyLaunchRequest launchRequest;
-        private readonly ListView profileList = new ListView();
+        private readonly ListView profileList = new BufferedProfileList();
         private readonly Label summary = new Label();
         private readonly Label detail = new Label();
-        private readonly Button addButton = ActionButton("新增档案");
-        private readonly Button editButton = ActionButton("编辑");
-        private readonly Button connectButton = ActionButton("连接");
-        private readonly Button disconnectButton = ActionButton("断开");
-        private readonly Button deleteButton = ActionButton("删除");
         private readonly System.Windows.Forms.Timer refreshTimer = new System.Windows.Forms.Timer();
         private BridgeProfileCatalog catalog;
         private bool configurationAvailable;
@@ -63,6 +67,10 @@ namespace Liangjian.BridgeV4.App
                 "Liangjian", "BridgeV4");
             profileStore = new BridgeProfileStore(Path.Combine(dataRoot, "profiles.json"),
                 new CurrentUserSecretProtector());
+            authorization = new InstallationAuthorizationStore(Path.Combine(dataRoot, "installation.authorization"),
+                new CurrentUserSecretProtector(), profileStore, new InstallationAuthorizationClient());
+            try { clientOptions = BridgeClientOptions.Load(AppDomain.CurrentDomain.BaseDirectory); }
+            catch (Exception) { accountStatus.Text = "服务配置不可用，请使用完整安装包。"; }
             try
             {
                 catalog = profileStore.LoadOrCreate();
@@ -79,8 +87,8 @@ namespace Liangjian.BridgeV4.App
             terminalHost = new TerminalSessionHost(TerminalSessionHost.DefaultPipeName);
             connections = new BridgeProfileConnectionManager(terminalHost, profileStore,
                 catalog.InstallationId, dataRoot,
-                new HttpBridgeSessionTokenProvider(catalog.InstallationId));
-            removals = new BridgeProfileRemovalService(profileStore, new HttpBridgeCredentialRevoker(catalog.InstallationId),
+                new HttpBridgeSessionTokenProvider(catalog.InstallationId, clientOptions == null ? null : clientOptions.ApiBase));
+            removals = new BridgeProfileRemovalService(profileStore, new HttpBridgeCredentialRevoker(catalog.InstallationId, clientOptions == null ? null : clientOptions.ApiBase),
                 delegate(string profileId) { connections.Stop(profileId); });
             string detectedInstallRoot;
             if (BridgeInstallLayout.TryResolve(AppDomain.CurrentDomain.BaseDirectory, out detectedInstallRoot))
@@ -96,13 +104,14 @@ namespace Liangjian.BridgeV4.App
             terminalHost.Start();
 
             refreshTimer.Interval = 1000;
-            refreshTimer.Tick += delegate { RefreshProfiles(); CheckForUpdates(); };
+            refreshTimer.Tick += async delegate { RefreshProfiles(); CheckForUpdates(); await RefreshAccount(); };
             refreshTimer.Start();
         }
 
         protected override void OnShown(EventArgs eventArgs)
         {
             base.OnShown(eventArgs);
+            InitializeTray();
             if (launchRequest.StartMinimized) WindowState = FormWindowState.Minimized;
             RefreshProfiles();
             if (!configurationAvailable)
@@ -120,10 +129,12 @@ namespace Liangjian.BridgeV4.App
         {
             base.OnFormClosing(eventArgs);
             if (eventArgs.Cancel) return;
-            if (removalInProgress)
+            if (KeepRunningOnClose(eventArgs.CloseReason)) { eventArgs.Cancel = true; return; }
+            if (removalInProgress || accountRequest || accountDialogOpen)
             {
                 eventArgs.Cancel = true;
-                detail.Text = "正在确认设备凭据撤销，请稍候再关闭窗口。";
+                explicitExit = false;
+                detail.Text = "正在完成账号或设备请求，请稍候再关闭窗口。";
                 return;
             }
             shutdownRequested = true;
@@ -145,104 +156,18 @@ namespace Liangjian.BridgeV4.App
 
         protected override void OnFormClosed(FormClosedEventArgs eventArgs)
         {
+            DisposeTray();
             refreshTimer.Stop();
             connections.StateChanged -= OnRuntimeChanged;
             terminalHost.SessionsChanged -= OnRuntimeChanged;
             terminalHost.HostError -= OnTerminalHostError;
             refreshTimer.Dispose();
+            profileMenu.Dispose();
+            accountMenu.Dispose();
+            moreMenu.Dispose();
+            revokeButton.Dispose();
+            permissionTip.Dispose();
             base.OnFormClosed(eventArgs);
-        }
-
-        private void BuildLayout(RuntimeStatus runtime)
-        {
-            TableLayoutPanel root = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                Padding = new Padding(24),
-                ColumnCount = 1,
-                RowCount = 6
-            };
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-
-            TableLayoutPanel heading = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, ColumnCount = 2 };
-            heading.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-            heading.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            Panel titlePanel = new Panel { Dock = DockStyle.Top, Height = 58 };
-            Label title = new Label { AutoSize = true, Font = new Font(Font.FontFamily, 18F, FontStyle.Bold), Text = "量见智桥" };
-            Label subtitle = new Label { AutoSize = true, Location = new Point(2, 36), ForeColor = Color.DimGray,
-                Text = "连接本地 MT4 / MT5，提供数据并执行服务器下发的确定性指令" };
-            titlePanel.Controls.Add(title);
-            titlePanel.Controls.Add(subtitle);
-            heading.Controls.Add(titlePanel, 0, 0);
-            Label runtimeBadge = new Label
-            {
-                AutoSize = true,
-                Padding = new Padding(10, 7, 10, 7),
-                Anchor = AnchorStyles.Top | AnchorStyles.Right,
-                Text = runtime.Supported ? ".NET 4.8 运行正常" : "需要 .NET Framework 4.8",
-                BackColor = runtime.Supported ? Color.Honeydew : Color.MistyRose,
-                ForeColor = runtime.Supported ? Color.DarkGreen : Color.DarkRed
-            };
-            heading.Controls.Add(runtimeBadge, 1, 0);
-            root.Controls.Add(heading, 0, 0);
-
-            summary.AutoSize = true;
-            summary.Margin = new Padding(0, 14, 0, 10);
-            summary.ForeColor = Color.FromArgb(65, 75, 90);
-            root.Controls.Add(summary, 0, 1);
-
-            FlowLayoutPanel actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, Margin = new Padding(0, 0, 0, 12) };
-            actions.Controls.Add(addButton);
-            actions.Controls.Add(editButton);
-            actions.Controls.Add(connectButton);
-            actions.Controls.Add(disconnectButton);
-            actions.Controls.Add(deleteButton);
-            root.Controls.Add(actions, 0, 2);
-
-            profileList.Dock = DockStyle.Fill;
-            profileList.View = View.Details;
-            profileList.FullRowSelect = true;
-            profileList.HideSelection = false;
-            profileList.MultiSelect = false;
-            profileList.BorderStyle = BorderStyle.FixedSingle;
-            profileList.Columns.Add("档案", 180);
-            profileList.Columns.Add("平台", 65);
-            profileList.Columns.Add("交易账户", 105);
-            profileList.Columns.Add("服务器", 190);
-            profileList.Columns.Add("终端", 90);
-            profileList.Columns.Add("服务器连接", 110);
-            profileList.Columns.Add("自动连接", 80);
-            profileList.SelectedIndexChanged += delegate { UpdateSelection(); };
-            profileList.DoubleClick += delegate { EditSelected(); };
-            root.Controls.Add(profileList, 0, 3);
-
-            detail.AutoSize = true;
-            detail.MaximumSize = new Size(930, 0);
-            detail.Margin = new Padding(0, 12, 0, 10);
-            detail.ForeColor = Color.FromArgb(92, 102, 116);
-            root.Controls.Add(detail, 0, 4);
-
-            Label boundary = new Label
-            {
-                AutoSize = true,
-                ForeColor = Color.DimGray,
-                Text = "删除只移除本地档案配置；不会关闭交易终端，也不会删除 SQLite 命令账本、未确认回执或服务端历史。"
-            };
-            root.Controls.Add(boundary, 0, 5);
-
-            addButton.Click += delegate { AddProfile(); };
-            editButton.Click += delegate { EditSelected(); };
-            connectButton.Click += delegate { BridgeProfileSettings profile = SelectedProfile(); if (profile != null) StartProfile(profile); };
-            disconnectButton.Click += delegate { BridgeProfileSettings profile = SelectedProfile(); if (profile != null) StopProfile(profile.ProfileId); };
-            deleteButton.Click += delegate { DeleteSelected(); };
-
-            Controls.Add(root);
-            UpdateSelection();
         }
 
         private void TryWriteLegacyReadySignal()
@@ -269,12 +194,32 @@ namespace Liangjian.BridgeV4.App
             catch (InvalidDataException) { }
         }
 
-        private void AddProfile()
+        private async Task AddProfile(bool forcePairing = false)
         {
-            if (removalInProgress || shutdownRequested) return;
+            if (removalInProgress || shutdownRequested || accountRequest || accountDialogOpen) return;
+            accountDialogOpen = true;
+            try { await AddProfileCore(forcePairing); }
+            finally { accountDialogOpen = false; }
+        }
+
+        private async Task AddProfileCore(bool forcePairing)
+        {
             if (!configurationAvailable) return;
+            try
+            {
+                var installed = await Task.Run(() => authorization.ReadView());
+                if (!forcePairing && installed != null && installed.Status == "approved") { await AddAuthorizedProfile(); return; }
+                if (!forcePairing && clientOptions != null)
+                {
+                    using (InstallationAuthorizationForm form = new InstallationAuthorizationForm(clientOptions, authorization, catalog.InstallationId))
+                        if (form.ShowDialog(this) != DialogResult.OK) return;
+                    await AddAuthorizedProfile();
+                    return;
+                }
+            }
+            catch (Exception) { MessageBox.Show(this, "无法读取软件授权，请使用原 Windows 用户并检查配置目录。", "授权不可用"); return; }
             BridgePairingDraftStore pairing = new BridgePairingDraftStore(Path.Combine(dataRoot, "pairing.pending"),
-                new CurrentUserSecretProtector(), profileStore, new BridgePairingClient());
+                new CurrentUserSecretProtector(), profileStore, new BridgePairingClient(clientOptions == null ? null : clientOptions.ApiBase));
             BridgePairingDraft pending;
             try
             {
@@ -294,11 +239,13 @@ namespace Liangjian.BridgeV4.App
             BridgeProfileSettings profile = new BridgeProfileSettings
             {
                 ProfileId = "profile-" + Guid.NewGuid().ToString("N"), Platform = "mt5",
-                DisplayName = "新终端档案", AutoConnect = false
+                DisplayName = "新终端档案", AutoConnect = true
             };
+            ApplyPackagedDefaults(profile);
             if (pending != null) profile = pending.Profile.Clone();
             using (ProfileEditorForm editor = new ProfileEditorForm(profile, true, pairing, catalog.InstallationId,
-                pending == null ? null : pending.Code, WindowsTerminalDiscovery.Create(terminalHost)))
+                pending == null ? null : pending.Code, WindowsTerminalDiscovery.Create(terminalHost),
+                profileAlreadyExists: ProfileAlreadyExists))
             {
                 if (editor.ShowDialog(this) != DialogResult.OK) return;
                 try
@@ -324,24 +271,170 @@ namespace Liangjian.BridgeV4.App
             }
         }
 
+        private void ApplyPackagedDefaults(BridgeProfileSettings profile)
+        {
+            string root = AppDomain.CurrentDomain.BaseDirectory;
+            if (string.IsNullOrWhiteSpace(profile.PythonExecutablePath)) profile.PythonExecutablePath = Path.Combine(root, "runtime", "python", "python.exe");
+            if (string.IsNullOrWhiteSpace(profile.WorkerScriptPath)) profile.WorkerScriptPath = Path.Combine(root, "workers", "mt5", "worker.py");
+            if (string.IsNullOrWhiteSpace(profile.ServerUri) && clientOptions != null) profile.ServerUri = clientOptions.RealtimeUri;
+        }
+
+        private async Task AddAuthorizedProfile()
+        {
+            try
+            {
+                BridgeProfileSettings pending = await Task.Run(() => authorization.ReadPendingProfile());
+                if (pending != null && catalog.Profiles.Exists(item => item.ProfileId == pending.ProfileId))
+                { authorization.CompleteProfile(pending.ProfileId); pending = null; }
+                BridgeProfileSettings profile = pending ?? new BridgeProfileSettings
+                { ProfileId = "profile-" + Guid.NewGuid().ToString("N"), Platform = "mt5", DisplayName = "新终端档案", AutoConnect = true };
+                ApplyPackagedDefaults(profile);
+                using (ProfileEditorForm editor = new ProfileEditorForm(profile, true,
+                    terminalDiscovery: WindowsTerminalDiscovery.Create(terminalHost), installationAuthorization: authorization,
+                    profileAlreadyExists: ProfileAlreadyExists))
+                {
+                    if (editor.ShowDialog(this) != DialogResult.OK) return;
+                    BridgeProfileCatalog candidate = CopyCatalog();
+                    candidate.Profiles.Add(editor.Profile);
+                    profileStore.Save(candidate);
+                    catalog = candidate;
+                    RefreshProfiles();
+                    SelectProfile(editor.Profile.ProfileId);
+                    nextAccountRefresh = DateTime.MinValue;
+                    try { authorization.CompleteProfile(editor.Profile.ProfileId); }
+                    catch (Exception)
+                    {
+                        MessageBox.Show(this, "档案已保存，待完成记录暂未清理。下次新增时会继续清理，无需重新授权。", "档案已保存");
+                    }
+                }
+            }
+            catch (Exception)
+            {
+                MessageBox.Show(this, "档案尚未完成保存，授权请求已保留。请检查网络、重复终端和目录权限，再点击新增档案继续。", "请重试", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        private bool ProfileAlreadyExists(BridgeProfileSettings candidate)
+        {
+            return catalog.Profiles.Exists(item => item.Platform == candidate.Platform
+                && string.Equals(item.TerminalInstanceId, candidate.TerminalInstanceId, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private async Task RefreshAccount()
+        {
+            if (accountRequest || accountDialogOpen || shutdownRequested || DateTime.UtcNow < nextAccountRefresh) return;
+            nextAccountRefresh = DateTime.UtcNow.AddSeconds(5);
+            accountRequest = true;
+            revokeButton.Enabled = false;
+            UpdateSelection();
+            try
+            {
+                InstallationAuthorizationView view = await Task.Run(() => authorization.ReadView());
+                if (shutdownRequested || IsDisposed) return;
+                authorizeButton.Visible = view == null || view.Status != "approved";
+                revokeButton.Visible = view != null && view.Status == "approved";
+                if (view == null || view.Status != "approved")
+                {
+                    accountCapacity.Text = "连接额度：登录后查看";
+                    revokeButton.Enabled = view != null && view.Status == "revoked";
+                    if (clientOptions != null) accountStatus.Text = view != null && view.Status == "revoked"
+                        ? "授权已撤销 · 可退出账号后重新连接" : "未授权软件 · 请点击连接账号";
+                    return;
+                }
+                InstallationStatus status = await Task.Run(() => authorization.Status());
+                if (shutdownRequested || IsDisposed) return;
+                if (!status.Authorized)
+                {
+                    authorizeButton.Visible = true;
+                    revokeButton.Visible = false;
+                    accountCapacity.Text = "连接额度：待核实";
+                    accountStatus.Text = "授权已失效 · 可退出账号后重新连接";
+                    revokeButton.Enabled = true;
+                    return;
+                }
+                accountStatus.Text = status.DisplayName;
+                accountCapacity.Text = "连接额度 " + status.Total + "    ·    已用 " + status.Active + "    ·    可用 " + status.Available;
+                accountCapacity.ForeColor = SystemInformation.HighContrast ? SystemColors.WindowText
+                    : status.Available == 0 ? Color.FromArgb(145, 92, 24) : Color.FromArgb(65, 75, 90);
+                connections.ResumeCapacityWaiters(status.Available);
+                revokeButton.Enabled = true;
+            }
+            catch (Exception)
+            {
+                if (!shutdownRequested && !IsDisposed)
+                { accountCapacity.Text = "连接额度暂不可用 · 正在重试"; revokeButton.Enabled = true; }
+            }
+            finally { accountRequest = false; if (!shutdownRequested && !IsDisposed) UpdateSelection(); }
+        }
+
+        private async Task RevokeAccount()
+        {
+            if (accountRequest || accountDialogOpen || shutdownRequested || removalInProgress) return;
+            if (MessageBox.Show(this, "退出会撤销本软件授权及其终端凭据，并断开本软件的连接。交易终端保持运行，历史记录保留。是否继续？",
+                "退出账号", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
+            accountRequest = true;
+            revokeButton.Enabled = authorizeButton.Enabled = false;
+            UpdateSelection();
+            bool revoked = false;
+            try
+            {
+                await Task.Run(() => authorization.Revoke());
+                revoked = true;
+                if (shutdownRequested || IsDisposed) return;
+                authorizeButton.Visible = true;
+                List<string> profileIds = new List<string>();
+                foreach (BridgeProfileSettings profile in catalog.Profiles) profileIds.Add(profile.ProfileId);
+                lock (stateGate)
+                    foreach (string id in profileIds) if (starting.Contains(id)) cancelledStarts.Add(id);
+                await Task.Run(delegate
+                {
+                    List<Exception> failures = new List<Exception>();
+                    foreach (string id in profileIds)
+                        try { connections.Stop(id); } catch (Exception error) { failures.Add(error); }
+                    if (failures.Count != 0) throw new AggregateException("bridge_account_stop_incomplete", failures);
+                });
+                if (shutdownRequested || IsDisposed) return;
+                RefreshProfiles();
+                accountStatus.Text = "已退出账号";
+                accountCapacity.Text = "连接额度：登录后查看";
+                revokeButton.Visible = false;
+            }
+            catch (Exception)
+            {
+                if (!shutdownRequested && !IsDisposed) MessageBox.Show(this, revoked
+                    ? "软件授权已撤销，部分本地连接尚未停止。请再次退出账号完成清理。"
+                    : "退出结果尚未确认，请检查网络后重试。", "请重试");
+            }
+            finally
+            {
+                accountRequest = false;
+                if (!shutdownRequested && !IsDisposed) { authorizeButton.Enabled = clientOptions != null && configurationAvailable; nextAccountRefresh = DateTime.MinValue; UpdateSelection(); }
+            }
+        }
+
         private void EditSelected()
         {
             BridgeProfileSettings current = SelectedProfile();
-            if (current == null || !configurationAvailable || current.RemovalPending || removalInProgress || shutdownRequested) return;
+            if (current == null || !configurationAvailable || current.RemovalPending || removalInProgress || shutdownRequested || accountRequest) return;
+            lock (stateGate) if (starting.Contains(current.ProfileId)) return;
+            if (updateActivationStarted) return;
             BridgeProfileSettings edited = current.Clone();
+            ApplyPackagedDefaults(edited);
             using (ProfileEditorForm editor = new ProfileEditorForm(edited, false,
                 terminalDiscovery: WindowsTerminalDiscovery.Create(terminalHost)))
             {
                 if (editor.ShowDialog(this) != DialogResult.OK) return;
                 try
                 {
-                    bool routeChanged = !current.SameRoute(editor.Profile);
+                    bool connectionChanged = !current.SameConnectionSettings(editor.Profile);
                     // The credential belongs to this paired profile, not to its current account.
                     editor.Profile.ProfileId = current.ProfileId;
                     int index = catalog.Profiles.IndexOf(current);
                     BridgeProfileCatalog candidate = CopyCatalog();
                     candidate.Profiles[index] = editor.Profile;
-                    if (routeChanged) StopProfile(current.ProfileId);
+                    // Save only after the old runtime has released its workers and lease.
+                    // A stop timeout leaves the original catalog and configuration intact.
+                    if (connectionChanged) StopProfile(current.ProfileId);
                     profileStore.Save(candidate);
                     catalog = candidate;
                     RefreshProfiles();
@@ -354,7 +447,7 @@ namespace Liangjian.BridgeV4.App
         private void DeleteSelected()
         {
             BridgeProfileSettings profile = SelectedProfile();
-            if (profile == null || !configurationAvailable || removalInProgress || shutdownRequested || updateActivationStarted) return;
+            if (profile == null || !configurationAvailable || removalInProgress || shutdownRequested || updateActivationStarted || accountRequest) return;
             if (!profile.RemovalPending && MessageBox.Show(this, "确定移除档案“" + profile.DisplayName
                 + "”并撤销对应设备凭据吗？账户历史、本地安全账本和缓存会保留。",
                 "移除终端档案", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) != DialogResult.OK) return;
@@ -451,11 +544,11 @@ namespace Liangjian.BridgeV4.App
         {
             if (shutdownRequested) return;
             if (IsDisposed) return;
-            string selected = SelectedProfileId();
-            profileList.BeginUpdate();
-            try
+            if (profileMenu.Visible) return;
             {
-                profileList.Items.Clear();
+                Dictionary<string, ListViewItem> existing = new Dictionary<string, ListViewItem>(StringComparer.Ordinal);
+                foreach (ListViewItem row in profileList.Items) existing.Add((string)row.Tag, row);
+                HashSet<string> retained = new HashSet<string>(StringComparer.Ordinal);
                 foreach (BridgeProfileSettings profile in catalog.Profiles)
                 {
                     BridgeProfileConnectionSnapshot state = connections.Snapshot(profile);
@@ -466,33 +559,49 @@ namespace Liangjian.BridgeV4.App
                         busy = starting.Contains(profile.ProfileId);
                         operationErrors.TryGetValue(profile.ProfileId, out localError);
                     }
-                    ListViewItem item = new ListViewItem(profile.DisplayName) { Tag = profile.ProfileId };
-                    item.SubItems.Add(profile.Platform.ToUpperInvariant());
-                    item.SubItems.Add(profile.Login);
-                    item.SubItems.Add(profile.BrokerServer);
-                    item.SubItems.Add(TerminalText(state.TerminalState));
-                    item.SubItems.Add(profile.RemovalPending ? (removalInProgress ? "正在移除" : "待移除，可重试")
+                    ListViewItem item;
+                    if (!existing.TryGetValue(profile.ProfileId, out item))
+                    {
+                        item = new ListViewItem(profile.DisplayName) { Tag = profile.ProfileId };
+                        for (int column = 1; column < 7; column++) item.SubItems.Add(string.Empty);
+                        profileList.Items.Add(item);
+                    }
+                    retained.Add(profile.ProfileId);
+                    SetProfileCell(item, 0, profile.DisplayName);
+                    SetProfileCell(item, 1, profile.Platform.ToUpperInvariant());
+                    SetProfileCell(item, 2, profile.Login);
+                    SetProfileCell(item, 3, profile.BrokerServer);
+                    SetProfileCell(item, 4, ProfileStatusText(state));
+                    item.SubItems[4].Tag = ProfilePermissionDetails(state);
+                    SetProfileCell(item, 5, profile.RemovalPending ? (removalInProgress ? "正在移除" : "待移除，可重试")
                         : busy ? "正在启动" : ConnectionText(state.State));
-                    item.SubItems.Add(profile.AutoConnect ? "是" : "否");
-                    if (!string.IsNullOrEmpty(localError) || !string.IsNullOrEmpty(state.LastErrorCode))
-                        item.ForeColor = Color.DarkRed;
-                    profileList.Items.Add(item);
+                    SetProfileCell(item, 6, profile.AutoConnect ? "是" : "否");
+                    Color color = !string.IsNullOrEmpty(localError) || (!string.IsNullOrEmpty(state.LastErrorCode) && state.State != "capacity_wait")
+                        ? Color.DarkRed : SystemColors.WindowText;
+                    if (item.ForeColor != color) item.ForeColor = color;
                 }
+                foreach (KeyValuePair<string, ListViewItem> row in existing)
+                    if (!retained.Contains(row.Key)) profileList.Items.Remove(row.Value);
             }
-            finally { profileList.EndUpdate(); }
-            if (selected != null) SelectProfile(selected);
 
-            int terminalCount = terminalHost.Snapshot().Count;
-            summary.Text = catalog.Profiles.Count + " 个终端档案  ·  " + terminalCount
-                + " 个 MT4 适配器在线  ·  每个档案独立连接与独立 SQLite"
-                + UpdateSummary();
+            int terminalCount = 0, serverCount = 0;
+            foreach (BridgeProfileSettings profile in catalog.Profiles)
+            {
+                BridgeProfileConnectionSnapshot state = connections.Snapshot(profile);
+                if (state.TerminalState == "connected") terminalCount++;
+                if (state.State == "active") serverCount++;
+            }
+            summary.Text = "我的终端  " + catalog.Profiles.Count + "    ·    终端在线 " + terminalCount
+                + "    ·    服务器已连接 " + serverCount + UpdateSummary();
+            emptyState.Visible = catalog.Profiles.Count == 0;
             UpdateSelection();
+            UpdatePermissionTip();
             TryWriteLegacyReadySignal();
         }
 
         private void CheckForUpdates()
         {
-            if (shutdownRequested || removalInProgress) return;
+            if (shutdownRequested || removalInProgress || accountRequest || accountDialogOpen) return;
             if (updates == null || updateActivationStarted || IsDisposed) return;
             PendingBridgeRelease newest = null;
             foreach (PendingBridgeRelease release in connections.ReadObservedReleases())
@@ -556,18 +665,23 @@ namespace Liangjian.BridgeV4.App
 
         private void UpdateSelection()
         {
+            RefreshDiagnostics();
             BridgeProfileSettings profile = SelectedProfile();
             bool selected = profile != null;
-            editButton.Enabled = selected && configurationAvailable && !profile.RemovalPending && !removalInProgress;
-            connectButton.Enabled = selected && configurationAvailable && !profile.RemovalPending;
-            disconnectButton.Enabled = selected;
-            deleteButton.Enabled = selected && configurationAvailable && !removalInProgress && !updateActivationStarted;
+            bool isStarting;
+            lock (stateGate) isStarting = selected && starting.Contains(profile.ProfileId);
+            editButton.Enabled = selected && configurationAvailable && !profile.RemovalPending && !removalInProgress && !accountRequest
+                && !isStarting && !updateActivationStarted;
+            connectButton.Enabled = selected && configurationAvailable && !profile.RemovalPending && !accountRequest;
+            disconnectButton.Enabled = selected && !accountRequest;
+            deleteButton.Enabled = selected && configurationAvailable && !removalInProgress && !updateActivationStarted && !accountRequest;
             deleteButton.Text = selected && profile.RemovalPending ? "重试移除" : "删除";
-            addButton.Enabled = configurationAvailable && !removalInProgress;
+            addButton.Enabled = configurationAvailable && !removalInProgress && !accountRequest;
+            primaryAdd.Enabled = addButton.Enabled && !accountDialogOpen && !shutdownRequested;
             if (!selected)
             {
                 detail.Text = configurationAvailable
-                    ? "选择一个档案查看连接状态；双击可编辑。"
+                    ? "选择一个终端查看连接情况；双击可编辑备注和设置。"
                     : "配置文件读取失败，本次启动已进入只读保护状态。";
                 return;
             }
@@ -578,12 +692,12 @@ namespace Liangjian.BridgeV4.App
             if (profile.RemovalPending)
             {
                 detail.Text = removalInProgress ? "正在停止连接并撤销设备凭据，账户历史和本地账本会保留。"
-                    : "此档案等待移除，不会自动连接。请点击“重试移除”完成服务器撤销和本地移除。"
+                    : "此档案等待移除，不会自动连接。请右键选择“重试移除”完成服务器撤销和本地移除。"
                         + (string.IsNullOrEmpty(error) ? string.Empty : "  " + error);
                 return;
             }
-            detail.Text = "实例：" + profile.TerminalInstanceId + "  ·  实时地址：" + profile.ServerUri
-                + (string.IsNullOrEmpty(error) ? string.Empty : "  ·  最近错误：" + error);
+            detail.Text = ConnectionGuidance(profile, state, error);
+            detail.ForeColor = !string.IsNullOrEmpty(error) ? Color.FromArgb(156, 83, 37) : Color.FromArgb(92, 102, 116);
         }
 
         private BridgeProfileSettings SelectedProfile()
@@ -644,7 +758,11 @@ namespace Liangjian.BridgeV4.App
 
         private static Button ActionButton(string text)
         {
-            return new Button { Text = text, AutoSize = true, MinimumSize = new Size(88, 36), Margin = new Padding(0, 0, 8, 0) };
+            Button button = new Button { Text = text, AutoSize = true, Cursor = Cursors.Hand, MinimumSize = new Size(92, 36),
+                Padding = new Padding(10, 0, 10, 0), Margin = new Padding(0, 0, 8, 0),
+                FlatStyle = FlatStyle.Flat, BackColor = Color.White, ForeColor = Color.FromArgb(45, 57, 73) };
+            button.FlatAppearance.BorderColor = Color.FromArgb(213, 221, 231);
+            return button;
         }
 
         private static string SafeError(Exception error)
@@ -659,6 +777,7 @@ namespace Liangjian.BridgeV4.App
             {
                 case "active": return "已连接";
                 case "awaiting_welcome": return "正在鉴权";
+                case "capacity_wait": return "等待可用额度";
                 case "backoff": return "等待重连";
                 case "disconnected": return "准备连接";
                 case "update_wait": return "等待更新";

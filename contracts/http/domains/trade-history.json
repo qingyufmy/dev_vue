@@ -101,6 +101,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
           }
         }
       }
@@ -134,6 +137,74 @@
             }
           },
           "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          }
+        }
+      }
+    },
+    "/history/executions/{legacy_id}/deals": {
+      "get": {
+        "operationId": "listArchivedExecutionDeals",
+        "summary": "List exact retained deals for an originally owned legacy execution",
+        "description": "Original user and legacy account identity only; no ticket/time proximity matching. Decimal values are strings. Empty history is not proof that no trade occurred.",
+        "tags": [
+          "TradeHistory"
+        ],
+        "parameters": [
+          {
+            "name": "legacy_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$"
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]{0,18}$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Historical deals",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArchivedExecutionDealsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "401": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "403": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "404": {
+            "$ref": "#/components/responses/Problem"
+          },
+          "503": {
             "$ref": "#/components/responses/Problem"
           }
         }
@@ -891,6 +962,145 @@
               }
             ],
             "unevaluatedProperties": false
+          },
+          "meta": {
+            "$ref": "#/components/schemas/Meta"
+          }
+        }
+      },
+      "ArchivedExecutionDeal": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "legacy_id",
+          "legacy_outcome_id",
+          "deal_ticket",
+          "position_id",
+          "order_ticket",
+          "entry_type",
+          "volume",
+          "price",
+          "profit",
+          "commission",
+          "swap",
+          "fee",
+          "occurred_at_utc"
+        ],
+        "properties": {
+          "legacy_id": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$"
+          },
+          "legacy_outcome_id": {
+            "type": "string",
+            "pattern": "^[1-9][0-9]{0,18}$"
+          },
+          "deal_ticket": {
+            "type": "string"
+          },
+          "position_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "order_ticket": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "entry_type": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "volume": {
+            "type": "string",
+            "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+          },
+          "price": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+          },
+          "profit": {
+            "type": "string",
+            "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+          },
+          "commission": {
+            "type": "string",
+            "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+          },
+          "swap": {
+            "type": "string",
+            "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+          },
+          "fee": {
+            "type": "string",
+            "pattern": "^-?[0-9]+(\\.[0-9]+)?$"
+          },
+          "occurred_at_utc": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "ArchivedExecutionDealsResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "data",
+          "meta"
+        ],
+        "properties": {
+          "data": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "items",
+              "next_cursor",
+              "legacy_execution_id",
+              "identity_namespace",
+              "executable"
+            ],
+            "properties": {
+              "items": {
+                "type": "array",
+                "maxItems": 100,
+                "items": {
+                  "$ref": "#/components/schemas/ArchivedExecutionDeal"
+                }
+              },
+              "next_cursor": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "legacy_execution_id": {
+                "type": "string",
+                "pattern": "^[1-9][0-9]{0,18}$"
+              },
+              "identity_namespace": {
+                "type": "string",
+                "enum": [
+                  "retained-legacy"
+                ]
+              },
+              "executable": {
+                "type": "boolean",
+                "enum": [
+                  false
+                ]
+              }
+            }
           },
           "meta": {
             "$ref": "#/components/schemas/Meta"

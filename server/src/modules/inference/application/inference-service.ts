@@ -1,14 +1,14 @@
 import { randomUUID } from 'node:crypto'
-import type { StrategyService } from '../../strategies/application/strategy-service.js'
+import type { ActiveStrategyVersionReader } from '../../strategies/index.js'
 import type { AnalysisInputSnapshot, AnalysisWorkClaim, JsonObject, MarketAnalysisResult, TraderDecisionResult, TraderInputSnapshot, TraderWorkClaim } from '../domain/inference.js'
 import { assertConfidence, assertMarketAnalysisResult, assertTraderDecisionResult, contentHash, InferenceError, normalizeSymbol, snapshotHash } from '../domain/inference.js'
 import { applyTraderTakeProfit } from '../domain/trader-take-profit.js'
 import type { InferenceRepository } from './inference-ports.js'
 
-const MANUAL_COOLDOWN_SECONDS = 180
+const MANUAL_COOLDOWN_SECONDS = 300
 
 export class InferenceService {
-  constructor(private readonly repository: InferenceRepository, private readonly strategies: StrategyService) {}
+  constructor(private readonly repository: InferenceRepository, private readonly strategies: ActiveStrategyVersionReader) {}
 
   async requestManualAnalysis(userId: number, strategyId: string, symbolInput: string, idempotencyKey: string, now = new Date()) {
     if (idempotencyKey.length < 16 || idempotencyKey.length > 128) throw new InferenceError('idempotency_key_invalid', 422)
@@ -102,7 +102,9 @@ export class InferenceService {
   }
 
   analysis(userId: number, analysisId: string) { return this.repository.getAnalysisDetail(userId, analysisId) }
-  analyses(userId: number, limit = 50) { return this.repository.listAnalyses(userId, Math.min(Math.max(limit, 1), 100)) }
-  decisions(userId: number, accountId: string, limit = 50) { return this.repository.listTraderDecisions(userId, accountId, Math.min(Math.max(limit, 1), 100)) }
+  decisions(userId: number, accountId: string, limit = 50) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new InferenceError('decision_list_limit_invalid', 400)
+    return this.repository.listTraderDecisions(userId, accountId, limit)
+  }
   decision(userId: number, decisionId: string) { return this.repository.getTraderDecision(userId, decisionId) }
 }

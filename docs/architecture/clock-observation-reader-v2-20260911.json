@@ -1,0 +1,11 @@
+{
+  "kind": "clock-observation-writer-reference/v1",
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "referenceDatabaseRemoved": true,
+  "errorCode": "TypeError",
+  "errorLocations": [
+    "    at file:///D:/dev_codex/dev_vue/scripts/verify-clock-observation-writer-reference-local.mjs:57:23",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)"
+  ]
+}

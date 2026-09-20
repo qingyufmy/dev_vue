@@ -1,0 +1,102 @@
+{
+  "kind": "strategy-restored-baseline-preflight/v1",
+  "inspected": true,
+  "databaseWrites": 0,
+  "applyReady": false,
+  "schema": {
+    "schemaReady": true,
+    "identity": {
+      "db": "dev_vue_m1_source_20260910_01",
+      "uuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+    },
+    "planHash": "7b841f5c02d042a559de1fe3b06ee42ae45ff09a455d6f767792fc5856ada84b",
+    "journal": {
+      "actualCount": 188,
+      "expectedCount": 188,
+      "matches": true,
+      "mismatched": []
+    },
+    "tables": [
+      {
+        "name": "data_migration_runs",
+        "expectedHash": "7aa4ec51dfbb2b317ee2facf4a6de7401e1d3a82379f15317aa6d396157ac7cb",
+        "actualHash": "7aa4ec51dfbb2b317ee2facf4a6de7401e1d3a82379f15317aa6d396157ac7cb",
+        "triggers": 0,
+        "matches": true
+      },
+      {
+        "name": "data_migration_checkpoints",
+        "expectedHash": "63b25e568b62520e5b4da354f5dc2d6ac7914568a9e6cb8925a88bef74023ffb",
+        "actualHash": "63b25e568b62520e5b4da354f5dc2d6ac7914568a9e6cb8925a88bef74023ffb",
+        "triggers": 0,
+        "matches": true
+      },
+      {
+        "name": "data_migration_batches",
+        "expectedHash": "6d7c073609f8bd04f5b7b34938c62c8eb9dff877364c7c4915a72ac9bc699b8b",
+        "actualHash": "6d7c073609f8bd04f5b7b34938c62c8eb9dff877364c7c4915a72ac9bc699b8b",
+        "triggers": 0,
+        "matches": true
+      },
+      {
+        "name": "data_migration_id_maps",
+        "expectedHash": "e28d01c271e64f9acd262de3bb6ea12401f3700826c171bc83b17da8344beed0",
+        "actualHash": "e28d01c271e64f9acd262de3bb6ea12401f3700826c171bc83b17da8344beed0",
+        "triggers": 0,
+        "matches": true
+      },
+      {
+        "name": "data_migration_row_receipts",
+        "expectedHash": "c82b221448572f6957a444576a1c33989e0a82dc62805268bf3ff10308977e0b",
+        "actualHash": "c82b221448572f6957a444576a1c33989e0a82dc62805268bf3ff10308977e0b",
+        "triggers": 0,
+        "matches": true
+      },
+      {
+        "name": "data_migration_source_rows",
+        "expectedHash": "64ce7085714f890ec74d261703c857851341f57ca7459ca0a4a7574570160ccb",
+        "actualHash": "64ce7085714f890ec74d261703c857851341f57ca7459ca0a4a7574570160ccb",
+        "triggers": 0,
+        "matches": true
+      },
+      {
+        "name": "strategies",
+        "expectedHash": "8435f65723f4c195d0b8767fa7cf1d9eefa4eae7ca20177d141946fcd8768bab",
+        "actualHash": "8435f65723f4c195d0b8767fa7cf1d9eefa4eae7ca20177d141946fcd8768bab",
+        "triggers": 0,
+        "matches": true
+      },
+      {
+        "name": "strategy_versions",
+        "expectedHash": "768295142175363f8f381a4bc6b68d56ec1171e5e9211bf7ffa5a2ec90db31ee",
+        "actualHash": "768295142175363f8f381a4bc6b68d56ec1171e5e9211bf7ffa5a2ec90db31ee",
+        "triggers": 0,
+        "matches": true
+      },
+      {
+        "name": "auto_prompt_types",
+        "expectedHash": "a99bd269c0fdeba3efa41fbda0df29eea699d591a7ee7cc9357aa43c30cad224",
+        "actualHash": "a99bd269c0fdeba3efa41fbda0df29eea699d591a7ee7cc9357aa43c30cad224",
+        "triggers": 0,
+        "matches": true
+      },
+      {
+        "name": "users",
+        "expectedHash": "cac027f809fae6396dd31254f9e3ec1e632158b6f64784540def3635985f4ffc",
+        "actualHash": "cac027f809fae6396dd31254f9e3ec1e632158b6f64784540def3635985f4ffc",
+        "triggers": 0,
+        "matches": true
+      }
+    ],
+    "applyReady": false,
+    "remainingChecks": [
+      "role_conversion",
+      "source_snapshot_binding",
+      "restored_data_reconciliation",
+      "subscription_promotion"
+    ]
+  },
+  "observedAt": "2026-09-10T03:12:00.673Z",
+  "toolSha256": "e23ff91c8fd08ade2bb8fa8c9b42254eaceb42f56b25a49e3a0fb4b43ae0a807",
+  "limits": "Structural admission only; backup restoration parity, role conversion, data backfill and runtime acceptance remain separate."
+}

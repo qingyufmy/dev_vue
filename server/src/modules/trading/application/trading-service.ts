@@ -36,7 +36,9 @@ export class TradingService {
       this.repository.getAccountSnapshot(account.id, userId), this.repository.listSymbols(account.id),
       this.repository.listPositions(account.id, userId), this.repository.listPendingOrders(account.id, userId),
     ])
-    return { account, snapshot, symbols, positions, pendingOrders }
+    await this.readableAccount(userId, account.id)
+    const availableSymbols = [...new Set([...symbols, ...positions.items.map(row => row.symbol), ...pendingOrders.items.map(row => row.symbol)])].sort()
+    return { account, snapshot, symbols: availableSymbols, positions, pendingOrders }
   }
 
   async quote(userId: number, accountId: string, symbol: string, observerChannelId?: string) {
@@ -76,16 +78,17 @@ export class TradingService {
 }
 
 export class ConnectionCapacityService {
-  constructor(private readonly capacities: ConnectionCapacityRepository, private readonly leases: ConnectionLeaseStore) {}
+  constructor(private readonly capacities: ConnectionCapacityRepository, private readonly leases: ConnectionLeaseStore,
+    private readonly activeConnections: Pick<ConnectionLeaseStore, 'count'> = leases) {}
 
   async summary(userId: number) {
-    const [purchased, active] = await Promise.all([this.capacities.getPurchasedCapacity(userId), this.leases.count(userId)])
-    const total = 1 + Math.max(0, purchased)
-    return { included: 1, purchased: Math.max(0, purchased), total, active, available: Math.max(0, total - active) }
+    const [included, purchased, active] = await Promise.all([this.capacities.getIncludedCapacity(userId), this.capacities.getPurchasedCapacity(userId), this.activeConnections.count(userId)])
+    const total = included + Math.max(0, purchased)
+    return { included, purchased: Math.max(0, purchased), total, active, available: Math.max(0, total - active) }
   }
 
   async connect(input: Omit<Parameters<ConnectionLeaseStore['claim']>[0], 'capacity' | 'ttlSeconds'>) {
-    const capacity = 1 + Math.max(0, await this.capacities.getPurchasedCapacity(input.userId))
+    const capacity = await this.capacities.getIncludedCapacity(input.userId) + Math.max(0, await this.capacities.getPurchasedCapacity(input.userId))
     try {
       return await this.leases.claim({ ...input, capacity, ttlSeconds: 45 })
     } catch (error) {

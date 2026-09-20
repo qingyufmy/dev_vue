@@ -88,6 +88,14 @@ namespace Liangjian.BridgeV4.SmokeTests
                 && (string)sent["installation_id"] == "installation-removal" && (string)sent["profile_id"] == profile.ProfileId,
                 "revocation_identity_not_sent");
             foreach (byte value in transport.Bytes) Assert(value == 0, "revocation_request_not_cleared");
+            HttpBridgeCredentialRevoker configured = new HttpBridgeCredentialRevoker("installation-removal", transport, "http://localhost:3010");
+            BridgeProfileSettings local = profile.Clone(); local.ServerUri = "ws://localhost:3012/bridge/v4/ws";
+            configured.Revoke(local, Token);
+            Assert(transport.Endpoint.AbsoluteUri == "http://localhost:3010/api/v4/bridge/credential-revocations", "revocation_configured_api_port_ignored");
+            local.ServerUri = "wss://localhost:3012/bridge/v4/ws";
+            Reject(delegate { configured.Revoke(local, Token); });
+            local.ServerUri = "ws://127.0.0.1:3012/bridge/v4/ws";
+            Reject(delegate { configured.Revoke(local, Token); });
             foreach (string bad in new[]
             {
                 Receipt().Replace("profile-one", "profile-other"),

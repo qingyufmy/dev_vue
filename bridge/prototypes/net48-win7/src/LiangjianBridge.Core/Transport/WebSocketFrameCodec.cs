@@ -113,14 +113,14 @@ namespace Liangjian.BridgeV4.Transport
             {
                 output.WriteByte((byte)(maskFlag | 126));
                 output.WriteByte((byte)(length >> 8));
-                output.WriteByte((byte)length);
+                output.WriteByte((byte)(length & 0xff));
                 return;
             }
             output.WriteByte((byte)(maskFlag | 127));
             ulong value = (ulong)length;
             for (int shift = 56; shift >= 0; shift -= 8)
             {
-                output.WriteByte((byte)(value >> shift));
+                output.WriteByte((byte)((value >> shift) & 0xff));
             }
         }
 

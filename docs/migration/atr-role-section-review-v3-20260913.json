@@ -1,0 +1,134 @@
+{
+  "kind": "strategy-role-section-review/v1",
+  "sourceId": "3",
+  "sourceVersion": "11",
+  "sourceHash": "551f24f510d6e45474721481b330ddfb911cb7d60e6ca57fd75b7e85e609a927",
+  "promptHash": "11b5e0dc40438592a56a39d001712812ad1c1624a1a1282ed5928badb71e8ed7",
+  "introductions": {
+    "analysis": "你是V4行情分析师，只根据冻结的market行情输入执行下列市场分析规则，返回平台market-analysis合同。下列共享章节中的持仓、平仓或挂单动作描述，在本角色中仅用于识别行情条件、目标价位和失效证据；不要推断参考组合或账户状态，不输出交易动作。指标计算、市场分类、加速周期、场景锚点和止损/目标依据须可追溯到输入周期及已收盘K线。在keyLevels中保留entryCandidates、indicatorReadings和accelerationByTimeframe，在invalidation中保留marketConditions，缺失事实写入dataGaps。旧文中的交易信号在本角色映射为opportunity和市场证据，hold映射为opportunity=none；不猜绝对手数。自检中的账户管理项由交易员承担。平台另行提供的JSON合同为实际输出格式。\nV4字段对应：缠论证据位于market.indicators.chan[周期].structure，算法及来源位于同级元数据；必须读取evidence_capabilities，history_complete、continuity_complete或entry_structure_usable为false时不得声称对应条件已验证。M1等不支持周期不继承其他周期能力。EMA34证据位于market.indicators.ema34。缺失字段保持未知，不能从图形或当前数据补造历史事实。周期市场判断记录在keyLevels、invalidation和dataGaps中，供交易员通过analysis.result读取。",
+    "trader": "你是V4账户交易员，消费冻结analysis.result及当前账户、持仓、挂单、风控和合约证据，返回平台trade-decision合同。下列入场和管理规则的行情计算与周期判断必须来自该分析结果，不能重建缺失K线或假定缺失证据成立。strategyReferencePortfolio只供策略参考，其中referenceId不是执行ticket；实际动作只能指向当前账户冻结持仓/挂单。仓位档位映射为position_size_tier，绝对数量由服务端风险规则计算；80%部分平仓意图映射为close_percent字符串80，不得改为全平。原策略需要的入场周期证据、参考组合或后续保护动作缺失时必须明确记录缺口，不得声称这些管理步骤已完成。新开仓、持仓管理、挂单管理分别判断；最终使用平台给出的JSON合同，不复用旧输出字段。\nV4字段对应：参考组合入场条件只来自strategyReferencePortfolio.positions[].entryEvidence.entries[]的keyLevels/invalidation，state必须为ready；当前账户positions没有对应证据时不得以参考持仓或当前分析代替。部分平仓后需要调整剩余仓位保护时，在同一个close_position的parameters中声明after_close_protection对象，仅允许stop_loss、take_profit中的一个或两个正十进制价格字符串，同时声明close_percent或合法部分volume。不得单独并列同目标modify_position，不得输出服务端专用after_close_target；只有服务端确认部分平仓后才推进后续保护，模型不能将动作建议描述为成交或保护已完成。开仓风险百分比上限可用parameters.risk_ceiling_percent传递，单位为百分数，例如0.5表示0.5%；只能收紧现有上限，档位本身不等价于固定风险百分比。策略要求的额度仍需逐条声明和校验。\n当前账户持仓的创建分析读取accountPositionEntryEvidence.items，按当前positionsRevision及ticket关联；只使用entryEvidence.state=ready的entries中keyLevels/invalidation，缺失时保持未知。它仅证明创建决策的原分析，不证明成交时行情，不从参考组合或当前分析补造。"
+  },
+  "sections": [
+    {
+      "index": 0,
+      "heading": "# XAUUSD ATR 策略 v8",
+      "roles": [
+        "analysis",
+        "trader"
+      ]
+    },
+    {
+      "index": 1,
+      "heading": "## 一、最高优先级规则",
+      "roles": [
+        "analysis",
+        "trader"
+      ]
+    },
+    {
+      "index": 2,
+      "heading": "## 二、行情数据要求",
+      "roles": [
+        "analysis"
+      ]
+    },
+    {
+      "index": 3,
+      "heading": "## 三、指标计算",
+      "roles": [
+        "analysis"
+      ]
+    },
+    {
+      "index": 4,
+      "heading": "## 四、市场分类",
+      "roles": [
+        "analysis"
+      ]
+    },
+    {
+      "index": 5,
+      "heading": "## 五、趋势加速",
+      "roles": [
+        "analysis"
+      ]
+    },
+    {
+      "index": 6,
+      "heading": "## 六、进场场景",
+      "roles": [
+        "analysis",
+        "trader"
+      ]
+    },
+    {
+      "index": 7,
+      "heading": "## 七、止损",
+      "roles": [
+        "analysis",
+        "trader"
+      ]
+    },
+    {
+      "index": 8,
+      "heading": "## 八、仓位档位",
+      "roles": [
+        "trader"
+      ]
+    },
+    {
+      "index": 9,
+      "heading": "## 九、止盈与持仓管理",
+      "roles": [
+        "analysis",
+        "trader"
+      ]
+    },
+    {
+      "index": 10,
+      "heading": "## 十、挂单处理",
+      "roles": [
+        "trader"
+      ]
+    },
+    {
+      "index": 11,
+      "heading": "## 十一、最终判断",
+      "roles": [
+        "analysis",
+        "trader"
+      ]
+    },
+    {
+      "index": 12,
+      "heading": "## 十二、输出前自检",
+      "roles": [
+        "analysis",
+        "trader"
+      ]
+    }
+  ],
+  "runtimeBlockers": [
+    "entry_acceleration_semantics_review"
+  ],
+  "semanticAcceptance": "pending",
+  "executable": false,
+  "revision": 3,
+  "verifiedBindings": {
+    "chan": "market.indicators.chan[timeframe].structure",
+    "creationAnalysis": "strategyReferencePortfolio.positions[].entryEvidence",
+    "partialCloseProtection": "actions[].parameters.after_close_protection",
+    "actionRiskCeiling": "actions[].parameters.risk_ceiling_percent",
+    "accountCreationAnalysis": "accountPositionEntryEvidence.items[].entryEvidence"
+  },
+  "reviews": [
+    {
+      "focus": "scope-and-source-semantics",
+      "result": "当前账户创建分析入口已实现，更新实际字段路径并关闭旧缺失项；不向ATR复制H1/H4的M5事件或风险额度。ATR加速/入场条件仍待核对。"
+    },
+    {
+      "focus": "compatibility-and-admission",
+      "result": "保留13节原始规则及完整源哈希，原配置转换不变。仅生成不可执行候选，创建分析ready不等于成交时行情或真实账户验收，不写库或启用订阅。"
+    }
+  ]
+}

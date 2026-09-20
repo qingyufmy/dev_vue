@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:aurum:bridge-market-read:v1",
+  "title": "Internal bounded read-only market request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["v", "id", "userId", "accountId", "deadline", "kind", "symbol", "timeframe", "before", "limit", "cursor"],
+  "properties": {
+    "v": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$" },
+    "userId": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "accountId": { "type": "string", "pattern": "^[1-9][0-9]{0,19}$" },
+    "deadline": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+    "kind": { "enum": ["symbols", "instrument", "candles"] },
+    "symbol": { "type": ["string", "null"], "pattern": "^[A-Za-z0-9._-]{1,64}$" },
+    "timeframe": { "enum": [null, "M1", "M5", "M15", "M30", "H1", "H4", "D1"] },
+    "before": { "type": ["integer", "null"], "minimum": 1, "maximum": 9007199254740991 },
+    "limit": { "type": "integer", "minimum": 1, "maximum": 500 },
+    "cursor": { "type": ["string", "null"], "pattern": "^[0-9]{1,5}$" }
+  },
+  "oneOf": [
+    { "properties": { "kind": { "const": "symbols" }, "symbol": { "type": "null" }, "timeframe": { "type": "null" }, "before": { "type": "null" } } },
+    { "properties": { "kind": { "const": "instrument" }, "symbol": { "type": "string" }, "timeframe": { "type": "null" }, "before": { "type": "null" }, "limit": { "const": 1 }, "cursor": { "type": "null" } } },
+    { "properties": { "kind": { "const": "candles" }, "symbol": { "type": "string" }, "timeframe": { "type": "string" }, "before": { "type": "integer" }, "limit": { "minimum": 2 }, "cursor": { "type": "null" } } }
+  ]
+}

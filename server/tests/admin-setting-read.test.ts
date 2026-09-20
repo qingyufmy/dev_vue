@@ -1,6 +1,7 @@
 import Fastify from 'fastify'
 import type { Pool } from 'mysql2/promise'
 import { expect,it,vi } from 'vitest'
+import { AuthError } from '../src/modules/auth/index.js'
 import { AdminSettingReader } from '../src/modules/settings/index.js'
 import { MysqlAdminSettingReader } from '../src/modules/settings/infrastructure/mysql-admin-setting-reader.js'
 import { adminSettingReadRoutes } from '../src/modules/settings/transport/http/admin-setting-read-routes.js'
@@ -43,4 +44,16 @@ it('database authorization precedes value reads and read transactions are rolled
  expect(execute.mock.calls[0]).toEqual([expect.stringContaining('FOR SHARE'),[1]])
  expect(c.rollback).toHaveBeenCalledTimes(1);expect(c.release).toHaveBeenCalledTimes(1)
  execute.mockReset().mockResolvedValueOnce([[],[]]);await expect(repo.read(1,{namespace:'smtp',key:'port',expectedType:'integer'})).rejects.toThrow('admin_required');expect(execute).toHaveBeenCalledTimes(1)
+})
+it('authenticates before invalid input and rejects malformed response values',async()=>{
+ const f=await fixture();try {
+  f.auth.authenticate.mockRejectedValueOnce(new AuthError('auth_session_invalid',401))
+  expect((await f.send('namespace=&key=port')).statusCode).toBe(401)
+  expect((await f.send('namespace=&key=port')).statusCode).toBe(400)
+  expect(f.read).not.toHaveBeenCalled()
+  f.read.mockResolvedValueOnce({status:'found',metadata,valueState:'text',rawValue:{secret:'private-setting'}})
+  const r=await f.send()
+  expect(r.statusCode).toBe(503);expect(r.headers['content-type']).toContain('application/problem+json')
+  expect(r.body).not.toContain('private-setting')
+ }finally{await f.app.close()}
 })

@@ -1,4 +1,9 @@
-import type { FastifyPluginAsync } from 'fastify'
+import { userCommandTargetVersion } from '../../domain/user-command-target-version.js'
+import { randomUUID } from 'node:crypto'
+import { AuthError } from '../../../auth/index.js'
+import { createHttpContractValidator, HttpContractError } from '../../../../transport/http-contract.js'
+import { httpRuntimeContracts } from '../../../../transport/generated/http-contracts.js'
+import type { FastifyPluginAsync, FastifyReply } from 'fastify'
 import {
   UserExecutionCommandError,
   type UserExecutionCommandInput,
@@ -21,10 +26,7 @@ export interface UserExecutionCommandRoutesOptions {
 
 interface RequestBody extends Record<string, unknown> {
   command_type?: unknown
-  commandType?: unknown
   expected_state?: unknown
-  expected?: unknown
-  parameters?: unknown
 }
 
 const response = (requestId: string, data: unknown) => ({ data, meta: { request_id: requestId, generated_at: new Date().toISOString() } })
@@ -36,31 +38,39 @@ const response = (requestId: string, data: unknown) => ({ data, meta: { request_
  * still performs the authoritative validation and normalization.
  */
 export const userExecutionCommandRoutes: FastifyPluginAsync<UserExecutionCommandRoutesOptions> = async (fastify, options) => {
+  const contract = createHttpContractValidator(httpRuntimeContracts, ['getExecutionCommandContext', 'createExecutionCommand'])
   fastify.get<{ Params: { account_id: string }; Querystring: { symbol?: string; ticket?: string } }>('/trading-accounts/:account_id/execution-context', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
     try {
       const { userId } = await options.auth.authenticate(request)
+      if (Object.keys(request.query).some(key => key !== 'symbol' && key !== 'ticket')) throw new HttpContractError('api_request_invalid', 400)
+      contract.request('getExecutionCommandContext', request)
       const result = await options.service.commandContext({
         userId,
         accountId: request.params.account_id,
         symbol: request.query.symbol ?? null,
         ticket: request.query.ticket ?? null,
       })
-      return response(request.id, commandContextDto(result.context, result.symbol, result.ticket))
-    } catch (error) { return problem(error, request, reply) }
+      return contract.response('getExecutionCommandContext', response(request.id, commandContextDto(result.context, result.symbol, result.ticket)))
+    } catch (error) { return contextProblem(error, request.id, reply, contract) }
   })
 
   fastify.post<{ Params: { account_id: string }; Body: RequestBody }>('/trading-accounts/:account_id/execution-commands', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
     try {
       // Authenticate before parsing or mutating anything.  assertWrite owns
       // the CSRF/write-token decision and is mandatory for this route.
       const { userId } = await options.auth.assertWrite(request)
       const idempotencyKey = request.headers['idempotency-key']
       if (typeof idempotencyKey !== 'string' || !idempotencyKey.trim()) throw new UserExecutionCommandError('idempotency_key_required', 428)
+      if (Object.keys(request.query as object).length) throw new HttpContractError('api_request_invalid', 400)
+      contract.request('createExecutionCommand', request)
       const body = request.body ?? {}
       const input = toCommandInput(userId, request.params.account_id, body, idempotencyKey)
       const result = await options.service.execute(input)
-      return reply.code(202).send(response(request.id, commandResultDto(result)))
-    } catch (error) { return problem(error, request, reply) }
+      try { return reply.code(202).send(contract.response('createExecutionCommand', response(request.id, commandResultDto(result)), 202)) }
+      catch { throw new UserExecutionCommandError('user_command_commit_unknown', 503) }
+    } catch (error: any) { console.error('[EXEC-CMD]', error?.code ?? error?.message ?? String(error)); return problem(error, request, reply, contract) }
   })
 }
 
@@ -98,7 +108,7 @@ function commandContextDto(context: Awaited<ReturnType<UserExecutionCommandServi
       contract_revision: String(context.currentRevisions.contract),
       risk_revision: String(context.currentRevisions.risk),
     },
-    target_revision: target && Number(target.revision) > 0 ? String(target.revision) : null,
+    target_revision: target && Number(target.revision) > 0 ? String(userCommandTargetVersion(target)) : null,
     quote,
     instrument,
   }
@@ -110,38 +120,27 @@ function positiveDecimal(value: unknown) {
 }
 
 function toCommandInput(userId: number, accountId: string, body: RequestBody, idempotencyKey: string): UserExecutionCommandInput {
-  const commandType = (body.command_type ?? body.commandType) as UserExecutionCommandType
-  const source = body.parameters && isObject(body.parameters) ? body.parameters : body
-  const expectedValue = body.expected_state ?? body.expected ?? {
-    account_revision: body.account_revision,
-    positions_revision: body.positions_revision,
-    pending_orders_revision: body.pending_orders_revision,
-    quote_revision: body.quote_revision,
-    contract_revision: body.contract_revision,
-    risk_revision: body.risk_revision,
-    resource_revision: body.resource_revision,
-  }
+  const commandType = body.command_type as UserExecutionCommandType
   return {
     userId,
     accountId,
     commandType,
     idempotencyKey: idempotencyKey.trim(),
-    expected: expectedFromHttp(expectedValue),
-    parameters: parametersFromHttp(commandType, source),
+    expected: expectedFromHttp(body.expected_state),
+    parameters: parametersFromHttp(commandType, body),
   }
 }
 
 function expectedFromHttp(value: unknown): UserExecutionExpectedRevisions {
   if (!isObject(value)) return value as UserExecutionExpectedRevisions
   return {
-    accountRevision: value.account_revision ?? value.accountRevision,
-    positionsRevision: value.positions_revision ?? value.positionsRevision,
-    pendingOrdersRevision: value.pending_orders_revision ?? value.pendingOrdersRevision,
-    quoteRevision: value.quote_revision ?? value.quoteRevision,
-    contractRevision: value.contract_revision ?? value.contractRevision,
-    riskRevision: value.risk_revision ?? value.riskRevision,
-    resourceRevision: value.resource_revision === undefined && value.resourceRevision === undefined
-      ? null : value.resource_revision ?? value.resourceRevision,
+    accountRevision: value.account_revision,
+    positionsRevision: value.positions_revision,
+    pendingOrdersRevision: value.pending_orders_revision,
+    quoteRevision: value.quote_revision,
+    contractRevision: value.contract_revision,
+    riskRevision: value.risk_revision,
+    resourceRevision: value.resource_revision ?? null,
   } as UserExecutionExpectedRevisions
 }
 
@@ -149,29 +148,29 @@ function parametersFromHttp(commandType: UserExecutionCommandType, value: Record
   switch (commandType) {
     case 'market_order':
       return {
-        symbol: value.symbol, side: value.side, volume: value.volume, stopLoss: value.stop_loss ?? value.stopLoss,
-        takeProfit: value.take_profit ?? value.takeProfit, referencePrice: value.reference_price ?? value.referencePrice, comment: value.comment,
+        symbol: value.symbol, side: value.side, volume: value.volume, stopLoss: value.stop_loss,
+        takeProfit: value.take_profit, referencePrice: value.reference_price, comment: value.comment,
       } as UserExecutionCommandInput['parameters']
     case 'pending_order':
       return {
-        symbol: value.symbol, orderType: value.order_type ?? value.orderType ?? value.type, volume: value.volume, price: value.price,
-        stopLimitPrice: value.stop_limit_price ?? value.stopLimitPrice, stopLoss: value.stop_loss ?? value.stopLoss,
-        takeProfit: value.take_profit ?? value.takeProfit, referencePrice: value.reference_price ?? value.referencePrice,
-        expirationUtcMsc: value.expiration_utc_msc ?? value.expirationUtcMsc, comment: value.comment,
+        symbol: value.symbol, orderType: value.order_type, volume: value.volume, price: value.price,
+        stopLimitPrice: value.stop_limit_price, stopLoss: value.stop_loss,
+        takeProfit: value.take_profit, referencePrice: value.reference_price,
+        expirationUtcMsc: value.expiration_utc_msc, comment: value.comment,
       } as UserExecutionCommandInput['parameters']
     case 'modify_position':
       return {
-        ticket: value.ticket, stopLoss: value.stop_loss ?? value.stopLoss, takeProfit: value.take_profit ?? value.takeProfit,
-        removeStopLoss: value.remove_stop_loss ?? value.removeStopLoss, removeTakeProfit: value.remove_take_profit ?? value.removeTakeProfit,
+        ticket: value.ticket, stopLoss: value.stop_loss, takeProfit: value.take_profit,
+        removeStopLoss: value.remove_stop_loss, removeTakeProfit: value.remove_take_profit,
       } as UserExecutionCommandInput['parameters']
     case 'close_position': return { ticket: value.ticket, volume: value.volume } as UserExecutionCommandInput['parameters']
     case 'modify_order':
       return {
-        ticket: value.ticket, price: value.price, volume: value.volume, stopLimitPrice: value.stop_limit_price ?? value.stopLimitPrice,
-        stopLoss: value.stop_loss ?? value.stopLoss, takeProfit: value.take_profit ?? value.takeProfit,
-        removeStopLoss: value.remove_stop_loss ?? value.removeStopLoss, removeTakeProfit: value.remove_take_profit ?? value.removeTakeProfit,
-        removeExpiration: value.remove_expiration ?? value.removeExpiration,
-        expirationUtcMsc: value.expiration_utc_msc ?? value.expirationUtcMsc,
+        ticket: value.ticket, price: value.price, volume: value.volume, stopLimitPrice: value.stop_limit_price,
+        stopLoss: value.stop_loss, takeProfit: value.take_profit,
+        removeStopLoss: value.remove_stop_loss, removeTakeProfit: value.remove_take_profit,
+        removeExpiration: value.remove_expiration,
+        expirationUtcMsc: value.expiration_utc_msc,
       } as UserExecutionCommandInput['parameters']
     case 'cancel_order': return { ticket: value.ticket } as UserExecutionCommandInput['parameters']
     default: throw new UserExecutionCommandError('user_command_type_invalid', 422)
@@ -197,17 +196,40 @@ function commandResultDto(result: UserExecutionCommandResult) {
   }
 }
 
-function problem(error: unknown, request: { id: string; url: string }, reply: { code(status: number): { send(body: unknown): unknown } }) {
-  const known = error instanceof UserExecutionCommandError
-    ? error
-    : new UserExecutionCommandError('execution_command_unavailable', 503)
-  return reply.code(known.status).send({
+function problem(error: unknown, request: { id: string; url: string }, reply: FastifyReply, contract: ReturnType<typeof createHttpContractValidator>) {
+  const known = error instanceof UserExecutionCommandError || error instanceof AuthError || error instanceof HttpContractError
+    ? error : new UserExecutionCommandError('execution_command_unavailable', 503)
+  const body = {
     type: `urn:aurum:problem:${known.code}`, title: 'Execution command failed', status: known.status,
-    code: known.code, detail: known.code, instance: request.url, correlation_id: request.id,
-    retryable: known.status >= 500, ...(Object.keys(known.details).length ? { details: known.details } : {}),
-  })
+    code: known.code, detail: known.status >= 500 ? '暂时无法确认结果，请保留原请求编号和内容。' : known.code,
+    instance: '/api/v4/trading-accounts', correlation_id: request.id,
+    retryable: known.status >= 500, ...(known instanceof UserExecutionCommandError && Object.keys(known.details).length ? { errors: Object.entries(known.details)
+      .filter(([field]) => field === 'resource' || field === 'ticket')
+      .map(([field, value]) => ({ field, code: known.code, message: String(value) })) } : {}),
+  }
+  try {
+    return reply.type('application/problem+json').code(known.status).send(contract.response('createExecutionCommand', body, known.status, 'application/problem+json'))
+  } catch {
+    const fallback = { type: 'urn:aurum:problem:user_command_commit_unknown', title: 'Execution command result unknown', status: 503,
+      code: 'user_command_commit_unknown', detail: '暂时无法确认结果，请保留原请求编号和内容。',
+      instance: '/api/v4/trading-accounts', correlation_id: randomUUID(), retryable: true }
+    return reply.type('application/problem+json').code(503).send(contract.response('createExecutionCommand', fallback, 503, 'application/problem+json'))
+  }
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function contextProblem(error: unknown, requestId: string, reply: FastifyReply, contract: ReturnType<typeof createHttpContractValidator>) {
+  const known = error instanceof UserExecutionCommandError || error instanceof AuthError || error instanceof HttpContractError
+    ? error : new UserExecutionCommandError('execution_command_unavailable', 503)
+  const body = { type: `urn:aurum:problem:${known.code}`, title: 'Execution context unavailable', status: known.status,
+    code: known.code, detail: known.code, instance: '/api/v4/trading-accounts', correlation_id: requestId, retryable: known.status >= 500 }
+  try {
+    return reply.type('application/problem+json').code(known.status).send(contract.response('getExecutionCommandContext', body, known.status, 'application/problem+json'))
+  } catch {
+    const fallback = { ...body, type: 'urn:aurum:problem:api_response_invalid', code: 'api_response_invalid', detail: 'api_response_invalid', status: 503, correlation_id: randomUUID(), retryable: true }
+    return reply.type('application/problem+json').code(503).send(contract.response('getExecutionCommandContext', fallback, 503, 'application/problem+json'))
+  }
 }

@@ -50,7 +50,7 @@ function eventDto(value: AuditEventSummary) {
     reason_code: value.reasonCode, symbol: value.symbol, occurred_at: value.occurredAt,
     terminal_timezone_offset_minutes: value.terminalTimezoneOffsetMinutes, correlation_id: value.correlationId }
 }
-function traceDto(value: AuditTraceNode) { return { stage: value.stage, status: value.status, source_kind: value.sourceKind,
+function traceDto(value: AuditTraceNode) { return { parameters: value.parameters ?? {}, intent_id: value.intentId ?? null, action_kind: value.actionKind ?? null, stage: value.stage, status: value.status, source_kind: value.sourceKind,
   source_id: value.sourceId, title: value.title, detail: value.detail, reason_code: value.reasonCode, occurred_at: value.occurredAt } }
 function detailDto(value: AuditEventDetail) { return { event: eventDto(value.event), trace: value.trace.map(traceDto),
   evidence: value.evidence, links: value.links } }

@@ -1,9 +1,19 @@
+import { decodeMarketProjection } from './bridge-market-projection-decoder.js'
+import { BridgeClockCalibration } from './bridge-clock-calibration.js'
+import { decodeAccountProjection } from './bridge-account-projection-decoder.js'
 import type { BridgeProjectionInput, BridgeExactTradeState } from '../../trading/index.js'
 import { BridgeGatewayError, type BridgeGatewayRoute } from '../domain/bridge-gateway.js'
 import type { BridgeProjectionDecoder, BridgeStreamEventEnvelope } from './bridge-stream-ingestor.js'
 
 export class BridgeTradeProjectionDecoder implements BridgeProjectionDecoder {
+  private readonly clocks = new BridgeClockCalibration()
   async decode(route: BridgeGatewayRoute, event: BridgeStreamEventEnvelope): Promise<BridgeProjectionInput | null> {
+    if (event.payload.stream === 'quotes' || event.payload.stream === 'current_candle') return decodeMarketProjection(route, event)
+    if (event.payload.stream === 'account') {
+      const projection = decodeAccountProjection(route, event)
+      if (projection.resource === 'account.metrics') Object.assign(projection.data, this.clocks.observe(route, event))
+      return projection
+    }
     if (event.payload.stream !== 'positions' && event.payload.stream !== 'pending_orders') return null
     if (!event.payload.full_snapshot || event.payload.deletes.length !== 0) throw new BridgeGatewayError('bridge_trade_snapshot_invalid', 400)
     const observedAt = utc(event.payload.observed_at_utc_msc)
@@ -21,13 +31,14 @@ export class BridgeTradeProjectionDecoder implements BridgeProjectionDecoder {
 }
 
 function position(accountId: string, revision: number, item: Record<string, unknown>) {
-  exactKeys(item, ['ticket', 'symbol', 'direction', 'order_type', 'magic', 'volume', 'open_price', 'current_price', 'stop_limit_price', 'stop_loss', 'take_profit', 'expiration_utc_msc', 'profit', 'opened_at_utc_msc'], ['source', 'signal_id'])
+  exactKeys(item, ['ticket', 'symbol', 'direction', 'order_type', 'magic', 'volume', 'open_price', 'current_price', 'stop_limit_price', 'stop_loss', 'take_profit', 'expiration_utc_msc', 'profit', 'opened_at_utc_msc'], ['source', 'signal_id', 'position_identifier'])
   const exact = exactState(item, true)
   const currentPrice = decimal(item.current_price, 'current_price')
   const profit = signedDecimal(item.profit, 'profit')
   const openedAt = utc(integer(item.opened_at_utc_msc, 'opened_at_utc_msc'))
   return { exact, public: {
     ticket: exact.ticket, accountId, symbol: exact.symbol, side: exact.direction, volume: exact.volume,
+    ...('position_identifier' in item ? { positionIdentifier: positionIdentifier(item.position_identifier) } : {}),
     openPrice: exact.open_price, currentPrice, stopLoss: exact.stop_loss, takeProfit: exact.take_profit,
     floatingProfit: profit, openedAt, source: source(item.source), signalId: optionalId(item.signal_id), revision,
   } }
@@ -62,6 +73,12 @@ function exactState(item: Record<string, unknown>, positionState: boolean): Brid
 }
 
 function ticket(value: unknown) { const result = text(value, 'ticket'); if (!/^[1-9][0-9]{0,19}$/.test(result)) invalid('ticket'); return result }
+function positionIdentifier(value: unknown) {
+  if (value === null) return null
+  const result = text(value, 'position_identifier')
+  if (!/^[1-9][0-9]{0,19}$/.test(result) || BigInt(result) > 18446744073709551615n) invalid('position_identifier')
+  return result
+}
 function symbol(value: unknown) { const result = text(value, 'symbol'); if (!/^[A-Za-z0-9._-]{1,64}$/.test(result)) invalid('symbol'); return result }
 function decimal(value: unknown, field: string) { const result = text(value, field); if (!/^(?:0\.[0-9]*[1-9][0-9]*|[1-9][0-9]*(?:\.[0-9]+)?)$/.test(result)) invalid(field); return result }
 function signedDecimal(value: unknown, field: string) { const result = text(value, field); if (!/^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(result)) invalid(field); return result }

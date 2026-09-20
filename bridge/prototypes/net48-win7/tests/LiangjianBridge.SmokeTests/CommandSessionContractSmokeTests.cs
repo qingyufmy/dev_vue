@@ -180,13 +180,38 @@ namespace Liangjian.BridgeV4.SmokeTests
                     session.AfterResponseSent(Now + 1);
                     Assert(runtime.CommandLedger.ReadState("profile-a", "idempotency-command-0001") == "uncertain",
                         "uncertain_result_not_recorded");
+                    string originalContext = new JavaScriptSerializer().Serialize(Object(Object(Parse(
+                        runtime.CommandLedger.ReadByCommandId("profile-a", "command-0001").ResultJson), "result"), "reconcile"));
+                    TerminalCommandExecutionResult settled = commands.ReconcileResult;
+                    for (int attempt = 0; attempt < 2; attempt++)
+                    {
+                        commands.ReconcileResult = TerminalCommandExecutionResult.Uncertain(
+                            attempt == 0 ? "bridge_mt5_terminal_unavailable" : "bridge_reconciliation_pending",
+                            attempt == 0 ? null : new Dictionary<string, object> { { "raw_result", "pending-evidence" } });
+                        session.Handle(Envelope("command.reconcile", "message-reconcile-pending-" + attempt, 1,
+                            new Dictionary<string, object>
+                            {
+                                { "command_id", "command-0001" }, { "action", "order.place" },
+                                { "terminal_ticket", "501" }
+                            }), Now + 1000 + attempt);
+                        IDictionary<string, object> details = Object(Parse(
+                            runtime.CommandLedger.ReadByCommandId("profile-a", "command-0001").ResultJson), "result");
+                        Assert(new JavaScriptSerializer().Serialize(Object(details, "reconcile")) == originalContext,
+                            "reconciliation_original_context_lost");
+                        if (attempt == 1) Assert((string)details["raw_result"] == "pending-evidence",
+                            "reconciliation_latest_evidence_lost");
+                        Assert(commands.ExecuteCalls == 1, "pending_reconciliation_replayed_trade");
+                        // A replacement session must recover solely from the durable ledger.
+                        session = new BridgeProfileSession(runtime, new UnusedQuerySource(), commands);
+                    }
+                    commands.ReconcileResult = settled;
                     session.Handle(Envelope("command.reconcile", "message-reconcile-final", 1,
                         new Dictionary<string, object>
                         {
                             { "command_id", "command-0001" }, { "action", "order.place" },
                             { "terminal_ticket", "501" }
                         }), Now + 20000);
-                    Assert(commands.ExecuteCalls == 1 && commands.ReconcileCalls == 1
+                    Assert(commands.ExecuteCalls == 1 && commands.ReconcileCalls == 3
                         && runtime.CommandLedger.ReadState("profile-a", "idempotency-command-0001") == "succeeded",
                         "reconcile_replayed_trade_or_did_not_settle");
                 }

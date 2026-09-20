@@ -91,6 +91,7 @@ function reset() {
               <SelectItem value="queued">排队中</SelectItem>
               <SelectItem value="running">处理中</SelectItem>
               <SelectItem value="succeeded">已完成</SelectItem>
+              <SelectItem value="partially_succeeded">部分完成</SelectItem>
               <SelectItem value="rejected">已拒绝</SelectItem>
               <SelectItem value="failed">失败</SelectItem>
               <SelectItem value="uncertain">待核实</SelectItem>

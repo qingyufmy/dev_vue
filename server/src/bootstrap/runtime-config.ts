@@ -26,16 +26,23 @@ export interface V4RuntimeConfig extends V4BaseRuntimeConfig {
   executionConcurrency: number
   executionMagic: number
   executionDeviation: number
+  positionProtectionMaxAgeMs: number
+  positionProtectionMaxInstrumentAgeMs: number
   analysisSchedulerHealthPort: number
   analysisHealthPort: number
   traderHealthPort: number
   riskHealthPort: number
+  riskSummaryHealthPort: number
   reviewHealthPort: number
   historySchedulerHealthPort: number
+  executionSchedulerHealthPort: number
+  executionRecoveryPollMs: number
+  executionRecoveryBatchSize: number
   analysisSchedulePollMs: number
   analysisScheduleBatchSize: number
   analysisConcurrency: number
   traderConcurrency: number
+  traderUserConcurrency: number
   riskConcurrency: number
   reviewConcurrency: number
   historySchedulePollMs: number
@@ -85,15 +92,22 @@ export function loadV4RuntimeConfig(env: NodeJS.ProcessEnv = process.env): V4Run
     executionConcurrency: integer(env.V4_EXECUTION_CONCURRENCY, 4, 1, 32, 'V4_EXECUTION_CONCURRENCY'),
     executionMagic: integer(env.V4_EXECUTION_MAGIC, 0, 0, 2_147_483_647, 'V4_EXECUTION_MAGIC'),
     executionDeviation: integer(env.V4_EXECUTION_DEVIATION, 20, 0, 100_000, 'V4_EXECUTION_DEVIATION'),
+    positionProtectionMaxAgeMs: integer(env.V4_POSITION_PROTECTION_MAX_AGE_MS, 30_000, 1, 60_000, 'V4_POSITION_PROTECTION_MAX_AGE_MS'),
+    positionProtectionMaxInstrumentAgeMs: integer(env.V4_POSITION_PROTECTION_MAX_INSTRUMENT_AGE_MS, 300_000, 1, 300_000, 'V4_POSITION_PROTECTION_MAX_INSTRUMENT_AGE_MS'),
     analysisSchedulerHealthPort: integer(env.V4_ANALYSIS_SCHEDULER_HEALTH_PORT, 3022, 1, 65_535, 'V4_ANALYSIS_SCHEDULER_HEALTH_PORT'),
     analysisHealthPort: integer(env.V4_ANALYSIS_HEALTH_PORT, 3023, 1, 65_535, 'V4_ANALYSIS_HEALTH_PORT'),
     traderHealthPort: integer(env.V4_TRADER_HEALTH_PORT, 3024, 1, 65_535, 'V4_TRADER_HEALTH_PORT'),
     riskHealthPort: integer(env.V4_RISK_HEALTH_PORT, 3025, 1, 65_535, 'V4_RISK_HEALTH_PORT'),
+    riskSummaryHealthPort: integer(env.V4_RISK_SUMMARY_HEALTH_PORT, 3030, 1, 65_535, 'V4_RISK_SUMMARY_HEALTH_PORT'),
     reviewHealthPort: integer(env.V4_REVIEW_HEALTH_PORT, 3026, 1, 65_535, 'V4_REVIEW_HEALTH_PORT'),
     historySchedulerHealthPort: integer(env.V4_HISTORY_SCHEDULER_HEALTH_PORT, 3027, 1, 65_535, 'V4_HISTORY_SCHEDULER_HEALTH_PORT'),
+    executionSchedulerHealthPort: integer(env.V4_EXECUTION_SCHEDULER_HEALTH_PORT, 3028, 1, 65_535, 'V4_EXECUTION_SCHEDULER_HEALTH_PORT'),
+    executionRecoveryPollMs: integer(env.V4_EXECUTION_RECOVERY_POLL_MS, 5_000, 1_000, 60_000, 'V4_EXECUTION_RECOVERY_POLL_MS'),
+    executionRecoveryBatchSize: integer(env.V4_EXECUTION_RECOVERY_BATCH_SIZE, 50, 1, 500, 'V4_EXECUTION_RECOVERY_BATCH_SIZE'),
     analysisSchedulePollMs: integer(env.V4_ANALYSIS_SCHEDULE_POLL_MS, 1_000, 100, 60_000, 'V4_ANALYSIS_SCHEDULE_POLL_MS'),
     analysisScheduleBatchSize: integer(env.V4_ANALYSIS_SCHEDULE_BATCH_SIZE, 100, 1, 500, 'V4_ANALYSIS_SCHEDULE_BATCH_SIZE'),
     analysisConcurrency: integer(env.V4_ANALYSIS_CONCURRENCY, 2, 1, 16, 'V4_ANALYSIS_CONCURRENCY'),
+    traderUserConcurrency: integer(env.V4_TRADER_USER_CONCURRENCY, 2, 1, 32, 'V4_TRADER_USER_CONCURRENCY'),
     traderConcurrency: integer(env.V4_TRADER_CONCURRENCY, 4, 1, 32, 'V4_TRADER_CONCURRENCY'),
     riskConcurrency: integer(env.V4_RISK_CONCURRENCY, 8, 1, 64, 'V4_RISK_CONCURRENCY'),
     reviewConcurrency: integer(env.V4_REVIEW_CONCURRENCY, 1, 1, 4, 'V4_REVIEW_CONCURRENCY'),

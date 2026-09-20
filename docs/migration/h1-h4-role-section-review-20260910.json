@@ -1,0 +1,28 @@
+{
+  "kind": "strategy-role-section-review/v1",
+  "sourceId": "1",
+  "sourceVersion": "44",
+  "sourceHash": "f021d377dd4027a7848ff1f6dd397de88b654830d23dc149ded83328c19a2232",
+  "promptHash": "da031ebc31df27668c37bbf96beb7b907a786117f577ef4c4702a62e2a41d509",
+  "introductions": {
+    "analysis": "你是V4行情分析师，只根据本次冻结的客观行情证据执行下面的市场规则，返回平台market-analysis合同。严格保留H1常态主判、仅H1不明确时H4降级、M15确认或否决、M5触发、M1 EMA34最后过滤的职责和先后顺序。不得重算或补造系统未提供的Chan、结构、事件、指标、保护价位和目标。下列共享章节中的仓位、订单和账户动作在本角色仅用于描述候选条件及失效证据，不判断实际账户状态或输出账户动作；由账户交易员检查相应管理规则。将已检查的市场候选、触发事件身份及周期、结构保护和目标证据保留在keyLevels，失效条件保留在invalidation，必要证据缺失写入dataGaps。旧hold/observe对应opportunity=none，旧交易字段不覆盖平台当前JSON合同。",
+    "trader": "你是V4账户交易员，使用冻结analysis.result、实际账户持仓/挂单、合约和风险证据执行下面的新开仓和管理规则，返回平台trade-decision合同。周期方向、确认、触发、结构保护与目标必须引用冻结分析，不从缺失K线或缺失系统对象补算。strategyReferencePortfolio仅用于策略参考，referenceId不能作为执行ticket；真实操作只能针对当前账户快照。保留同向默认不加仓、独立新事件才可加仓、事件不能重复使用、挂单有效期5至15分钟及退出后等待新快照再反向开仓等原始条件；缺少事件使用或独立性证据时不得宣称满足加仓条件。仓位档位映射为position_size_tier，绝对手数由确定性服务端计算，不能假定档位本身已保证原文百分比风险上限。旧position_action、position_evaluations等字段仅是原规则语义来源，不能直接作为V4输出字段；无法无歧义映射时记录缺口，不虚构已执行动作。下列规则不会赋予策略绕过平台风控的权限。"
+  },
+  "sections": [
+    {"index":0,"heading":"# 行情分析 Agent — H1 主判 / H4 严格降级 — 正式生产版 v3.3.1（均线客观数据模式）","roles":["analysis","trader"]},
+    {"index":1,"heading":"## 1. 角色与生产边界","roles":["analysis","trader"]},
+    {"index":2,"heading":"## 2. 系统数据是唯一客观权威","roles":["analysis","trader"]},
+    {"index":3,"heading":"## 3. 周期职责与方向语义","roles":["analysis","trader"]},
+    {"index":4,"heading":"## 4. 正式决策流程","roles":["analysis","trader"]},
+    {"index":5,"heading":"## 5. 结构止损、分层止盈与收益风险","roles":["analysis","trader"]},
+    {"index":6,"heading":"## 6. 新开仓、同向持仓与挂单生命周期","roles":["trader"]},
+    {"index":7,"heading":"## 7. 当前持仓与挂单管理","roles":["trader"]},
+    {"index":8,"heading":"## 8. 通用输出合同与字段一致性","roles":["analysis","trader"]},
+    {"index":9,"heading":"## 9. 最终自检","roles":["analysis","trader"]}
+  ],
+  "runtimeBlockers": ["chan_objective_evidence_contract_and_runtime","trigger_identity_and_event_usage_mapping","structure_protection_and_target_evidence_mapping","legacy_action_and_percentage_risk_semantics_review"],
+  "reviews": [
+    {"focus":"role-responsibility-and-coverage","result":"管理章节仅给trader，共享市场章节保留原顺序与全部字节；双角色说明约束输出职责，暂不宣称消除全部语义冲突。"},
+    {"focus":"compatibility-and-missing-evidence","result":"保留结构价格与事件来源要求，不补算系统未提供证据；旧动作字段、百分比风险与V4档位的对应关系仍须审查，不能按编译成功放行。"}
+  ]
+}

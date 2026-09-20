@@ -1,21 +1,22 @@
-import { createBridgeGatewayLeases, createBridgeSessionTickets } from '../modules/bridge/composition.js'
+import { assertMysqlInstrumentCollectionSchemaReady, createTransactionTerminalFactRouteGuard, createTransactionAccountClock } from '../modules/trading/composition.js'
+import { RedisBridgeMarketReadSubscriber, RedisBridgeMarketDemandSubscriber, createBridgeGatewayLeases, createBridgeSessionTickets } from '../modules/bridge/composition.js'
 import { createActivePrincipalAccess } from '../modules/auth/composition.js'
-import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import { createProjectionReservationAbsorber } from '../modules/execution/composition.js'
 import Fastify from 'fastify'
 import { Worker } from 'bullmq'
+import { createBridgeCommandProcessor } from '../queue/bridge-command-processor.js'
+import { createBridgeHistoryTaskProcessor } from '../queue/bridge-history-task-processor.js'
+import { createBridgeInstrumentProcessor } from '../queue/bridge-instrument-processor.js'
 import {
   assertV4RuntimeEnabled, connectCacheRedis, createCacheRedis, createMysqlPool,
   installProcessLifecycle, loadServerEnvironment, loadV4RuntimeConfig, RoleHealth,
 } from '../bootstrap/index.js'
-import {
-  BridgeCommandService, MysqlBridgeCommandRepository,
-} from '../modules/execution/index.js'
-import { BridgeGatewayCommandTransport, BridgeGatewayService, BridgeTradeProjectionDecoder, BridgeV4StreamIngestor, BridgeGatewayQueryTransport, InProcessBridgeGatewayDirectory } from '../modules/bridge/index.js'
-import { createBridgeGatewayRoutes } from '../modules/bridge/composition.js'
-import { createAccountRegistration, createBridgeTradingModule } from '../modules/trading/composition.js'
-import { createMysqlTradeHistoryCollector } from '../modules/trade-history/composition.js'
-import { BRIDGE_DISPATCH_QUEUE, BRIDGE_HISTORY_QUEUE, type BridgeCommandJob, type BridgeHistoryJob } from '../queue/task-queues.js'
+import { createPositionProtectionCommandRuntime } from '../bootstrap/position-protection-command-runtime.js'
+import { BridgeGatewayCommandTransport, BridgeGatewayService, BridgeTradeProjectionDecoder, BridgeV4StreamIngestor, BridgeGatewayQueryTransport, InProcessBridgeGatewayDirectory, BridgeInstrumentCollector, BridgeInstrumentWorker } from '../modules/bridge/index.js'
+import { createBridgeGatewayRoutes, assertMysqlBridgeInstallationSchemaReady } from '../modules/bridge/composition.js'
+import { createAccountRegistration, createBridgeTradingModule, createMysqlInstrumentCollectionTasks, createMysqlInstrumentSnapshotReader, createInstrumentProjectionWriter } from '../modules/trading/composition.js'
+import { createMysqlHistoryTaskWorker, assertMysqlHistoryTaskSchemaReady } from '../modules/trade-history/composition.js'
+import { BRIDGE_DISPATCH_QUEUE, BRIDGE_HISTORY_TASK_QUEUE, BRIDGE_INSTRUMENT_QUEUE, type BridgeCommandJob, type BridgeHistoryTaskJob, type BridgeInstrumentJob } from '../queue/task-queues.js'
 import { BridgeV4WebSocketServer } from '../transport/bridge-v4-websocket-server.js'
 
 loadServerEnvironment()
@@ -26,7 +27,11 @@ async function main() {
   const health = new RoleHealth('bridge-gateway')
   const pool = createMysqlPool(config.mysql)
   const cache = createCacheRedis(config.cacheRedis)
-  await Promise.all([pool.query('SELECT 1'), connectCacheRedis(cache)])
+  const marketCache = createCacheRedis(config.cacheRedis)
+  await Promise.all([pool.query('SELECT 1'), connectCacheRedis(cache), connectCacheRedis(marketCache)])
+  await assertMysqlInstrumentCollectionSchemaReady(pool)
+  await assertMysqlHistoryTaskSchemaReady(pool)
+  await assertMysqlBridgeInstallationSchemaReady(pool)
 
   const leases = createBridgeGatewayLeases(cache)
   const { capacity, projector } = createBridgeTradingModule(pool, cache, leases, error => {
@@ -35,10 +40,21 @@ async function main() {
   const streams = new BridgeV4StreamIngestor(new BridgeTradeProjectionDecoder(), projector)
   const directory = new InProcessBridgeGatewayDirectory()
   const routes = createBridgeGatewayRoutes(pool, connection => createAccountRegistration(connection, createActivePrincipalAccess(connection)))
+  const marketDemands = new RedisBridgeMarketDemandSubscriber(marketCache, leases, routes, directory, code => console.error(code))
   const transport = new BridgeGatewayCommandTransport(leases, directory, routes)
   const queries = new BridgeGatewayQueryTransport(leases, directory, routes)
-  const historyCollector = createMysqlTradeHistoryCollector(pool, queries)
-  const commands = new BridgeCommandService(new MysqlBridgeCommandRepository(pool, createTransactionAccountClock))
+  const marketReads = new RedisBridgeMarketReadSubscriber(marketCache, cache, leases, queries)
+  const historyTasks = createMysqlHistoryTaskWorker(pool, queries, leases, createTransactionTerminalFactRouteGuard, {
+    async read(userId, accountId) {
+      const connection = await pool.getConnection()
+      try { return await createTransactionAccountClock(connection).read(userId, accountId) }
+      finally { connection.release() }
+    },
+  })
+  const instrumentCollector = new BridgeInstrumentCollector(queries, createMysqlInstrumentSnapshotReader(pool), createInstrumentProjectionWriter(pool))
+  const instruments = new BridgeInstrumentWorker(createMysqlInstrumentCollectionTasks(pool), leases, instrumentCollector)
+  const { commands } = await createPositionProtectionCommandRuntime({ pool, routes: leases,
+    limits: { maxAgeMs: config.positionProtectionMaxAgeMs, maxInstrumentAgeMs: config.positionProtectionMaxInstrumentAgeMs } })
   const gateway = new BridgeGatewayService(
     createBridgeSessionTickets(cache),
     routes,
@@ -51,38 +67,48 @@ async function main() {
   )
 
   const app = Fastify({ logger: true, bodyLimit: 8 * 1024 })
-  const webSockets = new BridgeV4WebSocketServer(app.server, gateway)
+  const webSockets = new BridgeV4WebSocketServer(app.server, gateway,
+    (code, storageCode) => app.log.warn({ code, storageCode }, 'bridge session rejected'))
   app.get('/health/live', async () => ({ status: 'ok', ...health.snapshot(), connections: webSockets.connectionCount(), history_queries: queries.inflight() }))
   app.get('/health/ready', async (_request, reply) => {
-    const dependencies = await dependenciesReady(pool, cache) && commandWorker.isRunning() && historyWorker.isRunning()
+    const dependencies = await dependenciesReady(pool, cache) && commandWorker.isRunning() && historyWorker.isRunning() && instrumentWorker.isRunning()
     const snapshot = health.snapshot()
     const ready = dependencies && snapshot.accepting && snapshot.ready
     return reply.code(ready ? 200 : 503).send({ status: ready ? 'ok' : 'not_ready', ...snapshot,
       dependencies_ready: dependencies, connections: webSockets.connectionCount(), history_queries: queries.inflight() })
   })
 
+  const processCommand = createBridgeCommandProcessor(commands, transport)
   const commandWorker = new Worker<BridgeCommandJob>(BRIDGE_DISPATCH_QUEUE, async job => {
-    if (!job.data.commandId) throw new Error('bridge_command_job_invalid')
-    const result = await commands.dispatchQueued(job.data.commandId, transport)
+    const result = await processCommand(job)
     health.workSucceeded()
-    return { commandId: result.command.id, status: result.command.status, dispatched: result.dispatched }
+    return result
   }, { connection: config.queueRedis, prefix: config.queuePrefix, concurrency: 1, autorun: false })
   commandWorker.on('failed', (_job, error) => health.workFailed(publicError(error)))
 
-  const historyWorker = new Worker<BridgeHistoryJob>(BRIDGE_HISTORY_QUEUE, async job => {
-    if (!job.data.accountId) throw new Error('trade_history_job_invalid')
-    const route = await leases.current(job.data.accountId)
-    if (!route) throw new Error('bridge_query_route_unavailable')
-    const result = await historyCollector.collect(route)
+  const processHistoryTask = createBridgeHistoryTaskProcessor(historyTasks)
+  const historyWorker = new Worker<BridgeHistoryTaskJob>(BRIDGE_HISTORY_TASK_QUEUE, async (job, token) => {
+    const result = await processHistoryTask(job, token)
     health.workSucceeded()
-    return { accountId: job.data.accountId, ...result }
+    return result
   }, { connection: config.queueRedis, prefix: config.queuePrefix, concurrency: 1, autorun: false })
   historyWorker.on('failed', (_job, error) => health.workFailed(publicError(error)))
 
+  const processInstrument = createBridgeInstrumentProcessor(instruments)
+  const instrumentWorker = new Worker<BridgeInstrumentJob>(BRIDGE_INSTRUMENT_QUEUE, async (job, token) => {
+    const result = await processInstrument(job, token)
+    health.workSucceeded()
+    return result
+  }, { connection: config.queueRedis, prefix: config.queuePrefix, concurrency: 1, autorun: false })
+  instrumentWorker.on('failed', (_job, error) => health.workFailed(publicError(error)))
+
+  await marketDemands.start()
+  await marketReads.start()
   webSockets.start()
   await app.listen({ host: config.host, port: config.bridgeGatewayPort })
   void commandWorker.run()
   void historyWorker.run()
+  void instrumentWorker.run()
   health.setReady(true)
   health.setAccepting(true)
 
@@ -91,9 +117,12 @@ async function main() {
     health.setReady(false)
     await commandWorker.close()
     await historyWorker.close()
+    await instrumentWorker.close()
+    await marketReads.close()
+    await marketDemands.close()
     await webSockets.close()
     await app.close()
-    await Promise.allSettled([cache.quit(), pool.end()])
+    await Promise.allSettled([marketCache.quit(), cache.quit(), pool.end()])
   })
 }
 

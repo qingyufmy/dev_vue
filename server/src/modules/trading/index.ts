@@ -1,11 +1,14 @@
 export * from './domain/trading.js'
+export type { AccountInventorySummary, AccountInventorySummaryReader } from './application/account-inventory-summary-reader.js'
 export type { ContextWriteCommand, ContextWriteReceipt, ContextWriteAction } from './domain/context-write.js'
 export type { ContextWritePort } from './application/context-write-port.js'
 export type { AccountClockReader } from './application/account-clock-reader.js'
+export type { OwnedHistoryAccess, OwnedHistoryScope, OwnedHistoryAccessReader } from './application/owned-history-access.js'
 export type { AccountLiveRoute, AccountLiveRouteReader } from './application/account-live-route-reader.js'
 export * from './domain/account-access.js'
 export * from './application/account-access-policy.js'
 export * from './application/observer-ports.js'
+export type { StrategyObserverInventory, StrategyObserverInventoryReader } from './application/strategy-observer-inventory-reader.js'
 export * from './application/observer-management-ports.js'
 export * from './application/observer-management-service.js'
 export * from './application/observer-publication-service.js'
@@ -19,3 +22,27 @@ export { BROWSER_REALTIME_EVENT_CHANNEL } from './application/browser-realtime-p
 export { OBSERVER_CONTROL_CHANNEL, observerInvalidation } from './application/observer-invalidation.js'
 export type { ObserverInvalidation } from './application/observer-invalidation.js'
 export type { BrowserRealtimeSink, BrowserRealtimeConnection, BrowserRealtimeSessions, BrowserRealtimePublication } from './application/browser-realtime-ports.js'
+
+export type { ExecutionPendingReader, ExecutionPendingContext, ExecutionPendingSnapshot } from './application/execution-pending-reader.js'
+export type { InstrumentSnapshot, InstrumentSnapshotReader, InstrumentRevisionReader } from './application/instrument-snapshot-reader.js'
+export { instrumentTradePermissions, type InstrumentTradePermissions } from './domain/instrument-trade-permissions.js'
+export type { InstrumentProjectionWrite, InstrumentProjectionWriter } from './application/instrument-projection-writer.js'
+export type { InstrumentCollectionRequester } from './application/instrument-collection-requester.js'
+export type { InstrumentCollectionTasks, InstrumentCollectionClaim, InstrumentCollectionClaimResult } from './application/instrument-collection-tasks.js'
+export type { InstrumentCollectionRecovery } from './application/instrument-collection-recovery.js'
+export type { TerminalFactRouteGuard, TerminalFactRoute } from './application/terminal-fact-route-guard.js'
+
+export type { ExecutionPositionReader, ExecutionPositionReadScope, ExecutionPositionSnapshot, ExecutionPositionCollectionReader, ExecutionPositionCollectionScope, ExecutionPositionCollection } from './application/execution-position-reader.js'
+
+export type { ExecutionAccountReader, ExecutionAccountScope, ExecutionAccountFacts } from './application/execution-account-reader.js'
+
+export type { ExecutionQuoteReader, ExecutionQuoteScope, ExecutionQuoteFacts } from './application/execution-quote-reader.js'
+
+export type { ExecutionInstrumentReader, ExecutionInstrumentScope, ExecutionInstrumentFacts } from './application/execution-instrument-reader.js'
+export type { HistoricalClockBoundaryReader, HistoricalClockBoundaryScope } from './application/historical-clock-reader.js'
+
+export { matchesMarketSymbol } from './domain/market-symbol.js'
+
+export { samePositionState } from './domain/position-state.js'
+
+export { samePendingOrderState } from './domain/pending-order-state.js'

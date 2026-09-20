@@ -1,0 +1,18 @@
+{
+  "kind": "strategy-subscription-data-transition/v1",
+  "mode": "--prepare",
+  "target": "dev_vue",
+  "passed": false,
+  "currentDevVueWrites": 0,
+  "runtimeEnabled": false,
+  "stage": "freeze_inputs",
+  "errorCode": "strategy_batch_options",
+  "reason": "strategy_batch_options",
+  "errorLocations": [
+    "    at requireBackfill (file:///D:/dev_codex/dev_vue/scripts/lib/v4-backfill-contract.mjs:6:74)",
+    "    at check (file:///D:/dev_codex/dev_vue/scripts/lib/frozen-source-batch.mjs:6:34)",
+    "    at createFrozenSourceBatch (file:///D:/dev_codex/dev_vue/scripts/lib/frozen-source-batch.mjs:9:3)",
+    "    at createStrategySourceBatch (file:///D:/dev_codex/dev_vue/scripts/lib/strategy-source-batch.mjs:7:10)"
+  ],
+  "observedAt": "2026-09-11T01:34:52.121Z"
+}

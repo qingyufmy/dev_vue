@@ -1,3 +1,4 @@
+import { assertFrozenMigrationPrefix } from './frozen-migration-prefix.mjs'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { loadMigrationPlan, sha256, splitSqlStatements } from './v4-migration-plan.mjs'
@@ -34,8 +35,7 @@ export async function loadSubscriptionBuild(root) {
     || reference.identity.uuid !== 'ac423207-6ef3-11f1-b302-000c29fda104'
     || JSON.stringify(reference.tables.map(row => row.name)) !== JSON.stringify(Object.keys(subscriptionBuildMapping).slice(0, 3))) throw new Error('inplace_subscription_reference_invalid')
   const migrations = await loadMigrationPlan({ rootDirectory: fileURLToPath(root) })
-  if (reference.migrations.length !== migrations.length || migrations.some(migration => !reference.migrations.some(row => row.id === migration.id
-    && row.status === 'completed' && row.checksum_sha256 === migration.checksum))) throw new Error('inplace_subscription_reference_history_changed')
+  assertFrozenMigrationPrefix(reference.migrations, migrations, Object.keys(subscriptionBuildMapping), 'inplace_subscription_reference_history_changed')
   const sql = splitSqlStatements(await readFile(new URL('server/db/migrations/inplace/007_subscription_build_tables.sql', root), 'utf8'))
   if (sql.length !== 3 || sql.some((statement, i) => statement !== subscriptionBuildDefinition(reference.tables[i].ddl))) throw new Error('inplace_subscription_sql_reference_mismatch')
   const strategy = await loadStrategyUpgrade(root)

@@ -1,0 +1,69 @@
+{
+  "kind": "history-collection-current-upgrade/v1",
+  "passed": false,
+  "mode": "--prepare",
+  "target": "dev_vue",
+  "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+  "businessWritesPerformed": false,
+  "ddlAttempted": 0,
+  "ddlAcknowledged": 0,
+  "rehearsalEvidenceHash": "47a012b45e7f8aacb652f37a0311761aafd6d005626f0e3bbfd3af6eda9e9ebf",
+  "planHash": "008893e1f6ed3b626449f30e79c5707b54324c8ea9d11b853bdf6db6727fe7a9",
+  "tools": [
+    {
+      "path": "scripts/apply-history-collection-upgrade-local.mjs",
+      "sha256": "2ea5c582408bb5b70ab2868dc89f45366fd6ff30f2831ac913f2c4c787d83a36"
+    },
+    {
+      "path": "scripts/run-history-collection-current-local.py",
+      "sha256": "8b7fb68b2577dd8a57e8520090928c5b381127a5092412df0937e0b37b8a9c19"
+    },
+    {
+      "path": "scripts/lib/history-collection-rehearsal-gate.mjs",
+      "sha256": "e87547da23a2d7e6a2b738ad74f3a5316c9d75588fab6f4ad3809c37701b56bb"
+    },
+    {
+      "path": "scripts/lib/history-collection-receipt-upgrade.mjs",
+      "sha256": "bb085ad0827c864aedc192c8ebaf436865b31d10b1d6eebc59d654b4dcf55dc6"
+    },
+    {
+      "path": "scripts/lib/history-runtime-coordinator.mjs",
+      "sha256": "3d7f67afbb17e65fceec4e4fe98d72acf1351b4bf08960164e04350faef20334"
+    },
+    {
+      "path": "scripts/lib/mysql-inplace-column-store.mjs",
+      "sha256": "c42cfe0811296007b6a9f7fb46270b44b4f22614e0948af499293d95ce1cdafc"
+    },
+    {
+      "path": "scripts/lib/dev-vue-column-upgrade.mjs",
+      "sha256": "b20ab4ba86a9b9b40ef9ea5ea559c812f3db8166db6b117c3bd94d49b40a41ac"
+    },
+    {
+      "path": "scripts/lib/mysql-account-root-snapshot.mjs",
+      "sha256": "af96d52b976a484e2b79ac7b079fe9e2a7e5a38e77df938f1d9a62c483481318"
+    },
+    {
+      "path": "scripts/lib/mysql-history-runtime-store.mjs",
+      "sha256": "0f37af093f609c691642517a03e06727cafa0c31c8c8cf8dbe8cdcd8b2d12ce8"
+    },
+    {
+      "path": "scripts/lib/inplace-foundation-upgrade.mjs",
+      "sha256": "9b024fc4ca674cc8ac5cec70754aeeb4c873cf6878d27b312e0876bf74a46f6d"
+    },
+    {
+      "path": "server/db/migrations/inplace/051_history_collection_receipts.sql",
+      "sha256": "bd41a044f29f305dcde3f51e1b623b346ca3fe064aa3ce334a4ec5ee2655b0fe"
+    }
+  ],
+  "restoredReceiptSha256": "3b29735c9d033a5695974e31b8a52222c1096709b61678401ce6b23a9215b6de",
+  "error": {
+    "code": "history_collection_current_failed",
+    "trace": [
+      "    at file:///D:/dev_codex/dev_vue/scripts/apply-history-collection-upgrade-local.mjs:89:14",
+      "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)",
+      "    at async withInplaceUpgradeLock (file:///D:/dev_codex/dev_vue/scripts/lib/mysql-inplace-column-store.mjs:58:12)",
+      "    at async file:///D:/dev_codex/dev_vue/scripts/apply-history-collection-upgrade-local.mjs:59:3"
+    ]
+  },
+  "observedAt": "2026-09-10T04:31:47.360Z"
+}

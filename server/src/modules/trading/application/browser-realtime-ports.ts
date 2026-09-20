@@ -8,6 +8,7 @@ export interface BrowserRealtimeSink {
 
 export interface BrowserRealtimeConnection {
   receive(message: unknown): Promise<void>
+  heartbeat?(): Promise<void>
   close(): void
 }
 

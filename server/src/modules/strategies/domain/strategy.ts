@@ -84,6 +84,7 @@ export interface StrategySubscription {
 
 export interface CreateStrategyInput {
   userId: number
+  idempotencyKey: string
   kind: StrategyKind
   name: string
   description: string
@@ -93,6 +94,7 @@ export interface CreateStrategyInput {
 
 export interface UpdateStrategyMetadataInput {
   userId: number
+  idempotencyKey: string
   strategyId: string
   expectedRevision: number
   name: string
@@ -100,15 +102,19 @@ export interface UpdateStrategyMetadataInput {
 }
 
 export interface CreateStrategyVersionInput {
+  name?: string
+  description?: string
+  status?: 'draft' | 'active'
+  idempotencyKey: string
   userId: number
   strategyId: string
   expectedRevision: number
   promptText: string
   config: Record<string, unknown>
-  compiled: StrategyCompileResult
 }
 
 export interface PublishStrategyVersionInput {
+  idempotencyKey: string
   userId: number
   strategyId: string
   versionId: string
@@ -116,38 +122,39 @@ export interface PublishStrategyVersionInput {
 }
 
 export interface RetireStrategyInput {
+  idempotencyKey: string
   userId: number
   strategyId: string
   expectedRevision: number
 }
 
 export interface CreateStrategySubscriptionInput {
+  receiveWindow?: Record<string, unknown>
+  idempotencyKey: string
   userId: number
   tradingAccountId: string
   standardSymbol: string
   analysisStrategyId: string
-  traderStrategyId: string | null
-  analysisEnabled: boolean
-  traderEnabled: boolean
-  tradeSendEnabled: boolean
-  status: StrategySubscriptionStatus
-  nextDueAt: string | null
+  traderStrategyId?: string | null
+  analysisEnabled?: boolean
+  traderEnabled?: boolean
+  tradeSendEnabled?: boolean
+  status?: StrategySubscriptionStatus
 }
 
 export interface UpdateStrategySubscriptionInput {
+  receiveWindow?: Record<string, unknown>
+  idempotencyKey: string
   userId: number
   subscriptionId: string
   expectedRevision: number
   standardSymbol?: string
   analysisStrategyId?: string
-  analysisStrategyVersionId?: string
   traderStrategyId?: string | null
-  traderStrategyVersionId?: string | null
   analysisEnabled?: boolean
   traderEnabled?: boolean
   tradeSendEnabled?: boolean
   status?: StrategySubscriptionStatus
-  nextDueAt: string | null
 }
 
 export class StrategyAccessError extends Error {

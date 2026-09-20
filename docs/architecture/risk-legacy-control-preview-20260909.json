@@ -1,0 +1,18 @@
+{
+  "kind": "risk-legacy-control-preview/v1",
+  "inspected": true,
+  "observedAt": "2026-09-09T01:16:30.996Z",
+  "identity": {
+    "db": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "timezone": "+00:00"
+  },
+  "sourceCount": 1,
+  "sourceSha256": "b30da55c2659905a9a4f834992d8440953a0aedd17fbec50d3c560d0d15013b7",
+  "targetCount": "0",
+  "mappingValid": true,
+  "insertCandidate": true,
+  "actorMapping": "preserved",
+  "writes": 0,
+  "scope": "Read-only mapping preview; reason and actor IDs not exported. Not a persisted archive, write approval or migration completion."
+}

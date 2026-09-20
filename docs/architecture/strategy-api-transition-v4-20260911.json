@@ -1,0 +1,33 @@
+{
+  "kind": "strategy-api-migrated-data/v1",
+  "passed": false,
+  "target": "dev_vue_m1_source_20260910_02",
+  "currentDevVueWrites": 0,
+  "realAuthenticationVerified": false,
+  "realCommitVerified": false,
+  "transactionMode": "outer-rollback-with-per-request-savepoints",
+  "checks": [
+    "migrated-role-details-and-original-version-hashes",
+    "deleted-roles-hidden",
+    "platform-strategies-read-only"
+  ],
+  "sqlFailure": {
+    "code": "ER_NO_SUCH_TABLE",
+    "sqlState": "42S02"
+  },
+  "failedRequest": {
+    "serial": 14,
+    "method": "PATCH",
+    "path": "/strategy-subscriptions/1",
+    "expected": 409,
+    "actual": 503,
+    "code": "strategy_unavailable"
+  },
+  "errorCode": "Error",
+  "errorLocations": [
+    "    at request (file:///D:/dev_codex/dev_vue/scripts/verify-strategy-api-transition-local.mjs:69:167)",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)",
+    "    at async file:///D:/dev_codex/dev_vue/scripts/verify-strategy-api-transition-local.mjs:96:9"
+  ],
+  "observedAt": "2026-09-11T01:49:14.608Z"
+}

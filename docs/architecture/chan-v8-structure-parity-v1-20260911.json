@@ -1,0 +1,30 @@
+{
+  "kind": "chan-v8-structure-parity/v1",
+  "passed": true,
+  "checks": 760,
+  "nonemptySegments": 54,
+  "nonemptyCenters": 120,
+  "resynced": 35,
+  "referenceSha256": "b945ae29ab5df61648d5d8da86af27835ef7874be60bc7f43aa441820780b796",
+  "pureRangeSha256": "33d9a87ecb43b901b03f8061b591053bd95c3e4ecbb88f02b3e42ab0f4ae902d",
+  "targetHashes": [
+    {
+      "path": "server/src/modules/market/domain/chan-v8/types.ts",
+      "sha256": "9b82e4a070d0a72225ff81770cd47ed1dca2a9aabd9bdad09d2c4fc078c5a7ba"
+    },
+    {
+      "path": "server/src/modules/market/domain/chan-v8/features.ts",
+      "sha256": "3d6672a1d0848305ab1abe09603f9f44c66db83a7280b8924addb6cdbbc0a7d8"
+    },
+    {
+      "path": "server/src/modules/market/domain/chan-v8/segments.ts",
+      "sha256": "1f08c53a5e1b5f2ee95c23873e5e44b484b360da6ca95c65daa06d81b3037706"
+    },
+    {
+      "path": "server/src/modules/market/domain/chan-v8/centers.ts",
+      "sha256": "c71bf3d3a7e09b0a7fde265acff878556551231bd1a43ec0fcaacb86f78710df"
+    }
+  ],
+  "scope": "synthetic feature/segment/center parity only; divergence and full v8 runtime not covered",
+  "observedAt": "2026-09-11T10:06:29.334Z"
+}

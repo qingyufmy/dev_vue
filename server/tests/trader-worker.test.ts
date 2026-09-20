@@ -1,16 +1,61 @@
+import { unavailableAccountPositionEntries } from '../src/modules/inference/application/account-position-entry-evidence.js'
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it, vi } from 'vitest'
 import {
-  InferenceError, InferenceService, ModelInvocationError, TraderContextBuilder, TraderWorker,
+  contentHash, InferenceError, InferenceService, ModelInvocationError, TraderContextBuilder, TraderWorker,
   type InferenceRepository, type MarketAnalysisDetail, type TraderDecisionResult, type TraderInputSnapshot, type TraderRun, type TraderWorkClaim,
 } from '../src/modules/inference/index.js'
-import { StrategyService, type StrategyCatalog, type StrategyVersion } from '../src/modules/strategies/index.js'
+import { StrategyService, compileStrategy, type StrategyCatalog, type StrategyVersion } from '../src/modules/strategies/index.js'
 import type { TradingReadRepository } from '../src/modules/trading/index.js'
 
 const strategy: StrategyVersion = {
   id: '21', strategyId: '20', kind: 'trader', version: 1, promptText: '账户级决策', promptHash: 'b'.repeat(64), config: {},
   inputContractVersion: 'account-trader-input/v1', outputContractVersion: 'trade-decision/v1',
 }
+
+it('validates the explicit strategy reference requirement during compilation', () => {
+  expect(compileStrategy('trader', '参考组合', { strategy_reference_portfolio: { version: 1, mode: 'required' } }).valid).toBe(true)
+  for (const value of [null, true, { version: 2, mode: 'required' }, { version: 1, mode: 'optional' }, { version: 1, mode: 'required', fallback: 'empty' }]) {
+    expect(compileStrategy('trader', '参考组合', { strategy_reference_portfolio: value }).issues)
+      .toEqual(expect.arrayContaining([expect.objectContaining({ code: 'strategy_reference_requirement_invalid' })]))
+  }
+})
+
+it('does not require observer configuration even for a legacy required reference setting', async () => {
+  const builder = new TraderContextBuilder(inferenceRepository({ getAnalysisDetail: async () => analysis }), tradingRepository(),
+    { read: async () => ({ revision: 6, data: {} }) }, { read: async () => ({ revision: 7, data: {} }) })
+  const snapshot = await builder.build(run(), { ...strategy, config: { strategy_reference_portfolio: { version: 1, mode: 'required' } } },
+    new Date('2026-09-03T08:00:10.000Z'))
+  expect(snapshot).not.toHaveProperty('strategyReferencePortfolio')
+  expect(snapshot.account).toBeDefined()
+})
+
+it.each([false, true])('requests missing instrument facts and defers before model invocation (commitUnknown=%s)', async commitUnknown => {
+  const base = run(), beginTrader = vi.fn(), failQueuedTrader = vi.fn(), decide = vi.fn()
+  const repo = inferenceRepository({ getTraderRun: async () => base, getAnalysisDetail: async () => analysis, beginTrader, failQueuedTrader })
+  const request = vi.fn(async () => {
+    if (commitUnknown) throw new Error('instrument_request_commit_unknown')
+    return { requestId: 'request-1', created: true }
+  })
+  const contexts = new TraderContextBuilder(repo, tradingRepository(), { read: async () => null },
+    { read: async () => ({ revision: 1, data: {} }) }, undefined, { request })
+  const strategies = new StrategyService(new Strategies())
+  const worker = new TraderWorker(repo, new InferenceService(repo, strategies), strategies, contexts,
+    { profileId: null, provider: 'test', model: 'trader', timeoutMs: 5000, maxAttempts: 1, decide },
+    'worker', { assertAllowed: async () => 'a'.repeat(64) })
+  expect(await worker.process(base.id, new Date('2026-09-03T08:00:10.000Z')))
+    .toEqual({ status: 'deferred', code: 'trader_contract_pending', retryAfterMs: 5000 })
+  expect(request).toHaveBeenCalledWith({ userId: 42, accountId: '7', symbol: 'XAUUSD' })
+  expect(beginTrader).not.toHaveBeenCalled(); expect(failQueuedTrader).not.toHaveBeenCalled(); expect(decide).not.toHaveBeenCalled()
+})
+
+it('does not keep requesting instrument facts after analysis expiry', async () => {
+  const request = vi.fn()
+  const builder = new TraderContextBuilder(inferenceRepository({ getAnalysisDetail: async () => analysis }), tradingRepository(),
+    { read: async () => null }, { read: async () => null }, undefined, { request })
+  await expect(builder.build(run(), strategy, new Date('2026-09-03T08:06:00.000Z'))).rejects.toMatchObject({ code: 'trader_analysis_expired' })
+  expect(request).not.toHaveBeenCalled()
+})
 const analysis: MarketAnalysisDetail = {
   summary: { id: 'analysis-1', userId: 42, strategyId: '10', strategyVersionId: '11', symbol: 'XAUUSD', marketBias: 'bullish', opportunity: 'long_setup', confidence: 78, summary: '偏多候选', analyzedAt: '2026-09-03T08:00:00.000Z', validUntil: '2026-09-03T08:05:00.000Z', inputSnapshotHash: 'a'.repeat(64), revision: 2 },
   result: { marketBias: 'bullish', opportunity: 'long_setup', confidence: 78, summary: '偏多候选', marketRegime: 'trend', supportingEvidence: ['结构'], counterEvidence: [], keyLevels: { support: '3520' }, invalidation: { price: '3510' }, dataGaps: [], analysisBody: '正文', analyzedAt: '2026-09-03T08:00:00.000Z', validUntil: '2026-09-03T08:05:00.000Z' },
@@ -53,6 +98,19 @@ function expected(snapshot: TraderInputSnapshot) {
 }
 
 describe('Stage 12C account Trader Worker', () => {
+  it('freezes memory under the trader strategy and queued user scope', async () => {
+    const repo = inferenceRepository({ async getAnalysisDetail() { return analysis } })
+    const read = vi.fn(async () => ({ state: 'absent' as const, strategyId: '20' }))
+    const builder = new TraderContextBuilder(repo, tradingRepository(), { async read() { return { revision: 6, data: {} } } },
+      { async read() { return { revision: 7, data: {} } } }, undefined, undefined, { read })
+    const snapshot = await builder.build(run(), strategy, new Date('2026-09-03T08:00:10.000Z'))
+    expect(read).toHaveBeenCalledWith({ userId: 42, strategyId: '20', strategyKind: 'trader' })
+    expect(snapshot.strategyMemory).toEqual({ schemaVersion: 1, state: 'absent', strategyId: '20' })
+    expect(snapshot.strategyConfigHash).toBe(contentHash(strategy.config))
+    const changed = await builder.build(run(), { ...strategy, config: { entry_methods: ['limit'] } }, new Date('2026-09-03T08:00:10.000Z'))
+    expect(changed.strategy.promptHash).toBe(snapshot.strategy.promptHash)
+    expect(changed.strategyConfigHash).not.toBe(snapshot.strategyConfigHash)
+  })
   it('binds every private projection to the queued task user, never an implicit current owner', async () => {
     const repo = inferenceRepository({ async getAnalysisDetail() { return analysis } })
     const trading = tradingRepository()
@@ -179,3 +237,104 @@ describe('Stage 12C account Trader Worker', () => {
     expect(repository).not.toMatch(/execution_intent|command\.request|Bridge/i)
   })
 })
+
+
+it('freezes the current account scope through the entry-evidence reader before model invocation', async () => {
+  const read = vi.fn(async (scope: Parameters<typeof unavailableAccountPositionEntries>[0]) => unavailableAccountPositionEntries(scope))
+  const builder = new TraderContextBuilder(inferenceRepository({ getAnalysisDetail: async () => analysis }), tradingRepository(),
+    { read: async () => ({ revision: 6, data: {} }) }, { read: async () => ({ revision: 7, data: {} }) },
+    undefined, undefined, undefined, { read })
+  const snapshot = await builder.build(run(), strategy, new Date('2026-09-03T08:00:10.000Z'))
+  expect(read).toHaveBeenCalledWith({ userId: 42, accountId: '7', positionsRevision: 12,
+    positions: [], asOf: '2026-09-03T08:00:10.000Z' })
+  expect(snapshot.accountPositionEntryEvidence).toMatchObject({ accountId: '7', positionsRevision: 12, items: [],
+    purpose: 'account_position_creation_analysis_only' })
+})
+
+
+it('uses events pinned to the original analysis input and refuses a different source snapshot', async () => {
+  const evidence = { M5: { state: 'ready', events: [{ id: 'event:' + 'a'.repeat(64), stillValid: true }] } }
+  const source = { analysisId: analysis.summary.id, strategyVersionId: analysis.summary.strategyVersionId,
+    sourceAccountId: '9', snapshotId: 'source-snapshot', snapshotHash: analysis.summary.inputSnapshotHash, priceActionEvents: evidence }
+  const build = () => new TraderContextBuilder(inferenceRepository({ getAnalysisDetail: async () => analysis }), tradingRepository(),
+    { read: async () => ({ revision: 6, data: {} }) }, { read: async () => ({ revision: 7, data: {} }) },
+    undefined, undefined, undefined, undefined, { read: async () => source })
+    .build(run(), strategy, new Date('2026-09-03T08:00:10.000Z'))
+  const snapshot = await build()
+  expect(snapshot.marketEntryEvents).toMatchObject({ analysisId: analysis.summary.id, sourceAccountId: '9', timeframes: evidence })
+  evidence.M5.events[0]!.id = 'changed'
+  expect(JSON.stringify(snapshot.marketEntryEvents)).toContain('event:' + 'a'.repeat(64))
+  source.snapshotHash = '0'.repeat(64)
+  await expect(build()).rejects.toMatchObject({ code: 'analysis_source_evidence_invalid' })
+})
+
+it('still requests missing instrument facts when the quote is also absent', async () => {
+  const request = vi.fn(async () => ({ requestId: 'instrument-request', created: true }))
+  const trading = tradingRepository()
+  trading.getQuote = async () => null
+  const builder = new TraderContextBuilder(inferenceRepository({ getAnalysisDetail: async () => analysis }), trading,
+    { read: async () => null }, { read: async () => null }, undefined, { request })
+  await expect(builder.build(run(), strategy, new Date('2026-09-03T08:00:10.000Z')))
+    .rejects.toMatchObject({ code: 'trader_contract_pending' })
+  expect(request).toHaveBeenCalledWith({ userId: 42, accountId: '7', symbol: 'XAUUSD' })
+})
+
+it('checks the quote revision using the resolved terminal symbol', async () => {
+  const trading = tradingRepository()
+  const getQuote = trading.getQuote.bind(trading)
+  trading.getQuote = async (...args) => ({ ...(await getQuote(...args))!, symbol: 'XAUUSD.s' })
+  const latestRevision = trading.latestRevision.bind(trading)
+  trading.latestRevision = vi.fn(async (accountId, kind, resourceId) => {
+    if (kind === 'market.quote' && resourceId !== 'XAUUSD.s') return 0
+    return latestRevision(accountId, kind, resourceId)
+  })
+  const builder = new TraderContextBuilder(inferenceRepository({ getAnalysisDetail: async () => analysis }), trading,
+    { read: async () => ({ revision: 6, data: {} }) }, { read: async () => ({ revision: 7, data: {} }) })
+  await builder.build(run(), strategy, new Date('2026-09-03T08:00:10.000Z'))
+  expect(trading.latestRevision).toHaveBeenCalledWith('7', 'market.quote', 'XAUUSD.s')
+})
+
+
+it.each(['XAUUSD.s', 'EURUSD.s'])('refreshes queued inventory and matches the standard symbol: %s', async symbol => {
+  const repo = inferenceRepository({ getAnalysisDetail: async () => analysis })
+  const trading = tradingRepository({ account: 8, quote: 9, positions: 20, pending: 21 })
+  trading.listPositions = async () => ({ revision: 20, items: [{ ticket: 'manual-1', accountId: '7', symbol,
+    side: 'buy', volume: '0.01', openPrice: '3500', currentPrice: '3530', stopLoss: null, takeProfit: null,
+    floatingProfit: '30', openedAt: '2026-09-03T08:00:05.000Z', source: 'manual', signalId: null, revision: 20 }] })
+  const builder = new TraderContextBuilder(repo, trading, { read: async () => ({ revision: 6, data: {} }) },
+    { read: async () => ({ revision: 7, data: {} }) })
+  const snapshot = await builder.build(run(), { ...strategy, config: { strategy_reference_portfolio: { version: 1, mode: 'required' } } }, new Date('2026-09-03T08:00:10.000Z'))
+  expect(snapshot).toMatchObject({ positionsRevision: 20, pendingOrdersRevision: 21,
+    taskMode: symbol.startsWith('XAUUSD') ? 'both' : 'entry' })
+  expect(snapshot.positions[0]).toMatchObject({ source: 'manual', symbol })
+})
+
+it('does not evaluate a closed portfolio without an opportunity after queueing', async () => {
+  const detail = { ...analysis, summary: { ...analysis.summary, opportunity: 'none' as const } }
+  const builder = new TraderContextBuilder(inferenceRepository({ getAnalysisDetail: async () => detail }),
+    tradingRepository({ account: 8, quote: 9, positions: 20, pending: 21 }),
+    { read: async () => ({ revision: 6, data: {} }) }, { read: async () => ({ revision: 7, data: {} }) })
+  await expect(builder.build(run({ taskMode: 'manage' }), strategy, new Date('2026-09-03T08:00:10.000Z')))
+    .rejects.toMatchObject({ code: 'trader_no_actionable_context' })
+})
+
+it.each(['trader_context_torn_read', 'trader_quote_revision_conflict', 'trader_risk_revision_conflict'])(
+  'defers preparation conflicts without losing the queued task: %s', async code => {
+    const failQueuedTrader = vi.fn(), decide = vi.fn()
+    const repo = inferenceRepository({ getTraderRun: async () => run(), getAnalysisDetail: async () => analysis,
+      failQueuedTrader, beginTrader: async () => { throw new InferenceError(code, 409) } })
+    const contexts = new TraderContextBuilder(repo, tradingRepository(),
+      { read: async () => ({ revision: 6, data: {} }) }, { read: async () => ({ revision: 7, data: {} }) })
+    if (code === 'trader_context_torn_read') vi.spyOn(contexts, 'build').mockRejectedValue(new InferenceError(code, 409))
+    const strategies = new StrategyService(new Strategies())
+    const worker = new TraderWorker(repo, new InferenceService(repo, strategies), strategies, contexts,
+      { profileId: null, provider: 'test', model: 'trader', timeoutMs: 5000, maxAttempts: 1, decide },
+      'worker', { assertAllowed: async () => 'a'.repeat(64) })
+    expect(await worker.process('trader-1', new Date('2026-09-03T08:00:10.000Z')))
+      .toEqual({ status: 'deferred', code, retryAfterMs: 1000 })
+    expect(decide).not.toHaveBeenCalled()
+    expect(failQueuedTrader).not.toHaveBeenCalled()
+    vi.restoreAllMocks()
+    expect(await worker.process('trader-1', new Date('2026-09-03T08:06:00.000Z')))
+      .toMatchObject({ status: 'failed', code: 'trader_analysis_expired' })
+  })

@@ -1,0 +1,24 @@
+{
+  "kind": "risk-restored-baseline/v1",
+  "passed": true,
+  "observedAt": "2026-09-08T22:59:51.058Z",
+  "sourceIdentity": {
+    "database": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "restoredIdentity": {
+    "database": "dev_vue_m1_source_20260909_01",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "sourceSnapshotHash": "2cee04a19332d4506f4da5d12cf3c453b397e74a6632bb201feb601d4190fa29",
+  "restoredSnapshotHash": "d2ed8cd1da097965ccabdfb55e2f0d35a83f8fdf4cf38b5753cad4c070e1652b",
+  "sourceHistoryHash": "19e32a55020147d714334f03cfe009bfb6c30f224c4942fd40761c1f7a340a0e",
+  "restoredHistoryHash": "19e32a55020147d714334f03cfe009bfb6c30f224c4942fd40761c1f7a340a0e",
+  "priorProofHash": "6bb6834b7d3e9e9e82bd4309771fa7d9dc851d64ccece2dfa357a9a2ae0e3829",
+  "registrySteps": 166,
+  "backupReceiptHash": "72fe4ba90dcdecedba90b1dd9f1ee86a9077f60f46121fdee64c703ac351db29",
+  "currentDevVueWrites": 0,
+  "restoredWrites": 0,
+  "riskTargetsAbsent": true,
+  "scope": "Current context verifier and recorded observer seed passed; restored data and schema match verified backup and identical 166-step history. No risk DDL applied."
+}

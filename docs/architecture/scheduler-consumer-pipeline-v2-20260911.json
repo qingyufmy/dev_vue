@@ -1,0 +1,59 @@
+{
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "syntheticPorts": [
+    "model-result"
+  ],
+  "omittedTraderContextPorts": [],
+  "remainingEvidenceLimits": [
+    "synthetic-analysis-input-and-model-response",
+    "synthetic-terminal-route-and-result",
+    "direct-dispatch-state-update",
+    "stub-http-authentication",
+    "empty-reference-inventory",
+    "absent-memory-library",
+    "analysis-worker-model-adapter-not-run"
+  ],
+  "foreignKeysVerified": false,
+  "checks": [
+    "actual-instrument-reader-requires-current-owner-binding-and-connection-epoch",
+    "actual-scheduler-creates-one-due-run-and-begin-analysis-persists-frozen-input",
+    "analysis-result-and-trader-task-commit-with-UTC-and-outbox",
+    "duplicate-completion-rejected",
+    "disabled-reference-channel-rejects-context-before-model-and-restoration-recovers",
+    "actual-reference-portfolio-freezes-authorized-analysis-source-and-confirmed-empty-inventory",
+    "actual-trader-context-freezes-account-provenance-instrument-preferences-and-memory-state",
+    "real-outbox-to-BullMQ-consumer-preserves-run-and-analysis-identity",
+    "replayed-publication-does-not-deliver-a-second-job",
+    "real-TraderWorker-commits-nonempty-decision-once",
+    "persisted-decision-published-to-real-risk-queue",
+    "real-risk-worker-approves-once-with-frozen-strategy-evidence",
+    "approved-risk-event-reaches-execution-queue",
+    "real-execution-preparation-persists-one-intent-reservation-and-operation",
+    "execution-preparation-replay-preserves-original-identity",
+    "production-intent-consumer-creates-command-and-releases-isolated-account-lease",
+    "competing-account-lease-blocks-command-without-releasing-another-owner",
+    "same-intent-creates-one-command-and-persists-simulated-result-before-ack",
+    "duplicate-result-and-wrong-user-do-not-repeat-effects",
+    "actual-operation-HTTP-contract-returns-success-and-denies-another-user",
+    "actual-scheduler-creates-one-due-run-and-begin-analysis-persists-frozen-input",
+    "real-revoked-ownership-excludes-trader-fanout"
+  ],
+  "scheduleFailures": [],
+  "traderResult": {
+    "status": "succeeded"
+  },
+  "riskResult": {
+    "status": "approved",
+    "rejectCode": null
+  },
+  "operationHttp": {
+    "status": 200
+  },
+  "referenceQueueRemoved": true,
+  "referenceRiskQueueRemoved": true,
+  "referenceExecutionQueueRemoved": true,
+  "referenceGatewayRouteRemoved": true,
+  "referenceLeaseRemoved": true,
+  "referenceDatabaseRemoved": true
+}

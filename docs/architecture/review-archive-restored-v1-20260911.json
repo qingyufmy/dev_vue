@@ -1,0 +1,17 @@
+{
+  "kind": "review-archive-schema-upgrade/v1",
+  "passed": true,
+  "target": "dev_vue_m1_source_20260910_02",
+  "planHash": "4d02f0ea823158f1df3aa8efc63e3e692d7b54b8f35c14497e269ba0199af611",
+  "ddlAttempted": 3,
+  "businessRowWrites": 0,
+  "ddlAckLossRecovered": true,
+  "replayNoDDL": true,
+  "oldDataUnchanged": true,
+  "oldChecksumsUnchanged": true,
+  "steps": 259,
+  "tableCount": 308,
+  "afterSnapshotHash": "8e7e988f0e7aa9c58e6a1533aec2f9c132fa659c2eb21bca18be48bbce7aed2a",
+  "backupReceiptSha256": "5c3901ad66471bc14618f285e0ce041091ed84639a9aee1d6b381843fb9aab9d",
+  "observedAt": "2026-09-11T03:29:44.861Z"
+}

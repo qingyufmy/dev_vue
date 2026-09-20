@@ -1,11 +1,14 @@
 param(
     [ValidateSet('Online', 'Offline')]
     [string]$Mode = 'Online',
-    [string]$OfflineRuntimePath = ''
+    [string]$OfflineRuntimePath = '',
+    [string]$ClientConfigPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $prototypeRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+if ([string]::IsNullOrWhiteSpace($ClientConfigPath)) { throw 'bridge_release_client_config_required' }
+& (Join-Path $prototypeRoot 'prepare-client-config.ps1') -ClientConfigPath $ClientConfigPath -Release | Out-Host
 $artifactsRoot = Join-Path $prototypeRoot 'artifacts'
 $stagingRoot = Join-Path $artifactsRoot 'installer-staging'
 $installerOutputRoot = Join-Path $artifactsRoot 'installer'
@@ -17,7 +20,7 @@ if (-not (Test-Path -LiteralPath $innoCompiler)) {
     throw "bridge_inno_compiler_missing: $innoCompiler"
 }
 
-& (Join-Path $prototypeRoot 'build.ps1') -Platform x86
+& (Join-Path $prototypeRoot 'build.ps1') -Platform x86 -ClientConfigPath $ClientConfigPath
 
 $resolvedPrototype = [IO.Path]::GetFullPath($prototypeRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
 $resolvedStaging = [IO.Path]::GetFullPath($stagingRoot).TrimEnd([IO.Path]::DirectorySeparatorChar)
@@ -36,7 +39,12 @@ Copy-Item -LiteralPath (Join-Path $artifactsRoot 'LiangjianBridge.AuthenticodeVe
 Copy-Item -LiteralPath (Join-Path $artifactsRoot 'LiangjianBridge.exe') -Destination (Join-Path $resolvedStaging "versions\$version")
 Copy-Item -LiteralPath (Join-Path $artifactsRoot 'LiangjianBridge.Core.dll') -Destination (Join-Path $resolvedStaging "versions\$version")
 Copy-Item -LiteralPath (Join-Path $artifactsRoot 'System.Data.SQLite.dll') -Destination (Join-Path $resolvedStaging "versions\$version")
+Copy-Item -LiteralPath (Join-Path $artifactsRoot 'bridge-client.json') -Destination (Join-Path $resolvedStaging "versions\$version")
 Copy-Item -LiteralPath (Join-Path $artifactsRoot 'x86\SQLite.Interop.dll') -Destination (Join-Path $resolvedStaging "versions\$version\x86")
+Copy-Item -LiteralPath (Join-Path $artifactsRoot 'runtime') -Destination (Join-Path $resolvedStaging "versions\$version\runtime") -Recurse
+Copy-Item -LiteralPath (Join-Path $artifactsRoot 'workers') -Destination (Join-Path $resolvedStaging "versions\$version\workers") -Recurse
+& (Join-Path $prototypeRoot 'prepare-mt4-adapter.ps1') -OutputRoot (Join-Path $artifactsRoot 'adapters\mt4') -VerifyOnly | Out-Host
+Copy-Item -LiteralPath (Join-Path $artifactsRoot 'adapters') -Destination (Join-Path $resolvedStaging "versions\$version\adapters") -Recurse
 Set-Content -LiteralPath (Join-Path $resolvedStaging 'versions\current.txt') -Value $version -Encoding ASCII
 New-Item -ItemType Directory -Path $installerOutputRoot -Force | Out-Null
 

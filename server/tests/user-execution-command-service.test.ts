@@ -1,3 +1,5 @@
+import { userCommandTargetVersion } from '../src/modules/execution/domain/user-command-target-version.js'
+import { UserExecutionCommandError } from '../src/modules/execution/domain/user-execution-command.js'
 import { describe, expect, it } from 'vitest'
 import { UserExecutionCommandService } from '../src/modules/execution/application/user-execution-command-service.js'
 import type {
@@ -324,9 +326,9 @@ describe('UserExecutionCommandService', () => {
     expect(permissionRepository.records).toHaveLength(0)
   })
 
-  it('rejects stale collection and exact resource revisions before persistence', async () => {
+  it('rejects changed contracts and exact resource revisions before persistence', async () => {
     const collectionRepository = new MemoryUserExecutionCommandRepository(makeContext({
-      currentRevisions: { ...currentRevisions, positions: currentRevisions.positions + 1 },
+      currentRevisions: { ...currentRevisions, contract: currentRevisions.contract + 1 },
     }))
     await expect(new UserExecutionCommandService(collectionRepository).execute(marketInput('stale-list-01'), now))
       .rejects.toMatchObject({ code: 'user_command_expected_state_stale', status: 409 })
@@ -351,6 +353,42 @@ describe('UserExecutionCommandService', () => {
     expect(result.reservations[0]?.reservedVolume).toBeCloseTo(0.01)
     expect(result.intent.riskReservationId).toBe(result.reservations[0]?.id)
     expect(repository.records).toHaveLength(1)
+  })
+
+  it('evaluates new orders against updated live data without changing confirmed parameters or replay identity', async () => {
+    const context = makeContext()
+    context.currentRevisions = { ...currentRevisions, account: 20, quote: 50, positions: 30, pendingOrders: 40, risk: 70 }
+    context.quote.revision = 50
+    context.summary.revision = 70
+    const repository = new MemoryUserExecutionCommandRepository(context)
+    const service = new UserExecutionCommandService(repository)
+    const input = marketInput('live-new-order')
+    const original = structuredClone(input)
+    const result = await service.execute(input, now)
+    expect(result.kind).toBe('prepared')
+    expect(repository.records[0]!.expected).toMatchObject({ accountRevision: 20, quoteRevision: 50, positionsRevision: 30, pendingOrdersRevision: 40, riskRevision: 70 })
+    expect(repository.records[0]!.command.parameters).toEqual(original.parameters)
+    expect(input).toEqual(original)
+    expect(await service.execute(input, now)).toEqual(result)
+    expect(repository.records).toHaveLength(1)
+  })
+
+  it('still rejects new orders when the current risk policy blocks entry after the form was opened', async () => {
+    const context = makeContext({ policy: makePolicy(true) })
+    context.currentRevisions = { ...currentRevisions, account: 20, risk: 70 }
+    context.summary.revision = 70
+    const repository = new MemoryUserExecutionCommandRepository(context)
+    const result = await new UserExecutionCommandService(repository).execute(marketInput('live-risk-block'), now)
+    expect(result.kind).toBe('rejected')
+    expect(repository.records).toHaveLength(1)
+  })
+
+  it('does not accept a future revision supplied by a new-order request', async () => {
+    const repository = new MemoryUserExecutionCommandRepository(makeContext())
+    const input = marketInput('future-new-order')
+    input.expected.quoteRevision += 1
+    await expect(new UserExecutionCommandService(repository).execute(input, now)).rejects.toMatchObject({ code: 'user_command_expected_state_stale' })
+    expect(repository.records).toHaveLength(0)
   })
 
   it('allows close, cancel, and a stop-loss tightening while the account kill switch is on', async () => {
@@ -403,4 +441,72 @@ describe('UserExecutionCommandService', () => {
     expect(result.intent.action.parameters.take_profit).toBe('2510')
     expect(repository.records).toHaveLength(1)
   })
+})
+
+it('submits protection changes after display updates with fresh risk and preserves idempotency', async () => {
+  const context = makeContext()
+  const request = tightenStopInput('semantic-protection-1')
+  request.expected.resourceRevision = userCommandTargetVersion(context.positions[0]!)
+  context.positions[0]!.revision = 20
+  context.positions[0]!.floatingProfit = '123'
+  context.positions[0]!.currentPrice = '2501'
+  context.currentRevisions.positions = 20
+  context.currentRevisions.account = 30
+  context.currentRevisions.quote = 40
+  context.quote.revision = 40
+  const repository = new MemoryUserExecutionCommandRepository(context)
+  const service = new UserExecutionCommandService(repository)
+  const result = await service.execute(request, now)
+  expect(repository.records[0]!.expected).toMatchObject({ positionsRevision: 20, accountRevision: 30, quoteRevision: 40, resourceRevision: 20 })
+  expect(await service.execute(request, now)).toEqual(result)
+  expect(repository.records).toHaveLength(1)
+})
+it.each([{ volume: '0.2' }, { stopLoss: '2491' }, { takeProfit: '2530' }])('rejects changed protected target %j', async change => {
+  const context = makeContext(), request = tightenStopInput('semantic-conflict-1')
+  request.expected.resourceRevision = userCommandTargetVersion(context.positions[0]!)
+  Object.assign(context.positions[0]!, change)
+  const repository = new MemoryUserExecutionCommandRepository(context)
+  await expect(new UserExecutionCommandService(repository).execute(request, now)).rejects.toMatchObject({ code: 'user_command_target_stale' })
+  expect(repository.records).toHaveLength(0)
+})
+it('bounds retry on rolled-back persistence conflict and does not retry unknown outcomes', async () => {
+  const repository = new MemoryUserExecutionCommandRepository(makeContext())
+  let calls = 0
+  repository.persistCommand = async () => { calls++; throw new UserExecutionCommandError('user_command_expected_state_stale', 409) }
+  await expect(new UserExecutionCommandService(repository).execute(tightenStopInput('bounded-1'), now)).rejects.toMatchObject({ code: 'user_command_expected_state_stale' })
+  expect(calls).toBe(3)
+  calls = 0
+  repository.persistCommand = async () => { calls++; throw new UserExecutionCommandError('user_command_commit_unknown', 503) }
+  await expect(new UserExecutionCommandService(repository).execute(tightenStopInput('unknown-1'), now)).rejects.toMatchObject({ code: 'user_command_commit_unknown' })
+  expect(calls).toBe(1)
+})
+
+it('keeps context read and persistence inside the same account transaction', async () => {
+  let locked = false
+  const scoped = new MemoryUserExecutionCommandRepository(makeContext())
+  const load = scoped.loadContext.bind(scoped), persist = scoped.persistCommand.bind(scoped)
+  scoped.loadContext = async input => { expect(locked).toBe(true); return load(input) }
+  scoped.persistCommand = async input => { expect(locked).toBe(true); return persist(input) }
+  const repository: UserExecutionCommandRepository = {
+    loadContext: async () => { throw Error('outside transaction') },
+    findByIdempotency: async () => { throw Error('outside transaction') },
+    persistCommand: async () => { throw Error('outside transaction') },
+    withAccountTransaction: async (scope, work) => {
+      expect(scope).toMatchObject({ userId: 7, accountId: '42' })
+      locked = true
+      try { return await work(scoped) } finally { locked = false }
+    },
+  }
+  await new UserExecutionCommandService(repository).execute(tightenStopInput('locked-01'), now)
+  expect(scoped.records).toHaveLength(1)
+  expect(locked).toBe(false)
+})
+
+it('omits inactive removal flags and absent protection prices from the executable action', async () => {
+  const repo = new MemoryUserExecutionCommandRepository(makeContext())
+  await new UserExecutionCommandService(repo).execute(tightenStopInput('protection-wire-1'), now)
+  expect(repo.records[0]!.action.parameters).toMatchObject({ ticket: '9001', stop_loss: '2495' })
+  expect(repo.records[0]!.action.parameters).not.toHaveProperty('remove_stop_loss')
+  expect(repo.records[0]!.action.parameters).not.toHaveProperty('remove_take_profit')
+  expect(repo.records[0]!.action.parameters).not.toHaveProperty('take_profit')
 })

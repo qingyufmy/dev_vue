@@ -1,4 +1,10 @@
+import { matchesMarketSymbol } from '../domain/market-symbol.js'
+import type { QuoteProvenanceWriter } from '../application/quote-provenance-writer.js'
+import type { ExecutionPendingContext, ExecutionPendingSnapshot } from '../application/execution-pending-reader.js'
+import type { InstrumentProjectionWrite } from '../application/instrument-projection-writer.js'
+import { normalizeInstrumentProjection } from '../domain/instrument-projection.js'
 import { resolveStoredAccountClock } from './mysql-account-clock.js'
+import { appendClockObservation } from './mysql-clock-observation-writer.js'
 import type { Pool, PoolConnection, RowDataPacket } from 'mysql2/promise'
 import type {
   BridgeExactTradeState, ConnectionCapacityRepository, TradingProjectionRepository, TradingProjectionWrite, TradingReadRepository,
@@ -146,6 +152,7 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
     private readonly gatewayLeases: AccountLiveRouteReader | null = null,
     observerAccessReader?: ObserverAccessReader,
     private readonly reservationAbsorber?: (connection: PoolConnection) => ProjectionReservationAbsorber,
+    private readonly quoteProvenance?: (connection: PoolConnection) => QuoteProvenanceWriter,
   ) { this.observerAccessReader = observerAccessReader ?? { async list() { throw new TradingAccessError('trading_context_invalid', 503) }, async authorize() { throw new TradingAccessError('trading_context_invalid', 503) } } }
 
   private readonly observerAccessReader: ObserverAccessReader
@@ -192,6 +199,38 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
     return this.observerAccessReader.list(userId)
   }
 
+  async getPublicDisplayClock(ownerIds: number[]) {
+    if (!ownerIds.length) return null
+    const [rows] = await this.pool.execute<(RowDataPacket & { accountId: string; ownerUserId: number })[]>(`
+      SELECT CAST(c.trading_account_id AS CHAR) accountId,c.user_id ownerUserId FROM terminal_clock_observations_v4 c
+      JOIN trading_account_ownerships o ON o.trading_account_id=c.trading_account_id AND o.user_id=c.user_id
+        AND o.interval_id=c.ownership_interval_id AND o.revision=c.ownership_revision AND o.role='owner' AND o.revoked_at_utc IS NULL
+      JOIN terminal_account_bindings b ON b.trading_account_id=c.trading_account_id AND b.terminal_profile_id=c.terminal_profile_id
+        AND b.terminal_instance_id=c.terminal_instance_id AND b.unbound_at_utc IS NULL
+      WHERE c.user_id IN (${ownerIds.map(() => '?').join(',')}) AND c.reported_status='calibrated'
+        AND c.effective_status='calibrated' AND c.reported_offset_minutes=c.effective_offset_minutes
+      ORDER BY c.observed_at_utc DESC LIMIT 1`, ownerIds)
+    if (!rows[0]) return null
+    const ownerUserId = Number(rows[0].ownerUserId)
+    const clock = await this.getDisplayClock(rows[0].accountId, ownerUserId)
+    return clock ? { ...clock, ownerUserId } : null
+  }
+  async getPublicSourceClock(ownerUserId: number, accountId: string) {
+    return this.getDisplayClock(accountId, ownerUserId)
+  }
+  async getDisplayClock(accountId: string, userId: number) {
+    const context = await this.currentProjectionContext(accountId, userId)
+    if (!context) return null
+    const [rows] = await this.pool.execute<(RowDataPacket & { reported_offset_minutes: number; observed_at_utc: Date })[]>(`
+      SELECT reported_offset_minutes,observed_at_utc FROM terminal_clock_observations_v4
+      WHERE trading_account_id=? AND user_id=? AND ownership_interval_id=? AND ownership_revision=?
+        AND terminal_profile_id=? AND terminal_instance_id=? AND reported_status='calibrated'
+        AND effective_status='calibrated' AND reported_offset_minutes=effective_offset_minutes
+      ORDER BY observed_at_utc DESC LIMIT 1`, [accountId, userId, context.intervalId, context.ownershipRevision, context.profileId, context.instanceId])
+    const current = await this.currentProjectionContext(accountId, userId)
+    if (!current || !sameProjectionContext(context, current) || !rows[0]) return null
+    return { offset: rows[0].reported_offset_minutes, checkedAt: utc(rows[0].observed_at_utc)! }
+  }
   async getAccountSnapshot(accountId: string, userId: number) {
     const context = await this.currentProjectionContext(accountId, userId)
     if (!context) return null
@@ -355,10 +394,25 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
   async listSymbols(accountId: string) {
     const [rows] = await this.pool.execute<(RowDataPacket & { symbol: string })[]>(`SELECT symbol FROM market_quotes WHERE trading_account_id=? UNION SELECT symbol FROM market_candles WHERE trading_account_id=? ORDER BY symbol`, [accountId, accountId]); return rows.map(row => row.symbol)
   }
-  async getQuote(accountId: string, symbol: string) { const [rows] = await this.pool.execute<QuoteRow[]>('SELECT CAST(trading_account_id AS CHAR) trading_account_id,symbol,bid,ask,last_price,spread,trade_mode,observed_at_utc,revision FROM market_quotes WHERE trading_account_id=? AND symbol=?', [accountId, symbol]); const row = rows[0]; return row ? { accountId: row.trading_account_id, symbol: row.symbol, bid: String(row.bid), ask: String(row.ask), last: row.last_price === null ? null : String(row.last_price), spread: String(row.spread), tradeMode: row.trade_mode, observedAt: utc(row.observed_at_utc)!, revision: Number(row.revision) } : null }
-  async listCandles(accountId: string, symbol: string, timeframe: Timeframe, limit: number) {
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new TradingAccessError('market_candle_limit_invalid', 422)
-    const [rows] = await this.pool.execute<CandleRow[]>(`SELECT * FROM (SELECT CAST(trading_account_id AS CHAR) trading_account_id,symbol,timeframe,open_time_utc,open_price,high_price,low_price,close_price,tick_volume,closed,revision FROM market_candles WHERE trading_account_id=? AND symbol=? AND timeframe=? ORDER BY open_time_utc DESC LIMIT ?) tail ORDER BY open_time_utc`, [accountId, symbol, timeframe, String(limit)])
+  async getQuote(accountId: string, symbol: string) { const [rows] = await this.pool.execute<QuoteRow[]>('SELECT CAST(trading_account_id AS CHAR) trading_account_id,symbol,bid,ask,last_price,spread,trade_mode,observed_at_utc,revision FROM market_quotes CROSS JOIN (SELECT ? standard_symbol) requested WHERE trading_account_id=? AND LEFT(UPPER(symbol),CHAR_LENGTH(requested.standard_symbol))=UPPER(requested.standard_symbol) LIMIT 2', [symbol, accountId]); if (rows.length > 1) throw new Error('market_symbol_ambiguous'); const row = rows[0]; return row ? { accountId: row.trading_account_id, symbol: row.symbol, bid: String(row.bid), ask: String(row.ask), last: row.last_price === null ? null : String(row.last_price), spread: String(row.spread), tradeMode: row.trade_mode, observedAt: utc(row.observed_at_utc)!, revision: Number(row.revision) } : null }
+  async findPublicCachedSource(ownerIds: number[], symbol: string, timeframe: Timeframe) {
+    if (!ownerIds.length) return null
+    const [rows] = await this.pool.execute<(RowDataPacket & { accountId: string; ownerUserId: number; resolvedSymbol: string; platform: 'mt4' | 'mt5' })[]>(`
+      SELECT CAST(c.trading_account_id AS CHAR) accountId, o.user_id ownerUserId, c.symbol resolvedSymbol, a.platform
+      FROM market_candles c
+      JOIN trading_accounts a ON a.id=c.trading_account_id AND a.deleted_at_utc IS NULL
+      JOIN trading_account_ownerships o ON o.trading_account_id=a.id AND o.role='owner' AND o.revoked_at_utc IS NULL AND o.revision=a.ownership_revision
+      JOIN trading_account_ownership_intervals oi ON oi.id=o.interval_id AND oi.user_id=o.user_id AND oi.trading_account_id=a.id AND oi.ended_at_utc IS NULL
+      WHERE o.user_id IN (${ownerIds.map(() => '?').join(',')}) AND LEFT(UPPER(c.symbol),CHAR_LENGTH(?))=? AND c.timeframe=?
+      GROUP BY c.trading_account_id,o.user_id,c.symbol
+      ORDER BY MAX(c.open_time_utc) DESC,c.trading_account_id,c.symbol LIMIT 1`, [...ownerIds, symbol, symbol, timeframe])
+    return rows[0] ? { accountId: rows[0].accountId, ownerUserId: Number(rows[0].ownerUserId), resolvedSymbol: rows[0].resolvedSymbol, platform: rows[0].platform } : null
+  }
+
+  async listCandles(accountId: string, symbol: string, timeframe: Timeframe, limit: number, before?: string) {
+    // Internal calculation windows may exceed the independently capped browser/model window.
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 2000) throw new TradingAccessError('market_candle_limit_invalid', 422)
+    const [rows] = await this.pool.execute<CandleRow[]>(`SELECT * FROM (SELECT CAST(trading_account_id AS CHAR) trading_account_id,symbol,timeframe,open_time_utc,open_price,high_price,low_price,close_price,tick_volume,closed,revision FROM market_candles WHERE trading_account_id=? AND symbol=? AND timeframe=? ${before ? 'AND open_time_utc < ?' : ''} ORDER BY open_time_utc DESC LIMIT ?) tail ORDER BY open_time_utc`, [accountId, symbol, timeframe, ...(before ? [new Date(before)] : []), String(limit)])
     return rows.map(row => ({ accountId: row.trading_account_id, symbol: row.symbol, timeframe: row.timeframe, openTime: utc(row.open_time_utc)!, open: String(row.open_price), high: String(row.high_price), low: String(row.low_price), close: String(row.close_price), tickVolume: String(row.tick_volume), closed: Boolean(row.closed), revision: Number(row.revision) }))
   }
   async listPositions(accountId: string, userId: number) {
@@ -368,6 +422,10 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
     return this.listPrivateCollection<PendingOrder>(accountId, userId, 'pending_orders', 'pending_order_snapshots')
   }
   async latestRevision(accountId: string, resource: RealtimeResource, resourceId: string) { const [rows] = await this.pool.execute<RevisionRow[]>('SELECT revision FROM trading_projection_revisions WHERE trading_account_id=? AND resource_kind=? AND resource_id=?', [accountId, resource, resourceId]); return Number(rows[0]?.revision ?? 0) }
+  async getIncludedCapacity(userId: number) {
+    const [rows] = await this.pool.execute<CapacityRow[]>("SELECT CASE WHEN plan='pro' AND (plan_expires_at IS NULL OR plan_expires_at>UTC_TIMESTAMP(3)) THEN 1 ELSE 0 END quantity FROM users WHERE id=? AND deletion_status='active' AND deleted_at IS NULL", [userId])
+    return Number(rows[0]?.quantity ?? 0)
+  }
   async getPurchasedCapacity(userId: number) { const [rows] = await this.pool.execute<CapacityRow[]>(`SELECT COALESCE(SUM(quantity),0) quantity FROM bridge_connection_capacity_grants WHERE user_id=? AND revoked_at_utc IS NULL AND starts_at_utc<=UTC_TIMESTAMP(3) AND (expires_at_utc IS NULL OR expires_at_utc>UTC_TIMESTAMP(3))`, [userId]); return Number(rows[0]?.quantity ?? 0) }
 
   async applyProjection(input: TradingProjectionWrite) {
@@ -380,79 +438,17 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
   async applyTrustedProjection(input: TrustedBridgeProjectionWrite) {
     return transaction(this.pool, async connection => {
       const route = input.route
-      // A connection id identifies a production gateway route.  Its frozen
-      // device/ownership proof is mandatory there; the id-less path remains
-      // for the in-process projector used by legacy/offline callers.
-      const gatewayRoute = route.connectionId !== undefined
-      let gatewayProof: {
-        connectionId: string
-        installationId: string
-        credentialGeneration: number
-        ownershipRevision: string
-      } | null = null
-      if (gatewayRoute) {
-        const { connectionId, installationId, credentialGeneration, ownershipRevision } = route
-        if (typeof connectionId !== 'string' || connectionId.length === 0 || typeof installationId !== 'string' || installationId.length === 0
-          || typeof ownershipRevision !== 'string' || !/^[1-9][0-9]*$/.test(ownershipRevision)) {
-          throw new TradingAccessError('trading_context_invalid', 403)
-        }
-        if (typeof credentialGeneration !== 'number' || !Number.isSafeInteger(credentialGeneration) || credentialGeneration <= 0) {
-          throw new TradingAccessError('trading_context_invalid', 403)
-        }
-        gatewayProof = { connectionId, installationId, credentialGeneration, ownershipRevision }
-      }
-      const [accounts] = await connection.execute<RowDataPacket[]>('SELECT id FROM trading_accounts WHERE id=? AND deleted_at_utc IS NULL FOR UPDATE', [route.accountId])
-      if (accounts.length !== 1 || input.projection.accountId !== route.accountId) throw new TradingAccessError('trading_context_invalid', 403)
-      const [owners] = await connection.execute<OwnershipProofRow[]>(`SELECT o.interval_id,a.ownership_revision
-        FROM trading_accounts a
-        INNER JOIN trading_account_ownerships o ON o.trading_account_id=a.id AND o.user_id=?
-          AND o.role='owner' AND o.revoked_at_utc IS NULL
-        INNER JOIN trading_account_ownership_intervals oi ON oi.id=o.interval_id AND oi.user_id=o.user_id
-          AND oi.trading_account_id=o.trading_account_id AND oi.role='owner' AND oi.ended_at_utc IS NULL
-          AND oi.started_at_utc=o.granted_at_utc AND oi.started_at_utc<=UTC_TIMESTAMP(3)
-        INNER JOIN users u ON u.id=o.user_id AND u.deletion_status='active' AND u.deleted_at IS NULL
-        WHERE a.id=? AND o.revision=a.ownership_revision
-        FOR UPDATE`, [route.userId, route.accountId])
-      if (gatewayProof && (owners.length !== 1 || String(owners[0]!.ownership_revision) !== gatewayProof.ownershipRevision)) {
-        throw new TradingAccessError('trading_context_invalid', 403)
-      }
-      if (gatewayProof) {
-        const [credentials] = await connection.execute<CredentialProofRow[]>(`SELECT s.id
-          FROM bridge_refresh_sessions s
-          INNER JOIN users u ON u.id=s.user_id
-          INNER JOIN terminal_profiles p ON p.id=s.profile_id AND p.user_id=s.user_id
-            AND p.installation_id=? AND p.deleted_at_utc IS NULL
-          WHERE s.user_id=? AND s.installation_id=? AND s.profile_id=? AND s.generation=?
-            AND s.credential_version=4 AND s.revoked_at IS NULL
-            AND u.deletion_status='active' AND u.deleted_at IS NULL
-            AND (u.role='admin' OR (u.plan='pro' AND (u.plan_expires_at IS NULL OR u.plan_expires_at>UTC_TIMESTAMP(3))))
-          FOR UPDATE`, [gatewayProof.installationId, route.userId, gatewayProof.installationId, route.terminalProfileId, gatewayProof.credentialGeneration])
-        if (credentials.length !== 1) throw new TradingAccessError('trading_context_invalid', 403)
-      }
-      const [bindings] = await connection.execute<RowDataPacket[]>(`SELECT b.terminal_profile_id
-        FROM terminal_account_bindings b
-        INNER JOIN terminal_profiles p ON p.id=b.terminal_profile_id AND p.user_id=?
-          AND p.id=? AND p.platform=(SELECT platform FROM trading_accounts WHERE id=?) AND p.deleted_at_utc IS NULL
-        WHERE b.trading_account_id=? AND b.terminal_instance_id=? AND b.unbound_at_utc IS NULL
-        FOR UPDATE`, [route.userId, route.terminalProfileId, route.accountId, route.accountId, route.terminalInstanceId])
-      const [sessions] = await connection.execute<RowDataPacket[]>(`SELECT s.id
-        FROM bridge_connection_sessions s
-        INNER JOIN trading_accounts a ON a.id=s.trading_account_id AND a.deleted_at_utc IS NULL
-        WHERE s.user_id=? AND s.trading_account_id=? AND s.terminal_profile_id=? AND s.terminal_instance_id=?
-          AND s.connection_epoch_v4=? AND s.disconnected_at_utc IS NULL
-          ${gatewayProof ? 'AND s.connection_epoch=?' : ''}
-        FOR UPDATE`, gatewayProof ? [
-          route.userId, route.accountId, route.terminalProfileId, route.terminalInstanceId,
-          route.connectionEpoch, `v4:${gatewayProof.connectionId}`,
-        ] : [route.userId, route.accountId, route.terminalProfileId, route.terminalInstanceId, route.connectionEpoch])
-      if (owners.length !== 1 || bindings.length !== 1 || sessions.length !== 1) throw new TradingAccessError('trading_context_invalid', 403)
-      const ownership = { intervalId: owners[0]!.interval_id, ownershipRevision: String(owners[0]!.ownership_revision) }
+      const ownership = await lockTrustedProjectionRoute(connection, route, input.projection.accountId)
       if (!await lockProjectionRevision(connection, input.projection)) return { applied: false, absorbedReservationIds: [] }
       const clock = await resolveStoredAccountClock(connection, input, ownership)
       const projection = input.projection.resource === 'account.metrics' && clock
         ? { ...input.projection, data: { ...input.projection.data, ...clock } } : input.projection
       await writeLockedProjection(connection, projection)
       await writeProjectionProvenance(connection, input, ownership)
+      if (clock) await appendClockObservation(connection, input, ownership, clock)
+      if (input.projection.resource === 'market.quote' && this.quoteProvenance) {
+        await this.quoteProvenance(connection).write({route,projection:input.projection,ownership})
+      }
       if (input.projection.resource !== 'positions' && input.projection.resource !== 'pending_orders') {
         return { applied: true, absorbedReservationIds: [], ...(clock ? { clock } : {}) }
       }
@@ -470,10 +466,140 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
   }
 }
 
+export async function assertTerminalFactRoute(connection: PoolConnection, route: import('../application/terminal-fact-route-guard.js').TerminalFactRoute) {
+  const frozen = structuredClone(route)
+  if (!frozen.connectionId) throw new TradingAccessError('trading_context_invalid', 403)
+  await lockTrustedProjectionRoute(connection, frozen, frozen.accountId)
+  const [rows] = await connection.execute<RowDataPacket[]>(`SELECT id FROM trading_accounts
+    WHERE id=? AND platform=? AND BINARY broker_server=BINARY ? AND BINARY account_login=BINARY ? FOR SHARE`,
+  [frozen.accountId, frozen.platform, frozen.brokerServer, frozen.login])
+  if (rows.length !== 1) throw new TradingAccessError('trading_context_invalid', 403)
+}
+
+async function lockTrustedProjectionRoute(connection: PoolConnection, route: TrustedBridgeProjectionWrite['route'], projectionAccountId: string) {
+  // A connection id identifies a production gateway route.  Its frozen
+  // device/ownership proof is mandatory there; the id-less path remains
+  // for the in-process projector used by legacy/offline callers.
+  const gatewayRoute = route.connectionId !== undefined
+  let gatewayProof: {
+    connectionId: string
+    installationId: string
+    credentialGeneration: number
+    ownershipRevision: string
+  } | null = null
+  if (gatewayRoute) {
+    const { connectionId, installationId, credentialGeneration, ownershipRevision } = route
+    if (typeof connectionId !== 'string' || connectionId.length === 0 || typeof installationId !== 'string' || installationId.length === 0
+      || typeof ownershipRevision !== 'string' || !/^[1-9][0-9]*$/.test(ownershipRevision)) {
+      throw new TradingAccessError('trading_context_invalid', 403)
+    }
+    if (typeof credentialGeneration !== 'number' || !Number.isSafeInteger(credentialGeneration) || credentialGeneration <= 0) {
+      throw new TradingAccessError('trading_context_invalid', 403)
+    }
+    gatewayProof = { connectionId, installationId, credentialGeneration, ownershipRevision }
+  }
+  const [accounts] = await connection.execute<RowDataPacket[]>('SELECT id FROM trading_accounts WHERE id=? AND deleted_at_utc IS NULL FOR UPDATE', [route.accountId])
+  if (accounts.length !== 1 || projectionAccountId !== route.accountId) throw new TradingAccessError('trading_context_invalid', 403)
+  const [owners] = await connection.execute<OwnershipProofRow[]>(`SELECT o.interval_id,a.ownership_revision
+    FROM trading_accounts a
+    INNER JOIN trading_account_ownerships o ON o.trading_account_id=a.id AND o.user_id=?
+      AND o.role='owner' AND o.revoked_at_utc IS NULL
+    INNER JOIN trading_account_ownership_intervals oi ON oi.id=o.interval_id AND oi.user_id=o.user_id
+      AND oi.trading_account_id=o.trading_account_id AND oi.role='owner' AND oi.ended_at_utc IS NULL
+      AND oi.started_at_utc=o.granted_at_utc AND oi.started_at_utc<=UTC_TIMESTAMP(3)
+    INNER JOIN users u ON u.id=o.user_id AND u.deletion_status='active' AND u.deleted_at IS NULL
+    WHERE a.id=? AND o.revision=a.ownership_revision
+    FOR UPDATE`, [route.userId, route.accountId])
+  if (gatewayProof && (owners.length !== 1 || String(owners[0]!.ownership_revision) !== gatewayProof.ownershipRevision)) {
+    throw new TradingAccessError('trading_context_invalid', 403)
+  }
+  if (gatewayProof) {
+    const [credentials] = await connection.execute<CredentialProofRow[]>(`SELECT s.id
+      FROM bridge_refresh_sessions s
+      INNER JOIN users u ON u.id=s.user_id
+      INNER JOIN terminal_profiles p ON p.id=s.profile_id AND p.user_id=s.user_id
+        AND p.installation_id=? AND p.deleted_at_utc IS NULL
+      WHERE s.user_id=? AND s.installation_id=? AND s.profile_id=? AND s.generation=?
+        AND s.credential_version=4 AND s.revoked_at IS NULL
+        AND u.deletion_status='active' AND u.deleted_at IS NULL
+        AND (u.role='admin' OR (u.plan='pro' AND (u.plan_expires_at IS NULL OR u.plan_expires_at>UTC_TIMESTAMP(3))))
+      FOR UPDATE`, [gatewayProof.installationId, route.userId, gatewayProof.installationId, route.terminalProfileId, gatewayProof.credentialGeneration])
+    if (credentials.length !== 1) throw new TradingAccessError('trading_context_invalid', 403)
+  }
+  const [bindings] = await connection.execute<RowDataPacket[]>(`SELECT b.terminal_profile_id
+    FROM terminal_account_bindings b
+    INNER JOIN terminal_profiles p ON p.id=b.terminal_profile_id AND p.user_id=?
+      AND p.id=? AND p.platform=(SELECT platform FROM trading_accounts WHERE id=?) AND p.deleted_at_utc IS NULL
+    WHERE b.trading_account_id=? AND b.terminal_instance_id=? AND b.unbound_at_utc IS NULL
+    FOR UPDATE`, [route.userId, route.terminalProfileId, route.accountId, route.accountId, route.terminalInstanceId])
+  const [sessions] = await connection.execute<RowDataPacket[]>(`SELECT s.id
+    FROM bridge_connection_sessions s
+    INNER JOIN trading_accounts a ON a.id=s.trading_account_id AND a.deleted_at_utc IS NULL
+    WHERE s.user_id=? AND s.trading_account_id=? AND s.terminal_profile_id=? AND s.terminal_instance_id=?
+      AND s.connection_epoch_v4=? AND s.disconnected_at_utc IS NULL
+      ${gatewayProof ? 'AND s.connection_epoch=?' : ''}
+    FOR UPDATE`, gatewayProof ? [
+      route.userId, route.accountId, route.terminalProfileId, route.terminalInstanceId,
+      route.connectionEpoch, `v4:${gatewayProof.connectionId}`,
+    ] : [route.userId, route.accountId, route.terminalProfileId, route.terminalInstanceId, route.connectionEpoch])
+  if (owners.length !== 1 || bindings.length !== 1 || sessions.length !== 1) throw new TradingAccessError('trading_context_invalid', 403)
+  return { intervalId: owners[0]!.interval_id, ownershipRevision: String(owners[0]!.ownership_revision) }
+}
+
 function projectionTime(value: string): Date {
   const result = new Date(value)
   if (!Number.isFinite(result.getTime())) throw new TradingAccessError('trading_context_invalid', 400)
   return result
+}
+
+export async function writeInstrumentProjection(pool: Pool, input: InstrumentProjectionWrite) {
+  const frozen = structuredClone(input)
+  if (frozen.requestedSymbol !== undefined && !matchesMarketSymbol(frozen.symbol, frozen.requestedSymbol)) throw new Error('instrument_projection_invalid')
+  const normalized = normalizeInstrumentProjection(frozen.raw, frozen.symbol)
+  const observed = Date.parse(frozen.observedAt)
+  if (!Number.isFinite(observed) || new Date(observed).toISOString() !== frozen.observedAt
+    || !Number.isSafeInteger(frozen.expectedRevision) || frozen.expectedRevision < 0
+    || typeof frozen.sourceRevision !== 'string' || frozen.sourceRevision.length < 1 || frozen.sourceRevision.length > 191
+    || !frozen.route.connectionId || !frozen.route.installationId || !frozen.route.ownershipRevision) {
+    throw new Error('instrument_projection_invalid')
+  }
+  const evidence = { userId: frozen.route.userId, terminalInstanceId: frozen.route.terminalInstanceId,
+    terminalProfileId: frozen.route.terminalProfileId, connectionEpoch: frozen.route.connectionEpoch,
+    ownershipRevision: frozen.route.ownershipRevision, sourceRevision: frozen.sourceRevision, observedAt: frozen.observedAt }
+  const payload = { ...normalized, sourceEvidence: evidence, raw: frozen.raw }
+  const hash = sha256Canonical(payload)
+  return transaction(pool, async connection => {
+    await lockTrustedProjectionRoute(connection, frozen.route, frozen.route.accountId)
+    const [accounts] = await connection.execute<RowDataPacket[]>('SELECT broker_server,account_login FROM trading_accounts WHERE id=? FOR UPDATE', [frozen.route.accountId])
+    if (accounts.length !== 1 || accounts[0]!.broker_server !== frozen.route.brokerServer || accounts[0]!.account_login !== frozen.route.login) {
+      throw new TradingAccessError('trading_context_invalid', 403)
+    }
+    const assertCollectionLease = async () => {
+      if (!frozen.collectionLease) return
+      const [leases] = await connection.execute<RowDataPacket[]>(`SELECT id FROM instrument_collection_requests_v4
+        WHERE id=? AND user_id=? AND trading_account_id=? AND BINARY symbol=BINARY ?
+          AND status='running' AND lease_token=? AND lease_expires_at_utc>UTC_TIMESTAMP(3) FOR UPDATE`,
+      [frozen.collectionLease.requestId, frozen.route.userId, frozen.route.accountId, frozen.requestedSymbol ?? frozen.symbol, frozen.collectionLease.leaseToken])
+      if (leases.length !== 1) throw new Error('instrument_collection_lease_lost')
+    }
+    // Lock order: account/authorization, request, instrument. Claim/complete only lock the request.
+    await assertCollectionLease()
+    const [rows] = await connection.execute<(RowDataPacket & { payload_json: string | object; revision: number; observed_at_utc: Date })[]>(
+      'SELECT payload_json,revision,observed_at_utc FROM market_instrument_snapshots WHERE trading_account_id=? AND symbol=? FOR UPDATE',
+      [frozen.route.accountId, frozen.symbol])
+    const current = rows[0], revision = Number(current?.revision ?? 0)
+    if (!Number.isSafeInteger(revision) || revision < 0 || revision >= Number.MAX_SAFE_INTEGER) throw new Error('instrument_projection_revision_invalid')
+    if (current && sha256Canonical(parsePayload(current.payload_json)) === hash) return { applied: false, revision }
+    if (revision !== frozen.expectedRevision) throw new TradingAccessError('revision_conflict', 409)
+    if (current && observed <= new Date(current.observed_at_utc).getTime()) throw new Error('instrument_projection_observation_stale')
+    if (observed > Date.now()) throw new Error('instrument_projection_observation_future')
+    await connection.execute(`INSERT INTO market_instrument_snapshots
+      (trading_account_id,symbol,payload_json,observed_at_utc,revision) VALUES (?,?,?,?,?)
+      ON DUPLICATE KEY UPDATE payload_json=VALUES(payload_json),observed_at_utc=VALUES(observed_at_utc),revision=VALUES(revision)`,
+    [frozen.route.accountId, frozen.symbol, JSON.stringify(payload), new Date(observed), revision + 1])
+    await assertCollectionLease()
+    return { applied: true, revision: revision + 1 }
+  })
 }
 
 function parsePayload<T>(value: string | object): T { return (typeof value === 'string' ? JSON.parse(value) : value) as T }
@@ -570,4 +696,44 @@ async function replaceExactTradeStates(connection: PoolConnection, accountId: st
       accountId, entityKind, state.ticket, terminalInstanceId, connectionEpoch, revision, stateJson, sha256Canonical(state), projectionTime(observedAt),
     ])
   }
+}
+
+
+/** Account lock and collection locks stay on the execution caller's transaction. */
+export async function readExecutionPendingSnapshot(connection: PoolConnection, input: ExecutionPendingContext): Promise<ExecutionPendingSnapshot | null> {
+  const [locked] = await connection.execute<RowDataPacket[]>('SELECT id FROM trading_accounts WHERE id=? AND deleted_at_utc IS NULL FOR SHARE', [input.accountId])
+  if (locked.length !== 1) return null
+  const [accounts] = await connection.execute<AccountRow[]>(currentAccountSelect(true, true), [input.userId, input.accountId])
+  const row = accounts.length === 1 ? accounts[0]! : null
+  if (!row || row.owner_user_id === null || row.ownership_interval_id === null || row.ownership_revision === null
+    || row.profile_id === null || row.terminal_instance_id === null) return null
+  const context: CurrentProjectionContext = { row, userId: row.owner_user_id, intervalId: row.ownership_interval_id,
+    ownershipRevision: String(row.ownership_revision), profileId: row.profile_id, instanceId: row.terminal_instance_id }
+  if (context.userId !== input.userId || context.ownershipRevision !== input.ownershipRevision || context.instanceId !== input.terminalInstanceId
+    || row.broker_server !== input.brokerServer || row.account_login !== input.login) return null
+  const [sources] = await connection.execute<(ProjectionSourceRow & { observed_at: string })[]>(`SELECT ${projectionSourceFields()},
+    DATE_FORMAT(pp.observed_at_utc,'%Y-%m-%dT%H:%i:%s.%fZ') observed_at
+    FROM trading_projection_revisions pr INNER JOIN trading_projection_provenance_v4 pp
+      ON pp.trading_account_id=pr.trading_account_id AND pp.resource_kind=pr.resource_kind AND pp.resource_id=pr.resource_id
+    WHERE pr.trading_account_id=? AND pr.resource_kind='pending_orders' AND pr.resource_id='open' FOR SHARE`, [input.accountId])
+  const source = sources.length === 1 ? sources[0]! : null
+  if (!source || !projectionSourceMatches(source, context) || String(source.source_connection_epoch) !== input.connectionEpoch) return null
+  const [sessions] = await connection.execute<RowDataPacket[]>(`SELECT id FROM bridge_connection_sessions
+    WHERE user_id=? AND trading_account_id=? AND terminal_profile_id=? AND terminal_instance_id=?
+      AND connection_epoch_v4=? AND disconnected_at_utc IS NULL FOR SHARE`,
+  [input.userId, input.accountId, context.profileId, input.terminalInstanceId, input.connectionEpoch])
+  if (sessions.length !== 1) return null
+  // Do not filter away old revision rows: mixed replacement data is incomplete.
+  const [rows] = await connection.execute<ProjectionPayloadRow[]>('SELECT payload_json,revision FROM pending_order_snapshots WHERE trading_account_id=? ORDER BY ticket FOR SHARE', [input.accountId])
+  const revision = Number(source.revision), items: PendingOrder[] = []
+  for (const item of rows) {
+    if (Number(item.revision) !== revision) return null
+    let parsed: PendingOrder
+    try { parsed = parsePayload<PendingOrder>(item.payload_json) } catch { return null }
+    if (!parsed || parsed.accountId !== input.accountId || Number(parsed.revision) !== revision || !parsed.ticket) return null
+    items.push(parsed)
+  }
+  const observed = source.observed_at
+  if (typeof observed !== 'string' || !/\.\d{3}000Z$/.test(observed)) return null
+  return { ...input, revision: String(source.revision), observedAt: observed.replace(/(\.\d{3})000Z$/, '$1Z'), complete: true, items }
 }

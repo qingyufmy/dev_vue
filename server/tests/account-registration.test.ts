@@ -49,9 +49,9 @@ describe('transaction-bound account registration (SQL double)', () => {
     const f = fixture([{ affectedRows: 1 }, [{ id }], { affectedRows: 1 }, { affectedRows: 1 }])
     await expect(f.registration.createAccount(input)).resolves.toEqual({ ok: true, accountId: id })
     await expect(f.registration.grantFirstOwnership({ userId: 7, accountId: id, registeredAt: input.registeredAt })).resolves.toEqual({ ok: true })
-    expect(f.execute.mock.calls[0]![1]).toEqual([input.platform, input.brokerServer, input.login, input.currency, input.registeredAt, input.registeredAt])
-    expect(f.execute.mock.calls[2]![1]).toEqual([expect.any(String), 7, id, input.registeredAt, `bridge-first-account:${id}`, input.registeredAt, input.registeredAt])
-    expect(f.execute.mock.calls[3]![1]).toEqual([7, id, input.registeredAt, expect.any(String)])
+    expect(f.execute.mock.calls[0]![1]).toEqual([input.platform, input.brokerServer, input.login, input.currency, new Date(input.registeredAt), new Date(input.registeredAt)])
+    expect(f.execute.mock.calls[2]![1]).toEqual([expect.any(String), 7, id, new Date(input.registeredAt), `bridge-first-account:${id}`, new Date(input.registeredAt), new Date(input.registeredAt)])
+    expect(f.execute.mock.calls[3]![1]).toEqual([7, id, new Date(input.registeredAt), expect.any(String)])
   })
 
   it('rejects invalid identity values without number coercion', async () => {

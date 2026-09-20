@@ -1,0 +1,1049 @@
+{
+  "kind": "strategy-canonical-source-inventory/v1",
+  "inspected": true,
+  "businessWritesPerformed": false,
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "version": "8.4.8"
+  },
+  "sourceReview": {
+    "kind": "legacy_strategy_source_review",
+    "sourceHash": "45aeab4521578c2662a0eec8eb38c6a45744d21a84993f886640f00347f73549",
+    "counts": {
+      "strategies": 3,
+      "subscriptions": 5,
+      "sourceFields": 44,
+      "subscriptionSymbolOccurrences": 5
+    },
+    "fields": {
+      "auto_prompt_types": [
+        "id",
+        "title",
+        "description",
+        "system_prompt",
+        "symbols_json",
+        "interval_minutes",
+        "is_active",
+        "sort_order",
+        "created_by",
+        "created_at",
+        "updated_at",
+        "deleted_at",
+        "scope",
+        "owner_user_id",
+        "model_profile_id",
+        "inference_mode",
+        "visibility_status",
+        "version",
+        "version_label",
+        "market_data_plan_json",
+        "strategy_policy_json",
+        "entry_methods_json",
+        "use_chan_analysis",
+        "use_ema34_filter",
+        "include_portfolio_context"
+      ],
+      "strategy_subscriptions": [
+        "id",
+        "user_id",
+        "trading_account_id",
+        "strategy_id",
+        "risk_profile_id",
+        "symbols_json",
+        "execution_enabled",
+        "memory_mode",
+        "conflicting_strategy_id",
+        "is_deleted",
+        "created_at",
+        "updated_at",
+        "schedule_enabled",
+        "schedule_timezone",
+        "schedule_weekdays_json",
+        "schedule_windows_json",
+        "outside_window_behavior",
+        "take_profit_mode",
+        "active_execution_user_key"
+      ]
+    },
+    "perStrategy": [
+      {
+        "locatorHash": "391552c099c101b131feaf24c5795a6a15bc8ec82015424e0d2b4274a369a0bf",
+        "sourceHash": "f021d377dd4027a7848ff1f6dd397de88b654830d23dc149ded83328c19a2232",
+        "promptHash": "da031ebc31df27668c37bbf96beb7b907a786117f577ef4c4702a62e2a41d509",
+        "promptBytes": 16971,
+        "descriptionCharacters": 80,
+        "scope": "platform",
+        "visibilityStatus": "active",
+        "isActive": "1",
+        "deleted": false,
+        "currentVersion": "44",
+        "inferenceMode": "platform_model",
+        "symbolCount": 1,
+        "marketConfigKeys": [
+          "primary_timeframe",
+          "timeframes"
+        ],
+        "policyConfigKeys": [
+          "constraints",
+          "engine_version",
+          "features",
+          "indicators",
+          "mode",
+          "prompt_rules",
+          "schema_version",
+          "ui",
+          "workflow"
+        ],
+        "targetKind": null,
+        "historicalVersionsReconstructed": false
+      },
+      {
+        "locatorHash": "cc11310c456c3690d5a74c23aa31cc25b4e74cdae146c71e54ad9dbc1d109fde",
+        "sourceHash": "6188d7ae3349483b4e925b1746508e07c37ac55375078908f0d2cc65f16cb6aa",
+        "promptHash": "f6e0a1e2ac41945a9aa7ff8a8aaa0cebc12a3bcc981a929ad5cf810a090e11ae",
+        "promptBytes": 3,
+        "descriptionCharacters": 12,
+        "scope": "platform",
+        "visibilityStatus": "archived",
+        "isActive": "0",
+        "deleted": true,
+        "currentVersion": "1",
+        "inferenceMode": "platform_model",
+        "symbolCount": 2,
+        "marketConfigKeys": [
+          "primary_timeframe",
+          "timeframes"
+        ],
+        "policyConfigKeys": null,
+        "targetKind": null,
+        "historicalVersionsReconstructed": false
+      },
+      {
+        "locatorHash": "a4aab3f1f08004e907d2357fafe74cab56359bcb32e23f52e7eb1d3a9c0a2ad3",
+        "sourceHash": "551f24f510d6e45474721481b330ddfb911cb7d60e6ca57fd75b7e85e609a927",
+        "promptHash": "11b5e0dc40438592a56a39d001712812ad1c1624a1a1282ed5928badb71e8ed7",
+        "promptBytes": 11007,
+        "descriptionCharacters": 0,
+        "scope": "platform",
+        "visibilityStatus": "active",
+        "isActive": "1",
+        "deleted": false,
+        "currentVersion": "11",
+        "inferenceMode": "platform_model",
+        "symbolCount": 1,
+        "marketConfigKeys": [
+          "primary_timeframe",
+          "timeframes"
+        ],
+        "policyConfigKeys": null,
+        "targetKind": null,
+        "historicalVersionsReconstructed": false
+      }
+    ],
+    "perSubscription": [
+      {
+        "locatorHash": "391552c099c101b131feaf24c5795a6a15bc8ec82015424e0d2b4274a369a0bf",
+        "sourceHash": "b5b4d5c669e7be4d7e958163d9185b4e9c7148203106438f835097443ef492ec",
+        "strategyLocatorHash": "391552c099c101b131feaf24c5795a6a15bc8ec82015424e0d2b4274a369a0bf",
+        "symbolCount": 1,
+        "symbolSource": "subscription_explicit",
+        "symbolSourceHash": "3e6701fcc4dfeed20bce65f05476694fe58b9fb0f43dff0138db66bfa08d2b62",
+        "executionEnabled": "1",
+        "deleted": "0",
+        "scheduleEnabled": "0"
+      },
+      {
+        "locatorHash": "cc11310c456c3690d5a74c23aa31cc25b4e74cdae146c71e54ad9dbc1d109fde",
+        "sourceHash": "633090efec9bb02391af9ed7c81ed9d5cbe98445760f5e360e8a7c762cdf4dbc",
+        "strategyLocatorHash": "a4aab3f1f08004e907d2357fafe74cab56359bcb32e23f52e7eb1d3a9c0a2ad3",
+        "symbolCount": 1,
+        "symbolSource": "subscription_explicit",
+        "symbolSourceHash": "3e6701fcc4dfeed20bce65f05476694fe58b9fb0f43dff0138db66bfa08d2b62",
+        "executionEnabled": "0",
+        "deleted": "0",
+        "scheduleEnabled": "0"
+      },
+      {
+        "locatorHash": "a4aab3f1f08004e907d2357fafe74cab56359bcb32e23f52e7eb1d3a9c0a2ad3",
+        "sourceHash": "6008e13722929cc87769c2e1fe3495ed094f51aaf805546588c30b17d477c8c3",
+        "strategyLocatorHash": "a4aab3f1f08004e907d2357fafe74cab56359bcb32e23f52e7eb1d3a9c0a2ad3",
+        "symbolCount": 1,
+        "symbolSource": "strategy_inherited",
+        "symbolSourceHash": "3e6701fcc4dfeed20bce65f05476694fe58b9fb0f43dff0138db66bfa08d2b62",
+        "executionEnabled": "0",
+        "deleted": "0",
+        "scheduleEnabled": "0"
+      },
+      {
+        "locatorHash": "2bf175f9655e7bb7357b9f0a7c6051465a5ae701104ffe741b98e852c0e4d460",
+        "sourceHash": "1296a9c4ca7fdf9f82f1bb75aa65c94483a2d83b8d5463a5487d8054a9440210",
+        "strategyLocatorHash": "391552c099c101b131feaf24c5795a6a15bc8ec82015424e0d2b4274a369a0bf",
+        "symbolCount": 1,
+        "symbolSource": "strategy_inherited",
+        "symbolSourceHash": "3e6701fcc4dfeed20bce65f05476694fe58b9fb0f43dff0138db66bfa08d2b62",
+        "executionEnabled": "0",
+        "deleted": "0",
+        "scheduleEnabled": "0"
+      },
+      {
+        "locatorHash": "d10a4bc9e0c1fa4e8f3d7ce2512b8756e47ca5fa451f373c39a1431bb88db49f",
+        "sourceHash": "ab16f2f8c1404b3b621e2a8266e3b3f56ea72b7b3882257c7b53f623acd62fee",
+        "strategyLocatorHash": "391552c099c101b131feaf24c5795a6a15bc8ec82015424e0d2b4274a369a0bf",
+        "symbolCount": 1,
+        "symbolSource": "strategy_inherited",
+        "symbolSourceHash": "3e6701fcc4dfeed20bce65f05476694fe58b9fb0f43dff0138db66bfa08d2b62",
+        "executionEnabled": "1",
+        "deleted": "0",
+        "scheduleEnabled": "0"
+      }
+    ],
+    "issues": [],
+    "blockers": [
+      "strategy_kind_and_output_contract_mapping",
+      "configuration_field_conversion",
+      "historical_time_basis",
+      "subscription_account_symbol_permissions",
+      "historical_version_evidence"
+    ],
+    "executable": false,
+    "businessWritesPerformed": false
+  },
+  "timeBasis": {
+    "interpretation": "UTC",
+    "evidence": "user-confirmed-legacy-utc-20260908"
+  },
+  "strategyCandidates": [
+    {
+      "sourceId": "1",
+      "sourceHash": "f021d377dd4027a7848ff1f6dd397de88b654830d23dc149ded83328c19a2232",
+      "metadataStatus": "converted",
+      "problems": [],
+      "sourceVersion": "44",
+      "inferenceMode": "platform_model",
+      "lifecycle": "active",
+      "promptHash": "da031ebc31df27668c37bbf96beb7b907a786117f577ef4c4702a62e2a41d509",
+      "roleResolved": false,
+      "roleConfig": {
+        "sourceHash": "dfc826675248a8e0e0cb22756bfa44802ef1b2cbebe3d93468ed5851dc2ee10c",
+        "status": "partial",
+        "problems": [
+          {
+            "field": "use_chan_analysis",
+            "code": "chan_runtime_mapping_required"
+          },
+          {
+            "field": "scope",
+            "code": "platform_reference_portfolio_runtime_mapping_required"
+          }
+        ],
+        "analysisConfig": {
+          "ema34_evidence": {
+            "version": 1,
+            "timeframe": "M1"
+          },
+          "market_data_plan": {
+            "version": 1,
+            "primary_timeframe": "H1",
+            "timeframes": [
+              {
+                "timeframe": "H1",
+                "kline_count": 150
+              },
+              {
+                "timeframe": "M1",
+                "kline_count": 30
+              },
+              {
+                "timeframe": "M5",
+                "kline_count": 100
+              },
+              {
+                "timeframe": "M15",
+                "kline_count": 150
+              },
+              {
+                "timeframe": "H4",
+                "kline_count": 100
+              }
+            ]
+          },
+          "macro_evidence": {
+            "mode": "off"
+          }
+        },
+        "traderConfig": {
+          "entry_methods": [
+            "market",
+            "limit",
+            "stop",
+            "stop_limit"
+          ]
+        },
+        "portfolioContext": {
+          "sourceHash": "4f99aa7c308c18fcfe117ee241165731cb15590f15fefa8a8abcff6c0db25d45",
+          "status": "mapping_required",
+          "mode": "strategy_reference",
+          "sourceCondition": "strategy_observer_source_matches_market_source",
+          "sourceContents": "open_or_closing_strategy_outcomes_joined_to_live_source_inventory",
+          "sourceFailure": "unavailable_not_empty",
+          "targetRole": "trader",
+          "problems": [
+            {
+              "field": "scope",
+              "code": "platform_reference_portfolio_runtime_mapping_required"
+            }
+          ]
+        },
+        "executable": false,
+        "remainingChecks": [
+          "role_specific_prompts",
+          "target_identity_mapping",
+          "restore_backfill_reconciliation"
+        ],
+        "retainedSourceHashes": {
+          "market_data_plan_json": "106888ba32f6a508dcbc59e51a8643d65f9c278a93b9bff6c25932ff396128af",
+          "entry_methods_json": "fede9c36e1a9bc408aaee0b78c5d6a0973eb3be0b47f74b4617bd0a9d16c86b2",
+          "strategy_policy_json": "82c163b57a14f5b4f19c3c649dd6e1b74322d481255ba69e3bfa33c8c1e35a58",
+          "use_chan_analysis": "391552c099c101b131feaf24c5795a6a15bc8ec82015424e0d2b4274a369a0bf",
+          "use_ema34_filter": "391552c099c101b131feaf24c5795a6a15bc8ec82015424e0d2b4274a369a0bf",
+          "include_portfolio_context": "98089e6d36f78e9766c9ea34d5acb3611f3a92cd81c5eb102095d924ffc7d08b",
+          "scope": "c7bc9d40d3aa06fc8b391eb56b7642e8cb267036dceb1a872f77d2eb8e4791ca"
+        }
+      }
+    },
+    {
+      "sourceId": "2",
+      "sourceHash": "6188d7ae3349483b4e925b1746508e07c37ac55375078908f0d2cc65f16cb6aa",
+      "metadataStatus": "converted",
+      "problems": [],
+      "sourceVersion": "1",
+      "inferenceMode": "platform_model",
+      "lifecycle": "retired",
+      "promptHash": "f6e0a1e2ac41945a9aa7ff8a8aaa0cebc12a3bcc981a929ad5cf810a090e11ae",
+      "roleResolved": false,
+      "roleConfig": {
+        "sourceHash": "35ef35081d45df6dac6af0f77a0d9b17376338578c492c63699ee7021c9a5c90",
+        "status": "partial",
+        "problems": [
+          {
+            "field": "scope",
+            "code": "platform_reference_portfolio_runtime_mapping_required"
+          }
+        ],
+        "analysisConfig": {
+          "market_data_plan": {
+            "version": 1,
+            "primary_timeframe": "M30",
+            "timeframes": [
+              {
+                "timeframe": "M30",
+                "kline_count": 100
+              }
+            ]
+          },
+          "macro_evidence": {
+            "mode": "off"
+          }
+        },
+        "traderConfig": {
+          "entry_methods": [
+            "market",
+            "limit",
+            "stop",
+            "stop_limit"
+          ]
+        },
+        "portfolioContext": {
+          "sourceHash": "4f99aa7c308c18fcfe117ee241165731cb15590f15fefa8a8abcff6c0db25d45",
+          "status": "mapping_required",
+          "mode": "strategy_reference",
+          "sourceCondition": "strategy_observer_source_matches_market_source",
+          "sourceContents": "open_or_closing_strategy_outcomes_joined_to_live_source_inventory",
+          "sourceFailure": "unavailable_not_empty",
+          "targetRole": "trader",
+          "problems": [
+            {
+              "field": "scope",
+              "code": "platform_reference_portfolio_runtime_mapping_required"
+            }
+          ]
+        },
+        "executable": false,
+        "remainingChecks": [
+          "role_specific_prompts",
+          "target_identity_mapping",
+          "restore_backfill_reconciliation"
+        ],
+        "retainedSourceHashes": {
+          "market_data_plan_json": "8e85de4105e4991d8de1248020e65225376603e343b1f13c77a7bbca2e7df2d8",
+          "entry_methods_json": "fede9c36e1a9bc408aaee0b78c5d6a0973eb3be0b47f74b4617bd0a9d16c86b2",
+          "strategy_policy_json": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "use_chan_analysis": "98089e6d36f78e9766c9ea34d5acb3611f3a92cd81c5eb102095d924ffc7d08b",
+          "use_ema34_filter": "98089e6d36f78e9766c9ea34d5acb3611f3a92cd81c5eb102095d924ffc7d08b",
+          "include_portfolio_context": "98089e6d36f78e9766c9ea34d5acb3611f3a92cd81c5eb102095d924ffc7d08b",
+          "scope": "c7bc9d40d3aa06fc8b391eb56b7642e8cb267036dceb1a872f77d2eb8e4791ca"
+        }
+      }
+    },
+    {
+      "sourceId": "3",
+      "sourceHash": "551f24f510d6e45474721481b330ddfb911cb7d60e6ca57fd75b7e85e609a927",
+      "metadataStatus": "converted",
+      "problems": [],
+      "sourceVersion": "11",
+      "inferenceMode": "platform_model",
+      "lifecycle": "active",
+      "promptHash": "11b5e0dc40438592a56a39d001712812ad1c1624a1a1282ed5928badb71e8ed7",
+      "roleResolved": false,
+      "roleConfig": {
+        "sourceHash": "69178c40297967d46b0d8b6b658973ed2f00742cda8ec88d97aa1a008b10fcfc",
+        "status": "partial",
+        "problems": [
+          {
+            "field": "scope",
+            "code": "platform_reference_portfolio_runtime_mapping_required"
+          }
+        ],
+        "analysisConfig": {
+          "market_data_plan": {
+            "version": 1,
+            "primary_timeframe": "H1",
+            "timeframes": [
+              {
+                "timeframe": "H1",
+                "kline_count": 100
+              },
+              {
+                "timeframe": "M5",
+                "kline_count": 100
+              },
+              {
+                "timeframe": "M15",
+                "kline_count": 100
+              },
+              {
+                "timeframe": "M30",
+                "kline_count": 100
+              },
+              {
+                "timeframe": "H4",
+                "kline_count": 100
+              }
+            ]
+          },
+          "macro_evidence": {
+            "mode": "off"
+          }
+        },
+        "traderConfig": {
+          "entry_methods": [
+            "market",
+            "limit",
+            "stop",
+            "stop_limit"
+          ]
+        },
+        "portfolioContext": {
+          "sourceHash": "4f99aa7c308c18fcfe117ee241165731cb15590f15fefa8a8abcff6c0db25d45",
+          "status": "mapping_required",
+          "mode": "strategy_reference",
+          "sourceCondition": "strategy_observer_source_matches_market_source",
+          "sourceContents": "open_or_closing_strategy_outcomes_joined_to_live_source_inventory",
+          "sourceFailure": "unavailable_not_empty",
+          "targetRole": "trader",
+          "problems": [
+            {
+              "field": "scope",
+              "code": "platform_reference_portfolio_runtime_mapping_required"
+            }
+          ]
+        },
+        "executable": false,
+        "remainingChecks": [
+          "role_specific_prompts",
+          "target_identity_mapping",
+          "restore_backfill_reconciliation"
+        ],
+        "retainedSourceHashes": {
+          "market_data_plan_json": "8457a92de859e6b5196cd9e8245e371c51f4db1126a4349f0ff2bf9f97fca816",
+          "entry_methods_json": "fede9c36e1a9bc408aaee0b78c5d6a0973eb3be0b47f74b4617bd0a9d16c86b2",
+          "strategy_policy_json": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+          "use_chan_analysis": "98089e6d36f78e9766c9ea34d5acb3611f3a92cd81c5eb102095d924ffc7d08b",
+          "use_ema34_filter": "98089e6d36f78e9766c9ea34d5acb3611f3a92cd81c5eb102095d924ffc7d08b",
+          "include_portfolio_context": "98089e6d36f78e9766c9ea34d5acb3611f3a92cd81c5eb102095d924ffc7d08b",
+          "scope": "c7bc9d40d3aa06fc8b391eb56b7642e8cb267036dceb1a872f77d2eb8e4791ca"
+        }
+      }
+    }
+  ],
+  "subscriptionCandidates": [
+    {
+      "sourceId": "1",
+      "sourceHash": "b5b4d5c669e7be4d7e958163d9185b4e9c7148203106438f835097443ef492ec",
+      "strategySourceId": "1",
+      "legacyAccountId": "1",
+      "targetAccountId": "1",
+      "currentOwner": true,
+      "ownershipDisposition": "current_owner",
+      "historicalOwnershipEvidenceHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "problems": [],
+      "symbols": {
+        "sourceHash": "3d1516321cd0d0c3d4164873d457414234ad36d4369e876bcd851d5d28c6a252",
+        "selectionMode": "explicit",
+        "status": "converted",
+        "problems": [],
+        "symbols": [
+          "XAUUSD"
+        ],
+        "schedulerSymbols": [
+          "XAUUSD"
+        ],
+        "dispatchSymbols": [
+          "XAUUSD"
+        ]
+      },
+      "schedule": {
+        "sourceHash": "783c103f6e2e5d8d691a547323444f2f0d82c7a316945af2b7e360286df553b6",
+        "status": "converted",
+        "problems": [],
+        "defaultsApplied": [],
+        "timezoneNormalized": false,
+        "candidate": {
+          "version": 1,
+          "timezone": "terminal_server",
+          "enabled": false,
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "windows": [
+            {
+              "start": "00:00",
+              "end": "23:59"
+            }
+          ],
+          "outsideBehavior": "pause_all"
+        },
+        "executable": false,
+        "blockers": [
+          "schedule_runtime_consumers",
+          "terminal_clock_trust_policy"
+        ]
+      },
+      "executionPreferences": {
+        "sourceHash": "8995acfda7024a33d1065f068f506cab988221a150474ff6948a6176be58df28",
+        "status": "converted",
+        "problems": [],
+        "normalizations": [],
+        "candidate": {
+          "contract_version": 1,
+          "take_profit_mode": "ai_recommended",
+          "revision": "1",
+          "created_at_utc": "2026-07-25 18:45:23.000",
+          "updated_at_utc": "2026-08-11 19:28:02.000"
+        },
+        "selection": {
+          "mode": "ai_recommended",
+          "source": "legacy_tp1_fallback",
+          "recommendedTier": null,
+          "requestedTier": 1,
+          "usedTier": null,
+          "price": null
+        },
+        "timeBasis": "user-confirmed-legacy-utc",
+        "executable": false
+      },
+      "configReview": {
+        "sourceHash": "e449c07af257fa32ec9b16741f25a6aa3428abdf176bdead095451428914810a",
+        "status": "recognized",
+        "problems": [],
+        "normalizations": [],
+        "semantics": {
+          "memorySaveMode": "platform_only",
+          "takeProfitMode": "ai_recommended",
+          "requestedTier": null,
+          "aiMissingRecommendationTier": 1,
+          "riskProfile": {
+            "state": "absent"
+          },
+          "conflictingStrategy": {
+            "state": "absent"
+          },
+          "generatedKeyMatches": true
+        },
+        "executable": false,
+        "blockers": [
+          "memory_runtime_mapping",
+          "take_profit_target_mapping",
+          "risk_configuration_authority",
+          "conflict_reference_mapping"
+        ]
+      },
+      "legacyExecutionEnabled": true,
+      "legacyDeleted": false,
+      "runtimePermissionGranted": false
+    },
+    {
+      "sourceId": "2",
+      "sourceHash": "633090efec9bb02391af9ed7c81ed9d5cbe98445760f5e360e8a7c762cdf4dbc",
+      "strategySourceId": "3",
+      "legacyAccountId": "2",
+      "targetAccountId": "2",
+      "currentOwner": false,
+      "ownershipDisposition": "historical_only",
+      "historicalOwnershipEvidenceHash": "ca02aa7893db2284d9d13516ce9a1929d0e45caee15a31e7abeaee083bd427b6",
+      "problems": [],
+      "symbols": {
+        "sourceHash": "3d1516321cd0d0c3d4164873d457414234ad36d4369e876bcd851d5d28c6a252",
+        "selectionMode": "explicit",
+        "status": "converted",
+        "problems": [],
+        "symbols": [
+          "XAUUSD"
+        ],
+        "schedulerSymbols": [
+          "XAUUSD"
+        ],
+        "dispatchSymbols": [
+          "XAUUSD"
+        ]
+      },
+      "schedule": {
+        "sourceHash": "783c103f6e2e5d8d691a547323444f2f0d82c7a316945af2b7e360286df553b6",
+        "status": "converted",
+        "problems": [],
+        "defaultsApplied": [],
+        "timezoneNormalized": false,
+        "candidate": {
+          "version": 1,
+          "timezone": "terminal_server",
+          "enabled": false,
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "windows": [
+            {
+              "start": "00:00",
+              "end": "23:59"
+            }
+          ],
+          "outsideBehavior": "pause_all"
+        },
+        "executable": false,
+        "blockers": [
+          "schedule_runtime_consumers",
+          "terminal_clock_trust_policy"
+        ]
+      },
+      "executionPreferences": {
+        "sourceHash": "97497a4ba5196a50d8e729437c174b01ffb1304b36285691976232a06edb1d39",
+        "status": "converted",
+        "problems": [],
+        "normalizations": [],
+        "candidate": {
+          "contract_version": 1,
+          "take_profit_mode": "ai_recommended",
+          "revision": "1",
+          "created_at_utc": "2026-07-27 10:11:20.000",
+          "updated_at_utc": "2026-08-27 12:27:35.000"
+        },
+        "selection": {
+          "mode": "ai_recommended",
+          "source": "legacy_tp1_fallback",
+          "recommendedTier": null,
+          "requestedTier": 1,
+          "usedTier": null,
+          "price": null
+        },
+        "timeBasis": "user-confirmed-legacy-utc",
+        "executable": false
+      },
+      "configReview": {
+        "sourceHash": "3f9d1ccf8bb01479d2a9d1af3e91c91862cc14eb0d162bf2e65cb612c9a70589",
+        "status": "recognized",
+        "problems": [],
+        "normalizations": [],
+        "semantics": {
+          "memorySaveMode": "platform_only",
+          "takeProfitMode": "ai_recommended",
+          "requestedTier": null,
+          "aiMissingRecommendationTier": 1,
+          "riskProfile": {
+            "state": "absent"
+          },
+          "conflictingStrategy": {
+            "state": "absent"
+          },
+          "generatedKeyMatches": true
+        },
+        "executable": false,
+        "blockers": [
+          "memory_runtime_mapping",
+          "take_profit_target_mapping",
+          "risk_configuration_authority",
+          "conflict_reference_mapping"
+        ]
+      },
+      "legacyExecutionEnabled": false,
+      "legacyDeleted": false,
+      "runtimePermissionGranted": false
+    },
+    {
+      "sourceId": "3",
+      "sourceHash": "6008e13722929cc87769c2e1fe3495ed094f51aaf805546588c30b17d477c8c3",
+      "strategySourceId": "3",
+      "legacyAccountId": "1",
+      "targetAccountId": "1",
+      "currentOwner": true,
+      "ownershipDisposition": "current_owner",
+      "historicalOwnershipEvidenceHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "problems": [],
+      "symbols": {
+        "sourceHash": "9b8c90af81095510bd726fdd6c4404d93e3a3d4ebe4985f08c4a47e74fa51665",
+        "selectionMode": "inherit_strategy",
+        "status": "converted",
+        "problems": [],
+        "symbols": [
+          "XAUUSD"
+        ],
+        "schedulerSymbols": [
+          "XAUUSD"
+        ],
+        "dispatchSymbols": [
+          "XAUUSD"
+        ]
+      },
+      "schedule": {
+        "sourceHash": "783c103f6e2e5d8d691a547323444f2f0d82c7a316945af2b7e360286df553b6",
+        "status": "converted",
+        "problems": [],
+        "defaultsApplied": [],
+        "timezoneNormalized": false,
+        "candidate": {
+          "version": 1,
+          "timezone": "terminal_server",
+          "enabled": false,
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "windows": [
+            {
+              "start": "00:00",
+              "end": "23:59"
+            }
+          ],
+          "outsideBehavior": "pause_all"
+        },
+        "executable": false,
+        "blockers": [
+          "schedule_runtime_consumers",
+          "terminal_clock_trust_policy"
+        ]
+      },
+      "executionPreferences": {
+        "sourceHash": "c0e734cdb6a4c084545e1cb1f33759918f00c0de3e404e96f70749780b785891",
+        "status": "converted",
+        "problems": [],
+        "normalizations": [],
+        "candidate": {
+          "contract_version": 1,
+          "take_profit_mode": "ai_recommended",
+          "revision": "1",
+          "created_at_utc": "2026-07-27 11:21:30.000",
+          "updated_at_utc": "2026-08-11 19:28:02.000"
+        },
+        "selection": {
+          "mode": "ai_recommended",
+          "source": "legacy_tp1_fallback",
+          "recommendedTier": null,
+          "requestedTier": 1,
+          "usedTier": null,
+          "price": null
+        },
+        "timeBasis": "user-confirmed-legacy-utc",
+        "executable": false
+      },
+      "configReview": {
+        "sourceHash": "3f9d1ccf8bb01479d2a9d1af3e91c91862cc14eb0d162bf2e65cb612c9a70589",
+        "status": "recognized",
+        "problems": [],
+        "normalizations": [],
+        "semantics": {
+          "memorySaveMode": "platform_only",
+          "takeProfitMode": "ai_recommended",
+          "requestedTier": null,
+          "aiMissingRecommendationTier": 1,
+          "riskProfile": {
+            "state": "absent"
+          },
+          "conflictingStrategy": {
+            "state": "absent"
+          },
+          "generatedKeyMatches": true
+        },
+        "executable": false,
+        "blockers": [
+          "memory_runtime_mapping",
+          "take_profit_target_mapping",
+          "risk_configuration_authority",
+          "conflict_reference_mapping"
+        ]
+      },
+      "legacyExecutionEnabled": false,
+      "legacyDeleted": false,
+      "runtimePermissionGranted": false
+    },
+    {
+      "sourceId": "4",
+      "sourceHash": "1296a9c4ca7fdf9f82f1bb75aa65c94483a2d83b8d5463a5487d8054a9440210",
+      "strategySourceId": "1",
+      "legacyAccountId": "2",
+      "targetAccountId": "2",
+      "currentOwner": false,
+      "ownershipDisposition": "historical_only",
+      "historicalOwnershipEvidenceHash": "ca02aa7893db2284d9d13516ce9a1929d0e45caee15a31e7abeaee083bd427b6",
+      "problems": [],
+      "symbols": {
+        "sourceHash": "9b8c90af81095510bd726fdd6c4404d93e3a3d4ebe4985f08c4a47e74fa51665",
+        "selectionMode": "inherit_strategy",
+        "status": "converted",
+        "problems": [],
+        "symbols": [
+          "XAUUSD"
+        ],
+        "schedulerSymbols": [
+          "XAUUSD"
+        ],
+        "dispatchSymbols": [
+          "XAUUSD"
+        ]
+      },
+      "schedule": {
+        "sourceHash": "783c103f6e2e5d8d691a547323444f2f0d82c7a316945af2b7e360286df553b6",
+        "status": "converted",
+        "problems": [],
+        "defaultsApplied": [],
+        "timezoneNormalized": false,
+        "candidate": {
+          "version": 1,
+          "timezone": "terminal_server",
+          "enabled": false,
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "windows": [
+            {
+              "start": "00:00",
+              "end": "23:59"
+            }
+          ],
+          "outsideBehavior": "pause_all"
+        },
+        "executable": false,
+        "blockers": [
+          "schedule_runtime_consumers",
+          "terminal_clock_trust_policy"
+        ]
+      },
+      "executionPreferences": {
+        "sourceHash": "fb5ab95a08bcc10f2e997df0bca4bbae6e02f4862a3752e3b9dc97feebadedad",
+        "status": "converted",
+        "problems": [],
+        "normalizations": [],
+        "candidate": {
+          "contract_version": 1,
+          "take_profit_mode": "ai_recommended",
+          "revision": "1",
+          "created_at_utc": "2026-08-06 09:40:27.000",
+          "updated_at_utc": "2026-08-27 12:27:35.000"
+        },
+        "selection": {
+          "mode": "ai_recommended",
+          "source": "legacy_tp1_fallback",
+          "recommendedTier": null,
+          "requestedTier": 1,
+          "usedTier": null,
+          "price": null
+        },
+        "timeBasis": "user-confirmed-legacy-utc",
+        "executable": false
+      },
+      "configReview": {
+        "sourceHash": "3f9d1ccf8bb01479d2a9d1af3e91c91862cc14eb0d162bf2e65cb612c9a70589",
+        "status": "recognized",
+        "problems": [],
+        "normalizations": [],
+        "semantics": {
+          "memorySaveMode": "platform_only",
+          "takeProfitMode": "ai_recommended",
+          "requestedTier": null,
+          "aiMissingRecommendationTier": 1,
+          "riskProfile": {
+            "state": "absent"
+          },
+          "conflictingStrategy": {
+            "state": "absent"
+          },
+          "generatedKeyMatches": true
+        },
+        "executable": false,
+        "blockers": [
+          "memory_runtime_mapping",
+          "take_profit_target_mapping",
+          "risk_configuration_authority",
+          "conflict_reference_mapping"
+        ]
+      },
+      "legacyExecutionEnabled": false,
+      "legacyDeleted": false,
+      "runtimePermissionGranted": false
+    },
+    {
+      "sourceId": "5",
+      "sourceHash": "ab16f2f8c1404b3b621e2a8266e3b3f56ea72b7b3882257c7b53f623acd62fee",
+      "strategySourceId": "1",
+      "legacyAccountId": "4",
+      "targetAccountId": "2",
+      "currentOwner": true,
+      "ownershipDisposition": "current_owner",
+      "historicalOwnershipEvidenceHash": "3783bd9892ee83ec2a6fa96a1a4cb045eca9922a1b3eda718d0e21016af859be",
+      "problems": [],
+      "symbols": {
+        "sourceHash": "9b8c90af81095510bd726fdd6c4404d93e3a3d4ebe4985f08c4a47e74fa51665",
+        "selectionMode": "inherit_strategy",
+        "status": "converted",
+        "problems": [],
+        "symbols": [
+          "XAUUSD"
+        ],
+        "schedulerSymbols": [
+          "XAUUSD"
+        ],
+        "dispatchSymbols": [
+          "XAUUSD"
+        ]
+      },
+      "schedule": {
+        "sourceHash": "783c103f6e2e5d8d691a547323444f2f0d82c7a316945af2b7e360286df553b6",
+        "status": "converted",
+        "problems": [],
+        "defaultsApplied": [],
+        "timezoneNormalized": false,
+        "candidate": {
+          "version": 1,
+          "timezone": "terminal_server",
+          "enabled": false,
+          "weekdays": [
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "windows": [
+            {
+              "start": "00:00",
+              "end": "23:59"
+            }
+          ],
+          "outsideBehavior": "pause_all"
+        },
+        "executable": false,
+        "blockers": [
+          "schedule_runtime_consumers",
+          "terminal_clock_trust_policy"
+        ]
+      },
+      "executionPreferences": {
+        "sourceHash": "6874b61b729872ffd49923a2e00a4b036e0afbe5223b892856684a352146e55d",
+        "status": "converted",
+        "problems": [],
+        "normalizations": [],
+        "candidate": {
+          "contract_version": 1,
+          "take_profit_mode": "ai_recommended",
+          "revision": "1",
+          "created_at_utc": "2026-08-17 09:13:06.000",
+          "updated_at_utc": "2026-08-27 12:31:36.000"
+        },
+        "selection": {
+          "mode": "ai_recommended",
+          "source": "legacy_tp1_fallback",
+          "recommendedTier": null,
+          "requestedTier": 1,
+          "usedTier": null,
+          "price": null
+        },
+        "timeBasis": "user-confirmed-legacy-utc",
+        "executable": false
+      },
+      "configReview": {
+        "sourceHash": "60b307b6c2acaedd0129e5f09722e3d920f315ecbeb0e9c2bffd56a123d583e0",
+        "status": "recognized",
+        "problems": [],
+        "normalizations": [],
+        "semantics": {
+          "memorySaveMode": "platform_only",
+          "takeProfitMode": "ai_recommended",
+          "requestedTier": null,
+          "aiMissingRecommendationTier": 1,
+          "riskProfile": {
+            "state": "absent"
+          },
+          "conflictingStrategy": {
+            "state": "absent"
+          },
+          "generatedKeyMatches": true
+        },
+        "executable": false,
+        "blockers": [
+          "memory_runtime_mapping",
+          "take_profit_target_mapping",
+          "risk_configuration_authority",
+          "conflict_reference_mapping"
+        ]
+      },
+      "legacyExecutionEnabled": true,
+      "legacyDeleted": false,
+      "runtimePermissionGranted": false
+    }
+  ],
+  "historyCount": 238,
+  "schemaPreflight": {
+    "schemaReady": true,
+    "requiredSteps": 238,
+    "sourceTable": "strategy_subscriptions_legacy_v3",
+    "targetTable": "strategy_subscriptions",
+    "applyReady": false
+  },
+  "historyHash": "5877740ad98ff0cf99b7c65cef0ac49e92a01973367418503badf6c2450dd5cd",
+  "accountMappingHash": "f1d79cc87486e5b8a91d79508351b114dd9b6be81062abae1c295e0cf69127dc",
+  "riskProfileInputsHash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+  "inputHash": "ce523c5c89d5464228e5b37f9af72724d0356abde170667a1426aa2096cc78b8",
+  "counts": {
+    "strategies": 3,
+    "subscriptions": 5,
+    "legacyAccounts": 4,
+    "accounts": 6,
+    "persistedAccountMappings": 4,
+    "historicalSubscriptions": 2,
+    "unresolvedSubscriptions": 0
+  },
+  "observedAt": "2026-09-10T15:08:47.154Z"
+}

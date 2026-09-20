@@ -12,6 +12,7 @@ beforeEach(() => {
     accounts: ref([]), observers: ref([{ id: '12', active: true, sourceAccountId: '1', displayName: '示范账户' }]),
     context: ref({ accountId: null, observerChannelId: null, mode: 'blocked' }),
     loading: ref(false), error: ref(''), snapshot: ref(null), hasAccount: ref(false),
+    symbols: ref([]), marketLoading: ref(false),
     load: vi.fn(), stop: vi.fn(), selectObserver: vi.fn(), selectAccount: vi.fn(), leaveObserver: vi.fn(),
   }
 })

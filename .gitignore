@@ -35,6 +35,8 @@ server/dist-v4/
 .output/
 bridge/release-artifacts/
 bridge/.test-artifacts/
+bridge/prototypes/net48-win7/artifacts-review/
+bridge/prototypes/net48-win7/artifacts-core-test/
 
 __pycache__/
 .venv-bridge/

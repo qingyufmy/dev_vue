@@ -69,7 +69,7 @@ namespace Liangjian.BridgeV4.Runtime
                 CoveredRangeEndUtcMsc = cursor.WindowEndUtcMsc,
                 SourceRevision = revision,
                 Candles = ProjectionSourceSupport.MapCandles(payload, scope[0], scope[1],
-                    cursor.WindowStartUtcMsc, cursor.WindowEndUtcMsc, observedAt, revision),
+                    cursor.WindowStartUtcMsc, cursor.WindowEndUtcMsc, observedAt, revision, request.AllowOpenCandles),
                 History = new List<HistoryItemRecord>(),
                 PublishCoverage = true,
                 HasMore = hasMore,
@@ -83,7 +83,10 @@ namespace Liangjian.BridgeV4.Runtime
             ProjectionSourceCursor cursor = ProjectionSourceSupport.ResolveWindow(
                 request, ProjectionSourceSupport.HistoryWindowMsc);
             int workerLimit = Math.Min(request.Limit, 250);
-            Mt5WorkerResponse response = archiveHost.Request(
+            Mt5WorkerResponse response = null;
+            for (int split = 0; split <= 12; split++)
+            {
+                response = archiveHost.Request(
                 request.TerminalInstanceId, request.BrokerServer, request.Login, "archive",
                 "history_range_sync",
                 new Dictionary<string, object>(StringComparer.Ordinal)
@@ -98,6 +101,14 @@ namespace Liangjian.BridgeV4.Runtime
                     },
                     { "limit", workerLimit }
                 });
+                object errorCode;
+                bool dense = response != null && response.IsError && response.Payload != null
+                    && response.Payload.TryGetValue("error_code", out errorCode)
+                    && Convert.ToString(errorCode, CultureInfo.InvariantCulture) == "mt5_history_range_too_dense";
+                if (!dense) break;
+                // Preserve the exact covered prefix; only divide a fresh window, never skip a cursor group.
+                if (split == 12 || !ProjectionSourceSupport.ShrinkFreshHistoryWindow(cursor)) break;
+            }
             RequireOutcome(response, "history_batch");
             IDictionary<string, object> batch = ProjectionSourceSupport.ReadObject(response.Payload, "batch");
             bool nativeHasMore = ProjectionSourceSupport.ReadBoolean(batch, "has_more");

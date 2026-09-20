@@ -1,3 +1,9 @@
+import { strategyRuntimeSettings } from '../domain/strategy-runtime-settings.js'
+import type { TraderControlInput } from './trader-control.js'
+import { evaluateSubscriptionWindow } from '../domain/subscription-window.js'
+import { parseEntryEventPolicy } from '../domain/entry-event-policy.js'
+import { parsePriceActionEvidencePlan } from '../domain/price-action-evidence.js'
+import { parseChanEvidencePlan } from '../domain/chan-evidence.js'
 import { parseEma34Plan } from '../domain/ema34-evidence.js'
 import { createHash } from 'node:crypto'
 import type {
@@ -8,6 +14,8 @@ import type {
 import { StrategyAccessError } from '../domain/strategy.js'
 import { parseStrategyMarketDataPlan } from '../domain/strategy-market-plan.js'
 import { parseStrategyEntryMethods } from '../domain/strategy-entry-methods.js'
+import { parseStrategyReferenceRequirement } from '../domain/strategy-reference-requirement.js'
+import { parseStrategyRiskBudget } from '../domain/strategy-risk-budget.js'
 
 export interface StrategyCatalog {
   listAvailable(userId: number, kind?: StrategyKind): Promise<StrategySummary[]>
@@ -15,19 +23,44 @@ export interface StrategyCatalog {
 }
 
 export interface StrategyManagementRepository {
+  setAccountTrader?(input: TraderControlInput): Promise<{ enabled: boolean }>
   findDetail(userId: number, strategyId: string): Promise<StrategyDetail | null>
-  create(input: CreateStrategyInput & { compiled: StrategyCompileResult }): Promise<StrategyDetail>
-  updateMetadata(input: UpdateStrategyMetadataInput): Promise<StrategyDetail>
-  createVersion(input: CreateStrategyVersionInput): Promise<StrategyDetail>
+  create(input: CreateStrategyInput, prepare: () => PreparedStrategyDraft): Promise<StrategyDetail>
+  updateMetadata(input: UpdateStrategyMetadataInput, prepare: () => Pick<UpdateStrategyMetadataInput, 'name' | 'description'>): Promise<StrategyDetail>
+  createVersion(input: CreateStrategyVersionInput, prepare: (kind: StrategyKind) => StrategyCompileResult): Promise<StrategyDetail>
   publishVersion(input: PublishStrategyVersionInput): Promise<StrategyDetail>
   retire(input: RetireStrategyInput): Promise<StrategyDetail>
   findSubscription(userId: number, subscriptionId: string): Promise<StrategySubscription | null>
   listSubscriptions(userId: number, tradingAccountId?: string): Promise<StrategySubscription[]>
-  createSubscription(input: CreateStrategySubscriptionInput): Promise<StrategySubscription>
-  updateSubscription(input: UpdateStrategySubscriptionInput): Promise<StrategySubscription>
+  createSubscription(input: CreateStrategySubscriptionInput, prepare: () => PreparedSubscriptionCreate): Promise<StrategySubscription>
+  updateSubscription(input: UpdateStrategySubscriptionInput, prepare: (current: StrategySubscription) => PreparedSubscriptionUpdate): Promise<StrategySubscription>
 }
 
 export type StrategyRepository = StrategyCatalog & StrategyManagementRepository
+
+export interface PreparedStrategyDraft {
+  name: string
+  description: string
+  promptText: string
+  compiled: StrategyCompileResult
+}
+
+export interface PreparedSubscriptionCreate {
+  receiveWindow: Record<string, unknown>
+  receiveTimezone: string
+  standardSymbol: string
+  traderStrategyId: string | null
+  analysisEnabled: boolean
+  traderEnabled: boolean
+  tradeSendEnabled: boolean
+  status: 'active' | 'paused'
+  nextDueAt: string | null
+}
+
+export type PreparedSubscriptionUpdate = Omit<PreparedSubscriptionCreate, 'status'> & {
+  analysisStrategyId: string
+  status: StrategySubscription['status']
+}
 
 const DEFAULT_ANALYSIS_TIMEFRAMES = ['M5', 'M15', 'H1', 'H4'] as const
 const ALLOWED_TIMEFRAMES = new Set(['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1'])
@@ -72,7 +105,16 @@ function plainObject(value: unknown): Record<string, unknown> | null {
 }
 
 function normalizeConfig(kind: StrategyKind, config: Record<string, unknown>, issues: StrategyCompileIssue[]) {
+  let common = {}
+  try { common = strategyRuntimeSettings(config) }
+  catch { issues.push(issue('error', 'strategy_runtime_settings_invalid', '请检查支持品种和使用模型', 'config')) }
   if (kind === 'trader') {
+    try { parseEntryEventPolicy(config.entry_event_policy) }
+    catch { issues.push(issue('error', 'entry_event_policy_invalid', '请检查入场事件约束和周期', 'config.entry_event_policy')) }
+    try { parseStrategyRiskBudget(config.risk_budget) }
+    catch { issues.push(issue('error', 'strategy_risk_budget_invalid', '策略单笔风险上限必须为大于0且不超过100的十进制百分数字符串', 'config.risk_budget')) }
+    try { parseStrategyReferenceRequirement(config.strategy_reference_portfolio) }
+    catch { issues.push(issue('error', 'strategy_reference_requirement_invalid', '策略参考组合配置无效', 'config.strategy_reference_portfolio')) }
     if (config.entry_methods !== undefined) {
       try { parseStrategyEntryMethods(config.entry_methods) }
       catch { issues.push(issue('error', 'strategy_entry_methods_invalid', '请选择有效且不重复的入场方式', 'config.entry_methods')) }
@@ -80,14 +122,33 @@ function normalizeConfig(kind: StrategyKind, config: Record<string, unknown>, is
     try { return canonicalClone(config) }
     catch { issues.push(issue('error', 'config_json_invalid', '策略配置必须是可序列化的 JSON 对象', 'config')); return {} }
   }
-  const allowed = new Set(['timeframes', 'candle_limit', 'macro_evidence', 'market_data_plan', 'ema34_evidence'])
+  const allowed = new Set(['symbols', 'model_profile_id', 'interval_minutes', 'timeframes', 'candle_limit', 'macro_evidence', 'market_data_plan', 'ema34_evidence', 'chan_evidence', 'price_action_evidence'])
   for (const key of Object.keys(config)) {
     if (!allowed.has(key)) issues.push(issue('error', 'config_field_unknown', `不支持的配置字段：${key}`, `config.${key}`))
   }
-  let indicators = {}
+  let indicators = common
+  if (config.interval_minutes !== undefined) {
+    const minutes = config.interval_minutes
+    if (typeof minutes !== 'number' || !Number.isSafeInteger(minutes) || minutes < 1 || minutes > 1440) issues.push(issue('error', 'interval_minutes_invalid', '运行间隔须为 1 至 1440 分钟的整数', 'config.interval_minutes'))
+    else indicators = { ...indicators, interval_minutes: minutes }
+  }
   if (config.ema34_evidence !== undefined) {
-    try { indicators = { ema34_evidence: parseEma34Plan(config.ema34_evidence) } }
+    try { indicators = { ...indicators, ema34_evidence: parseEma34Plan(config.ema34_evidence) } }
     catch { issues.push(issue('error', 'ema34_plan_invalid', '请检查 EMA34 证据版本和周期', 'config.ema34_evidence')) }
+  }
+  if (config.price_action_evidence !== undefined) {
+    try { indicators = { ...indicators, price_action_evidence: parsePriceActionEvidencePlan(config.price_action_evidence) } }
+    catch { issues.push(issue('error', 'price_action_plan_invalid', '请检查价格事件证据版本和开关', 'config.price_action_evidence')) }
+  }
+  if (config.chan_evidence !== undefined) {
+    try { indicators = { ...indicators, chan_evidence: parseChanEvidencePlan(config.chan_evidence) } }
+    catch { issues.push(issue('error', 'chan_plan_invalid', '请检查缠论证据版本和开关', 'config.chan_evidence')) }
+  }
+  if (config.ema34_evidence !== undefined) {
+    const ema = config.ema34_evidence as { timeframe?: unknown }
+    const selected = config.market_data_plan as { timeframes?: Array<{ timeframe: string }> } | undefined
+    const periods = Array.isArray(selected?.timeframes) ? selected.timeframes.map(row => row?.timeframe) : config.timeframes ?? [...DEFAULT_ANALYSIS_TIMEFRAMES]
+    if (Array.isArray(periods) && !periods.includes(ema?.timeframe)) issues.push(issue('error', 'ema34_timeframe_not_in_market_plan', 'EMA34 周期必须包含在行情数据范围中', 'config.ema34_evidence'))
   }
   if (config.market_data_plan !== undefined) {
     if (config.timeframes !== undefined || config.candle_limit !== undefined) issues.push(issue('error', 'market_data_plan_conflict', '市场数据计划不能同时使用统一周期或数量配置', 'config.market_data_plan'))
@@ -171,7 +232,8 @@ function scanDangerousKeys(value: unknown, path: string, issues: StrategyCompile
   if (!value || typeof value !== 'object') return
   for (const [key, child] of Object.entries(value)) {
     const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, '')
-    if (DANGEROUS_CONFIG_KEYS.has(normalized) || DANGEROUS_CONFIG_STEMS.some(stem => normalized.includes(stem))) issues.push(issue('error', 'dangerous_capability_forbidden', `配置字段不允许声明执行、网络、文件或 SQL 能力：${key}`, `${path}.${key}`))
+    const modelReference = path === 'config' && key === 'model_profile_id' && (child === null || typeof child === 'string' && /^[1-9]\d{0,19}$/.test(child))
+    if (!modelReference && (DANGEROUS_CONFIG_KEYS.has(normalized) || DANGEROUS_CONFIG_STEMS.some(stem => normalized.includes(stem)))) issues.push(issue('error', 'dangerous_capability_forbidden', `配置字段不允许声明执行、网络、文件或 SQL 能力：${key}`, `${path}.${key}`))
     scanDangerousKeys(child, `${path}.${key}`, issues)
   }
 }
@@ -192,6 +254,12 @@ function management(repository: StrategyCatalog): StrategyManagementRepository {
 export class StrategyService {
   constructor(private readonly catalog: StrategyCatalog, private readonly now: () => Date = () => new Date()) {}
 
+  async setAccountTrader(input: TraderControlInput) {
+    const repository = management(this.catalog)
+    if (!repository.setAccountTrader) throw new StrategyAccessError('strategy_management_unavailable', 503)
+    return repository.setAccountTrader(input)
+  }
+
   list(userId: number, kind?: StrategyKind) {
     return this.catalog.listAvailable(userId, kind)
   }
@@ -210,21 +278,35 @@ export class StrategyService {
   detail(userId: number, strategyId: string) { return management(this.catalog).findDetail(userId, strategyId) }
 
   async create(userId: number, input: Omit<CreateStrategyInput, 'userId'>) {
-    const compiled = compileStrategy(input.kind, input.promptText, input.config)
-    if (!compiled.valid) throw new StrategyAccessError('strategy_compile_invalid', 422, compiled.issues)
-    return management(this.catalog).create({ ...input, userId, compiled })
+    // Preparation runs only for a new request, after the durable replay lookup.
+    return management(this.catalog).create({ ...input, userId }, () => {
+      if ((input.kind !== 'analysis' && input.kind !== 'trader') || typeof input.name !== 'string'
+        || input.name.trim().length < 1 || input.name.trim().length > 191
+        || typeof input.description !== 'string' || input.description.trim().length > 2000) {
+        throw new StrategyAccessError('request_field_invalid', 422)
+      }
+      const compiled = compileStrategy(input.kind, input.promptText, input.config)
+      if (!compiled.valid) throw new StrategyAccessError('strategy_compile_invalid', 422, compiled.issues)
+      return { name: input.name.trim(), description: input.description.trim(), promptText: input.promptText.trim(), compiled }
+    })
   }
 
   async updateMetadata(input: Omit<UpdateStrategyMetadataInput, 'userId'> & { userId: number }) {
-    return management(this.catalog).updateMetadata(input)
+    return management(this.catalog).updateMetadata(input, () => {
+      if (typeof input.name !== 'string' || input.name.trim().length < 1 || input.name.trim().length > 191
+        || typeof input.description !== 'string' || input.description.trim().length > 2000) {
+        throw new StrategyAccessError('request_field_invalid', 422)
+      }
+      return { name: input.name.trim(), description: input.description.trim() }
+    })
   }
 
-  async createVersion(input: Omit<CreateStrategyVersionInput, 'userId' | 'compiled'> & { userId: number; promptText: unknown; config: unknown }) {
-    const detail = await this.detail(input.userId, input.strategyId)
-    if (!detail) throw new StrategyAccessError('strategy_not_found', 404)
-    const compiled = compileStrategy(detail.summary.kind, input.promptText, input.config)
-    if (!compiled.valid) throw new StrategyAccessError('strategy_compile_invalid', 422, compiled.issues)
-    return management(this.catalog).createVersion({ ...input, promptText: String(input.promptText).trim(), config: compiled.normalizedConfig, compiled })
+  async createVersion(input: CreateStrategyVersionInput) {
+    return management(this.catalog).createVersion(input, kind => {
+      const compiled = compileStrategy(kind, input.promptText, input.config)
+      if (!compiled.valid) throw new StrategyAccessError('strategy_compile_invalid', 422, compiled.issues)
+      return compiled
+    })
   }
 
   publishVersion(input: PublishStrategyVersionInput) { return management(this.catalog).publishVersion(input) }
@@ -232,50 +314,56 @@ export class StrategyService {
 
   listSubscriptions(userId: number, tradingAccountId?: string) { return management(this.catalog).listSubscriptions(userId, tradingAccountId) }
 
-  async createSubscription(userId: number, input: Omit<CreateStrategySubscriptionInput, 'userId' | 'nextDueAt'>) {
-    if (input.status === 'ended') throw new StrategyAccessError('subscription_status_invalid', 422)
-    const analysis = await this.requireActiveVersion(userId, input.analysisStrategyId, 'analysis')
-    if (!input.analysisEnabled && input.traderEnabled) throw new StrategyAccessError('subscription_analysis_required', 422)
-    let trader: StrategyVersion | null = null
-    if (input.traderEnabled && !input.traderStrategyId) throw new StrategyAccessError('subscription_trader_required', 422)
-    const traderStrategyId = input.traderStrategyId
-    if (traderStrategyId) trader = await this.requireActiveVersion(userId, traderStrategyId, 'trader')
-    if (input.tradeSendEnabled && !input.traderEnabled) throw new StrategyAccessError('subscription_trader_required', 422)
-    const nextDueAt = input.status === 'active' && input.analysisEnabled ? nextScheduleDue(this.now(), 300) : null
-    return management(this.catalog).createSubscription({ ...input, userId, analysisStrategyId: analysis.strategyId, traderStrategyId: trader?.strategyId ?? null, nextDueAt })
+  async createSubscription(userId: number, input: Omit<CreateStrategySubscriptionInput, 'userId'>) {
+    return management(this.catalog).createSubscription({ ...input, userId }, () => {
+      const status = input.status ?? 'active'
+      if (status !== 'active' && status !== 'paused') throw new StrategyAccessError('subscription_status_invalid', 422)
+      for (const value of [input.analysisEnabled, input.traderEnabled, input.tradeSendEnabled]) {
+        if (value !== undefined && typeof value !== 'boolean') throw new StrategyAccessError('request_field_invalid', 422)
+      }
+      const analysisEnabled = input.analysisEnabled ?? true, traderEnabled = input.traderEnabled ?? false
+      const tradeSendEnabled = input.tradeSendEnabled ?? false, traderStrategyId = input.traderStrategyId ?? null
+      if (!analysisEnabled && traderEnabled) throw new StrategyAccessError('subscription_analysis_required', 422)
+      if (traderEnabled && !traderStrategyId) throw new StrategyAccessError('subscription_trader_required', 422)
+      const standardSymbol = typeof input.standardSymbol === 'string' ? input.standardSymbol.trim().toUpperCase() : ''
+      if (!/^[A-Z0-9._-]{1,64}$/.test(standardSymbol) || /[^A-Z0-9._-]/.test(standardSymbol)) throw new StrategyAccessError('request_field_invalid', 422)
+      return { ...prepareTimeWindow(input.receiveWindow ?? { enabled: false }), standardSymbol, traderStrategyId, analysisEnabled, traderEnabled, tradeSendEnabled, status,
+        nextDueAt: status === 'active' && analysisEnabled ? nextScheduleDue(this.now(), 300) : null }
+    })
   }
 
-  async updateSubscription(input: Omit<UpdateStrategySubscriptionInput, 'nextDueAt'> & { userId: number }) {
-    const current = await management(this.catalog).findSubscription(input.userId, input.subscriptionId)
-    if (!current) throw new StrategyAccessError('strategy_subscription_not_found', 404)
-    if (current.status === 'ended') throw new StrategyAccessError('strategy_subscription_ended', 409)
-    const analysisStrategyId = input.analysisStrategyId ?? current.analysisStrategyId
-    const analysisChanged = input.analysisStrategyId !== undefined && input.analysisStrategyId !== current.analysisStrategyId
-    const analysis = analysisChanged ? await this.requireActiveVersion(input.userId, analysisStrategyId, 'analysis') : null
-    const traderStrategyId = input.traderStrategyId === undefined ? current.traderStrategyId : input.traderStrategyId
-    const traderChanged = input.traderStrategyId !== undefined && input.traderStrategyId !== current.traderStrategyId
-    const trader = traderChanged && traderStrategyId ? await this.requireActiveVersion(input.userId, traderStrategyId, 'trader') : null
-    const analysisEnabled = input.analysisEnabled ?? current.analysisEnabled
-    const traderEnabled = input.traderEnabled ?? current.traderEnabled
-    const tradeSendEnabled = input.tradeSendEnabled ?? current.tradeSendEnabled
-    if (!analysisEnabled && traderEnabled) throw new StrategyAccessError('subscription_analysis_required', 422)
-    if (traderEnabled && !traderStrategyId) throw new StrategyAccessError('subscription_trader_required', 422)
-    if (tradeSendEnabled && !traderEnabled) throw new StrategyAccessError('subscription_trader_required', 422)
-    const status = input.status ?? current.status
-    const nextDueAt = status === 'active' && analysisEnabled ? nextScheduleDue(this.now(), current.schedule.cadenceSeconds) : null
-    const update: UpdateStrategySubscriptionInput = {
-      userId: input.userId, subscriptionId: input.subscriptionId, expectedRevision: input.expectedRevision,
-      analysisStrategyId, traderStrategyId: trader?.strategyId ?? traderStrategyId, analysisEnabled, traderEnabled,
-      tradeSendEnabled, status, nextDueAt,
-      ...(input.standardSymbol === undefined ? {} : { standardSymbol: input.standardSymbol }),
-      ...(analysis ? { analysisStrategyVersionId: analysis.id } : {}),
-      ...(traderChanged ? { traderStrategyVersionId: trader?.id ?? null } : {}),
-    }
-    return management(this.catalog).updateSubscription(update)
+  async updateSubscription(input: UpdateStrategySubscriptionInput) {
+    return management(this.catalog).updateSubscription(input, current => {
+      if (current.status === 'ended') throw new StrategyAccessError('strategy_subscription_ended', 409)
+      const analysisStrategyId = input.analysisStrategyId ?? current.analysisStrategyId
+      const traderStrategyId = input.traderStrategyId === undefined ? current.traderStrategyId : input.traderStrategyId
+      for (const value of [input.analysisEnabled, input.traderEnabled, input.tradeSendEnabled]) {
+        if (value !== undefined && typeof value !== 'boolean') throw new StrategyAccessError('request_field_invalid', 422)
+      }
+      const analysisEnabled = input.analysisEnabled ?? current.analysisEnabled
+      const traderEnabled = input.traderEnabled ?? current.traderEnabled
+      const tradeSendEnabled = input.tradeSendEnabled ?? current.tradeSendEnabled
+      if (!analysisEnabled && traderEnabled) throw new StrategyAccessError('subscription_analysis_required', 422)
+      if (traderEnabled && !traderStrategyId) throw new StrategyAccessError('subscription_trader_required', 422)
+      const status = input.status ?? current.status
+      if (!['active', 'paused', 'ended'].includes(status)) throw new StrategyAccessError('subscription_status_invalid', 422)
+      const standardSymbol = input.standardSymbol === undefined ? current.standardSymbol : input.standardSymbol.trim().toUpperCase()
+      if (!/^[A-Z0-9._-]{1,64}$/.test(standardSymbol) || /[^A-Z0-9._-]/.test(standardSymbol)) throw new StrategyAccessError('request_field_invalid', 422)
+      return { ...prepareTimeWindow(input.receiveWindow ?? current.schedule.receiveWindow), analysisStrategyId, traderStrategyId, analysisEnabled, traderEnabled, tradeSendEnabled, status, standardSymbol,
+        nextDueAt: status !== 'active' || !analysisEnabled ? null : input.receiveWindow !== undefined || analysisEnabled !== current.analysisEnabled || status !== current.status || analysisStrategyId !== current.analysisStrategyId
+          ? nextScheduleDue(this.now(), current.schedule.cadenceSeconds) : current.schedule.nextDueAt }
+    })
   }
 }
 
 function nextScheduleDue(now: Date, cadenceSeconds: number) {
   const cadence = Math.max(60, Math.trunc(cadenceSeconds)) * 1000
   return new Date(Math.floor(now.getTime() / cadence) * cadence + cadence).toISOString()
+}
+
+function prepareTimeWindow(raw: Record<string, unknown>) {
+  const receiveWindow = structuredClone(raw), receiveTimezone = receiveWindow.enabled ? 'terminal_server' : 'UTC'
+  try { evaluateSubscriptionWindow(receiveWindow, receiveWindow.version === 1 ? 'terminal_server' : receiveTimezone, new Date(), null) }
+  catch { throw new StrategyAccessError('subscription_window_invalid', 422) }
+  return { receiveWindow, receiveTimezone: receiveWindow.version === 1 ? 'terminal_server' : receiveTimezone }
 }

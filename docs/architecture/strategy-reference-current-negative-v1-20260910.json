@@ -1,0 +1,12 @@
+{
+  "kind": "strategy-reference-current-negative-path/v1",
+  "passed": true,
+  "writes": 0,
+  "checks": [
+    "actual-execution-schema-admitted",
+    "missing-analysis-source-rejected-before-live-route-lookup",
+    "repeated-errors-rollback-and-release-pooled-connection"
+  ],
+  "positivePortfolioVerified": false,
+  "observedAt": "2026-09-10T15:19:23.589Z"
+}

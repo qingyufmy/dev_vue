@@ -1,11 +1,12 @@
-import { runContextCommand, recoverContextCommand, contextCommandState } from '~/features/trading-context'
-import { applyAccountSnapshot } from '~/features/trading-context'
-import { observerChannels, tradingAccounts, tradingContext, applyTradingContext, applyTradingAccounts, applyObserverChannels, createRequestScope } from '~/features/trading-context'
+import { applyPublicSnapshot, mergePublicHistory } from './public-market-state'
+import { preferredOnlineAccount, runContextCommand, recoverContextCommand, contextCommandState } from '~/features/trading-context'
+import { applyAccountSnapshot, activeMarketSymbol } from '~/features/trading-context'
+import { applyPublicDisplayClock, observerChannels, tradingAccounts, tradingContext, applyTradingContext, applyTradingAccounts, applyObserverChannels, createRequestScope } from '~/features/trading-context'
 import { ApiClientError, createApiClient } from '@aurum/api-client'
 import { computed, ref, watch } from 'vue'
 import type { MarketAnalysisSummary, StrategySummary, Timeframe } from '@aurum/contracts'
 import { useTradeSession } from '~/features/auth'
-import { accountSnapshot, clearAccountRuntime, marketCandles, marketQuote, openPositions, pendingOrders, resourceRevisions } from './home-runtime'
+import { accountSnapshot, marketSourceKey, clearAccountRuntime, marketCandles, marketQuote, marketStructure, openPositions, pendingOrders, resourceRevisions } from './home-runtime'
 import { startTradingRealtime, stopTradingRealtime } from './trading-realtime'
 
 const client = createApiClient()
@@ -16,9 +17,30 @@ export function useHomeWorkspace() {
   const marketLoading = ref(false)
   const marketError = ref('')
   const symbol = ref('')
+  watch(symbol, value => { if (value) activeMarketSymbol.value = value })
   const symbols = ref<string[]>([])
   const timeframe = ref<Timeframe>('M5')
   const marketHistoryVersion = ref(0)
+  const historyLoading = ref(false)
+  const historyMessage = ref('')
+  let exhaustedBefore = ''
+  let historyRetryAt = 0
+  async function loadOlderHistory() {
+    const before = marketCandles.value[0]?.openTime
+    if (Date.now() < historyRetryAt || !before || historyLoading.value || exhaustedBefore === before || marketLoading.value) return
+    const current = requests.begin('older-history'), source = marketSourceKey.value
+    const requestedSymbol = symbol.value, requestedTimeframe = timeframe.value
+    historyLoading.value = true; historyMessage.value = ''; historyRetryAt = Date.now() + 750
+    try {
+      const result = await client.getPublicMarketSnapshot(requestedSymbol, requestedTimeframe, 200, before)
+      if (!current() || requestedSymbol !== symbol.value || requestedTimeframe !== timeframe.value || source !== marketSourceKey.value) return
+      if (result.data.source_key !== source) { await refreshMarket(); return }
+      if (!result.data.candles.length) { exhaustedBefore = before; historyMessage.value = '已到当前缓存最早历史'; return }
+      mergePublicHistory(result.data)
+      marketHistoryVersion.value += 1
+    } catch { if (current()) { historyRetryAt = Date.now() + 3000; historyMessage.value = '历史加载失败，可重试' } }
+    finally { historyLoading.value = false }
+  }
   const activeAccountId = ref<string | null>(null)
   const latestAnalysis = ref<MarketAnalysisSummary | null>(null)
   const analysisStrategies = ref<StrategySummary[]>([])
@@ -59,15 +81,15 @@ export function useHomeWorkspace() {
       const context = contextResponse.data
       let observer = context.mode === 'observer' ? observerChannels.value.find((item) => item.id === context.observerChannelId && item.active) : null
       if (context.mode === 'observer' && !observer) throw new Error('当前观摩授权已失效，请退出观摩后重新选择')
-      let selected = observer?.sourceAccountId ?? context.accountId ?? tradingAccounts.value[0]?.id ?? null
-      if (!selected) { activeAccountId.value = null; clearAccountRuntime(); return }
+      let selected = observer?.sourceAccountId ?? preferredOnlineAccount(tradingAccounts.value, context.accountId)
+      if (!selected) { activeAccountId.value = null; clearAccountRuntime(); await loadMarket('', true, null); return }
       if (context.mode !== 'observer' && selected !== context.accountId && session.value) {
         const selectedContext = (await runContextCommand(session.value, 'select_account', selected, context.revision)).data
         if (!current()) return
         applyTradingContext(selectedContext)
         observer = selectedContext.mode === 'observer' ? observerChannels.value.find(item => item.id === selectedContext.observerChannelId && item.active) : null
         selected = observer?.sourceAccountId ?? selectedContext.accountId
-        if (!selected) { activeAccountId.value = null; clearAccountRuntime(); return }
+        if (!selected) { activeAccountId.value = null; clearAccountRuntime(); await loadMarket('', true, null); return }
       }
       await loadAccount(selected, true, observer?.id ?? null)
     } catch (reason) {
@@ -102,25 +124,28 @@ export function useHomeWorkspace() {
     error.value = ''
     applyAccountSnapshot(workspace.snapshot); openPositions.value = workspace.positions.items; pendingOrders.value = workspace.pendingOrders.items
     resourceRevisions.value.account = workspace.snapshot?.revision ?? 0; resourceRevisions.value.positions = workspace.positions.revision; resourceRevisions.value.pendingOrders = workspace.pendingOrders.revision
-    symbols.value = workspace.symbols
-    if (!symbol.value || !workspace.symbols.includes(symbol.value)) symbol.value = workspace.symbols[0] ?? ''
-    if (symbol.value) await loadMarket(accountId, false, observerChannelId, scope)
+    await loadMarket(accountId, false, observerChannelId, scope)
   }
 
   async function loadMarket(accountId = activeAccountId.value ?? '', reconnect = true, observerChannelId: string | null = tradingContext.value?.mode === 'observer' ? tradingContext.value.observerChannelId ?? null : null, scope = scopeVersion) {
-    if (!accountId || !symbol.value || scope !== scopeVersion) return
+    if (scope !== scopeVersion) return
     const current = requests.begin('market')
-    const requestedSymbol = symbol.value
-    const requestedTimeframe = timeframe.value
-    const result = await Promise.all([
-      client.getMarketQuote(accountId, requestedSymbol, observerChannelId), client.getMarketCandles(accountId, requestedSymbol, requestedTimeframe, 200, observerChannelId),
-    ]).catch(reason => { if (!current()) return null; clearForbiddenSnapshot(reason, scope); throw reason })
-    if (!result || !current() || accountId !== activeAccountId.value
-      || requestedSymbol !== symbol.value || requestedTimeframe !== timeframe.value) return
-    const [quote, candles] = result
-    marketQuote.value = quote.data; marketCandles.value = candles.data.items; marketHistoryVersion.value += 1
-    resourceRevisions.value.quote = quote.data?.revision ?? 0; resourceRevisions.value.candle = candles.data.items.at(-1)?.revision ?? 0
-    if (reconnect && session.value) await startTradingRealtime(session.value, accountId, symbol.value, timeframe.value, observerChannelId, () => syncAccountSnapshot(accountId, observerChannelId, scope), () => { void loadLatestAnalysis() })
+    marketError.value = ''
+    const directory = await client.getPublicMarketSymbols()
+    if (!current()) return
+    applyPublicDisplayClock(directory.data.timezone ?? null)
+    symbols.value = directory.data.items
+    if (!symbols.value.includes(symbol.value)) symbol.value = symbols.value.includes('XAUUSD') ? 'XAUUSD' : symbols.value[0] ?? ''
+    if (!symbol.value) return
+    const requestedSymbol = symbol.value, requestedTimeframe = timeframe.value
+    const result = await client.getPublicMarketSnapshot(requestedSymbol, requestedTimeframe)
+      .catch(reason => { if (!current()) return null; clearForbiddenSnapshot(reason, scope); throw reason })
+    if (!result || !current() || requestedSymbol !== symbol.value || requestedTimeframe !== timeframe.value) return
+    exhaustedBefore = ''; historyMessage.value = ''
+    applyPublicSnapshot(result.data)
+    marketHistoryVersion.value += 1
+    if (reconnect && session.value) await startTradingRealtime(session.value, accountId, symbol.value, timeframe.value, observerChannelId,
+      () => accountId ? syncAccountSnapshot(accountId, observerChannelId, scope) : loadMarket('', false, null, scope), () => { void loadLatestAnalysis() })
   }
 
   async function selectAccount(accountId: string) {
@@ -172,7 +197,7 @@ export function useHomeWorkspace() {
   async function refreshMarket() {
     const current = requests.begin('market-selection')
     stopTradingRealtime()
-    marketQuote.value = null; marketCandles.value = []
+    marketQuote.value = null; marketCandles.value = []; marketStructure.value = null
     resourceRevisions.value.quote = 0; resourceRevisions.value.candle = 0
     marketLoading.value = true; marketError.value = ''
     try { await loadMarket() }
@@ -233,8 +258,9 @@ export function useHomeWorkspace() {
     if (session.value) void load()
   }, { flush: 'sync' })
 
-  return { loading, error, symbol, symbols, timeframe, marketHistoryVersion, accounts: tradingAccounts, observers: observerChannels, context: tradingContext,
-    snapshot: accountSnapshot, quote: marketQuote, candles: marketCandles, positions: openPositions, pendingOrders,
+  return { marketSourceKey, historyLoading, historyMessage, loadOlderHistory, loading, error, symbol, symbols, timeframe, marketHistoryVersion, accounts: tradingAccounts, observers: observerChannels, context: tradingContext,
+    positionsConfirmed: computed(() => resourceRevisions.value.positions > 0), ordersConfirmed: computed(() => resourceRevisions.value.pendingOrders > 0),
+    snapshot: accountSnapshot, quote: marketQuote, candles: marketCandles, structure: marketStructure, positions: openPositions, pendingOrders,
     latestAnalysis, analysisStrategies, analysisLoading, analysisError, marketLoading, marketError, refreshMarket,
     hasAccount: computed(() => Boolean(activeAccountId.value)), load, selectAccount, selectObserver, leaveObserver, selectSymbol, selectTimeframe, stop }
 }

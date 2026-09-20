@@ -1,0 +1,15 @@
+{
+  "kind": "risk-current-upgrade-inspection/v1",
+  "passed": true,
+  "observedAt": "2026-09-08T23:25:54.379Z",
+  "status": "pending",
+  "ddlCount": 0,
+  "identity": {
+    "database": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "historyCount": 166,
+  "proofHash": "29463ff2444117212de2fe808cb2bbecf4bfd424192bd4b0eddefddd3619db5a",
+  "sourceWrites": 0,
+  "scope": "Current database identity, full prior proof, table state and protected rows verified. No upgrade executed."
+}

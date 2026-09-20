@@ -1,4 +1,7 @@
-import type { FastifyPluginAsync } from 'fastify'
+import { randomUUID } from 'node:crypto'
+import { createHttpContractValidator } from '../../../../transport/http-contract.js'
+import { httpRuntimeContracts } from '../../../../transport/generated/http-contracts.js'
+import type { FastifyPluginAsync, FastifyReply } from 'fastify'
 import { AuthError } from '../../../auth/index.js'
 import type { ReferralRuleManagementService, RuleChange } from '../../application/referral-rule-management.js'
 
@@ -26,36 +29,51 @@ function changesFromBody(body: unknown): RuleChange[] {
 }
 
 export const referralRuleRoutes: FastifyPluginAsync<ReferralRuleRoutesOptions> = async (app, options) => {
+  const contract = createHttpContractValidator(httpRuntimeContracts, ['listReferralRules', 'updateReferralRules'])
   app.get('/rules', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
     try {
       const actor = await options.auth.authenticate(request)
       if (Object.keys(request.query as object).length) throw Error('referral_rule_update_invalid')
+      contract.request('listReferralRules', request)
       const rules = await options.service.list(actor)
-      reply.header('Cache-Control', 'no-store')
-      return { data: { rules: rules.map(rule => ({ rule_id: rule.id, plan: rule.plan, period: rule.period,
+      return contract.response('listReferralRules', { data: { rules: rules.map(rule => ({ rule_id: rule.id, plan: rule.plan, period: rule.period,
         rate_bps: rule.rateBps, enabled: rule.enabled, revision: rule.revision })) },
-        meta: { request_id: request.id, generated_at: new Date().toISOString() } }
+        meta: { request_id: request.id, generated_at: new Date().toISOString() } })
     } catch (error) {
-      const code = error instanceof AuthError ? error.code : error instanceof Error && Object.hasOwn(statuses, error.message) ? error.message : 'referral_rule_unavailable'
-      const status = error instanceof AuthError ? error.status : statuses[code] ?? 503
-      return reply.code(status).send({ type: `urn:aurum:problem:${code}`, title: '返佣规则读取失败', status, code,
-        detail: '暂时无法读取规则，请检查权限后重试。', instance: request.url, correlation_id: request.id, retryable: status === 503 })
+      return failure(error, request.id, reply, contract, 'listReferralRules')
     }
   })
   app.put<{ Body: unknown }>('/rules', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store')
     try {
       const actor = await options.auth.assertWrite(request)
       const key = request.headers['idempotency-key']
-      if (typeof key !== 'string') throw Error('referral_rule_update_invalid')
+      if (typeof key !== 'string' || Object.keys(request.query as object).length) throw Error('referral_rule_update_invalid')
+      try { contract.request('updateReferralRules', request) } catch { throw Error('referral_rule_update_invalid') }
       const result = await options.service.update(actor, key, changesFromBody(request.body))
-      return { data: { rules: result.rules.map(rule => ({ rule_id: String(rule.id), revision: rule.revision })), replayed: result.replayed },
-        meta: { request_id: request.id, generated_at: new Date().toISOString() } }
+      try { return contract.response('updateReferralRules', { data: { rules: result.rules.map(rule => ({ rule_id: String(rule.id), revision: rule.revision })), replayed: result.replayed },
+        meta: { request_id: request.id, generated_at: new Date().toISOString() } }) }
+      catch { throw Error('referral_rule_commit_unknown') }
     } catch (error) {
-      const code = error instanceof AuthError ? error.code : error instanceof Error && Object.hasOwn(statuses, error.message) ? error.message : 'referral_rule_unavailable'
-      const status = error instanceof AuthError ? error.status : statuses[code] ?? 503
-      return reply.code(status).send({ type: `urn:aurum:problem:${code}`, title: '返佣规则更新失败', status, code,
-        detail: status === 503 ? '暂时无法确认结果，请保留原请求编号。' : '请检查权限、请求内容及规则版本。',
-        instance: request.url, correlation_id: request.id, retryable: status === 503 })
+      return failure(error, request.id, reply, contract, 'updateReferralRules')
     }
   })
+}
+
+function failure(error: unknown, id: string, reply: FastifyReply,
+  contract: ReturnType<typeof createHttpContractValidator>, operation: 'listReferralRules' | 'updateReferralRules') {
+  const code = error instanceof AuthError ? error.code : error instanceof Error && Object.hasOwn(statuses, error.message) ? error.message : 'referral_rule_unavailable'
+  const status = error instanceof AuthError ? error.status : statuses[code] ?? 503
+  const body = { type: `urn:aurum:problem:${code}`, title: '返佣规则请求失败', status, code,
+    detail: status === 503 && operation === 'updateReferralRules' ? '暂时无法确认结果，请保留原请求编号和内容。' : '请检查权限、请求内容及规则版本。',
+    instance: '/api/v4/admin/referrals/rules', correlation_id: id, retryable: status === 503 }
+  try {
+    return reply.type('application/problem+json').code(status).send(contract.response(operation, body, status, 'application/problem+json'))
+  } catch {
+    const fallbackCode = operation === 'updateReferralRules' ? 'referral_rule_commit_unknown' : 'referral_rule_unavailable'
+    const fallback = { ...body, type: `urn:aurum:problem:${fallbackCode}`, code: fallbackCode, status: 503,
+      detail: '暂时无法确认结果，请保留原请求编号和内容。', correlation_id: randomUUID(), retryable: true }
+    return reply.type('application/problem+json').code(503).send(contract.response(operation, fallback, 503, 'application/problem+json'))
+  }
 }

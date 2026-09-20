@@ -1,0 +1,116 @@
+{
+  "kind": "strategy-subscription-data-transition/v1",
+  "mode": "--apply-current",
+  "target": "dev_vue",
+  "passed": true,
+  "currentDevVueWrites": 27,
+  "runtimeEnabled": false,
+  "stage": "commit_and_replay",
+  "baselineDifferences": [],
+  "writeAttempted": true,
+  "ledgerDeltas": {
+    "data_migration_runs": 1,
+    "data_migration_checkpoints": 2,
+    "data_migration_batches": 2,
+    "data_migration_row_receipts": 8,
+    "data_migration_source_rows": 8,
+    "data_migration_id_maps": 17
+  },
+  "runId": "bc0aa74e-052b-fef5-db1a-61e65edad228",
+  "candidateHash": "44941c52d850fbdb6b535390690222c34cd9bb6c55bd14c9a8655e7201dd8838",
+  "targetDeltas": {
+    "strategies": 6,
+    "strategy_versions": 6,
+    "strategy_subscriptions": 5,
+    "subscription_schedules": 5,
+    "subscription_execution_preferences": 5
+  },
+  "oldBusinessTablesUnchanged": true,
+  "replayedAfterCommitUnknown": false,
+  "replayNoAdditionalRows": true,
+  "oldMigrationLedgerUnchanged": true,
+  "backupReceiptSha256": "5c3901ad66471bc14618f285e0ce041091ed84639a9aee1d6b381843fb9aab9d",
+  "fullForeignKeysRetained": true,
+  "beforeHash": "d87526f94d0d57dd102318ff6b9044822defa92394233dc78df164caca92b85d",
+  "afterHash": "d5b7612614db7cc0b09646ca9462b2a19ecfe6beb534179403e0ea6235950728",
+  "admissions": [
+    {
+      "sourceId": "1",
+      "sourceHash": "f021d377dd4027a7848ff1f6dd397de88b654830d23dc149ded83328c19a2232",
+      "originalStatus": "active",
+      "targetStatus": "draft",
+      "runtimeAdmission": "blocked",
+      "semanticAcceptance": "pending",
+      "configStatus": "partial",
+      "configProblems": [
+        {
+          "field": "use_chan_analysis",
+          "code": "chan_runtime_mapping_required"
+        }
+      ]
+    },
+    {
+      "sourceId": "2",
+      "sourceHash": "6188d7ae3349483b4e925b1746508e07c37ac55375078908f0d2cc65f16cb6aa",
+      "originalStatus": "retired",
+      "targetStatus": "retired",
+      "runtimeAdmission": "blocked",
+      "semanticAcceptance": "pending",
+      "configStatus": "converted",
+      "configProblems": []
+    },
+    {
+      "sourceId": "3",
+      "sourceHash": "551f24f510d6e45474721481b330ddfb911cb7d60e6ca57fd75b7e85e609a927",
+      "originalStatus": "active",
+      "targetStatus": "draft",
+      "runtimeAdmission": "blocked",
+      "semanticAcceptance": "pending",
+      "configStatus": "converted",
+      "configProblems": []
+    }
+  ],
+  "subscriptionAdmissions": [
+    {
+      "sourceId": "1",
+      "sourceHash": "b5b4d5c669e7be4d7e958163d9185b4e9c7148203106438f835097443ef492ec",
+      "targetAccountId": "1",
+      "ownershipDisposition": "current_owner",
+      "status": "paused",
+      "runtimePermissionGranted": false
+    },
+    {
+      "sourceId": "2",
+      "sourceHash": "633090efec9bb02391af9ed7c81ed9d5cbe98445760f5e360e8a7c762cdf4dbc",
+      "targetAccountId": "2",
+      "ownershipDisposition": "historical_only",
+      "status": "ended",
+      "runtimePermissionGranted": false
+    },
+    {
+      "sourceId": "3",
+      "sourceHash": "6008e13722929cc87769c2e1fe3495ed094f51aaf805546588c30b17d477c8c3",
+      "targetAccountId": "1",
+      "ownershipDisposition": "current_owner",
+      "status": "paused",
+      "runtimePermissionGranted": false
+    },
+    {
+      "sourceId": "4",
+      "sourceHash": "1296a9c4ca7fdf9f82f1bb75aa65c94483a2d83b8d5463a5487d8054a9440210",
+      "targetAccountId": "2",
+      "ownershipDisposition": "historical_only",
+      "status": "ended",
+      "runtimePermissionGranted": false
+    },
+    {
+      "sourceId": "5",
+      "sourceHash": "ab16f2f8c1404b3b621e2a8266e3b3f56ea72b7b3882257c7b53f623acd62fee",
+      "targetAccountId": "2",
+      "ownershipDisposition": "current_owner",
+      "status": "paused",
+      "runtimePermissionGranted": false
+    }
+  ],
+  "observedAt": "2026-09-11T01:40:24.371Z"
+}

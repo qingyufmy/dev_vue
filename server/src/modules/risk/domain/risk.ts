@@ -3,6 +3,11 @@ export type { RiskPolicyValues, AccountRiskPolicyPatch, RiskPolicyBoundary, Effe
 import { createHash } from 'node:crypto'
 import type { RiskJsonObject, RiskAction, RiskDecisionInput } from './risk-action.js'
 import { manualReleaseApplies, type ManualReleaseRuleCode, type ManualRiskRelease } from './manual-risk-release.js'
+import { resolvePositionTierActions, type PositionSizingContext } from './position-tier-actions.js'
+import { PositionSizingError, positionVolumeExceedsRiskBudget } from './position-tier-sizing.js'
+import type { StrategyBudgetContext } from './strategy-budget-context.js'
+import { actionRiskCeiling } from './action-risk-ceiling.js'
+import { PartialCloseError, resolvePartialCloseActions } from './partial-close-actions.js'
 
 export type RiskDecisionStatus = 'approved' | 'rejected'
 export type RiskRuleOutcome = 'passed' | 'rejected' | 'not_applicable'
@@ -16,6 +21,7 @@ export interface RiskInstrumentSnapshot {
   volumeMax: string
   volumeStep: string
   tradeEnabled: boolean
+  allowedOpenSides?: Array<'buy' | 'sell'>
   revision: number
 }
 
@@ -35,6 +41,10 @@ export interface RiskRuleResult {
 }
 
 export interface RiskEvaluationInput {
+  /** Trusted server evidence only; never copied from model action parameters. */
+  frozenPositions?: { positions: unknown[]; revision: number }
+  positionSizingContext?: PositionSizingContext
+  strategyBudgetContext?: StrategyBudgetContext
   decisionId: string
   decisionRevision: number
   decisionCreatedAt: string
@@ -83,25 +93,51 @@ export class RiskError extends Error {
 export const DEFAULT_RISK_POLICY: Readonly<RiskPolicyValues> = Object.freeze({
   allowedSymbols: ['*'], requireStopLoss: true, failClosedOnIncompleteData: true,
   maxRiskPerTradePercent: 1, maxDailyLossPercent: 3, maxDrawdownPercent: 8,
-  maxOpenPositions: 10, maxPendingOrders: 20, maxTotalVolume: 1, maxSpreadPoints: 120,
+  maxOpenPositions: 10, maxPendingOrders: 20, maxTotalVolume: 5, maxOrderVolume: 0.05, maxSpreadPoints: 120,
   maxQuoteAgeSeconds: 15, maxRiskSummaryAgeSeconds: 30, maxDecisionAgeSeconds: 300, maxPriceDeviationPercent: 0.1,
   manualReleaseEnabled: true, manualReleaseMaxDailyLossPercent: 5, manualReleaseMaxDrawdownPercent: 12,
   manualReleaseMaxDailyOpenCount: 30, manualReleaseConsecutiveLossLimit: 5,
   minOpenIntervalSeconds: 30, maxDailyOpenCount: 20, consecutiveLossLimit: 3,
-  lossCooldownMinutes: 60, pendingValidMinutes: 180, weekendCloseMinutes: 60,
+  lossCooldownMinutes: 60, pendingValidMinutes: 180, pendingDedupAtrMultiplier: 0.05, weekendCloseMinutes: 60,
   tradeSendEnabled: false, accountKillSwitch: false,
 })
 
 export const ACCOUNT_EDITABLE_FIELDS: Array<keyof AccountRiskPolicyPatch> = [
   'maxRiskPerTradePercent', 'maxDailyLossPercent', 'maxDrawdownPercent', 'maxOpenPositions',
-  'maxPendingOrders', 'maxTotalVolume', 'maxSpreadPoints', 'minOpenIntervalSeconds',
+  'maxPendingOrders', 'maxOrderVolume', 'maxTotalVolume', 'maxSpreadPoints', 'minOpenIntervalSeconds',
   'maxDailyOpenCount', 'consecutiveLossLimit', 'lossCooldownMinutes', 'pendingValidMinutes',
   'weekendCloseMinutes', 'tradeSendEnabled', 'accountKillSwitch',
 ]
 
+/** V4 persisted policies may omit newer fields; all consumers use this one compatibility rule. */
+export function readPlatformRiskValues(raw: string | object): RiskPolicyValues {
+  let parsed: unknown = raw
+  try { if (typeof raw === 'string') parsed = JSON.parse(raw) }
+  catch { throw new RiskError('risk_platform_policy_invalid', 409) }
+  const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
+  if (!isObject(parsed)) throw new RiskError('risk_platform_policy_invalid', 409)
+  const wrapped = Object.hasOwn(parsed, 'values')
+  if (wrapped && Object.keys(parsed).some(key => !['values', 'controls'].includes(key))) throw new RiskError('risk_platform_policy_unmapped', 409)
+  const values = wrapped ? parsed.values : parsed
+  if (!isObject(values)) throw new RiskError('risk_platform_policy_invalid', 409)
+  if (Object.keys(values).some(key => !Object.hasOwn(DEFAULT_RISK_POLICY, key))) throw new RiskError('risk_platform_policy_unmapped', 409)
+  // Missing maxOrderVolume in old V4 JSON resolves to 0.05, never maxTotalVolume.
+  // Legacy snake_case policies and independent controls require explicit migration.
+  const merged = { ...DEFAULT_RISK_POLICY, ...values } as RiskPolicyValues
+  const validated = assertPolicyValues(merged)
+  if (wrapped && Object.hasOwn(parsed, 'controls')) validateRiskPolicyControls(parsed.controls, validated)
+  return validated
+}
+
+export function readPlatformRiskControls(raw: string | object): NonNullable<RiskPolicyBoundary['controls']> {
+  const values = readPlatformRiskValues(raw)
+  const parsed = (typeof raw === 'string' ? JSON.parse(raw) : raw) as Record<string, unknown>
+  return validateRiskPolicyControls(Object.hasOwn(parsed, 'values') ? parsed.controls ?? {} : {}, values)
+}
+
 const lowerIsSafer = new Set<keyof AccountRiskPolicyPatch>([
   'maxRiskPerTradePercent', 'maxDailyLossPercent', 'maxDrawdownPercent', 'maxOpenPositions',
-  'maxPendingOrders', 'maxTotalVolume', 'maxSpreadPoints', 'maxDailyOpenCount',
+  'maxPendingOrders', 'maxOrderVolume', 'maxTotalVolume', 'maxSpreadPoints', 'maxDailyOpenCount',
   'consecutiveLossLimit', 'pendingValidMinutes',
 ])
 const higherIsSafer = new Set<keyof AccountRiskPolicyPatch>(['minOpenIntervalSeconds', 'lossCooldownMinutes', 'weekendCloseMinutes'])
@@ -117,8 +153,16 @@ export function resolveRiskPolicy(input: {
   updatedAt: string
 }): EffectiveRiskPolicy {
   const platform = assertPolicyValues({ ...input.platform.values, tradeSendEnabled: false, accountKillSwitch: false })
+  const controls = validateRiskPolicyControls(input.platform.controls ?? {}, platform)
+  for (const [key, control] of Object.entries(controls)) {
+    const field = key as keyof RiskPolicyValues
+    ;(platform[field] as number) = control!.lockedValue ?? Math.min(control!.allowedMax, Math.max(control!.allowedMin, platform[field] as number))
+  }
+  assertPolicyValues(platform)
   const values: RiskPolicyValues = { ...platform, allowedSymbols: [...platform.allowedSymbols] }
   for (const key of ACCOUNT_EDITABLE_FIELDS) {
+    const control = controls[key]
+    if ((control?.lockedValue !== null && control?.lockedValue !== undefined) || control?.userEditable === false) continue
     const candidate = input.account?.[key]
     if (candidate === undefined) continue
     if (typeof values[key] === 'boolean') {
@@ -126,6 +170,11 @@ export function resolveRiskPolicy(input: {
       continue
     }
     if (typeof candidate !== 'number' || !Number.isFinite(candidate)) throw new RiskError(`risk_policy_${String(key)}_invalid`, 422)
+    if (control) {
+      if (candidate < control.allowedMin || candidate > control.allowedMax) throw new RiskError(`risk_policy_${String(key)}_boundary_invalid`, 422)
+      ;(values[key] as number) = candidate
+      continue
+    }
     const boundary = platform[key]
     if (typeof boundary !== 'number') throw new RiskError(`risk_policy_${String(key)}_invalid`, 422)
     if (lowerIsSafer.has(key) && candidate > boundary) throw new RiskError(`risk_policy_${String(key)}_relaxation_forbidden`, 422)
@@ -134,12 +183,41 @@ export function resolveRiskPolicy(input: {
   }
   values.requireStopLoss = true
   values.failClosedOnIncompleteData = true
+  assertPolicyValues(values)
   return {
     accountId: input.accountId, userId: input.userId, platformPolicyVersionId: input.platformPolicyVersionId,
     accountPolicyVersionId: input.accountPolicyVersionId, policySetRevision: input.policySetRevision,
     globalKillSwitch: input.platform.globalKillSwitch,
-    values, editableFields: [...ACCOUNT_EDITABLE_FIELDS], updatedAt: input.updatedAt,
+    numericControls: controls, values, editableFields: ACCOUNT_EDITABLE_FIELDS.filter(key => !controls[key] || (controls[key]!.userEditable && controls[key]!.lockedValue === null)), updatedAt: input.updatedAt,
   }
+}
+
+export function validateRiskPolicyControls(raw: unknown, platform: RiskPolicyValues): NonNullable<RiskPolicyBoundary['controls']> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new RiskError('risk_platform_controls_invalid', 409)
+  const result: NonNullable<RiskPolicyBoundary['controls']> = {}
+  for (const [key, value] of Object.entries(raw)) {
+    if (!Object.hasOwn(DEFAULT_RISK_POLICY, key)) throw new RiskError('risk_platform_policy_unmapped', 409)
+    if (typeof platform[key as keyof RiskPolicyValues] !== 'number'
+      || !value || typeof value !== 'object' || Array.isArray(value)) throw new RiskError('risk_platform_control_invalid', 409)
+    if (Object.keys(value).sort().join(',') !== 'allowedMax,allowedMin,lockedValue,userEditable') throw new RiskError('risk_platform_control_invalid', 409)
+    const control = value as import('./risk-state.js').RiskNumericControl
+    if (!Number.isFinite(control.allowedMin) || !Number.isFinite(control.allowedMax) || control.allowedMin < 0
+      || control.allowedMin > control.allowedMax || typeof control.userEditable !== 'boolean'
+      || control.lockedValue !== null && (!Number.isFinite(control.lockedValue) || control.lockedValue < control.allowedMin || control.lockedValue > control.allowedMax)) {
+      throw new RiskError('risk_platform_control_invalid', 409)
+    }
+    // Reuse field validation for integer counts and positive durations; cross-field
+    // manual-release relationships are validated after effective values are resolved.
+    const integral = ['maxOpenPositions', 'maxPendingOrders', 'maxQuoteAgeSeconds', 'maxRiskSummaryAgeSeconds', 'maxDecisionAgeSeconds',
+      'manualReleaseMaxDailyOpenCount', 'manualReleaseConsecutiveLossLimit', 'minOpenIntervalSeconds', 'maxDailyOpenCount',
+      'consecutiveLossLimit', 'lossCooldownMinutes', 'pendingValidMinutes', 'weekendCloseMinutes'].includes(key)
+    if (integral && ![control.allowedMin, control.allowedMax, control.lockedValue ?? control.allowedMin].every(Number.isSafeInteger)) throw new RiskError('risk_platform_control_invalid', 409)
+    if (['maxQuoteAgeSeconds', 'maxRiskSummaryAgeSeconds', 'maxDecisionAgeSeconds', 'pendingValidMinutes', 'maxOrderVolume'].includes(key)
+      && control.allowedMin <= 0) throw new RiskError('risk_platform_control_invalid', 409)
+    if (key === 'pendingDedupAtrMultiplier' && (control.allowedMax > 5 || control.userEditable)) throw new RiskError('risk_platform_control_invalid', 409)
+    result[key as keyof RiskPolicyValues] = { ...control }
+  }
+  return result
 }
 
 export function assertAccountPolicyPatch(value: AccountRiskPolicyPatch) {
@@ -207,6 +285,22 @@ export function evaluateRisk(input: RiskEvaluationInput, now = new Date()): Risk
   }
 
   if (input.summary.accountId !== input.policy.accountId || input.summary.userId !== input.policy.userId) return reject('RISK_ACCOUNT_SCOPE_MISMATCH')
+  try { for (const action of input.result.actions) actionRiskCeiling(action) }
+  catch (error) {
+    if (error instanceof PositionSizingError) return reject(`RISK_${error.code.toUpperCase()}`)
+    throw error
+  }
+  if (input.strategyBudgetContext) {
+    const context = input.strategyBudgetContext
+    if (context.decisionId !== input.decisionId || context.decisionRevision !== input.decisionRevision
+      || context.userId !== input.policy.userId || context.accountId !== input.policy.accountId
+      || context.subscriptionRevision !== input.currentRevisions.subscription) return reject('RISK_STRATEGY_BUDGET_CONTEXT_STALE')
+    pass('RISK_STRATEGY_BUDGET_VERIFIED', { strategy_id: context.strategyId, version_id: context.versionId,
+      snapshot_id: context.snapshotId, snapshot_hash: context.snapshotHash, decision_hash: context.decisionHash,
+      prompt_hash: context.promptHash, config_hash: context.configHash,
+      strategy_risk_ceiling_percent: context.strategyRiskCeilingPercent ?? null,
+      ...(context.strategyRiskSelection ? { strategy_risk_selection: { ...context.strategyRiskSelection } } : {}) })
+  }
   if (input.summary.revision !== input.currentRevisions.risk) return reject('RISK_SUMMARY_REVISION_STALE')
   const requiredRevisionKeys = input.requiredRevisionKeys ?? Object.keys(input.currentRevisions) as Array<keyof RiskEvaluationInput['currentRevisions']>
   for (const action of input.result.actions) {
@@ -225,6 +319,14 @@ export function evaluateRisk(input: RiskEvaluationInput, now = new Date()): Risk
 
   if (!policy.tradeSendEnabled) return reject('RISK_TRADE_SEND_DISABLED')
 
+  let closePrepared: ReturnType<typeof resolvePartialCloseActions>
+  try { closePrepared = resolvePartialCloseActions(input) }
+  catch (error) {
+    if (error instanceof PartialCloseError) return reject(`RISK_${error.code.toUpperCase()}`)
+    throw error
+  }
+  rules.push(...closePrepared.rules)
+
   for (const action of riskReducing) {
     const ticket = String(action.parameters.ticket ?? '')
     const inventory = action.kind === 'cancel_order' || action.kind === 'modify_order' ? input.pendingOrders : input.positions
@@ -232,7 +334,7 @@ export function evaluateRisk(input: RiskEvaluationInput, now = new Date()): Risk
   }
   if (riskIncreasing.length === 0) {
     pass('RISK_REDUCING_ACTION_ALLOWED')
-    return result('approved', null, rules, input.result.actions, input.policy, now)
+    return result('approved', null, rules, closePrepared.actions, input.policy, now)
   }
 
   if (input.policy.globalKillSwitch) return reject('RISK_GLOBAL_KILL_SWITCH')
@@ -273,16 +375,23 @@ export function evaluateRisk(input: RiskEvaluationInput, now = new Date()): Risk
   const spreadPoints = (ask - bid) / point
   if (spreadPoints > policy.maxSpreadPoints) return reject('RISK_SPREAD_LIMIT', null, { spread_points: Number(spreadPoints.toFixed(4)) })
 
+  let prepared: ReturnType<typeof resolvePositionTierActions>
+  try { prepared = resolvePositionTierActions({ ...input, result: { ...input.result, actions: closePrepared.actions } }, riskPolicyHash(input.policy)) }
+  catch (error) {
+    if (error instanceof PositionSizingError) return reject(`RISK_${error.code.toUpperCase()}`)
+    throw error
+  }
+  rules.push(...prepared.rules)
   let addedVolume = 0
   for (const action of riskIncreasing) {
-    const actionResult = evaluateAction(action, input, ask, bid)
+    const actionResult = evaluateAction(prepared.actions[input.result.actions.indexOf(action)]!, input, ask, bid)
     rules.push(...actionResult.rules)
     if (actionResult.rejectCode) return result('rejected', actionResult.rejectCode, rules, [], input.policy, now)
     addedVolume += actionResult.addedVolume
   }
   if (Number(input.summary.totalVolume) + addedVolume > policy.maxTotalVolume + 1e-9) return reject('RISK_TOTAL_VOLUME_LIMIT')
   pass('RISK_POLICY_APPROVED', { added_volume: Number(addedVolume.toFixed(8)) })
-  return result('approved', null, rules, input.result.actions, input.policy, now, releaseApplied ? input.manualRelease ?? null : null)
+  return result('approved', null, rules, prepared.actions, input.policy, now, releaseApplied ? input.manualRelease ?? null : null)
 }
 
 function evaluateAction(action: RiskAction, input: RiskEvaluationInput, ask: number, bid: number) {
@@ -294,10 +403,12 @@ function evaluateAction(action: RiskAction, input: RiskEvaluationInput, ask: num
   const params = action.parameters
   const side = String(params.side ?? (String(params.type ?? '').startsWith('buy') ? 'buy' : String(params.type ?? '').startsWith('sell') ? 'sell' : ''))
   if (side !== 'buy' && side !== 'sell') return fail('RISK_ACTION_SIDE_INVALID')
+  if (input.instrument.allowedOpenSides && !input.instrument.allowedOpenSides.includes(side)) return fail('RISK_INSTRUMENT_DIRECTION_DISABLED')
   const volume = decimal(params.volume, 'risk_action_volume_invalid')
   const stopLoss = decimal(params.stop_loss ?? params.sl, 'risk_action_stop_loss_invalid')
   const entry = action.kind === 'market_order' ? (side === 'buy' ? ask : bid) : decimal(params.price, 'risk_action_price_invalid')
   if (volume <= 0 || entry <= 0 || stopLoss <= 0) return fail('RISK_ACTION_NUMERIC_INVALID')
+  if (volume > input.policy.values.maxOrderVolume + 1e-9) return fail('RISK_ORDER_VOLUME_LIMIT')
   if ((side === 'buy' && stopLoss >= entry) || (side === 'sell' && stopLoss <= entry)) return fail('RISK_STOP_LOSS_DIRECTION_INVALID')
   const volumeMin = decimal(input.instrument.volumeMin, 'risk_instrument_volume_invalid')
   const volumeMax = decimal(input.instrument.volumeMax, 'risk_instrument_volume_invalid')
@@ -309,12 +420,25 @@ function evaluateAction(action: RiskAction, input: RiskEvaluationInput, ask: num
   if (tickSize <= 0 || tickValue <= 0 || equity <= 0) return fail('RISK_CALCULATION_DATA_INVALID')
   const riskAmount = Math.abs(entry - stopLoss) / tickSize * tickValue * volume
   const riskPercent = riskAmount / equity * 100
-  if (riskPercent > input.policy.values.maxRiskPerTradePercent + 1e-9) return fail('RISK_PER_TRADE_LIMIT', { risk_percent: Number(riskPercent.toFixed(6)) })
+  const actionCeiling = actionRiskCeiling(action)
+  try {
+    if (positionVolumeExceedsRiskBudget({ equity: input.summary.equity,
+      maxRiskPerTradePercent: String(input.policy.values.maxRiskPerTradePercent), volume: String(params.volume),
+      ...(actionCeiling === undefined ? {} : { actionRiskCeilingPercent: actionCeiling }),
+      ...(input.strategyBudgetContext?.strategyRiskCeilingPercent === undefined ? {} : { strategyRiskCeilingPercent: input.strategyBudgetContext.strategyRiskCeilingPercent }),
+      entry: String(action.kind === 'market_order' ? (side === 'buy' ? input.quote.ask : input.quote.bid) : params.price),
+      stopLoss: String(params.stop_loss ?? params.sl), tickSize: input.instrument.tickSize, tickValue: input.instrument.tickValue,
+    })) return fail('RISK_PER_TRADE_LIMIT', { risk_percent: Number(riskPercent.toFixed(6)) })
+  } catch (error) {
+    if (error instanceof PositionSizingError) return fail('RISK_CALCULATION_DATA_INVALID')
+    throw error
+  }
   if (params.reference_price === undefined) return fail('RISK_REFERENCE_PRICE_REQUIRED')
   const reference = decimal(params.reference_price, 'risk_reference_price_invalid')
   if (reference <= 0) return fail('RISK_REFERENCE_PRICE_INVALID')
   if (Math.abs(entry - reference) / reference * 100 > input.policy.values.maxPriceDeviationPercent) return fail('RISK_PRICE_DEVIATION_LIMIT')
   pass('RISK_ACTION_APPROVED', {
+    action_risk_ceiling_percent: actionCeiling ?? null,
     risk_amount: Number(riskAmount.toFixed(8)),
     risk_percent: Number(riskPercent.toFixed(6)),
     volume,
@@ -376,6 +500,9 @@ function isRiskReducing(action: RiskAction, input: RiskEvaluationInput) {
 }
 
 function assertPolicyValues(value: RiskPolicyValues): RiskPolicyValues {
+  if (typeof value.maxOrderVolume !== 'number' || !Number.isFinite(value.maxOrderVolume) || value.maxOrderVolume <= 0) throw new RiskError('risk_platform_order_volume_invalid', 500)
+  if (typeof value.pendingDedupAtrMultiplier !== 'number' || !Number.isFinite(value.pendingDedupAtrMultiplier)
+    || value.pendingDedupAtrMultiplier < 0 || value.pendingDedupAtrMultiplier > 5) throw new RiskError('risk_platform_pending_dedup_invalid', 500)
   if (value.requireStopLoss !== true || value.failClosedOnIncompleteData !== true) throw new RiskError('risk_platform_mandatory_rule_invalid', 500)
   if (!Array.isArray(value.allowedSymbols)) throw new RiskError('risk_allowed_symbols_invalid', 500)
   const allowedSymbols = [...new Set(value.allowedSymbols.map(symbol => typeof symbol === 'string' ? symbol.trim().toUpperCase() : '').filter(Boolean))]
@@ -387,8 +514,8 @@ function assertPolicyValues(value: RiskPolicyValues): RiskPolicyValues {
     value.minOpenIntervalSeconds, value.maxDailyOpenCount, value.consecutiveLossLimit,
     value.lossCooldownMinutes, value.pendingValidMinutes, value.weekendCloseMinutes].every(Number.isSafeInteger)) throw new RiskError('risk_platform_integer_rule_invalid', 500)
   if (value.maxQuoteAgeSeconds < 1 || value.maxRiskSummaryAgeSeconds < 1 || value.maxDecisionAgeSeconds < 1 || value.pendingValidMinutes < 1) throw new RiskError('risk_platform_duration_rule_invalid', 500)
-  if (value.manualReleaseMaxDailyLossPercent < value.maxDailyLossPercent || value.manualReleaseMaxDrawdownPercent < value.maxDrawdownPercent
-    || value.manualReleaseMaxDailyOpenCount < value.maxDailyOpenCount || value.manualReleaseConsecutiveLossLimit < value.consecutiveLossLimit) throw new RiskError('risk_platform_manual_release_boundary_invalid', 500)
+  if (value.manualReleaseEnabled && (value.manualReleaseMaxDailyLossPercent < value.maxDailyLossPercent || value.manualReleaseMaxDrawdownPercent < value.maxDrawdownPercent
+    || value.manualReleaseMaxDailyOpenCount < value.maxDailyOpenCount || value.manualReleaseConsecutiveLossLimit < value.consecutiveLossLimit)) throw new RiskError('risk_platform_manual_release_boundary_invalid', 500)
   if (typeof value.manualReleaseEnabled !== 'boolean' || typeof value.tradeSendEnabled !== 'boolean' || typeof value.accountKillSwitch !== 'boolean') throw new RiskError('risk_platform_toggle_rule_invalid', 500)
   return { ...value, allowedSymbols }
 }

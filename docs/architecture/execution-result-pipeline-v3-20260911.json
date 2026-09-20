@@ -1,0 +1,43 @@
+{
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "syntheticPorts": [
+    "model-result",
+    "trader-context-builder",
+    "active-strategy-reader",
+    "instrument-reader"
+  ],
+  "foreignKeysVerified": false,
+  "checks": [
+    "analysis-result-and-trader-task-commit-with-UTC-and-outbox",
+    "duplicate-completion-rejected",
+    "real-outbox-to-BullMQ-consumer-preserves-run-and-analysis-identity",
+    "replayed-publication-does-not-deliver-a-second-job",
+    "real-TraderWorker-commits-nonempty-decision-once",
+    "persisted-decision-published-to-real-risk-queue",
+    "real-risk-worker-approves-once-with-frozen-strategy-evidence",
+    "approved-risk-event-reaches-execution-queue",
+    "real-execution-preparation-persists-one-intent-reservation-and-operation",
+    "execution-preparation-replay-preserves-original-identity"
+  ],
+  "traderResult": {
+    "status": "succeeded"
+  },
+  "riskResult": {
+    "status": "approved",
+    "rejectCode": null
+  },
+  "operationHttp": {
+    "status": 503,
+    "code": "execution_unavailable"
+  },
+  "errorCode": "ERR_ASSERTION",
+  "locations": [
+    "    at file:///D:/dev_codex/dev_vue/scripts/verify-analysis-completion-reference-local.mjs:264:16",
+    "    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)"
+  ],
+  "referenceQueueRemoved": true,
+  "referenceRiskQueueRemoved": true,
+  "referenceExecutionQueueRemoved": true,
+  "referenceDatabaseRemoved": true
+}

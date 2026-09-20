@@ -1,0 +1,14 @@
+{
+  "kind": "clock-observation-writer-reference/v1",
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "referenceDatabaseRemoved": true,
+  "checks": [
+    "actual-writer-sql",
+    "transaction-rollback",
+    "raw-status-preserved",
+    "duplicate-rejected",
+    "calibrated-null-rejected"
+  ],
+  "scope": "Synthetic route and minimal parent fixtures; actual writer and canonical table. Not live Bridge calibration."
+}

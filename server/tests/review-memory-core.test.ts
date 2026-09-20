@@ -72,9 +72,9 @@ describe('Stage 12R review and strategy memory core', () => {
   it('keeps retry and refreshed-evidence generation modes distinct', async () => {
     const repo = repository(); const request = vi.spyOn(repo.value, 'requestGeneration')
     const service = new ReviewService(repo.value, () => new Date(now))
-    await service.requestGeneration(7, 'case-1', 3, 'retry')
+    await service.requestGeneration(7, 'case-1', 3, 'retry', 'review-generation-0001')
     expect(request).toHaveBeenCalledWith(expect.objectContaining({ mode: 'retry', expectedRevision: 3 }))
-    expect(() => service.requestGeneration(7, 'case-1', 3, 'replace')).toThrowError(expect.objectContaining({ code: 'review_generation_mode_invalid' }))
+    expect(() => service.requestGeneration(7, 'case-1', 3, 'replace', 'review-generation-0001')).toThrowError(expect.objectContaining({ code: 'review_generation_mode_invalid' }))
   })
 
   it('keeps the migration append-only and separates review jobs from provider attempts', async () => {
@@ -117,9 +117,9 @@ describe('Stage 12R review and strategy memory core', () => {
       diffPreviewText: '', conflicts: [], createdAt: now, revision: 3,
     })
     const service = new ReviewService(repo.value, () => new Date(now))
-    await service.decideMemoryUpdate(7, 'update-1', 2, 'revoke')
+    await service.decideMemoryUpdate(7, 'update-1', 2, 'revoke', 'memory-decision-0001')
     expect(decide).toHaveBeenCalledWith(expect.objectContaining({ decision: 'revoke', expectedRevision: 2 }))
-    expect(() => service.decideMemoryUpdate(7, 'update-1', 2, 'restore')).toThrowError(expect.objectContaining({ code: 'strategy_memory_decision_invalid' }))
+    expect(() => service.decideMemoryUpdate(7, 'update-1', 2, 'restore', 'memory-decision-0001')).toThrowError(expect.objectContaining({ code: 'strategy_memory_decision_invalid' }))
   })
 
   it('routes only the review job id to the isolated low-priority queue', async () => {

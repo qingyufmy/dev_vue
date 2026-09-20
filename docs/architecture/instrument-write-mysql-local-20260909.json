@@ -1,0 +1,23 @@
+{
+  "passed": true,
+  "scope": "temporary_table_real_transaction_semantics",
+  "persistentWrites": 0,
+  "checks": [
+    "commit_and_identical_replay_without_revision_growth",
+    "version_conflict_and_stale_observation_rollback",
+    "revoked_replay_and_account_identity_rejected",
+    "exact_decimal_raw_evidence_and_utc_preserved"
+  ],
+  "sources": {
+    "server/src/modules/trading/infrastructure/mysql-trading-repository.ts": "b57e1a7c24ac307e3a4fd24461ea3e2c41a7929d00f6d33d5a8ea2e3f6c5f238",
+    "server/src/modules/trading/domain/instrument-projection.ts": "54a60bee2209e5dedbed3a1c438be40afff4fb425b73c984da802783633f5aad",
+    "server/dist-v4/modules/trading/infrastructure/mysql-trading-repository.js": "4869957a3f0d5e4b9132a4e33308a9c098241f004700455b13f2e652779f7159"
+  },
+  "identity": {
+    "db": "dev_vue",
+    "uuid": "ac423207-6ef3-11f1-b302-000c29fda104",
+    "tz": "+00:00",
+    "version": "8.4.8"
+  },
+  "finishedAt": "2026-09-09T02:57:16.464Z"
+}

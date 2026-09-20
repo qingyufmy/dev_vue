@@ -1,0 +1,7 @@
+{
+  "kind": "clock-observation-writer-reference/v1",
+  "passed": false,
+  "existingDatabaseWrites": 0,
+  "referenceDatabaseRemoved": true,
+  "errorCode": "TypeError"
+}

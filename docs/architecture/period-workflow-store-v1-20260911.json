@@ -1,0 +1,16 @@
+{
+  "kind": "period-workflow-store-reference/v1",
+  "passed": true,
+  "existingDatabaseWrites": 0,
+  "referenceDatabaseRemoved": true,
+  "checks": [
+    "registration-rollback",
+    "unique-scope-replay",
+    "transition-rollback",
+    "plan-persisted-before-request",
+    "empty-period-completion",
+    "completed-no-reactivation",
+    "corrupt-progress-rejected"
+  ],
+  "scope": "Actual workflow engine and MySQL store; authorization, clock, history and review ports are synthetic. No live scheduler or terminal."
+}

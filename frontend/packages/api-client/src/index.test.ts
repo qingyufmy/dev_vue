@@ -4,6 +4,16 @@ import { z } from 'zod'
 import { createApiClient } from './index'
 
 describe('createApiClient', () => {
+  it('queries the original risk receipt key and preserves unconfirmed without issuing a write', async () => {
+    const meta = { request_id: 'receipt-test', generated_at: '2026-09-09T00:00:00.000Z' }
+    const fetchImpl = vi.fn<typeof fetch>().mockImplementation(async () => new Response(JSON.stringify({ data: { state: 'unconfirmed', release: null }, meta }), { status: 200 }))
+    const client = createApiClient({ fetchImpl })
+    expect((await client.getManualRiskReleaseReceipt('account/7', 'original:key')).data).toEqual({ state: 'unconfirmed', release: null })
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('/api/v4/risk-accounts/account%2F7/manual-release-receipt?idempotency_key=original%3Akey')
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(() => client.getManualRiskReleaseReceipt('account/7', 'bad')).toThrow()
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
   it('always uses the current host session cookie', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({ data: 'ok' }), {
       headers: { 'Content-Type': 'application/json' },
@@ -109,7 +119,7 @@ describe('createApiClient', () => {
     const meta = { request_id: 'analysis', generated_at: '2026-09-04T04:00:00.000Z' }
     const fetchImpl = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: { items: [] }, meta }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { items: [] }, meta }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: { items: [], next_cursor: null }, meta }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ data: {
         analysis_id: 'run-1', strategy_id: 'strategy/1', strategy_version_id: 'version-1', symbol: 'XAUUSD',
         trigger: 'manual', status: 'queued', created_at: '2026-09-04T04:00:00.000Z',
@@ -122,7 +132,7 @@ describe('createApiClient', () => {
     await client.createManualAnalysis('csrf', { strategy_id: 'strategy/1', symbol: 'XAUUSD', mode: 'manual' }, 'manual-analysis-idempotency-1')
 
     expect(fetchImpl.mock.calls[0]?.[0]).toBe('/api/v4/strategies?kind=analysis')
-    expect(fetchImpl.mock.calls[1]?.[0]).toBe('/api/v4/market-analyses?page_size=100')
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe('/api/v4/market-analyses?page_size=200')
     expect(fetchImpl.mock.calls[2]?.[0]).toBe('/api/v4/analysis-jobs')
     const [, request] = fetchImpl.mock.calls[2] ?? []
     expect(new Headers(request?.headers).get('X-CSRF-Token')).toBe('csrf')
@@ -147,7 +157,7 @@ describe('createApiClient', () => {
     await client.listTradeDecisions('account/7', 200)
     await client.getTradeDecision('decision/1')
 
-    expect(fetchImpl.mock.calls[0]?.[0]).toBe('/api/v4/trade-decisions?account_id=account%2F7&page_size=100')
+    expect(fetchImpl.mock.calls[0]?.[0]).toBe('/api/v4/trade-decisions?account_id=account%2F7&page_size=200')
     expect(fetchImpl.mock.calls[1]?.[0]).toBe('/api/v4/trade-decisions/decision%2F1')
   })
 
@@ -239,7 +249,7 @@ describe('createApiClient', () => {
       manual_release_enabled: true, manual_release_max_daily_loss_percent: '5', manual_release_max_drawdown_percent: '12',
       manual_release_max_daily_open_count: 30, manual_release_consecutive_loss_limit: 5,
       max_risk_per_trade_percent: '1', max_daily_loss_percent: '3', max_drawdown_percent: '8', max_open_positions: 5,
-      max_pending_orders: 5, max_total_volume: '2', max_spread_points: '30', min_open_interval_seconds: 60,
+      max_pending_orders: 5, max_order_volume: '0.05', max_total_volume: '2', max_spread_points: '30', min_open_interval_seconds: 60,
       max_daily_open_count: 20, consecutive_loss_limit: 3, loss_cooldown_minutes: 15, pending_valid_minutes: 240,
       weekend_close_minutes: 30, trade_send_enabled: true, account_kill_switch: false, require_stop_loss: true,
       editable_fields: ['max_risk_per_trade_percent', 'trade_send_enabled'], revision: '3', updated_at: generatedAt,
@@ -274,7 +284,7 @@ describe('createApiClient', () => {
     await client.getRiskPolicy('account/7')
     await client.getRiskSummary('account/7')
     await client.getManualRiskRelease('account/7')
-    await client.replaceRiskPolicy('csrf', 'account/7', { max_risk_per_trade_percent: '0.5', reason: '降低风险' }, 3)
+    await client.replaceRiskPolicy('csrf', 'account/7', { max_risk_per_trade_percent: '0.5', reason: '降低风险' }, 3, 'original-policy-key')
     await client.createManualRiskRelease('csrf', 'account/7', { acknowledge_risk: true, reason: '确认风险后恢复交易' }, 8, 'risk-release-idempotency-1')
     await client.listRiskDecisions('account/7', 200)
     await client.getRiskDecision('risk/1')
@@ -290,6 +300,7 @@ describe('createApiClient', () => {
     ])
     const [, policyRequest] = fetchImpl.mock.calls[3] ?? []
     expect(new Headers(policyRequest?.headers).get('If-Match')).toBe('"3"')
+    expect(new Headers(policyRequest?.headers).get('Idempotency-Key')).toBe('original-policy-key')
     const [, releaseRequest] = fetchImpl.mock.calls[4] ?? []
     expect(new Headers(releaseRequest?.headers).get('If-Match')).toBe('"8"')
     expect(new Headers(releaseRequest?.headers).get('Idempotency-Key')).toBe('risk-release-idempotency-1')
@@ -354,14 +365,14 @@ describe('strategy management API client', () => {
 
     await client.getStrategy('strategy/1')
     await client.compileStrategy('csrf', { kind: 'analysis', prompt_text: '分析黄金', config: { timeframes: ['M5'] } })
-    await client.createStrategy('csrf', { kind: 'analysis', name: '黄金分析', description: '结构', prompt_text: '分析黄金', config: {} })
-    await client.updateStrategyMetadata('csrf', 'strategy/1', { name: '新名字', description: '新说明' }, 1)
-    await client.createStrategyVersion('csrf', 'strategy/1', { prompt_text: 'v2', config: {} }, 2)
-    await client.publishStrategyVersion('csrf', 'strategy/1', 'version/2', 3)
-    await client.retireStrategy('csrf', 'strategy/1', 4)
+    await client.createStrategy('csrf', { kind: 'analysis', name: '黄金分析', description: '结构', prompt_text: '分析黄金', config: {} }, 'strategy-create-001')
+    await client.updateStrategyMetadata('csrf', 'strategy/1', { name: '新名字', description: '新说明' }, 1, 'strategy-metadata-001')
+    await client.createStrategyVersion('csrf', 'strategy/1', { prompt_text: 'v2', config: {} }, 2, 'strategy-version-001')
+    await client.publishStrategyVersion('csrf', 'strategy/1', 'version/2', 3, 'strategy-publish-001')
+    await client.retireStrategy('csrf', 'strategy/1', 4, 'strategy-retire-001')
     await client.listStrategySubscriptions('account/1')
-    await client.createStrategySubscription('csrf', { trading_account_id: 'account/1', symbol: 'XAUUSD', analysis_strategy_id: 'strategy/1' })
-    await client.updateStrategySubscription('csrf', 'subscription/1', { status: 'paused' }, 1)
+    await client.createStrategySubscription('csrf', { trading_account_id: 'account/1', symbol: 'XAUUSD', analysis_strategy_id: 'strategy/1' }, 'subscription-create-001')
+    await client.updateStrategySubscription('csrf', 'subscription/1', { status: 'paused' }, 1, 'subscription-update-001')
 
     expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
       '/api/v4/strategies/strategy%2F1', '/api/v4/strategies/compile', '/api/v4/strategies',
@@ -375,6 +386,13 @@ describe('strategy management API client', () => {
       expect(new Headers(request?.headers).get('X-CSRF-Token')).toBe('csrf')
     }
     expect(new Headers(fetchImpl.mock.calls[3]?.[1]?.headers).get('If-Match')).toBe('"1"')
+    expect(new Headers(fetchImpl.mock.calls[2]?.[1]?.headers).get('Idempotency-Key')).toBe('strategy-create-001')
+    expect(new Headers(fetchImpl.mock.calls[3]?.[1]?.headers).get('Idempotency-Key')).toBe('strategy-metadata-001')
+    expect(new Headers(fetchImpl.mock.calls[4]?.[1]?.headers).get('Idempotency-Key')).toBe('strategy-version-001')
+    expect(new Headers(fetchImpl.mock.calls[5]?.[1]?.headers).get('Idempotency-Key')).toBe('strategy-publish-001')
+    expect(new Headers(fetchImpl.mock.calls[6]?.[1]?.headers).get('Idempotency-Key')).toBe('strategy-retire-001')
+    expect(new Headers(fetchImpl.mock.calls[8]?.[1]?.headers).get('Idempotency-Key')).toBe('subscription-create-001')
+    expect(new Headers(fetchImpl.mock.calls[9]?.[1]?.headers).get('Idempotency-Key')).toBe('subscription-update-001')
     expect(new Headers(fetchImpl.mock.calls[4]?.[1]?.headers).get('If-Match')).toBe('"2"')
     expect(new Headers(fetchImpl.mock.calls[9]?.[1]?.headers).get('If-Match')).toBe('"1"')
     expect(JSON.parse(String(fetchImpl.mock.calls[9]?.[1]?.body))).toEqual({ status: 'paused' })
@@ -383,7 +401,7 @@ describe('strategy management API client', () => {
   it('validates strategy request bodies before making a network call', async () => {
     const fetchImpl = vi.fn<typeof fetch>()
     const client = createApiClient({ fetchImpl })
-    expect(() => client.updateStrategySubscription('csrf', 'subscription/1', { status: 'bad' as never }, 1)).toThrow()
+    expect(() => client.updateStrategySubscription('csrf', 'subscription/1', { status: 'bad' as never }, 1, 'subscription-update-001')).toThrow()
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 })

@@ -1,0 +1,49 @@
+{
+  "kind": "auth-current-inprocess/v1",
+  "passed": true,
+  "checks": [
+    "anonymous-business-reads-rejected",
+    "real-password-login",
+    "authorization-code-exchange",
+    "authenticated-session",
+    "code-replay-rejected",
+    "authenticated-business-reads-and-foreign-review-denial",
+    "revoked-session-rejected-by-business-modules"
+  ],
+  "networkListenerStarted": false,
+  "browserVerified": false,
+  "sessionsCreated": 2,
+  "sessionsRevoked": 2,
+  "businessReads": [
+    {
+      "path": "/api/v4/trading-accounts",
+      "status": 200
+    },
+    {
+      "path": "/api/v4/strategies",
+      "status": 200
+    },
+    {
+      "path": "/api/v4/strategy-subscriptions",
+      "status": 200
+    },
+    {
+      "path": "/api/v4/review-cases",
+      "status": 200
+    },
+    {
+      "path": "/api/v4/strategy-memories",
+      "status": 200
+    },
+    {
+      "path": "owned-account-risk-policy",
+      "status": 200
+    },
+    {
+      "path": "owned-account-risk-policy",
+      "status": 200
+    }
+  ],
+  "ownedAccounts": 2,
+  "observedAt": "2026-09-11T04:23:51.537Z"
+}

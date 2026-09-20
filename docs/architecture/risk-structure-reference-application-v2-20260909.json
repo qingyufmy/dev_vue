@@ -1,0 +1,1472 @@
+{
+  "kind": "risk-structure-reference/v1",
+  "observedAt": "2026-09-09T00:33:14.072Z",
+  "identity": {
+    "database": "dev_vue",
+    "serverUuid": "ac423207-6ef3-11f1-b302-000c29fda104"
+  },
+  "serverVersion": "8.4.8",
+  "registryHash": "fe1811c8fac96c63691abcc4e9a11f7473bb00e123acd2cf6d23177feae7ec37",
+  "definitions": [
+    {
+      "stepId": "inplace_043_01_risk_policy_sets_v4",
+      "stepChecksum": "9e2139a0f833a85d9606042296f1c3185dfbcb331e0ab62a5f7c0c6c31b58abf",
+      "beforeHash": null,
+      "afterHash": "0b790b3d46daaa1a36a94f5784f1cc146ab15b868ef092f471830f96280a5d98",
+      "canonicalDdl": "CREATE TABLE `risk_policy_sets_v4` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `scope` enum('platform','account') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `owner_user_id` int DEFAULT NULL,\n  `trading_account_id` bigint unsigned DEFAULT NULL,\n  `name` varchar(191) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `status` enum('active','retired') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',\n  `active_version_id` bigint unsigned DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `active_scope_key` varchar(191) CHARACTER SET ascii COLLATE ascii_bin GENERATED ALWAYS AS ((case when (`status` = _utf8mb4'active') then (case when (`scope` = _utf8mb4'platform') then _utf8mb4'platform' else concat(_utf8mb4'account:',cast(`trading_account_id` as char charset utf8mb4)) end) else NULL end)) STORED,\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_risk_policy_active_scope` (`active_scope_key`),\n  UNIQUE KEY `uk_risk_policy_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `idx_risk_policy_owner` (`owner_user_id`,`trading_account_id`,`status`,`id`),\n  KEY `fk_risk_policy_account` (`trading_account_id`),\n  CONSTRAINT `fk_risk_policy_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_risk_policy_owner` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_risk_policy_scope` CHECK ((((`scope` = _utf8mb4'platform') and (`owner_user_id` is null) and (`trading_account_id` is null)) or ((`scope` = _utf8mb4'account') and (`owner_user_id` is not null) and (`trading_account_id` is not null))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "stepId": "inplace_043_02_risk_policy_versions_v4",
+      "stepChecksum": "fdabafbbd3c7c1e6b3312c2fe369194b2e56232299642fbc7f6a8705ea491e91",
+      "beforeHash": null,
+      "afterHash": "dfa7a7777c56b293e5a13842c071c401f1034962255bf373daed3aeba8cb880d",
+      "canonicalDdl": "CREATE TABLE `risk_policy_versions_v4` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `policy_set_id` bigint unsigned NOT NULL,\n  `version_number` int unsigned NOT NULL,\n  `policy_json` json NOT NULL,\n  `policy_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `created_by_user_id` int DEFAULT NULL,\n  `change_reason` varchar(500) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_risk_policy_version_identity` (`id`,`policy_set_id`),\n  UNIQUE KEY `uk_risk_policy_version_number` (`policy_set_id`,`version_number`),\n  UNIQUE KEY `uk_risk_policy_version_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `fk_risk_policy_version_actor` (`created_by_user_id`),\n  CONSTRAINT `fk_risk_policy_version_actor` FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_risk_policy_version_set` FOREIGN KEY (`policy_set_id`) REFERENCES `risk_policy_sets_v4` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "stepId": "inplace_043_03_risk_policy_sets_v4",
+      "stepChecksum": "a8bd3ef1c177d06dfb2a2c355c1a8ce3f961762274c5c9f9d37a774eaaa6f67a",
+      "beforeHash": "0b790b3d46daaa1a36a94f5784f1cc146ab15b868ef092f471830f96280a5d98",
+      "afterHash": "7a931972f59546b3b5b4ff7070672d9611507d76fdd3c0c12384bc18ae443718",
+      "canonicalDdl": "CREATE TABLE `risk_policy_sets_v4` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `scope` enum('platform','account') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `owner_user_id` int DEFAULT NULL,\n  `trading_account_id` bigint unsigned DEFAULT NULL,\n  `name` varchar(191) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `status` enum('active','retired') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',\n  `active_version_id` bigint unsigned DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  `active_scope_key` varchar(191) CHARACTER SET ascii COLLATE ascii_bin GENERATED ALWAYS AS ((case when (`status` = _utf8mb4'active') then (case when (`scope` = _utf8mb4'platform') then _utf8mb4'platform' else concat(_utf8mb4'account:',cast(`trading_account_id` as char charset utf8mb4)) end) else NULL end)) STORED,\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `updated_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_risk_policy_active_scope` (`active_scope_key`),\n  UNIQUE KEY `uk_risk_policy_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `idx_risk_policy_owner` (`owner_user_id`,`trading_account_id`,`status`,`id`),\n  KEY `fk_risk_policy_account` (`trading_account_id`),\n  KEY `fk_risk_policy_active_version` (`active_version_id`,`id`),\n  CONSTRAINT `fk_risk_policy_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_risk_policy_active_version` FOREIGN KEY (`active_version_id`, `id`) REFERENCES `risk_policy_versions_v4` (`id`, `policy_set_id`),\n  CONSTRAINT `fk_risk_policy_owner` FOREIGN KEY (`owner_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `chk_risk_policy_scope` CHECK ((((`scope` = _utf8mb4'platform') and (`owner_user_id` is null) and (`trading_account_id` is null)) or ((`scope` = _utf8mb4'account') and (`owner_user_id` is not null) and (`trading_account_id` is not null))))\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "stepId": "inplace_043_04_risk_policy_change_items_v4",
+      "stepChecksum": "74cafba203bf45ca117cf33072b47c797a21cc54278214e4dc4744dbd2a395ce",
+      "beforeHash": null,
+      "afterHash": "2e642fde712714d55782fbdd4bf551bae920dd832c4c3c4c389f4e6ef408f243",
+      "canonicalDdl": "CREATE TABLE `risk_policy_change_items_v4` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `policy_set_id` bigint unsigned NOT NULL,\n  `policy_version_id` bigint unsigned NOT NULL,\n  `field_code` varchar(80) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `old_value_json` json DEFAULT NULL,\n  `new_value_json` json DEFAULT NULL,\n  `change_class` enum('tighten','relax_within_platform','toggle','inherit') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `requested_by_user_id` int NOT NULL,\n  `reason` varchar(500) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `changed_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  KEY `idx_risk_policy_changes` (`policy_set_id`,`changed_at_utc`,`id`),\n  KEY `fk_risk_policy_change_version` (`policy_version_id`),\n  KEY `fk_risk_policy_change_actor` (`requested_by_user_id`),\n  CONSTRAINT `fk_risk_policy_change_actor` FOREIGN KEY (`requested_by_user_id`) REFERENCES `users` (`id`),\n  CONSTRAINT `fk_risk_policy_change_set` FOREIGN KEY (`policy_set_id`) REFERENCES `risk_policy_sets_v4` (`id`),\n  CONSTRAINT `fk_risk_policy_change_version` FOREIGN KEY (`policy_version_id`) REFERENCES `risk_policy_versions_v4` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "stepId": "inplace_043_05_account_risk_states",
+      "stepChecksum": "03deb6aa524b4a82b38ae3d5d8e5a66b29105dfc023f4bb29e6f8400c07be0d9",
+      "beforeHash": null,
+      "afterHash": "4db6d16d799e757edba4be707dd9ded038e3e8c8020d0b60bcda635df05a478d",
+      "canonicalDdl": "CREATE TABLE `account_risk_states` (\n  `trading_account_id` bigint unsigned NOT NULL,\n  `user_id` int NOT NULL,\n  `business_date` date DEFAULT NULL,\n  `equity` decimal(24,8) NOT NULL,\n  `free_margin` decimal(24,8) NOT NULL,\n  `daily_loss_percent` decimal(12,6) NOT NULL DEFAULT '0.000000',\n  `drawdown_percent` decimal(12,6) NOT NULL DEFAULT '0.000000',\n  `open_positions` int unsigned NOT NULL DEFAULT '0',\n  `pending_orders` int unsigned NOT NULL DEFAULT '0',\n  `total_volume` decimal(24,8) NOT NULL DEFAULT '0.00000000',\n  `daily_open_count` int unsigned NOT NULL DEFAULT '0',\n  `consecutive_losses` int unsigned NOT NULL DEFAULT '0',\n  `terminal_timezone_offset_minutes` smallint DEFAULT NULL,\n  `clock_status` enum('calibrated','observer_bootstrap','stale','unavailable') COLLATE utf8mb4_unicode_ci NOT NULL,\n  `last_successful_open_at_utc` datetime(3) DEFAULT NULL,\n  `cooldown_until_utc` datetime(3) DEFAULT NULL,\n  `data_complete` tinyint(1) NOT NULL DEFAULT '0',\n  `incomplete_reasons_json` json NOT NULL,\n  `observed_at_utc` datetime(3) NOT NULL,\n  `revision` bigint unsigned NOT NULL,\n  PRIMARY KEY (`trading_account_id`),\n  KEY `idx_account_risk_state_user` (`user_id`,`observed_at_utc`,`trading_account_id`),\n  CONSTRAINT `fk_account_risk_state_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_account_risk_state_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "stepId": "inplace_043_06_risk_state_events",
+      "stepChecksum": "74dd4a8595c3fcafc38810f699508b7cae375f2c77f301b42c5f35a835001f45",
+      "beforeHash": null,
+      "afterHash": "0c28e4e3a42fc3f02b7a3f28095329a82465c44875b6b48cf915adbeee783230",
+      "canonicalDdl": "CREATE TABLE `risk_state_events` (\n  `id` bigint unsigned NOT NULL AUTO_INCREMENT,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `user_id` int NOT NULL,\n  `event_type` varchar(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `from_revision` bigint unsigned DEFAULT NULL,\n  `to_revision` bigint unsigned NOT NULL,\n  `payload_json` json NOT NULL,\n  `occurred_at_utc` datetime(3) NOT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_risk_state_event_revision` (`trading_account_id`,`to_revision`),\n  KEY `idx_risk_state_events_user` (`user_id`,`occurred_at_utc`,`id`),\n  CONSTRAINT `fk_risk_state_event_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_risk_state_event_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "stepId": "inplace_043_07_account_risk_summaries",
+      "stepChecksum": "f31b9a669f69a5abef9b5dc98de02e9f3e5831d7dd4558b2ef2c743b5272786f",
+      "beforeHash": null,
+      "afterHash": "6ef593a712583d2ad55ab2af25fc5ba3f1bafd47c9f3306b68a872b65523901f",
+      "canonicalDdl": "CREATE TABLE `account_risk_summaries` (\n  `trading_account_id` bigint unsigned NOT NULL,\n  `policy_version_id` bigint unsigned DEFAULT NULL,\n  `payload_json` json NOT NULL,\n  `observed_at_utc` datetime(3) NOT NULL,\n  `revision` bigint unsigned NOT NULL,\n  PRIMARY KEY (`trading_account_id`),\n  KEY `idx_account_risk_summary_observed` (`observed_at_utc`),\n  CONSTRAINT `fk_account_risk_summary_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    },
+    {
+      "stepId": "inplace_043_08_risk_manual_releases",
+      "stepChecksum": "0d612bf20358b7990e64b4414340e6db42e091f7c4995bebf74a3e090ccaf825",
+      "beforeHash": null,
+      "afterHash": "d079f1d3ec62adf64e27a72097437d122b871812e33d4595a5eed89f555d0fc4",
+      "canonicalDdl": "CREATE TABLE `risk_manual_releases` (\n  `id` char(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `user_id` int NOT NULL,\n  `trading_account_id` bigint unsigned NOT NULL,\n  `platform_policy_version_id` bigint unsigned NOT NULL,\n  `account_policy_version_id` bigint unsigned DEFAULT NULL,\n  `policy_set_revision` bigint unsigned NOT NULL,\n  `risk_state_revision` bigint unsigned NOT NULL,\n  `released_rules_json` json NOT NULL,\n  `baseline_json` json NOT NULL,\n  `breach_fingerprint` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `reason` varchar(500) COLLATE utf8mb4_unicode_ci NOT NULL,\n  `idempotency_key` varchar(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `request_sha256` char(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,\n  `status` enum('active','superseded','expired','revoked') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'active',\n  `expires_at_utc` datetime(3) NOT NULL,\n  `created_at_utc` datetime(3) NOT NULL,\n  `invalidated_at_utc` datetime(3) DEFAULT NULL,\n  `invalidation_reason` varchar(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_source_table` varchar(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `legacy_id` varchar(191) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,\n  `revision` bigint unsigned NOT NULL DEFAULT '1',\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `uk_risk_manual_release_request` (`user_id`,`trading_account_id`,`idempotency_key`),\n  UNIQUE KEY `uk_risk_manual_release_episode` (`trading_account_id`,`breach_fingerprint`),\n  UNIQUE KEY `uk_risk_manual_release_legacy` (`legacy_source_table`,`legacy_id`),\n  KEY `idx_risk_manual_release_active` (`trading_account_id`,`status`,`expires_at_utc`,`created_at_utc`),\n  KEY `fk_risk_manual_release_platform_policy` (`platform_policy_version_id`),\n  KEY `fk_risk_manual_release_account_policy` (`account_policy_version_id`),\n  CONSTRAINT `fk_risk_manual_release_account` FOREIGN KEY (`trading_account_id`) REFERENCES `trading_accounts` (`id`),\n  CONSTRAINT `fk_risk_manual_release_account_policy` FOREIGN KEY (`account_policy_version_id`) REFERENCES `risk_policy_versions_v4` (`id`),\n  CONSTRAINT `fk_risk_manual_release_platform_policy` FOREIGN KEY (`platform_policy_version_id`) REFERENCES `risk_policy_versions_v4` (`id`),\n  CONSTRAINT `fk_risk_manual_release_user` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
+    }
+  ],
+  "tools": [
+    {
+      "path": "docs/architecture/account-root-write-freeze-probe-20260908-v4.json",
+      "sha256": "04da545fc15ae5bbcdb0492e7ceb39e13f65d345e3a239a51e5462a6685bb51d"
+    },
+    {
+      "path": "docs/architecture/account-wave-local-rehearsal-20260908-v3.json",
+      "sha256": "55ea6f7ea88e5cc09f30a9479f05235567eb11d9c44bb997ff492f82f7e96039"
+    },
+    {
+      "path": "docs/architecture/account-wave-projection-verification-20260908.json",
+      "sha256": "23e1e5f4fb6aae60ad5411b6e76bd3eb13fc101f53c0a9762f2540ec7319e730"
+    },
+    {
+      "path": "docs/architecture/current-account-projection-reference-20260908.json",
+      "sha256": "f4e7e894612767c04f07d0fd7b7922b2f36f3ba37b47116ff2407e7c05cbb455"
+    },
+    {
+      "path": "docs/architecture/current-context-receipt-schema-reference-20260908.json",
+      "sha256": "56cb25383c8db0250ba6542c638062b00be8114eccde93126c2fe476769dd5b2"
+    },
+    {
+      "path": "docs/architecture/current-legacy-candle-backfill-proof-20260908.json",
+      "sha256": "9f89c35f7469f562fe353650a4f5bb9293bf92ac10a68e81b1575dfa1dd30493"
+    },
+    {
+      "path": "docs/architecture/current-legacy-candle-backfill-repeat-20260908.json",
+      "sha256": "3fad9bf204ad47a058e64c1c62f7b3e87b7bba083cdd6a4c481780b626e8182f"
+    },
+    {
+      "path": "docs/architecture/current-legacy-candle-build-reference-20260908.json",
+      "sha256": "7cd56c24fce82c90e3c154b2cc4eee44e182badd6455f57ad09e7839baadd52b"
+    },
+    {
+      "path": "docs/architecture/current-legacy-candle-conversion-20260908.json",
+      "sha256": "f452de7dcacc1f50486191614fb88cba2015a47676ff0f3c79baf8091fe469b5"
+    },
+    {
+      "path": "docs/architecture/current-observer-context-reference-20260908.json",
+      "sha256": "d26dfffaa4a5ed333b07d111f94ab83c929c60f5fb8c4fa492bf72771dccb9dc"
+    },
+    {
+      "path": "docs/architecture/terminal-route-reference-20260908.json",
+      "sha256": "129434875a8ca6234052eb97892798bec2141c2602ac36fe5a15fdcb17a3fe93"
+    },
+    {
+      "path": "package.json",
+      "sha256": "8bfa1237b716c6950f97671915fbd52bbfdc3221c6a82368bc4c75c4fa41e925"
+    },
+    {
+      "path": "pnpm-lock.yaml",
+      "sha256": "12d1077f29170c6674bc3d1831a1cdf483c3593d5962f55b681663f3b706e443"
+    },
+    {
+      "path": "scripts/apply-risk-current-upgrade-local.mjs",
+      "sha256": "0abbc368ef7c194a4af97ef29121a664cb9914d976fba5511e0cfe3ab6842b3f"
+    },
+    {
+      "path": "scripts/backfill-current-legacy-candles-local.mjs",
+      "sha256": "07344f9ad116df6d3a8ef5efb57d7d638f2b527deba827f0740d1c3726d844c8"
+    },
+    {
+      "path": "scripts/backup-risk-dev-vue-local.mjs",
+      "sha256": "f9f7b624e87ce1b53685f66f26668921d5793c404db4f5762efe5fc5f6c0b89b"
+    },
+    {
+      "path": "scripts/capture-account-projection-reference-local.mjs",
+      "sha256": "276327d1e54d57a345bb16fa0cc85dc19e7659688f660dd195d8c47084247831"
+    },
+    {
+      "path": "scripts/capture-legacy-candle-reference-local.mjs",
+      "sha256": "72cd6c99eee5f7086ebfff3c67ef3fba4e00e54caa245094d67301cabe107408"
+    },
+    {
+      "path": "scripts/capture-observer-context-reference-local.mjs",
+      "sha256": "d77528eb9688e4d7707256e2eb22df7f601a92b694d3980bae6d984e8158cbfe"
+    },
+    {
+      "path": "scripts/capture-terminal-route-reference-local.mjs",
+      "sha256": "7ba19e7eed749080f4bfc455d19ed6d41fcc84429fede8123748a08b42722f29"
+    },
+    {
+      "path": "scripts/inspect-risk-restored-baseline-local.mjs",
+      "sha256": "2ddf6b0028c2119cfe8ea7fef9a345ab81a6a90d84f7ccc641f1d140c3e027bd"
+    },
+    {
+      "path": "scripts/lib/account-projection-coordinator.mjs",
+      "sha256": "a7de11d87ae3ecc5a88de45dd76f81522f48fa204b9f17629f5e1599899c00b7"
+    },
+    {
+      "path": "scripts/lib/account-projection-reference-checks.mjs",
+      "sha256": "33af08fc7de9bd1413d0b72ef4dbe175fc99d55cfab935bc672e102e275cc184"
+    },
+    {
+      "path": "scripts/lib/account-root-historical-schema.mjs",
+      "sha256": "9c33ce6c0549a0fa501bda468e14e25cf57e9872e47b0452e64635dde0404c99"
+    },
+    {
+      "path": "scripts/lib/account-root-promotion.mjs",
+      "sha256": "ef42c28c706e13df6f8470b7214eb43620ee8d6ffc3e45509d6577d02f55e795"
+    },
+    {
+      "path": "scripts/lib/account-root-write-freeze.mjs",
+      "sha256": "88029e81454a6e8624df7b30de0a5b46d5350da93f6758d9165e1c2dc40ef746"
+    },
+    {
+      "path": "scripts/lib/api-contract-bundle.mjs",
+      "sha256": "18ba655a4067ecd4ed6f6b83bf5da8c1c5a4504c11c8a6ba74b54d3c6bde3d2c"
+    },
+    {
+      "path": "scripts/lib/api-route-coverage.mjs",
+      "sha256": "89b51b2a35e43cb912625c76bef06764e11cb8c33f623e7f539cf8746e6fc773"
+    },
+    {
+      "path": "scripts/lib/api-schema-compiler.mjs",
+      "sha256": "8534f749221813c3c7b2b28f27c331509727b28d3e3b3faae11dbc43a4517634"
+    },
+    {
+      "path": "scripts/lib/boundary-debt.mjs",
+      "sha256": "fe8e52b40c57851b044148459fada30b281f09f7ba0d37bc6fdf55551f8ccb69"
+    },
+    {
+      "path": "scripts/lib/context-changes-coordinator.mjs",
+      "sha256": "db7445cc9b1fe1e6e10ab0804353beb8c67533c6a22b4f1101b40b942d16498b"
+    },
+    {
+      "path": "scripts/lib/context-changes-historical-connection.mjs",
+      "sha256": "86bd20a360fe23d9f060b2381d1f7bcb1039e5ca12efc63ab46a2e9528d84123"
+    },
+    {
+      "path": "scripts/lib/current-legacy-candle-backfill-proof.mjs",
+      "sha256": "d7120c851050dc34d33fc98fdffafe4d951b301ef157f6b8bfa512f425ad8460"
+    },
+    {
+      "path": "scripts/lib/database-structure-comparison.mjs",
+      "sha256": "464ee53d6a12389776eab489f2ff29c5a33b3ed6613463c5eaee4985c57fc170"
+    },
+    {
+      "path": "scripts/lib/default-normalization-scope.mjs",
+      "sha256": "e08b7567e097bcce2a0c18f90e7752d62c1af6ff03e206b3565bdcbd5fa7d9d0"
+    },
+    {
+      "path": "scripts/lib/dev-vue-column-upgrade.mjs",
+      "sha256": "b20ab4ba86a9b9b40ef9ea5ea559c812f3db8166db6b117c3bd94d49b40a41ac"
+    },
+    {
+      "path": "scripts/lib/dev-vue-inplace-review.mjs",
+      "sha256": "c814141b7e7c0fb2fcec45da6ab7b460d9375e32eb7dcfa25301637288af9922"
+    },
+    {
+      "path": "scripts/lib/execute-column-constraints-upgrade.mjs",
+      "sha256": "f99e1304df8c17aa37471f7536450b24f3097d567ef184d6b12af41a1abdae24"
+    },
+    {
+      "path": "scripts/lib/execute-default-normalization-upgrade.mjs",
+      "sha256": "98a9b4227657d377eec3d115406dc7cb6801224f9324e8e129844faca550a198"
+    },
+    {
+      "path": "scripts/lib/execute-foundation-foreign-key-upgrade.mjs",
+      "sha256": "babf0b55c28bb46d57a7601623c32684d8cd0697d0d40933927a2bdcde1777ee"
+    },
+    {
+      "path": "scripts/lib/execute-independent-structure-upgrade.mjs",
+      "sha256": "26909365d37efeea599cc6df9cbf85efdf5ced0f548d2f44ff6dc85d9f086b7d"
+    },
+    {
+      "path": "scripts/lib/execute-learning-completion-upgrade.mjs",
+      "sha256": "e5ab8cdce24a6a9674671b4636e4fa7f08d94e225cde9a63db4300a31fda966b"
+    },
+    {
+      "path": "scripts/lib/execute-learning-core-upgrade.mjs",
+      "sha256": "ef65bceb6b5b3b780f4ffb1cb2ea13962cf8eee6fc9c9e6b81213e2691dc6a07"
+    },
+    {
+      "path": "scripts/lib/execute-model-capacity-upgrade.mjs",
+      "sha256": "cf1469bf5ad5754a3b2cb366e5c1312eac71ed331bcceb136097297b1fd5d3d9"
+    },
+    {
+      "path": "scripts/lib/execute-model-check-upgrade.mjs",
+      "sha256": "8ec7006b0a6bd000431fb1401774938eabfdc209f489b1764e0a6b108b4e394a"
+    },
+    {
+      "path": "scripts/lib/execute-null-membership-wave.mjs",
+      "sha256": "6a0e92b837b3bca4c595122a6305392fcb203a3c4582862b747a26b74bb3e0c1"
+    },
+    {
+      "path": "scripts/lib/execute-referral-rule-audit-upgrade.mjs",
+      "sha256": "e04b6f0465dd47168c94e440ce68c33ea2d9702a95651e075b6711673f6bfde6"
+    },
+    {
+      "path": "scripts/lib/execute-referral-rule-upgrade.mjs",
+      "sha256": "07f80f1110a7785c0517362b0e3f731e32efce4032b7e01edf92dedcca2249a1"
+    },
+    {
+      "path": "scripts/lib/execute-runtime-index-upgrade.mjs",
+      "sha256": "4a5327da4ebad0f3980442b8523e97cef6e3ed78bccb6b11b5872a420cbfffc1"
+    },
+    {
+      "path": "scripts/lib/execute-setting-request-upgrade.mjs",
+      "sha256": "8d1bdd101e9a13d267ba470293d26b6a47693e1d54f05002755c6f73312d2df7"
+    },
+    {
+      "path": "scripts/lib/execute-settings-upgrade.mjs",
+      "sha256": "3720f7204a966f900d807e88ae76d40e461c479f313fda83a9c36f2125a82592"
+    },
+    {
+      "path": "scripts/lib/execute-subscription-foreign-key-upgrade.mjs",
+      "sha256": "a0099c0273f4c774126e9b8f32319df3f015ae5fac7f24f9dafaea3831cdeddc"
+    },
+    {
+      "path": "scripts/lib/execute-temporal-precision-upgrade.mjs",
+      "sha256": "fb9c3167406473ce19c4d044b75ccfbc60e4544faf99543c2daf11249ef25685"
+    },
+    {
+      "path": "scripts/lib/execute-usage-strategy-capacity-upgrade.mjs",
+      "sha256": "1516aa169b7382cf286c6e4785aa7f4741135c6dd7af4fecb964ef680f4529e6"
+    },
+    {
+      "path": "scripts/lib/execute-wallet-address-upgrade.mjs",
+      "sha256": "cc3ea59e6a32fb453b4156e8af29526742c4b579fda8a34953632c8dbcc3be74"
+    },
+    {
+      "path": "scripts/lib/independent-structure-plan.mjs",
+      "sha256": "528cec83231f994a7fb307d4d7905234b4434116a8d88e5aba9f0f5e9a9e5350"
+    },
+    {
+      "path": "scripts/lib/independent-structure-snapshot.mjs",
+      "sha256": "432801980b23ff41b317cb1261f8325cfa0bc120aa25eec95183e59beddbf424"
+    },
+    {
+      "path": "scripts/lib/inplace-account-build.mjs",
+      "sha256": "2b9ef4dbab27edce134266d82092042d857ef9ae3d099c791969709423d6d453"
+    },
+    {
+      "path": "scripts/lib/inplace-account-projection-migration.mjs",
+      "sha256": "7e59a691e2f589a594b7f0cb56d42e54d34bdcc25bb681bed5603a93069de30e"
+    },
+    {
+      "path": "scripts/lib/inplace-account-root-migration.mjs",
+      "sha256": "ad1ef4666f19b8b035878ae26d59ce9c31dc6b60cf3138502c438d4991b42f5a"
+    },
+    {
+      "path": "scripts/lib/inplace-column-constraints-schema.mjs",
+      "sha256": "fe4d1736f9189e60ab8181bc22b9943477ae924aaff1f3aed06d7e1f5ae0672a"
+    },
+    {
+      "path": "scripts/lib/inplace-column-evidence.mjs",
+      "sha256": "7f62a4fae29a8e3ce12c84b6f704aa04f32c4ab324b53a2bf9bc706e66b67349"
+    },
+    {
+      "path": "scripts/lib/inplace-coordinator-proof.mjs",
+      "sha256": "8d9fa712b84a7fb76a65afa93c1a2eafaab54a4c59f139dfabd3269c4f643360"
+    },
+    {
+      "path": "scripts/lib/inplace-default-normalization-schema.mjs",
+      "sha256": "3030c1ba2c6ad97a19aaa467eafb722d570e970319b189d887c6fe11bff4e875"
+    },
+    {
+      "path": "scripts/lib/inplace-foundation-foreign-key-schema.mjs",
+      "sha256": "316eccca1a558c0e1709e68fc647e77c64265d83c9a483701178ab80e277f90f"
+    },
+    {
+      "path": "scripts/lib/inplace-foundation-upgrade.mjs",
+      "sha256": "9b024fc4ca674cc8ac5cec70754aeeb4c873cf6878d27b312e0876bf74a46f6d"
+    },
+    {
+      "path": "scripts/lib/inplace-independent-structure-schema.mjs",
+      "sha256": "a7d43744fb7c822fed52ea2ef34ed0b711e2aae413dd7a75631b9601ca942879"
+    },
+    {
+      "path": "scripts/lib/inplace-learning-completion-schema.mjs",
+      "sha256": "c7728e25d2d1432c14dfd6e9b02c39c75e37247152703c82dfde60bae3a55a94"
+    },
+    {
+      "path": "scripts/lib/inplace-learning-core-proof.mjs",
+      "sha256": "3fb37ff71605df2d3ce2566bba89042921ba65d3e12b70bd592845f2313fc2d1"
+    },
+    {
+      "path": "scripts/lib/inplace-learning-core-schema.mjs",
+      "sha256": "a25a2d52f37f64946aa961eeee30e09d9af3c6d1adb7f6dcbccb4e2b263506ea"
+    },
+    {
+      "path": "scripts/lib/inplace-legacy-candle-build-migration.mjs",
+      "sha256": "f37eedd9a7cd1092c50f8ac13971293e1e0351fafdcb2b539cec0f798228bd52"
+    },
+    {
+      "path": "scripts/lib/inplace-legacy-candle-promotion.mjs",
+      "sha256": "1654219f8de1ec377977e711da18be0189e06076e4a61662e5bda60df5e5007c"
+    },
+    {
+      "path": "scripts/lib/inplace-macro-coordinator-proof.mjs",
+      "sha256": "cb9b5054bdc4afefaca073264f30ae211fc0b5ac6e025482b4782bf85f8f1be8"
+    },
+    {
+      "path": "scripts/lib/inplace-macro-schema.mjs",
+      "sha256": "377a03de943560e3eda9e5bb95795aa17e8f1b1d1f3926404a34084233fde42e"
+    },
+    {
+      "path": "scripts/lib/inplace-membership-proof.mjs",
+      "sha256": "2021fb7f996c5434bfd592e164f2992cecde5813b64989a88e0aa8474e204a37"
+    },
+    {
+      "path": "scripts/lib/inplace-membership-row-guard.mjs",
+      "sha256": "c1056617f81a6d62f8d2c764d20873e286083bd4ca491aeceb4412b81db87fdf"
+    },
+    {
+      "path": "scripts/lib/inplace-membership-schema.mjs",
+      "sha256": "d4e8ec870abe47da68669855332f2e188c400d2b757a3000d5db54816b855e36"
+    },
+    {
+      "path": "scripts/lib/inplace-model-capacity-schema.mjs",
+      "sha256": "e3c71a386773eaa4fd75d707b9ba5e04578ccf51a1ae8ce9f6c79d742584f8bf"
+    },
+    {
+      "path": "scripts/lib/inplace-model-check-schema.mjs",
+      "sha256": "985558dbe1bafc51a715aa9bb60f0d10703cafca1116ffa63c6de64f2357a208"
+    },
+    {
+      "path": "scripts/lib/inplace-observer-context-migration.mjs",
+      "sha256": "38171149ccbc7c54a47f07ef23e5b92bfea96d6c1d3e25d4b5051084653032fa"
+    },
+    {
+      "path": "scripts/lib/inplace-ordered-schema-upgrade.mjs",
+      "sha256": "a861b2f94525965f7d35972dde97807aa16c0615b0406b99487fed59eb1cbc7d"
+    },
+    {
+      "path": "scripts/lib/inplace-payment-match-proof.mjs",
+      "sha256": "c404e379a2de33895d31b304c6654db0de37e1da09a609e6d89e45542ecd2071"
+    },
+    {
+      "path": "scripts/lib/inplace-payment-match-schema.mjs",
+      "sha256": "26406bfd550670d7204503ea503208660a65e3a9e19daa071dc7ce4ef7c8a211"
+    },
+    {
+      "path": "scripts/lib/inplace-payment-order-proof.mjs",
+      "sha256": "dd5aa26708aea27f88868f3b5bd0f7b8da7c93e78d92b190bf4fdd2076e5b852"
+    },
+    {
+      "path": "scripts/lib/inplace-payment-order-schema.mjs",
+      "sha256": "463ee60ab79797c5d0c6887f3cbb2e8823c57e20b700358ea207ae131ec380ef"
+    },
+    {
+      "path": "scripts/lib/inplace-referral-ledger-proof.mjs",
+      "sha256": "c1b2d45799fece37861f0d0e4cbf39a40c56c3fa6e58e2d5b854fb504f00165e"
+    },
+    {
+      "path": "scripts/lib/inplace-referral-ledger-schema.mjs",
+      "sha256": "54642d63077d4946db98725345386c176148e4bb9685b0c67195f5368fa7e770"
+    },
+    {
+      "path": "scripts/lib/inplace-referral-rule-audit-proof.mjs",
+      "sha256": "04d67633412ff25308ccb0abe5cac2f69c8b489b620f629a6205cd8274f3e4b7"
+    },
+    {
+      "path": "scripts/lib/inplace-referral-rule-audit-schema.mjs",
+      "sha256": "d14f0cbb76824359d5cf7dcba3a94dc49fc8e3e95fc3030cae7592d89117720a"
+    },
+    {
+      "path": "scripts/lib/inplace-referral-rule-proof.mjs",
+      "sha256": "9555d4cadafc3b8ca0691ddc50ed5ef98f5dda9a011f099c9a25d063a9f88f8b"
+    },
+    {
+      "path": "scripts/lib/inplace-referral-rule-schema.mjs",
+      "sha256": "1f2394977ee9b4f1a8906efd0cf796e60cb6439ce8693fb562cd4a7d91a1fa2e"
+    },
+    {
+      "path": "scripts/lib/inplace-referral-schema-proof.mjs",
+      "sha256": "917a22d4ba1388209611aacd69b693e4882b66463d1e4fe63d5601d3d5f10225"
+    },
+    {
+      "path": "scripts/lib/inplace-referral-schema.mjs",
+      "sha256": "cf810845ac9d80e3d37b39096bd30fea12e0f4a821581e22e7b0dacae08d6374"
+    },
+    {
+      "path": "scripts/lib/inplace-risk-structure.mjs",
+      "sha256": "2fdb20937ef4e6bcbb8fc59a79bd66e90246af644721fe8fcfd5af3125e74aa6"
+    },
+    {
+      "path": "scripts/lib/inplace-runtime-index-schema.mjs",
+      "sha256": "e0fcbcc1a9da5e25e81dee37d1a209657f152403b8993e034900c66fb2d68f9d"
+    },
+    {
+      "path": "scripts/lib/inplace-schema-coordinator.mjs",
+      "sha256": "d75cdb60b00307918fcbda998a406f69f1c7b98ab3aadec99a7be5e808e0376b"
+    },
+    {
+      "path": "scripts/lib/inplace-setting-request-proof.mjs",
+      "sha256": "d21e8099c3a16fa35e15013b8d85abc01bbe95bada605169a3461e5d43da6084"
+    },
+    {
+      "path": "scripts/lib/inplace-setting-request-schema.mjs",
+      "sha256": "8fb2d61dd61de9c920e2707203c8f3e41885958eaa4b5e0a1257520c5bb81719"
+    },
+    {
+      "path": "scripts/lib/inplace-settings-proof.mjs",
+      "sha256": "f04d5b7147047d4618ab88cda2267ec0640dbd70d99ab1a7e3eab3bb72d6ee49"
+    },
+    {
+      "path": "scripts/lib/inplace-settings-schema.mjs",
+      "sha256": "c1ceb92a8a8a28e36149a6a82b765556e0ec64b5057a31b69da21f70743e8c1f"
+    },
+    {
+      "path": "scripts/lib/inplace-source-evidence-upgrade.mjs",
+      "sha256": "29caa1458af104e06c4f2795b257fc3432fd14e89a958338f567f86e8a7c9d8e"
+    },
+    {
+      "path": "scripts/lib/inplace-strategy-upgrade.mjs",
+      "sha256": "19626af3ff06fb1077335b58eb8df3e2311d66e540c05033a1be0f178e6ecdfb"
+    },
+    {
+      "path": "scripts/lib/inplace-subscription-build.mjs",
+      "sha256": "8e7f29db16d23050f58a0b5cbf6ae9b88e0cda737e1ea3856de4d666a0a94d32"
+    },
+    {
+      "path": "scripts/lib/inplace-subscription-foreign-key-schema.mjs",
+      "sha256": "b1d19bcc308860a80edbbcf156e00332607122a0c9299b33f1961c3ed68e3634"
+    },
+    {
+      "path": "scripts/lib/inplace-table-dependencies.mjs",
+      "sha256": "73e0af66529ee27eda339ae4327fb653acc9d8e2057dd8c344e8e35d66bd2562"
+    },
+    {
+      "path": "scripts/lib/inplace-temporal-precision-schema.mjs",
+      "sha256": "2cef6e8373754d2d3c196305385ee768c2c5c0114cbcdd826db67340dde13231"
+    },
+    {
+      "path": "scripts/lib/inplace-terminal-route-migration.mjs",
+      "sha256": "489d8792ef5c06e973ca5441986942b6558699fd1c593ccb89a6e5772f190658"
+    },
+    {
+      "path": "scripts/lib/inplace-trading-context-changes.mjs",
+      "sha256": "bc1699f8dde1ffe90c3f3c3c5d43e626c9754cec021b774113b0d93406124527"
+    },
+    {
+      "path": "scripts/lib/inplace-usage-strategy-capacity-schema.mjs",
+      "sha256": "039ee54cd86577a82fa111f5972f209b108320be631b38292c5c32a8803f93bb"
+    },
+    {
+      "path": "scripts/lib/inplace-user-defaults-proof.mjs",
+      "sha256": "cf2052d0d5205404cb291bccd82728538df5ce6168fdf52d9b89f1924fed61ac"
+    },
+    {
+      "path": "scripts/lib/inplace-user-defaults.mjs",
+      "sha256": "bd6c8424b47be29ddda3e837539c178c5235687ce500649f0afa81b5097b2b42"
+    },
+    {
+      "path": "scripts/lib/inplace-wallet-address-proof.mjs",
+      "sha256": "5eeeb9808e625535ec515b5ac29e599c00d5c5cac14e39f9d4666c0d68cd244c"
+    },
+    {
+      "path": "scripts/lib/inplace-wallet-address-schema.mjs",
+      "sha256": "0abfe1fca5db00c42961d6444735dd8ecb0da6d3682d91f88635cdc6a7913a37"
+    },
+    {
+      "path": "scripts/lib/learning-backfill-rehearsal.mjs",
+      "sha256": "f1bb64163847a2b6aa8a9a22f13f3b7cd89fdddbe5cda960242841c9a5dc0eb9"
+    },
+    {
+      "path": "scripts/lib/learning-cli-rehearsal.mjs",
+      "sha256": "d1c15e3334178bbcd2eccfd8f69f22d88bdbab4c07394b0b26edaf1823e660d4"
+    },
+    {
+      "path": "scripts/lib/learning-completion-probe-grant.mjs",
+      "sha256": "ff6d86b18e113deff8e3ad774a452078c2b327558dd5dc70c03e6a9695fdd410"
+    },
+    {
+      "path": "scripts/lib/learning-completion-recovery-rendering.mjs",
+      "sha256": "9a42ae54bb1c796030cebfddf5c998ba0a99452bf86e49cb2fda91d4a1680395"
+    },
+    {
+      "path": "scripts/lib/learning-dev-vue-promotion.mjs",
+      "sha256": "29875e552ffbd56c78d04cd3b46616ff1c4c5d3c524ee8ce9501d5c199bbc211"
+    },
+    {
+      "path": "scripts/lib/learning-package-evidence.mjs",
+      "sha256": "009ee0e27b1dedbf4f9f3099ed93446646204bfc561738ffea58e7a72285c7c8"
+    },
+    {
+      "path": "scripts/lib/learning-rehearsal-fault-pool.mjs",
+      "sha256": "1d9bcebd1915d65f97419536cf419f7a873c8fb7e68f920015e434ea2bfb8611"
+    },
+    {
+      "path": "scripts/lib/learning-rehearsal-inputs.mjs",
+      "sha256": "bba95a958d94d8c4cc930e75e5cec9c398081f48c89b935fecff6767b4e9c33b"
+    },
+    {
+      "path": "scripts/lib/learning-restored-schema.mjs",
+      "sha256": "ca69f70fd7e86ccf04ac80e034ea34283f0dcc39ccb8c037bcb47661061fe922"
+    },
+    {
+      "path": "scripts/lib/legacy-candle-backfill-proof.mjs",
+      "sha256": "54acc317bef24d7825897f8a81f4ed0566cfa2c1c4c17476a0d0ff2c8e57a553"
+    },
+    {
+      "path": "scripts/lib/legacy-candle-backfill.mjs",
+      "sha256": "0c8b5254ca338e6e7396b55b89ea6eb45aad7cfbb1419726750c0a6bd9d86e0b"
+    },
+    {
+      "path": "scripts/lib/legacy-candle-build-coordinator.mjs",
+      "sha256": "ac3097af5184c775fa59e543cc0e19835d440a7ecb7c425e70eb2242329c96aa"
+    },
+    {
+      "path": "scripts/lib/legacy-candle-conversion.mjs",
+      "sha256": "9e96ca8dafce2cd503e875f7e69ee7e378262658a63399413ce56d54aba41bb4"
+    },
+    {
+      "path": "scripts/lib/legacy-candle-historical-schema.mjs",
+      "sha256": "ec8b4af78a7d4bcacabc6ee0a01841b66f16fc10c1e7178082c964a201ef5655"
+    },
+    {
+      "path": "scripts/lib/legacy-candle-historical-store.mjs",
+      "sha256": "09715c2ed055ca98e87ff4570ef7f3d2ea819989267e139b0f1c188d45def408"
+    },
+    {
+      "path": "scripts/lib/legacy-candle-promotion.mjs",
+      "sha256": "87731cf59435ec6952ca199e3fc3a62d24a7d1559c0db356b7c552501261721f"
+    },
+    {
+      "path": "scripts/lib/legacy-candle-reference-checks.mjs",
+      "sha256": "2fc4df33d0c428ef3761ff7eaa2357a6560a211ba5a136fa082033ee03143e48"
+    },
+    {
+      "path": "scripts/lib/local-reexports.mjs",
+      "sha256": "e973baf9acaf25b82dadc310c3aca32005c87d33f3256e50dc6ba156e54cbebf"
+    },
+    {
+      "path": "scripts/lib/model-capacity-snapshot.mjs",
+      "sha256": "78aebe8ca1e3f5a2042bcc9f2cbd835a31e93883a849ad809f5de606bb6ead2e"
+    },
+    {
+      "path": "scripts/lib/module-dependency-graph.mjs",
+      "sha256": "b93c023eb161022cf97e35005f2ae60c2ecf0effee17b8c1223708071592a0a3"
+    },
+    {
+      "path": "scripts/lib/mysql-account-backfill-v2.mjs",
+      "sha256": "1d289bd2b05a55fd3c85a4f30e3c0bbf8037fa5d1a6e00ed1b6aab5567f32e1a"
+    },
+    {
+      "path": "scripts/lib/mysql-account-projection-migration.mjs",
+      "sha256": "c6052ddf9f0e644d20d82e8234222c40b1cb0b0273eccefcdb1f6099201c2812"
+    },
+    {
+      "path": "scripts/lib/mysql-account-root-migration.mjs",
+      "sha256": "cfc1c619ba49ee3af29d8de669c5311ee8786c5944dfd6819ed2d297f43e9676"
+    },
+    {
+      "path": "scripts/lib/mysql-account-root-snapshot.mjs",
+      "sha256": "af96d52b976a484e2b79ac7b079fe9e2a7e5a38e77df938f1d9a62c483481318"
+    },
+    {
+      "path": "scripts/lib/mysql-context-changes.mjs",
+      "sha256": "7c329c69863d224bd0c961ff93f329dd243ff712a5626a473990eaac6c0f6b12"
+    },
+    {
+      "path": "scripts/lib/mysql-coordinated-account-backfill.mjs",
+      "sha256": "e6de85dba520592311b6b68b70ded6df0b26328721b45d052c2bd758e2ba14de"
+    },
+    {
+      "path": "scripts/lib/mysql-current-account-projection-migration.mjs",
+      "sha256": "f458f615dca773b88c73011c0ac0e107e21ed9d3c6d4d203d6942673fe556999"
+    },
+    {
+      "path": "scripts/lib/mysql-current-context-changes.mjs",
+      "sha256": "7c1bcfca53c88f66b4d9b31ac857521aa1579a888ca4ab930a6845d42aedabfb"
+    },
+    {
+      "path": "scripts/lib/mysql-current-legacy-candle-build-migration.mjs",
+      "sha256": "e360da12fd118991378b7b44f612600da4e741351fb4672d429da3a8997fdb16"
+    },
+    {
+      "path": "scripts/lib/mysql-current-legacy-candle-promotion.mjs",
+      "sha256": "338fdbb29e9b6c0caaccc895e7b058dd18a81614a0f58f58311e6f8e81710329"
+    },
+    {
+      "path": "scripts/lib/mysql-current-observer-context-migration.mjs",
+      "sha256": "ebe4a3699277b570bb37295cf0af911133cb4b1a2cc788b40fdd133e9f3806c2"
+    },
+    {
+      "path": "scripts/lib/mysql-inplace-account-backfill.mjs",
+      "sha256": "51d92f4be55670ad26dac0b93574a9703d117c8fb4bd470d13ae119b287fef9c"
+    },
+    {
+      "path": "scripts/lib/mysql-inplace-column-store.mjs",
+      "sha256": "c42cfe0811296007b6a9f7fb46270b44b4f22614e0948af499293d95ce1cdafc"
+    },
+    {
+      "path": "scripts/lib/mysql-learning-course-audit-reader.mjs",
+      "sha256": "e548f22920d8c2e183c25dc5ecc83c20709041cfbdb2b6dc2aa041e93ade3788"
+    },
+    {
+      "path": "scripts/lib/mysql-learning-course-backfill.mjs",
+      "sha256": "f638b170cdd288053b961a599f7b49f5e669f5082033eeaa31493dcf1345163a"
+    },
+    {
+      "path": "scripts/lib/mysql-learning-course-writer.mjs",
+      "sha256": "3a3da1af92a330c48fd7091f0a0921474832589852f0342a60fa7ca20e71948a"
+    },
+    {
+      "path": "scripts/lib/mysql-learning-progress-audit-reader.mjs",
+      "sha256": "e9012d3a161921741ca91bd61df8cc2bd71ea6a3600d36bf4faf3b11302290ea"
+    },
+    {
+      "path": "scripts/lib/mysql-learning-progress-backfill.mjs",
+      "sha256": "b51a0be6b844a133a67887ae76bfbd550940cc4be8bcc678cb42c55758f9d65f"
+    },
+    {
+      "path": "scripts/lib/mysql-learning-progress-writer.mjs",
+      "sha256": "09674021cfcda36e47efd39ac95c15036e91f0fce9d5123f1ae4761974dc3ac4"
+    },
+    {
+      "path": "scripts/lib/mysql-learning-verification-v2.mjs",
+      "sha256": "90b47f48a81306f07d07e052083c46ecb9c5f48c7551b94faa3e9395d8d74e7f"
+    },
+    {
+      "path": "scripts/lib/mysql-legacy-candle-backfill.mjs",
+      "sha256": "9588d6ba5dd0690c266832d84570b032e57a8073ae210fa4c814d419a10e0e1a"
+    },
+    {
+      "path": "scripts/lib/mysql-legacy-candle-build-migration.mjs",
+      "sha256": "51928e895a3629d953d8182c413dcb9f4067db2df87c9ed6762c997c5002e14d"
+    },
+    {
+      "path": "scripts/lib/mysql-legacy-candle-promotion.mjs",
+      "sha256": "fd790f481571b82d39a56c854de0e41942edb8c1686282544a5cd1e56e70c6d1"
+    },
+    {
+      "path": "scripts/lib/mysql-legacy-candle-source.mjs",
+      "sha256": "1d6d83132d9272f0f4d9c3538ae26dfbaedbd42afba0f15ba01d99c7deae1c4e"
+    },
+    {
+      "path": "scripts/lib/mysql-membership-backfill.mjs",
+      "sha256": "76255cfdf5bd238c26960669111714eb10dbb6720be64f64e5a4f8415523738d"
+    },
+    {
+      "path": "scripts/lib/mysql-membership-writer.mjs",
+      "sha256": "7d184905672be05305e76832b02a7d84998e74e07edb35eff3bd78a7421cce91"
+    },
+    {
+      "path": "scripts/lib/mysql-observer-context-migration.mjs",
+      "sha256": "32bcff4715bf812066d054a56947da9416c7e2cf23281aa946b4ddb673742526"
+    },
+    {
+      "path": "scripts/lib/mysql-payment-match-backfill.mjs",
+      "sha256": "0c6cb3212e4ee15edb94cf972388a29a34d8feb356420e2531fbe0c2071017e5"
+    },
+    {
+      "path": "scripts/lib/mysql-payment-match-writer.mjs",
+      "sha256": "ecafdf49ba959f2d1d3da69909dcd9e1c0c42e7c7f758a4369dc29a72bd634f7"
+    },
+    {
+      "path": "scripts/lib/mysql-payment-order-backfill.mjs",
+      "sha256": "b8a1c94802a809a6fe9a24f5ea445ad858736f7b3a33f6b51bf86df6250ccab2"
+    },
+    {
+      "path": "scripts/lib/mysql-payment-order-writer.mjs",
+      "sha256": "7431eb9a9fa4d719e55657d1845edd5bba1ddbc6be2e0c9d41ffbfbc34639b24"
+    },
+    {
+      "path": "scripts/lib/mysql-referral-backfill.mjs",
+      "sha256": "8cdae4a30a45c709bea8452547c2a9b86e4ff9d55d6eb8cffd4dd995cd993d9a"
+    },
+    {
+      "path": "scripts/lib/mysql-referral-openings.mjs",
+      "sha256": "cb282bc083d70e830e24e52278c07a61074a2535d59c077508b9ea43d40167ed"
+    },
+    {
+      "path": "scripts/lib/mysql-risk-structure-state.mjs",
+      "sha256": "140cf8a2f37658707a207eaa2af435003255b4b08469b5b380b7eeb904ad3049"
+    },
+    {
+      "path": "scripts/lib/mysql-risk-structure-store.mjs",
+      "sha256": "3928c19d11733bbda92abcc6c9e7de6135f6d357182dc28c53aca6e903442bde"
+    },
+    {
+      "path": "scripts/lib/mysql-settings-backfill-v2.mjs",
+      "sha256": "dfc9ed1641bee06f99cd8a9a811a7ea5a422a898e5b3428963f268264deef7c8"
+    },
+    {
+      "path": "scripts/lib/mysql-settings-backfill-v3.mjs",
+      "sha256": "42c94a5d2d6a60bfbc1b70a977338f7fe8ac8c43a226a9d85f7d024825e1c26a"
+    },
+    {
+      "path": "scripts/lib/mysql-settings-backfill.mjs",
+      "sha256": "8cf6666dbdc133be7d14c205ec3a11cf01b45e123cd81936a4a01934ce227536"
+    },
+    {
+      "path": "scripts/lib/mysql-settings-credential-writer.mjs",
+      "sha256": "8f235a00bbe6f9e59453d8a7c7f3a673103232ba7e6bd203ee37198d39f528e4"
+    },
+    {
+      "path": "scripts/lib/mysql-settings-writer.mjs",
+      "sha256": "5339a76d7ec0e3d17adb7f3809a6bb44338b272516f2acb98bca40e2b007dd8b"
+    },
+    {
+      "path": "scripts/lib/mysql-terminal-route-migration.mjs",
+      "sha256": "ce92f7aff5812c9de7ecb5073bc2a4f1f10b627dca1fd2feeaf874cb902499ea"
+    },
+    {
+      "path": "scripts/lib/mysql-wallet-address-writer.mjs",
+      "sha256": "664604e1505249607f641a3fd98806df6fbeeb198c658cc8dac7483b84493a13"
+    },
+    {
+      "path": "scripts/lib/mysql-wallet-backfill.mjs",
+      "sha256": "4e9a28ed4e5f5bf0475603233db501750112f3437e7dc3cf8a897f288f5345fc"
+    },
+    {
+      "path": "scripts/lib/nuxt-auto-import-graph.mjs",
+      "sha256": "4bab059766a3db1b829f0556b44b3c6d293d13f30a1c8424cb5e07d5665737d6"
+    },
+    {
+      "path": "scripts/lib/observer-context-coordinator.mjs",
+      "sha256": "d9229f6ff7c70bc0462f981573ef945f4045d4718519ae89d564d1620976354e"
+    },
+    {
+      "path": "scripts/lib/observer-context-reference-checks.mjs",
+      "sha256": "0b55d0d72b61e59026482414b4f4c1d6f18494f329ed2beb0b0d747107a24e1d"
+    },
+    {
+      "path": "scripts/lib/observer-registry-seed.mjs",
+      "sha256": "056e4b02c0b28277e7ba29a59c9523b4fc33adf4f855fba8e5c857cb237b59ec"
+    },
+    {
+      "path": "scripts/lib/referral-opening-proof.mjs",
+      "sha256": "818fd864195b1f623d3286f8d2df3e8fc5255bc427bb984dcf909030ad4c4271"
+    },
+    {
+      "path": "scripts/lib/risk-backup-parity.mjs",
+      "sha256": "c8f6ef0ee2874c5bc87957681f44a67725ae708a3f9a25a4e62a74691fbf2df7"
+    },
+    {
+      "path": "scripts/lib/risk-prior-history.mjs",
+      "sha256": "137a9b1440c9fccdcb43aed8918e7da203b2d79d2bb2344ce910c893f228f31b"
+    },
+    {
+      "path": "scripts/lib/risk-restoration-evidence.mjs",
+      "sha256": "035d8ca96f7d1deb757bc13dfeaba0d5b31331dc4ae6cdc1a4f402cb4e6e7f70"
+    },
+    {
+      "path": "scripts/lib/risk-structure-coordinator.mjs",
+      "sha256": "223641851d0ac19222c32e0ff6c400b6ddea57dbdbf6dab35dea0c373192ed43"
+    },
+    {
+      "path": "scripts/lib/risk-structure-historical-connection.mjs",
+      "sha256": "f8e13a7bf52b12c514d442ea937192a3b864f9cdfb5c144a4d2d366c77153f68"
+    },
+    {
+      "path": "scripts/lib/risk-structure-proof.mjs",
+      "sha256": "d087b551c50bb647af1b28960a6e907f20770c6a94fae2ef0380edc326bfc8d7"
+    },
+    {
+      "path": "scripts/lib/risk-structure-source.mjs",
+      "sha256": "4b0a5a1b9e4c8a34775fb56273097e6db9b1ea8e74fd652054d53026c5c9073e"
+    },
+    {
+      "path": "scripts/lib/risk-tool-transition.mjs",
+      "sha256": "c447e9837ca06c9ed67a57c4f2c526f1a9827d26738ef290fb9668bf6197ea59"
+    },
+    {
+      "path": "scripts/lib/settings-migration-environment.mjs",
+      "sha256": "c63a2e8dbb0a608d2eb9a66703bc9f783fd575880bfa59e729daeef2c6785ac0"
+    },
+    {
+      "path": "scripts/lib/sql-write-inventory.mjs",
+      "sha256": "941cc514e62209f45768062ceadf6d36c8370a9771d9fab28dced92671f7f03c"
+    },
+    {
+      "path": "scripts/lib/temporal-precision-snapshot.mjs",
+      "sha256": "27dcf5479d2cf92086b793add5f87625f51b2d44b9a753f28e14c217ece26509"
+    },
+    {
+      "path": "scripts/lib/terminal-route-coordinator.mjs",
+      "sha256": "731b7d0a14f580bc68ea501d368d214bc7c15439a3e39311a44e95d33cf36270"
+    },
+    {
+      "path": "scripts/lib/trade-history-migration-rehearsal.mjs",
+      "sha256": "546ac565d54d10cf67d8b4e3fbcb20e22a51d0928ed3c66abcb2a7be912c4ec9"
+    },
+    {
+      "path": "scripts/lib/v4-account-backfill-writer.mjs",
+      "sha256": "2bd9331d05120b3a3b9b4395021e5b235458e7402daf5833fdcca7b3b1da41e7"
+    },
+    {
+      "path": "scripts/lib/v4-account-conversion.mjs",
+      "sha256": "e013544b335cd9a7cb6f532a5cf9ea03715eff82bbfff2adfe72d28799236da0"
+    },
+    {
+      "path": "scripts/lib/v4-account-currency-evidence.mjs",
+      "sha256": "2a0533be274031421aec0b1b26dc37e94f0403576417923668f4d9df2de5e354"
+    },
+    {
+      "path": "scripts/lib/v4-account-id-mapping.mjs",
+      "sha256": "0b77de5c0bbff5ce10bb388aa841d40b80d8fc1aaa36b107e67c394c4420335a"
+    },
+    {
+      "path": "scripts/lib/v4-account-mapping-candidates.mjs",
+      "sha256": "025140e71268f47e26681965522543fb38978f25d8787ad13ab1eb2742551270"
+    },
+    {
+      "path": "scripts/lib/v4-account-ownership-consistency.mjs",
+      "sha256": "511fa90b1a4bb52c31bb054aec59d9894fcd2a7fc1aeb4836bf75ff83941bb99"
+    },
+    {
+      "path": "scripts/lib/v4-account-wave-manifest.mjs",
+      "sha256": "9459868977b3bc80c1e0bb1e5979288b668956dc79e8795972734b6ab24aa59a"
+    },
+    {
+      "path": "scripts/lib/v4-backfill-contract.mjs",
+      "sha256": "4dff263678f769cc2f733861446b9e50d4a0a2d1d2b9f3e1dc1e278d2c3d8810"
+    },
+    {
+      "path": "scripts/lib/v4-backfill-mysql-rehearsal.mjs",
+      "sha256": "8930f4173d80ada138e92406a50f0fba927d2d62a767d70fc83cbb58e998baa6"
+    },
+    {
+      "path": "scripts/lib/v4-backfill-mysql-repository.mjs",
+      "sha256": "c10905a49e99e8c12dabcb9e86434634eeb34344f4c0769f0fb88f543eb31c92"
+    },
+    {
+      "path": "scripts/lib/v4-backfill-preflight.mjs",
+      "sha256": "7554474d364cd76202191ad67f008fd4df0d3a48d716b5b787001266f6408bbe"
+    },
+    {
+      "path": "scripts/lib/v4-backfill-runner.mjs",
+      "sha256": "34a2e26ea0d09e8968825aaabee66f2e0c887853bf649f2c3e0327104231dbc2"
+    },
+    {
+      "path": "scripts/lib/v4-backfill-source-reader.mjs",
+      "sha256": "125c10ee99eed7c9830a8372e18cd6787b668ae250e330281fe89744434f931d"
+    },
+    {
+      "path": "scripts/lib/v4-backup-artifact.mjs",
+      "sha256": "4e66ff5a47c862dd494ef3d9800f413b07de19ca1a81e1e61eece4da8ef22591"
+    },
+    {
+      "path": "scripts/lib/v4-backup-continuation.mjs",
+      "sha256": "b8a6e944a37b6b7616983fb0f4693ed4a6768194e072efd702374dac19db2771"
+    },
+    {
+      "path": "scripts/lib/v4-backup-executor.mjs",
+      "sha256": "076e76278f0a2ba3a638687453c2aeb3a26da2fe396ca74680a75a1e07a42443"
+    },
+    {
+      "path": "scripts/lib/v4-backup-io.mjs",
+      "sha256": "0b6082e0b18e30a42ffad895e5f3cbd4a2645e87f623d02b5c1844d53f6f7171"
+    },
+    {
+      "path": "scripts/lib/v4-backup-observation.mjs",
+      "sha256": "0259300b24c366eefdf5262875d2791e341ea34c754677a25912abc703855031"
+    },
+    {
+      "path": "scripts/lib/v4-backup-preflight.mjs",
+      "sha256": "c6c66455b49c6634903b10025092c380167b21afd2a6516e5faccebf7c445fd9"
+    },
+    {
+      "path": "scripts/lib/v4-backup-sql-scope.mjs",
+      "sha256": "fdeff43a990150c3052ea632d671fd268c035ab026d55d935b67ca3f18540388"
+    },
+    {
+      "path": "scripts/lib/v4-field-manifest.mjs",
+      "sha256": "ada31b0efdc4efc2853d148319e5435b18eae69bc450731b91ba4c07cd969848"
+    },
+    {
+      "path": "scripts/lib/v4-identity-lifecycle.mjs",
+      "sha256": "d3ffcd4e95759b46642140d6011d4f8633493d77b46a1c729bf44784eaf9796b"
+    },
+    {
+      "path": "scripts/lib/v4-identity-ownership-audit.mjs",
+      "sha256": "e92662215fa30caeb4af945816f7dc2fe3df0210617ff2fbf19f9afde814af0e"
+    },
+    {
+      "path": "scripts/lib/v4-identity-source-audit.mjs",
+      "sha256": "580815c956bacb9ac9620b59f0f5a48edf2d8966bebbe56a38160e80248d2f35"
+    },
+    {
+      "path": "scripts/lib/v4-identity-time.mjs",
+      "sha256": "aa52d388a8fdb6854b79b8c3be724cf491d476b23560f619396772851f212976"
+    },
+    {
+      "path": "scripts/lib/v4-identity-values.mjs",
+      "sha256": "4d6c51c97ef6841c17536c1e2a794eacca715981c0ef497d73c68b998d89fd6e"
+    },
+    {
+      "path": "scripts/lib/v4-inplace-account-row-store.mjs",
+      "sha256": "43c4701f151960ba16ea70f5137830876c1f71b6a2aa63638dd837d27b1d3fc7"
+    },
+    {
+      "path": "scripts/lib/v4-learning-command.mjs",
+      "sha256": "4a29fa2a1a4948b65de091a35159209f2010b4775233b61dec29c034d5c4792b"
+    },
+    {
+      "path": "scripts/lib/v4-learning-control-audit.mjs",
+      "sha256": "e25daa157688cc3b9c760285e4c8aabe11e4ee6db1f4097353feabba6da7765f"
+    },
+    {
+      "path": "scripts/lib/v4-learning-core-migration.mjs",
+      "sha256": "c5a16110531c6dd8ee9e234efa1ce471df833d958a440f78acd5ae123a241d1d"
+    },
+    {
+      "path": "scripts/lib/v4-learning-course-audit.mjs",
+      "sha256": "360e2c2fdc845ffdd4f1d09534399fa1089caa272f0027f48df712b9756c53c7"
+    },
+    {
+      "path": "scripts/lib/v4-learning-course-backfill-contract.mjs",
+      "sha256": "0933b8b2699aaae7a324f0af81d3f470263970a296d2ac77993221b7df1ccb27"
+    },
+    {
+      "path": "scripts/lib/v4-learning-course-backfill-runner.mjs",
+      "sha256": "760f0006c61d98536c780a5ef8883501517bc2d8d5890337ca134ff68f17176e"
+    },
+    {
+      "path": "scripts/lib/v4-learning-course-backfill.mjs",
+      "sha256": "a5bbd5bc954c6b28157f90d7ef8056905f1e01a136719448a9026876f104553a"
+    },
+    {
+      "path": "scripts/lib/v4-learning-course-migration.mjs",
+      "sha256": "93b18429b099c2cd16d47df81f9007724c6f11da0b677cda2943b853d025331b"
+    },
+    {
+      "path": "scripts/lib/v4-learning-course-rows.mjs",
+      "sha256": "9e07b1e57eb159d2e0054a6903e479ef9e0d00e5bc6fb79264ba039a4a9897e9"
+    },
+    {
+      "path": "scripts/lib/v4-learning-duration.mjs",
+      "sha256": "9ba1c892106d9dcb197b3a6408bbe02fac7e9cc542496cad029ba496f5d0c8fc"
+    },
+    {
+      "path": "scripts/lib/v4-learning-field-contract.mjs",
+      "sha256": "fd301323ef1f90d8f610fa2cdcc76b85e5ae3e5b7ad0fb3066285a029fdd65a6"
+    },
+    {
+      "path": "scripts/lib/v4-learning-manifest-executor.mjs",
+      "sha256": "70ad35b8af9c1e1f613f473e99cf77dc570f46760070d4de6769d8116b84a299"
+    },
+    {
+      "path": "scripts/lib/v4-learning-manifest-pair.mjs",
+      "sha256": "fc5538495ba3bc09310c91eed53662fb3b649960dbf34db22dda225dd132678d"
+    },
+    {
+      "path": "scripts/lib/v4-learning-manifest.mjs",
+      "sha256": "9ed9f8874c98cee7ba623d177e1cb346127fa21181b9dab6a205c413a1d2d73b"
+    },
+    {
+      "path": "scripts/lib/v4-learning-progress-audit.mjs",
+      "sha256": "6c6438a1558094197586890aa618cb8e572178b31e11ae40954b5a72afebbf42"
+    },
+    {
+      "path": "scripts/lib/v4-learning-progress-backfill-contract.mjs",
+      "sha256": "b079a664fe4282bf304672b9d2db4f36182dee34fee78b55d60ece4fe15fadb0"
+    },
+    {
+      "path": "scripts/lib/v4-learning-progress-backfill-runner.mjs",
+      "sha256": "c223e30989fc71d7963d8b2b4e0c2e9bf2902d168a577dadf1de7b279c9ef717"
+    },
+    {
+      "path": "scripts/lib/v4-learning-progress-backfill.mjs",
+      "sha256": "8f283e1052119f014c66d8405aa983d48134d2b15ee5ef53ca6b344893a8ad71"
+    },
+    {
+      "path": "scripts/lib/v4-learning-progress-migration.mjs",
+      "sha256": "ad1e9ea9ca2d53fe79d9225144e99b03cabd1c5129c59f269e24ca3f0e2198fa"
+    },
+    {
+      "path": "scripts/lib/v4-learning-progress-rows.mjs",
+      "sha256": "ea0ebf3b84d4a5254b3fbe76a737a0a0c5306418b1e508f13d82a868aa003d0d"
+    },
+    {
+      "path": "scripts/lib/v4-membership-audit.mjs",
+      "sha256": "272b3e99e83f76943901c45c0372618e4d7c5851be73ce4f2d51c7d0972b85b9"
+    },
+    {
+      "path": "scripts/lib/v4-membership-backfill-contract.mjs",
+      "sha256": "432ceb9934836e5eaf457fd2b7b4c0c249f96a3cfd9c663c1a2c7a1b47ef4e99"
+    },
+    {
+      "path": "scripts/lib/v4-membership-backfill-runner.mjs",
+      "sha256": "26911df3c179791fcf252e5d15ee1c38831176cfe71bf3a5000988595dbb5bfb"
+    },
+    {
+      "path": "scripts/lib/v4-membership-backfill.mjs",
+      "sha256": "6286f29e9ea33ed8fd219cfc3f2ffe4743bfe48c93f5be2fc2ff55f8b80fd0d9"
+    },
+    {
+      "path": "scripts/lib/v4-membership-rows.mjs",
+      "sha256": "42d99ff83624c6fbc402870d740c983681a19aa9c3bb464d8987e408d818cd9e"
+    },
+    {
+      "path": "scripts/lib/v4-membership-source.mjs",
+      "sha256": "94681611df377570aa201fa645ac4c23ae8606143262bb3c24d01b320d3a1378"
+    },
+    {
+      "path": "scripts/lib/v4-migration-corrections.mjs",
+      "sha256": "d1c4fabe1bd4029fa1c62c6e95ed4c7e6775cbd32947fdc6732619cd3efb4189"
+    },
+    {
+      "path": "scripts/lib/v4-migration-events.mjs",
+      "sha256": "8c162873b2e3b7ad54ded5274ac1782c04f41fc6f1a5690dc357e674e2fa5dc9"
+    },
+    {
+      "path": "scripts/lib/v4-migration-plan.mjs",
+      "sha256": "087d097447de41bda0781aca7cfd6bab82bf6bedaa5c22fde9e8b80e443c2c37"
+    },
+    {
+      "path": "scripts/lib/v4-migration-recovery.mjs",
+      "sha256": "a102d98d5e14171a6dee45d43c63d448a03a60298899d440aff89530d9cdcdd5"
+    },
+    {
+      "path": "scripts/lib/v4-migration-target-preflight.mjs",
+      "sha256": "b5487faef44493c3cbeee35a047f389943d26b5fec3f4bdbe0a887a6ab9e1cdd"
+    },
+    {
+      "path": "scripts/lib/v4-null-membership-backfill.mjs",
+      "sha256": "b7456356c0b38ba9b3f0929009fc69b4191b166204766c8b83bae5ef89c9a6b7"
+    },
+    {
+      "path": "scripts/lib/v4-order-credit-conversion.mjs",
+      "sha256": "d78657ee284ff8e8834e5e17f262a3f7674272b688e56f17ebd2f5111eaeab88"
+    },
+    {
+      "path": "scripts/lib/v4-ownership-backfill-writer.mjs",
+      "sha256": "5ae19500bab065b6dd9791256dc9d75e65eb513cf3a7adddd18c3e3b4e3ac173"
+    },
+    {
+      "path": "scripts/lib/v4-ownership-conversion.mjs",
+      "sha256": "2ee5350462aa182fa60d5e2f5dee0b25b28a8ba5ac4e205c0251eb760ec40f44"
+    },
+    {
+      "path": "scripts/lib/v4-payment-config-source.mjs",
+      "sha256": "4c0649362d74af255b7d5560299038b8980af864f22fc59e9f5f5e00cf94b230"
+    },
+    {
+      "path": "scripts/lib/v4-payment-effects-source.mjs",
+      "sha256": "f62ef15f8597f195d87745abed7ac7c7e380b3866f19d59f296b2abfb2a15fb9"
+    },
+    {
+      "path": "scripts/lib/v4-payment-match-backfill-contract.mjs",
+      "sha256": "e1950eabbb7bd54caeabc53241aad9b17eaed1f153debf2923b984bfca5e9527"
+    },
+    {
+      "path": "scripts/lib/v4-payment-match-backfill-runner.mjs",
+      "sha256": "8b3d58789ca35b2600497e46531c80028738ff75ff790d748265fa1bb2c5d425"
+    },
+    {
+      "path": "scripts/lib/v4-payment-match-backfill.mjs",
+      "sha256": "d42a3d202b37557d658bb7c7877294d3934b65769378d09e70f1a708cecde53d"
+    },
+    {
+      "path": "scripts/lib/v4-payment-match-fact-audit.mjs",
+      "sha256": "26cc96a38602badf3cda10f73f9628016cd421db01fc8eaba290526621125ca0"
+    },
+    {
+      "path": "scripts/lib/v4-payment-match-rows.mjs",
+      "sha256": "e02fe8d632696f4edfff9c0a58f484692036e42a03f366a8247360825df8eb83"
+    },
+    {
+      "path": "scripts/lib/v4-payment-order-backfill-contract.mjs",
+      "sha256": "5dfad740785bea945cac5f20031c9e5db2ad0c34d3e2bce8c1ce8e76275e7c83"
+    },
+    {
+      "path": "scripts/lib/v4-payment-order-backfill-runner.mjs",
+      "sha256": "338d67e609e71420c4c2d3a6bfe8c09d7799b545959bdde4a90b0195862a4c37"
+    },
+    {
+      "path": "scripts/lib/v4-payment-order-backfill.mjs",
+      "sha256": "bbcaa5fc91d5c913c68b13d4719cb1364af792e4c2468320f29e463eefd7df79"
+    },
+    {
+      "path": "scripts/lib/v4-payment-order-conversion.mjs",
+      "sha256": "61336502927148436d4b1edf7a88f7c377f2515c589db3a5c0c56ece84e27ab1"
+    },
+    {
+      "path": "scripts/lib/v4-payment-order-fact-audit.mjs",
+      "sha256": "9ada3bc754bf370477090fd70ec5ff1476122d8474d7cc20a08c50c6edd6c375"
+    },
+    {
+      "path": "scripts/lib/v4-payment-order-rows.mjs",
+      "sha256": "f8e16e9d54f3796c67fa0ee2ec9e220de1c3fb45c7667d28d044f2690d2a2b2b"
+    },
+    {
+      "path": "scripts/lib/v4-payment-order-source.mjs",
+      "sha256": "095c32f6a06bbd0f428af936108246e50fc7062790e2b9b46dfdcd5862128a8b"
+    },
+    {
+      "path": "scripts/lib/v4-payment-source-archive-audit.mjs",
+      "sha256": "f65edac6719ac0ac6245e59509c95b69a634f3608723d68b1bb1c98105d069c8"
+    },
+    {
+      "path": "scripts/lib/v4-payment-watch-source.mjs",
+      "sha256": "5395cd3eac0c4a5d4c82acb50ef01fdbf60b063581fd72282de8a5fa0bb6d271"
+    },
+    {
+      "path": "scripts/lib/v4-referral-backfill-contract.mjs",
+      "sha256": "5312e3e801f48f46747d7c9fd6c029fafd96a29738ff26412eb81aa4f5f35a13"
+    },
+    {
+      "path": "scripts/lib/v4-referral-backfill-runner.mjs",
+      "sha256": "b00bd07f69d65651416cbfaf33cffb9e72654d981684b7b936e0437d28c355b1"
+    },
+    {
+      "path": "scripts/lib/v4-referral-backfill-writer.mjs",
+      "sha256": "d5f4bc0971284b26a640e2142c92f2b45e452651fbb7c106044cfa07bc3ddef3"
+    },
+    {
+      "path": "scripts/lib/v4-referral-conversion.mjs",
+      "sha256": "c0e4b5d418d2f96467e10954f1dbd25971c8a2aec6a8f26bbbacc943350c9cd2"
+    },
+    {
+      "path": "scripts/lib/v4-referral-ledger-audit.mjs",
+      "sha256": "8c63b69e93ae4eb344dfa2a060dd2004eafd3bf869df3c25936da309d03974ec"
+    },
+    {
+      "path": "scripts/lib/v4-referral-opening.mjs",
+      "sha256": "5dbdb2e9b25b173109f21455eb37287191d39c2cb3a8e2d1a379e20a04e02e3f"
+    },
+    {
+      "path": "scripts/lib/v4-referral-rule-source.mjs",
+      "sha256": "8569bab09b2bd84c4a55fd585588a18eb448d78f9caa9dab877e987517f58a17"
+    },
+    {
+      "path": "scripts/lib/v4-schema-fingerprint.mjs",
+      "sha256": "0255e014bbf75e3631d409cf5babec7c70c4c43112a101d6b4f63a6e8b1aabaf"
+    },
+    {
+      "path": "scripts/lib/v4-schema-migration-runner.mjs",
+      "sha256": "76ee60bebba8405d29d10a9c0a72cbbb9e79b0321e19b8f5c41274b3899db749"
+    },
+    {
+      "path": "scripts/lib/v4-settings-audit.mjs",
+      "sha256": "e692dde08d1f34e1ef088fcd63244fafe6f97f719077cf304a96a97b26398117"
+    },
+    {
+      "path": "scripts/lib/v4-settings-backfill-contract.mjs",
+      "sha256": "53e203eef06f89ae344f1a8e78ab8a2ef81d82c5fd29c465b11512002672bb98"
+    },
+    {
+      "path": "scripts/lib/v4-settings-backfill-runner.mjs",
+      "sha256": "d83249a8923c0ecf8b37d83117843263590e1b60d428b17ddd947baf3297cd57"
+    },
+    {
+      "path": "scripts/lib/v4-settings-backfill.mjs",
+      "sha256": "655f69a02feebd534443976f651cdc49e356c61058c7a7387d4f060b4ef76e74"
+    },
+    {
+      "path": "scripts/lib/v4-settings-credential-audit.mjs",
+      "sha256": "26a7c3d72395e235ddefe34c1a3791b8f3a371a3940ce0a065bf21f18438e069"
+    },
+    {
+      "path": "scripts/lib/v4-settings-credential-backfill.mjs",
+      "sha256": "e3a6d3da201177979c3e14fbdbbf4a9af59d0be03a039bcf03bec5d9885ddf9e"
+    },
+    {
+      "path": "scripts/lib/v4-settings-credential-conversion.mjs",
+      "sha256": "ba932904ae45f5424dcfd1e8932bec0edc6e5b8fadbf90fa2e8e21988c31bc1a"
+    },
+    {
+      "path": "scripts/lib/v4-settings-credential-plan.mjs",
+      "sha256": "7d8175724ba0b089be9bce1018608bbc4bf05634cde9c6d1a2a57d88648c7c3e"
+    },
+    {
+      "path": "scripts/lib/v4-settings-credential-rows.mjs",
+      "sha256": "2a6bad8b7a20f84e330bfe56fd1c5436272501860ee5c67a8682fc49faff57f0"
+    },
+    {
+      "path": "scripts/lib/v4-settings-credential-source.mjs",
+      "sha256": "995a1027a91dd02d5279e68e9877a8ba00c06f0089c08120520213b628a11dd3"
+    },
+    {
+      "path": "scripts/lib/v4-settings-disposition.mjs",
+      "sha256": "b11303f35a2c07673b92725cd693b5e5c674ca9a633d38bbe4395ef278cb6391"
+    },
+    {
+      "path": "scripts/lib/v4-settings-manifest.mjs",
+      "sha256": "ca9547ce28bb763f185ccac22c5be112f14da5d259adf44699c33e89f8f6f791"
+    },
+    {
+      "path": "scripts/lib/v4-settings-migration.mjs",
+      "sha256": "eca920b69b64c8d4f8a5fcc7dcd37a0942439998b6555352670aa91e69632aac"
+    },
+    {
+      "path": "scripts/lib/v4-settings-rows.mjs",
+      "sha256": "243b44a777bf4c311db8441076363280b077b849bab89f505c15379b9d0507c8"
+    },
+    {
+      "path": "scripts/lib/v4-settings-value-contract.mjs",
+      "sha256": "23751f0292fa2434bf012cf391951b45c8822458eb3ece5fd6ea731f8fb75074"
+    },
+    {
+      "path": "scripts/lib/v4-source-row-evidence.mjs",
+      "sha256": "aee6566776e1ff94679283cf1ec1b5e78e218dfc1de89375438c588427781b0e"
+    },
+    {
+      "path": "scripts/lib/v4-strategy-market-plan-conversion.mjs",
+      "sha256": "6e45371651ea18a9cc086e840115c2530bb9885cc022d4985b9d0d02307f4e20"
+    },
+    {
+      "path": "scripts/lib/v4-strategy-metadata-conversion.mjs",
+      "sha256": "d09ff87d8bd02bb4828392a6dce40e5e86700e3df1876eed5378f67f2e061f76"
+    },
+    {
+      "path": "scripts/lib/v4-strategy-rules-review.mjs",
+      "sha256": "5288b5f88bae83a073f79dd748ac56d4acb86699899a6c73be0f3ac1c1e9fe11"
+    },
+    {
+      "path": "scripts/lib/v4-strategy-source-review.mjs",
+      "sha256": "79876c33e928304faa626c8255e32d833ba7eabb886c089a790602cf003a097c"
+    },
+    {
+      "path": "scripts/lib/v4-subscription-account-review.mjs",
+      "sha256": "11007dc4cc3d6b5cf15863668f60cab56e9e545721441fafd97f684b48b3067d"
+    },
+    {
+      "path": "scripts/lib/v4-subscription-config-review.mjs",
+      "sha256": "5b817588f9a7a263bbafdc7b112ff5d02e3a3577d99e44a736ab4ccc64fb5466"
+    },
+    {
+      "path": "scripts/lib/v4-subscription-schedule-conversion.mjs",
+      "sha256": "d701f63b6c5825b6b97c2fdaf9ffffd0999c06dea5c4ab87bf1a41652c9fc4a9"
+    },
+    {
+      "path": "scripts/lib/v4-subscription-symbol-conversion.mjs",
+      "sha256": "7e7777eb8c33330b508311dedac646a8ceedabf51ae1c8e4493888dc083a6d07"
+    },
+    {
+      "path": "scripts/lib/v4-upgrade-review.mjs",
+      "sha256": "10145c3cd665494083b8dcfddfc7398c23d2f7057bdb7265e34b42705e70ba48"
+    },
+    {
+      "path": "scripts/lib/v4-wallet-address-rows.mjs",
+      "sha256": "c54087b86f5e412248f7e9a610a95a7e47d1bdce9de3c8b427213f8f38e69077"
+    },
+    {
+      "path": "scripts/lib/v4-wallet-address-source.mjs",
+      "sha256": "4444dd43361e35a93f807b83448c5c954ac10407916253194ec73b942f7b01a9"
+    },
+    {
+      "path": "scripts/lib/v4-wallet-audit.mjs",
+      "sha256": "b096ae9844b730a03b17b7465e71d7a2946751d8e6ead4ec5f726885176dd6db"
+    },
+    {
+      "path": "scripts/lib/v4-wallet-backfill-contract.mjs",
+      "sha256": "0ebfafd24a4673d8ab4c88d6ccb86feaebacf98c5cceef0bf15ba3e213f56ecd"
+    },
+    {
+      "path": "scripts/lib/v4-wallet-backfill-runner.mjs",
+      "sha256": "82d8a99d90eca79b28593c3fda07e5a0eaca52b40202d747be2a319eab5fa4ac"
+    },
+    {
+      "path": "scripts/lib/v4-wallet-backfill.mjs",
+      "sha256": "75e31b1701aae526b7a5ca079c0053e420e04ba92079f1457237bf2d70c3be82"
+    },
+    {
+      "path": "scripts/lib/v4-wallet-watch-links.mjs",
+      "sha256": "34fd799dd12fe78fa6f442c9ae8e3c3c48b317c8269f1132974f95d4951ef6f0"
+    },
+    {
+      "path": "scripts/prepare-risk-upgrade-proof-local.mjs",
+      "sha256": "26f19b204e76c63299903081cc59e781ac454b9515d114e466ed81cf6c72c5c7"
+    },
+    {
+      "path": "scripts/promote-current-legacy-candles-local.mjs",
+      "sha256": "716553e72baeaaf11d04b302828b4da7a93ee90ed2cdd34fcc014c4b53ccac74"
+    },
+    {
+      "path": "scripts/rehearse-account-projection-migration-local.mjs",
+      "sha256": "a1fb28eb3fd4fae5df2115b9fa0713f9d21d042fb0a4b1df6f8428da08e6b3c3"
+    },
+    {
+      "path": "scripts/rehearse-account-root-migration-local.mjs",
+      "sha256": "30ae47833d6252bd781072f1d4a8070a876f555bbd4073b770ee5d9c1c3e7957"
+    },
+    {
+      "path": "scripts/rehearse-account-wave-local.mjs",
+      "sha256": "d1467e0e88c9f5f5cb9802fbdebbd84f45e8e434fd8686c46df6a4e43821dead"
+    },
+    {
+      "path": "scripts/rehearse-context-changes-local.mjs",
+      "sha256": "2ce7b9a98eb7384d86b34df4adf1fc00c57e7bf78b0507e220df943dd2092adc"
+    },
+    {
+      "path": "scripts/rehearse-legacy-candle-backfill-local.mjs",
+      "sha256": "1e33e867a7ec8bad0eb11da769664c8651856ce8c7f6307507aef269a6d4c849"
+    },
+    {
+      "path": "scripts/rehearse-legacy-candle-build-migration-local.mjs",
+      "sha256": "ea49f6296564e8552684e40ec995e324738ddcf684fc5ce0eb15fe00afdcf4a2"
+    },
+    {
+      "path": "scripts/rehearse-legacy-candle-promotion-local.mjs",
+      "sha256": "9e64e5a0a9529c63521c45ed2e886bc40af7dca79c6ccb5379934c323df36e88"
+    },
+    {
+      "path": "scripts/rehearse-observer-context-migration-local.mjs",
+      "sha256": "a0c089fe20fe959aa1241f2a9aef8690a260ceb17f08df828fc5d304e6db057c"
+    },
+    {
+      "path": "scripts/rehearse-risk-structure-local.mjs",
+      "sha256": "75a45ee0e914612e209bbac97c5a5d9d8f24f2082765afbab486a01da669421d"
+    },
+    {
+      "path": "scripts/rehearse-terminal-route-migration-local.mjs",
+      "sha256": "92c0c1d46b87f97064e6f885e83dc1cd526463683ad379d0a508048165cc2302"
+    },
+    {
+      "path": "scripts/run-risk-backup-local.py",
+      "sha256": "1046d4d850b4e924d865068930068d9fd7dc79bab79f9a968db3dae62319cd14"
+    },
+    {
+      "path": "scripts/run-risk-current-application-local.py",
+      "sha256": "b11a7bad0a64ceae92cfbd175985c27427725d066ebf6a3e6794f7e7cacdd2c7"
+    },
+    {
+      "path": "scripts/run-risk-reference-local.py",
+      "sha256": "c1648bccc736f079f74ce5afa6e9d2dce48cfb0005d3f237277b227333fc013c"
+    },
+    {
+      "path": "scripts/run-risk-rehearsal-local.py",
+      "sha256": "f5311063b7b19449f52a622437d8ea12d287cc568355ec8bd1f7fd25dd15b70e"
+    },
+    {
+      "path": "scripts/run-risk-restored-baseline-local.py",
+      "sha256": "5e16f627b311a55dfa6d05845e85db741c92da96d50644585d2652f6d7eedfa4"
+    },
+    {
+      "path": "scripts/upgrade-current-account-projection-local.mjs",
+      "sha256": "b2d7e6e55867618ca52c77e6e5a8e629335442104bfa69ffee37ef9b8a807618"
+    },
+    {
+      "path": "scripts/upgrade-current-context-changes-local.mjs",
+      "sha256": "749552d8ec17d93b2db7a96625db3ebe0f0dd6ac2ed673e93804a4e727f39cab"
+    },
+    {
+      "path": "scripts/upgrade-current-legacy-candle-build-local.mjs",
+      "sha256": "53a66f3656f12d0282b41db44b0c5a8b56eed19c29ee0fa297dc259afe0c261a"
+    },
+    {
+      "path": "scripts/upgrade-current-observer-context-local.mjs",
+      "sha256": "c517817b4dfe9d4743bcfa0a65b582ec3016b66d7385acb19b70dba94248ad28"
+    },
+    {
+      "path": "scripts/verify-context-receipt-schema-local.mjs",
+      "sha256": "21de8f08cc7474d669ef7f8c0970ac7c35548bb7634ae2efa84643cb5731dd6c"
+    },
+    {
+      "path": "scripts/verify-risk-restoration-evidence-local.mjs",
+      "sha256": "5fb8138e58dcc048a123556b4d0e2990cb07080c170f43f17e49ea42692adeed"
+    },
+    {
+      "path": "scripts/verify-risk-structure-reference-local.mjs",
+      "sha256": "7c990bda453274db80a79f22b78a73b43614815614bde1cb5fd37796acd85149"
+    },
+    {
+      "path": "server/db/migrations/inplace/035_account_root_promotion.sql",
+      "sha256": "58ffa585f73a6b54c094dd1f1b7da9dd9f3b7ab5713ac0c36612ff1a9716fc73"
+    },
+    {
+      "path": "server/db/migrations/inplace/036_terminal_route_tables.sql",
+      "sha256": "5d12f59e84598e88967f3fa1cd5294b2dc13855279799f31fb937222cd51dab6"
+    },
+    {
+      "path": "server/db/migrations/inplace/037_observer_context_tables.sql",
+      "sha256": "27affaf437d3c245cf1a3da4a14835f5c6208bd5933d10ba0123da519ea76034"
+    },
+    {
+      "path": "server/db/migrations/inplace/038_account_market_projection_tables.sql",
+      "sha256": "1f2b6f585a51afe549bd8031bf5a3f15b5fd8e79228e8f546962b690bab58c87"
+    },
+    {
+      "path": "server/db/migrations/inplace/039_legacy_candle_build_tables.sql",
+      "sha256": "7f0edd16df4dae64c8c3042a3515745ce4f446eaf53bf80338119144f11e360d"
+    },
+    {
+      "path": "server/db/migrations/inplace/040_legacy_candle_promotion.sql",
+      "sha256": "443dc583e305fc594dfe1045e741424451a0b5a0928aa658566e36f7831e7c53"
+    },
+    {
+      "path": "server/db/migrations/inplace/041_trading_context_changes.sql",
+      "sha256": "9cb05c6b090c30925b257201fe0f8812598d1e235b20a045245eb2ac44aaef7d"
+    },
+    {
+      "path": "server/db/migrations/inplace/042_observer_registry_seed.sql",
+      "sha256": "79b7f830e42b921f906fe2382ce3e305711cd97686a378d7c75a50cf1710e7dd"
+    },
+    {
+      "path": "server/db/migrations/inplace/043_risk_core_structures.sql",
+      "sha256": "b0031227df78c19a1c58b01ffa3e8e258a3da20d8a1e03e49182d33c2d8a8072"
+    },
+    {
+      "path": "server/routes/ai/platform-market-data.js",
+      "sha256": "7e2c0943db1f514f98e6a4837570f215c5a6d7a0368bb898f57df1de4f4ac697"
+    }
+  ],
+  "checks": [
+    "eight-ddl-transitions-with-enforced-foreign-keys",
+    "active-version-must-belong-to-set",
+    "matching-active-version-accepted",
+    "account-scope-requires-account",
+    "same-user-account-key-is-unique",
+    "different-user-can-use-same-key",
+    "account-breach-episode-is-unique",
+    "release-user-must-exist",
+    "utc-millisecond-retained"
+  ],
+  "referenceDatabaseRemoved": true,
+  "existingDatabaseWrites": 0,
+  "scope": "Isolated reference database with typed parent stubs and actual foreign keys. Not current dev_vue upgrade, historical data restore, or API/receipt concurrency acceptance."
+}

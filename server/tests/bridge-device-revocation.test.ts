@@ -30,6 +30,7 @@ class CredentialPool {
     if (this.failRollback) throw new Error('rollback detail')
   }
   release() { this.transactions.push('release') }
+  destroy() { this.pending = null; this.transactions.push('destroy') }
   async execute(sql: string, params: unknown[] = []) {
     this.calls.push({ sql, params })
     if ((sql.match(/\?/g) ?? []).length !== params.length) throw new Error('placeholder mismatch')
@@ -87,27 +88,27 @@ describe('precise Bridge device revocation (transaction double)', () => {
     }
   })
 
-  it('rolls back update and commit failures without exposing storage details, and permits a later retry', async () => {
+  it('rolls back failed writes but destroys uncertain commits, and permits a later exact retry', async () => {
     for (const failAt of ['update', 'commit'] as const) {
       const pool = new CredentialPool()
       pool.failAt = failAt
       const repository = new MysqlBridgeCredentialRepository(pool.asPool())
-      await expect(repository.revokeDeviceRefresh(input)).rejects.toMatchObject({ code: 'bridge_credential_storage_failed', status: 503, retryable: true })
+      await expect(repository.revokeDeviceRefresh(input)).rejects.toMatchObject({ code: failAt === 'commit' ? 'bridge_credential_commit_unknown' : 'bridge_credential_storage_failed', status: 503, retryable: failAt !== 'commit' })
       expect(pool.rows[0]!.revokedAt).toBeNull()
-      expect(pool.transactions).toEqual(['begin', 'rollback', 'release'])
+      expect(pool.transactions).toEqual(failAt === 'commit' ? ['begin', 'destroy'] : ['begin', 'rollback', 'release'])
       pool.failAt = null
       await expect(repository.revokeDeviceRefresh(input)).resolves.toMatchObject({ generation: 2 })
       expect(pool.rows[0]!.revokedAt).not.toBeNull()
     }
   })
 
-  it('does not acknowledge a failed CAS and still releases when rollback itself fails', async () => {
+  it('does not acknowledge a failed CAS and destroys the connection when rollback fails', async () => {
     const pool = new CredentialPool()
     pool.zeroUpdate = true
     pool.failRollback = true
     await expect(new MysqlBridgeCredentialRepository(pool.asPool()).revokeDeviceRefresh(input))
       .rejects.toMatchObject({ code: 'bridge_credential_storage_failed', status: 503 })
     expect(pool.rows[0]!.revokedAt).toBeNull()
-    expect(pool.transactions).toEqual(['begin', 'rollback', 'release'])
+    expect(pool.transactions).toEqual(['begin', 'rollback', 'destroy'])
   })
 })
