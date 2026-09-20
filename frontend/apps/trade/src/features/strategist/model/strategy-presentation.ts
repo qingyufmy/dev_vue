@@ -19,6 +19,7 @@ export interface StrategyVersionView {
 export interface StrategyDetailView {
   strategy: StrategySummary
   versions: StrategyVersionView[]
+  performance: import('@aurum/contracts').StrategyDetail['performance']
 }
 
 export interface CompileIssueView {

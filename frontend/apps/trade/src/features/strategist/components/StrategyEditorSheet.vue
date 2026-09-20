@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Save } from '@lucide/vue'
-import type { StrategyKind } from '@aurum/contracts'
+import type { StrategyKind, StrategySummary } from '@aurum/contracts'
 import { computed, reactive, ref, toRaw, watch } from 'vue'
 import { Badge } from '@aurum/ui/badge'
 import { Button } from '@aurum/ui/button'
@@ -29,7 +29,8 @@ const props = withDefaults(defineProps<{
   compiling?: boolean
   submitting?: boolean
   error?: string
-}>(), { strategyName: '', baseVersion: null, compileResult: null, compiling: false, submitting: false, error: '' })
+  traderStrategies?: StrategySummary[]
+}>(), { strategyName: '', baseVersion: null, compileResult: null, compiling: false, submitting: false, error: '', traderStrategies: () => [] })
 
 const emit = defineEmits<{
   'update:open': [value: boolean]
@@ -136,6 +137,14 @@ watch(() => props.open, (open) => { if (open) reset() }, { immediate: true })
               <SelectContent><SelectItem value="active">启用</SelectItem><SelectItem value="draft">停用</SelectItem></SelectContent>
             </Select>
             <FieldDescription>{{ form.status === 'active' ? '保存后现有订阅使用更新后的策略。' : '保存后该策略不再参与分析或交易，订阅配置和历史记录保留。' }}</FieldDescription>
+          </Field>
+          <Field v-if="form.kind === 'analysis'">
+            <FieldLabel for="paired-trader-strategy">配套交易策略</FieldLabel>
+            <Select :model-value="typeof form.config.trader_strategy_id === 'string' ? form.config.trader_strategy_id : undefined" @update:model-value="form.config.trader_strategy_id = String($event)">
+              <SelectTrigger id="paired-trader-strategy"><SelectValue placeholder="选择交易执行策略" /></SelectTrigger>
+              <SelectContent><SelectGroup><SelectItem v-for="item in traderStrategies" :key="item.id" :value="item.id" :disabled="item.status === 'retired'">{{ item.name }} · {{ item.status === 'active' && item.activeVersionId ? '已发布' : '尚未发布' }}</SelectItem></SelectGroup></SelectContent>
+            </Select>
+            <FieldDescription>客户选择当前策略组合后，系统自动使用这条执行策略，不再要求二次选择。</FieldDescription>
           </Field>
           <StrategyRuntimeSettings v-model="form.config" :trader="form.kind === 'trader'" :platform="Boolean(platform)" />
           </section>

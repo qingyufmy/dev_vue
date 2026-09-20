@@ -4182,6 +4182,8 @@ export interface components {
             kind: "analysis" | "trader";
             name: string;
             owner_user_id: components["schemas"]["OpaqueId"] | null;
+            paired_trader_strategy: components["schemas"]["StrategyPairedTrader"] | null;
+            performance: components["schemas"]["StrategyPerformance"];
             revision: components["schemas"]["Revision"];
             /** @enum {string} */
             scope: "platform" | "user";
@@ -4272,6 +4274,28 @@ export interface components {
         StrategyMetadataPatch: {
             description: string;
             name: string;
+        };
+        StrategyPairedTrader: {
+            active_version_id: components["schemas"]["OpaqueId"] | null;
+            id: components["schemas"]["OpaqueId"];
+            name: string;
+            /** @enum {string} */
+            status: "draft" | "active" | "retired";
+        };
+        StrategyPerformance: {
+            currencies: string[];
+            currency: string | null;
+            max_drawdown: components["schemas"]["Decimal"] | null;
+            max_drawdown_percent: components["schemas"]["Decimal"] | null;
+            net_profit: components["schemas"]["Decimal"] | null;
+            period_end: components["schemas"]["UtcDateTime"] | null;
+            period_start: components["schemas"]["UtcDateTime"] | null;
+            profit_factor: components["schemas"]["Decimal"] | null;
+            return_percent: components["schemas"]["Decimal"] | null;
+            /** @enum {string} */
+            status: "available" | "insufficient" | "mixed_currency";
+            trade_count: number;
+            win_rate_percent: components["schemas"]["Decimal"] | null;
         };
         StrategySubscription: {
             analysis_enabled: boolean;
@@ -4380,6 +4404,7 @@ export interface components {
             kind: "analysis" | "trader";
             name: string;
             owner_user_id: components["schemas"]["OpaqueId"] | null;
+            paired_trader_strategy: components["schemas"]["StrategyPairedTrader"] | null;
             revision: components["schemas"]["Revision"];
             /** @enum {string} */
             scope: "platform" | "user";

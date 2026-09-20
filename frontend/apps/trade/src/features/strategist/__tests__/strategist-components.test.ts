@@ -20,6 +20,19 @@ describe('strategist workspace components', () => {
     expect(editor).not.toContain('trade-send-enabled')
     expect(editor).not.toContain('允许发送交易')
     expect(editor).toContain('自动分析按策略运行间隔调度')
+    expect(trader).toContain('自动绑定')
+    expect(trader).not.toContain('SelectTrigger')
+  })
+
+  it('presents analysis and execution as one customer-facing strategy combination with evidence metrics', () => {
+    const catalog = featureFile('components/StrategyCatalog.vue')
+    const detail = featureFile('components/StrategyDetail.vue')
+    expect(catalog).toContain('策略组合')
+    expect(catalog).not.toContain('TabsTrigger')
+    expect(detail).toContain('我的实盘效果')
+    expect(detail).toContain('精确归因')
+    expect(detail).toContain('最大回撤')
+    expect(detail).toContain('盈亏比')
   })
 
   it('keeps platform strategies read-only and uses immutable versions', () => {

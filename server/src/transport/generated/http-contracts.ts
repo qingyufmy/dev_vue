@@ -9174,6 +9174,19 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
               }
             ]
           },
+          "paired_trader_strategy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StrategyPairedTrader"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "performance": {
+            "$ref": "#/components/schemas/StrategyPerformance"
+          },
           "revision": {
             "$ref": "#/components/schemas/Revision"
           },
@@ -9209,6 +9222,8 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
           "status",
           "active_version_id",
           "revision",
+          "paired_trader_strategy",
+          "performance",
           "versions"
         ],
         "type": "object"
@@ -9607,6 +9622,176 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         "required": [
           "name",
           "description"
+        ],
+        "type": "object"
+      },
+      "StrategyPairedTrader": {
+        "additionalProperties": false,
+        "properties": {
+          "active_version_id": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/OpaqueId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "$ref": "#/components/schemas/OpaqueId"
+          },
+          "name": {
+            "maxLength": 191,
+            "minLength": 1,
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "draft",
+              "active",
+              "retired"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status",
+          "active_version_id"
+        ],
+        "type": "object"
+      },
+      "StrategyPerformance": {
+        "additionalProperties": false,
+        "properties": {
+          "currencies": {
+            "items": {
+              "maxLength": 16,
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "currency": {
+            "oneOf": [
+              {
+                "maxLength": 16,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_drawdown": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_drawdown_percent": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "net_profit": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "period_end": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UtcDateTime"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "period_start": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/UtcDateTime"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "profit_factor": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "return_percent": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "available",
+              "insufficient",
+              "mixed_currency"
+            ],
+            "type": "string"
+          },
+          "trade_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "win_rate_percent": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decimal"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "currency",
+          "currencies",
+          "net_profit",
+          "max_drawdown",
+          "return_percent",
+          "max_drawdown_percent",
+          "trade_count",
+          "win_rate_percent",
+          "profit_factor",
+          "period_start",
+          "period_end"
         ],
         "type": "object"
       },
@@ -10081,6 +10266,16 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
               }
             ]
           },
+          "paired_trader_strategy": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/StrategyPairedTrader"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "revision": {
             "$ref": "#/components/schemas/Revision"
           },
@@ -10109,6 +10304,7 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
           "description",
           "status",
           "active_version_id",
+          "paired_trader_strategy",
           "revision"
         ],
         "type": "object"

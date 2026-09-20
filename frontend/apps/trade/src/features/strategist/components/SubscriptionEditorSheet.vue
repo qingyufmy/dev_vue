@@ -34,14 +34,14 @@ const form = reactive<SubscriptionDraft>({ accountId: '', symbol: '', analysisSt
 const localError = ref('')
 const editing = computed(() => Boolean(props.subscription))
 const analysisStrategies = computed(() => props.strategies.filter((item) => item.kind === 'analysis' && ((item.status === 'active' && item.activeVersionId) || item.id === props.subscription?.analysisStrategyId)))
-const traderStrategies = computed(() => props.strategies.filter((item) => item.kind === 'trader' && ((item.status === 'active' && item.activeVersionId) || item.id === props.subscription?.traderStrategyId)))
+const selectedStrategy = computed(() => analysisStrategies.value.find(item => item.id === form.analysisStrategyId) ?? null)
 
 function reset() {
   const value = props.subscription
   form.accountId = value?.accountId ?? props.accountId
   form.symbol = value?.symbol ?? props.symbols[0] ?? 'XAUUSD'
   form.analysisStrategyId = value?.analysisStrategyId ?? analysisStrategies.value[0]?.id ?? ''
-  form.traderStrategyId = value?.traderStrategyId ?? traderStrategies.value[0]?.id ?? null
+  form.traderStrategyId = selectedStrategy.value?.pairedTraderStrategy?.id ?? value?.traderStrategyId ?? null
   form.analysisEnabled = value ? value.analysisEnabled && value.status === 'active' : true
   form.traderEnabled = value?.traderEnabled ?? false
   form.status = value?.status === 'paused' ? 'paused' : 'active'
@@ -63,7 +63,7 @@ function submit() {
   if (!form.accountId) return fail('请选择需要订阅的交易账户')
   if (!/^[A-Za-z0-9._-]{1,64}$/.test(form.symbol.trim())) return fail('交易品种格式不正确')
   if (!form.analysisStrategyId) return fail('请选择行情分析策略')
-  if (form.traderEnabled && !form.traderStrategyId) return fail('启用 AI 交易员后必须选择交易执行策略')
+  if (form.traderEnabled && !selectedStrategy.value?.pairedTraderStrategy?.activeVersionId) return fail('当前策略组合尚未配置可用的交易执行策略')
   localError.value = ''
   emit('submit', { ...form, status: form.analysisEnabled ? 'active' : 'paused', symbol: form.symbol.trim().toUpperCase() })
 }
@@ -71,14 +71,18 @@ function fail(message: string) { localError.value = message }
 
 watch(() => props.open, (open) => { if (open) reset() }, { immediate: true })
 watch(() => [props.accountId, props.subscription?.id], () => { if (props.open) reset() })
+watch(() => form.analysisStrategyId, () => {
+  form.traderStrategyId = selectedStrategy.value?.pairedTraderStrategy?.id ?? null
+  if (!selectedStrategy.value?.pairedTraderStrategy?.activeVersionId) form.traderEnabled = false
+})
 </script>
 
 <template>
   <Sheet :open="open" @update:open="emit('update:open', $event)">
     <SheetContent side="right" class="gap-0 overflow-hidden p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-2xl">
       <SheetHeader class="border-b pr-16 text-left">
-        <SheetTitle>{{ focus === 'trader' ? '自动交易设置' : focus === 'analysis' ? '自动分析设置' : editing ? '编辑账户订阅' : '新增账户订阅' }}</SheetTitle>
-        <SheetDescription>{{ focus === 'trader' ? '选择交易策略；启用后，风控通过的动作将自动发送。' : '选择分析策略，设置接收分析的时间。' }}</SheetDescription>
+        <SheetTitle>{{ focus === 'trader' ? '自动交易设置' : focus === 'analysis' ? '自动分析设置' : editing ? '编辑策略组合' : '应用策略组合' }}</SheetTitle>
+        <SheetDescription>{{ focus === 'trader' ? '交易引擎由策略组合自动绑定；启用后，风控通过的动作将自动发送。' : '只需选择一套策略组合，再设置账户、品种和运行方式。' }}</SheetDescription>
       </SheetHeader>
       <form class="min-h-0 flex-1 overflow-y-auto" @submit.prevent="submit">
         <div class="grid gap-6 p-4 sm:p-6">
@@ -107,14 +111,14 @@ watch(() => [props.accountId, props.subscription?.id], () => { if (props.open) r
             </Field>
           </FieldGroup>
 
-          <SubscriptionTraderFields v-if="focus === 'trader'" v-model:enabled="form.traderEnabled" v-model:strategy="form.traderStrategyId" :strategies="traderStrategies" />
+          <SubscriptionTraderFields v-if="focus === 'trader'" v-model:enabled="form.traderEnabled" :strategy="selectedStrategy?.pairedTraderStrategy ?? null" />
           <details :open="focus !== 'trader' || !editing || !form.analysisEnabled" class="rounded-xl border p-4">
             <summary class="cursor-pointer text-sm font-medium">{{ focus === 'trader' ? '关联的自动分析' : '分析与接收设置' }}<span class="ml-2 text-xs text-muted-foreground">{{ analysisStrategies.find(item => item.id === form.analysisStrategyId)?.name ?? '待选择策略' }}</span></summary>
             <div class="mt-4 grid gap-4">
           <Field>
-            <FieldLabel for="analysis-strategy">行情分析策略</FieldLabel>
+            <FieldLabel for="analysis-strategy">策略组合</FieldLabel>
             <Select :model-value="form.analysisStrategyId" @update:model-value="setValue('analysisStrategyId', $event)">
-              <SelectTrigger id="analysis-strategy"><SelectValue placeholder="选择已发布的分析策略" /></SelectTrigger>
+              <SelectTrigger id="analysis-strategy"><SelectValue placeholder="选择已发布的策略组合" /></SelectTrigger>
               <SelectContent><SelectGroup><SelectItem v-for="strategy in analysisStrategies" :key="strategy.id" :value="strategy.id" :disabled="strategy.status !== 'active' || !strategy.activeVersionId">{{ strategy.name }}{{ strategy.status !== 'active' || !strategy.activeVersionId ? '（暂不可用）' : '' }} · {{ strategy.scope === 'platform' ? '平台' : '个人' }}</SelectItem></SelectGroup></SelectContent>
             </Select>
           </Field>
@@ -130,7 +134,7 @@ watch(() => [props.accountId, props.subscription?.id], () => { if (props.open) r
           </details>
           <details v-if="focus !== 'trader'" :open="!focus" class="rounded-xl border p-4">
             <summary class="cursor-pointer text-sm font-medium">自动交易设置<span class="ml-2 text-xs text-muted-foreground">{{ form.traderEnabled ? '已启用' : '未启用' }}</span></summary>
-            <SubscriptionTraderFields class="mt-4" v-model:enabled="form.traderEnabled" v-model:strategy="form.traderStrategyId" :strategies="traderStrategies" />
+            <SubscriptionTraderFields class="mt-4" v-model:enabled="form.traderEnabled" :strategy="selectedStrategy?.pairedTraderStrategy ?? null" />
           </details>
 
 

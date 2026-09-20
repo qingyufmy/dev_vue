@@ -340,7 +340,10 @@ describe('strategy management API client', () => {
   }
   const detail = {
     id: 'strategy/1', kind: 'analysis', scope: 'user', owner_user_id: '7', name: '黄金分析', description: '结构',
-    status: 'draft', active_version_id: null, revision: '1', versions: [version],
+    status: 'draft', active_version_id: null, paired_trader_strategy: null, revision: '1',
+    performance: { status: 'insufficient', currency: null, currencies: [], net_profit: null, max_drawdown: null,
+      return_percent: null, max_drawdown_percent: null, trade_count: 0, win_rate_percent: null, profit_factor: null,
+      period_start: null, period_end: null }, versions: [version],
   }
   const compile = {
     valid: true, kind: 'analysis', prompt_hash: 'a'.repeat(64), normalized_config: { timeframes: ['M5'], candle_limit: 300 },

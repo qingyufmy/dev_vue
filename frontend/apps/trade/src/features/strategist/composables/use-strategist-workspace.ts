@@ -272,6 +272,7 @@ function mapDetail(value: StrategyDetail): StrategyDetailView {
   const { versions, ...strategy } = value
   return {
     strategy,
+    performance: value.performance,
     versions: versions.map((version) => ({
       id: version.id, versionNumber: version.version, promptText: version.promptText, promptSha256: version.promptHash,
       inputContractVersion: version.inputContractVersion, outputContractVersion: version.outputContractVersion,

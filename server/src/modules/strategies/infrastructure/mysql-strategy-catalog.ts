@@ -25,7 +25,23 @@ interface StrategyRow extends RowDataPacket {
   description: string
   status: 'draft' | 'active' | 'retired'
   active_version_id: string | null
+  paired_trader_id: string | null
+  paired_trader_name: string | null
+  paired_trader_status: 'draft' | 'active' | 'retired' | null
+  paired_trader_active_version_id: string | null
   revision: number
+}
+
+interface PerformanceRow extends RowDataPacket {
+  account_currency: string
+  trade_count: number
+  winning_count: number
+  net_profit: string
+  gross_profit: string
+  gross_loss: string
+  max_drawdown: string
+  period_start: Date
+  period_end: Date
 }
 
 interface VersionRow extends RowDataPacket {
@@ -70,17 +86,22 @@ interface SubscriptionRow extends RowDataPacket {
 
 const summary = (row: StrategyRow): StrategySummary => ({
   id: row.id, kind: row.kind, scope: row.scope, ownerUserId: row.owner_user_id, name: row.name,
-  description: row.description, status: row.status, activeVersionId: row.active_version_id, revision: Number(row.revision),
+  description: row.description, status: row.status, activeVersionId: row.active_version_id,
+  pairedTraderStrategy: row.paired_trader_id && row.paired_trader_name && row.paired_trader_status ? {
+    id: row.paired_trader_id, name: row.paired_trader_name, status: row.paired_trader_status,
+    activeVersionId: row.paired_trader_active_version_id,
+  } : null,
+  revision: Number(row.revision),
 })
 
 export class MysqlStrategyCatalog implements StrategyCatalog, StrategyManagementRepository {
   constructor(private readonly pool: Pool) {}
 
   async listAvailable(userId: number, kind?: StrategyKind) {
-    const params: Array<number | string> = [userId]
+    const params: Array<number | string> = [userId, userId]
     let kindSql = ''
     if (kind) { kindSql = ' AND s.kind=?'; params.push(kind) }
-    const [rows] = await this.pool.execute<StrategyRow[]>(`SELECT CAST(s.id AS CHAR) id,s.kind,s.scope,s.owner_user_id,s.name,s.description,s.status,CAST(s.active_version_id AS CHAR) active_version_id,s.revision FROM strategies s WHERE s.deleted_at_utc IS NULL AND (s.scope='platform' OR s.owner_user_id=?)${kindSql} ORDER BY s.kind,s.name,s.id`, params)
+    const [rows] = await this.pool.execute<StrategyRow[]>(`${strategySelect} WHERE s.deleted_at_utc IS NULL AND (s.scope='platform' OR s.owner_user_id=?)${kindSql} ORDER BY s.kind,s.name,s.id`, params)
     return rows.map(summary)
   }
 
@@ -255,16 +276,62 @@ export class MysqlStrategyCatalog implements StrategyCatalog, StrategyManagement
   }
 }
 
-const strategySelect = `SELECT CAST(s.id AS CHAR) id,s.kind,s.scope,s.owner_user_id,s.name,s.description,s.status,CAST(s.active_version_id AS CHAR) active_version_id,s.revision FROM strategies s`
+const strategySelect = `SELECT CAST(s.id AS CHAR) id,s.kind,s.scope,s.owner_user_id,s.name,s.description,s.status,CAST(s.active_version_id AS CHAR) active_version_id,s.revision,
+  CAST(pt.id AS CHAR) paired_trader_id,pt.name paired_trader_name,pt.status paired_trader_status,CAST(pt.active_version_id AS CHAR) paired_trader_active_version_id
+  FROM strategies s LEFT JOIN strategy_versions av ON av.id=s.active_version_id AND av.strategy_id=s.id
+  LEFT JOIN strategies pt ON s.kind='analysis' AND pt.id=CAST(JSON_UNQUOTE(JSON_EXTRACT(av.config_json,'$.trader_strategy_id')) AS UNSIGNED)
+    AND pt.kind='trader' AND pt.deleted_at_utc IS NULL AND (pt.scope='platform' OR pt.owner_user_id=?)`
 const versionSelect = `SELECT CAST(v.id AS CHAR) id,CAST(v.strategy_id AS CHAR) strategy_id,s.kind,v.version_number,v.prompt_text,v.prompt_sha256,v.config_json,v.input_contract_version,v.output_contract_version,v.created_by_user_id,v.created_at_utc FROM strategy_versions v INNER JOIN strategies s ON s.id=v.strategy_id`
 const subscriptionSelect = `SELECT CAST(s.id AS CHAR) id,s.user_id,CAST(s.trading_account_id AS CHAR) trading_account_id,s.standard_symbol,CAST(s.analysis_strategy_id AS CHAR) analysis_strategy_id,CAST(COALESCE((SELECT active_version_id FROM strategies WHERE id=s.analysis_strategy_id),s.analysis_strategy_version_id) AS CHAR) analysis_strategy_version_id,CAST(s.trader_strategy_id AS CHAR) trader_strategy_id,CAST(COALESCE((SELECT active_version_id FROM strategies WHERE id=s.trader_strategy_id),s.trader_strategy_version_id) AS CHAR) trader_strategy_version_id,s.analysis_enabled,s.trader_enabled,s.trade_send_enabled,s.status,s.revision,s.created_at_utc,s.updated_at_utc,COALESCE((SELECT CAST(JSON_UNQUOTE(JSON_EXTRACT(v.config_json,'$.interval_minutes')) AS UNSIGNED)*60 FROM strategy_versions v WHERE v.id=(SELECT active_version_id FROM strategies WHERE id=s.analysis_strategy_id)),sc.cadence_seconds) cadence_seconds,sc.receive_timezone,sc.receive_window_json,sc.next_due_at_utc,sc.revision schedule_revision FROM strategy_subscriptions s LEFT JOIN subscription_schedules sc ON sc.subscription_id=s.id INNER JOIN trading_account_ownerships owner ON owner.trading_account_id=s.trading_account_id AND owner.user_id=s.user_id AND owner.role='owner' AND owner.revoked_at_utc IS NULL`
 
 export async function readStrategyDetail(reader: Pick<PoolConnection, 'execute'>, userId: number, strategyId: string): Promise<StrategyDetail | null> {
-  const [rows] = await reader.execute<StrategyRow[]>(`${strategySelect} WHERE s.id=? AND s.deleted_at_utc IS NULL AND (s.scope='platform' OR s.owner_user_id=?) LIMIT 1`, [strategyId, userId])
+  const [rows] = await reader.execute<StrategyRow[]>(`${strategySelect} WHERE s.id=? AND s.deleted_at_utc IS NULL AND (s.scope='platform' OR s.owner_user_id=?) LIMIT 1`, [userId, strategyId, userId])
   const row = rows[0]
   if (!row) return null
   const [versions] = await reader.execute<VersionDetailRow[]>(versionSelect + ' WHERE v.strategy_id=? ORDER BY v.version_number DESC,v.id DESC', [strategyId])
-  return { summary: summary(row), versions: versions.map(versionDetail) }
+  return { summary: summary(row), versions: versions.map(versionDetail), performance: await readPerformance(reader, userId, row.id, row.paired_trader_id) }
+}
+
+async function readPerformance(reader: Pick<PoolConnection, 'execute'>, userId: number, analysisStrategyId: string, traderStrategyId: string | null) {
+  const insufficient = { status: 'insufficient' as const, currency: null, currencies: [], netProfit: null, maxDrawdown: null,
+    returnPercent: null, maxDrawdownPercent: null, tradeCount: 0, winRatePercent: null, profitFactor: null, periodStart: null, periodEnd: null }
+  if (!traderStrategyId) return insufficient
+  const [rows] = await reader.execute<PerformanceRow[]>(`WITH attributed AS (
+      SELECT r.id,r.account_currency,r.net_profit,r.closed_at_utc
+      FROM account_trade_records_v4 r
+      WHERE r.user_id=? AND r.status='closed' AND r.source_classification='system'
+        AND r.attribution_status='exact' AND r.evidence_status='complete' AND r.account_currency IS NOT NULL
+        AND EXISTS (SELECT 1 FROM account_trade_attributions_v4 a
+          INNER JOIN bridge_commands_v4 bc ON bc.id=a.source_id
+          INNER JOIN execution_intents ei ON ei.id=bc.execution_intent_id
+          INNER JOIN trade_decisions td ON td.id=ei.trade_decision_id
+          INNER JOIN market_analyses ma ON ma.id=td.market_analysis_id
+          WHERE a.trade_record_id=r.id AND a.source_kind='bridge_command' AND a.relation_kind='opened'
+            AND CAST(ma.strategy_id AS CHAR)=? AND CAST(td.strategy_id AS CHAR)=? )
+    ), curve AS (
+      SELECT id,account_currency,net_profit,closed_at_utc,
+        SUM(net_profit) OVER (PARTITION BY account_currency ORDER BY closed_at_utc,id) cumulative_profit
+      FROM attributed
+    ), peaks AS (
+      SELECT *,GREATEST(0,MAX(cumulative_profit) OVER (PARTITION BY account_currency ORDER BY closed_at_utc,id)) peak_profit FROM curve
+    )
+    SELECT account_currency,COUNT(*) trade_count,SUM(net_profit>0) winning_count,
+      CAST(SUM(net_profit) AS CHAR) net_profit,
+      CAST(SUM(CASE WHEN net_profit>0 THEN net_profit ELSE 0 END) AS CHAR) gross_profit,
+      CAST(ABS(SUM(CASE WHEN net_profit<0 THEN net_profit ELSE 0 END)) AS CHAR) gross_loss,
+      CAST(MAX(peak_profit-cumulative_profit) AS CHAR) max_drawdown,
+      MIN(closed_at_utc) period_start,MAX(closed_at_utc) period_end
+    FROM peaks GROUP BY account_currency ORDER BY account_currency`, [userId, analysisStrategyId, traderStrategyId])
+  if (!rows.length) return insufficient
+  const currencies = rows.map(item => item.account_currency)
+  const tradeCount = rows.reduce((total, item) => total + Number(item.trade_count), 0)
+  if (rows.length !== 1) return { ...insufficient, status: 'mixed_currency' as const, currencies, tradeCount }
+  const value = rows[0]!, losses = Number(value.gross_loss), count = Number(value.trade_count), wins = Number(value.winning_count)
+  return { status: 'available' as const, currency: value.account_currency, currencies, netProfit: value.net_profit,
+    maxDrawdown: value.max_drawdown, returnPercent: null, maxDrawdownPercent: null, tradeCount: count,
+    winRatePercent: count ? (wins * 100 / count).toFixed(2) : null,
+    profitFactor: losses > 0 ? (Number(value.gross_profit) / losses).toFixed(4) : Number(value.gross_profit) > 0 ? null : '0',
+    periodStart: toIso(value.period_start), periodEnd: toIso(value.period_end) }
 }
 
 async function ownedAccount(connection: PoolConnection, userId: number, accountId: string) {

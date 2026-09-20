@@ -13,7 +13,28 @@ export interface StrategySummary {
   description: string
   status: StrategyStatus
   activeVersionId: string | null
+  pairedTraderStrategy?: {
+    id: string
+    name: string
+    status: StrategyStatus
+    activeVersionId: string | null
+  } | null
   revision: number
+}
+
+export interface StrategyPerformance {
+  status: 'available' | 'insufficient' | 'mixed_currency'
+  currency: string | null
+  currencies: string[]
+  netProfit: string | null
+  maxDrawdown: string | null
+  returnPercent: string | null
+  maxDrawdownPercent: string | null
+  tradeCount: number
+  winRatePercent: string | null
+  profitFactor: string | null
+  periodStart: string | null
+  periodEnd: string | null
 }
 
 export interface StrategyVersion {
@@ -36,6 +57,7 @@ export interface StrategyVersionDetail extends StrategyVersion {
 export interface StrategyDetail {
   summary: StrategySummary
   versions: StrategyVersionDetail[]
+  performance?: StrategyPerformance
 }
 
 export interface StrategyCompileIssue {

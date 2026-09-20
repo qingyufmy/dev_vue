@@ -11,7 +11,7 @@ import {
 
 const analysisVersion: StrategyVersion = {
   id: 'version-analysis-1', strategyId: 'strategy-analysis-1', kind: 'analysis', version: 1,
-  promptText: '只分析市场结构', promptHash: 'a'.repeat(64), config: { timeframes: ['M5'], candle_limit: 300 },
+  promptText: '只分析市场结构', promptHash: 'a'.repeat(64), config: { timeframes: ['M5'], candle_limit: 300, trader_strategy_id: 'strategy-trader-1' },
   inputContractVersion: 'market-analysis-input/v1', outputContractVersion: 'market-analysis/v1',
 }
 const traderVersion: StrategyVersion = {
@@ -122,6 +122,7 @@ describe('Stage 12Q strategy management', () => {
     expect(rejected.valid).toBe(false)
     expect(rejected.issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'dangerous_capability_forbidden', path: 'config.network' })]))
     expect(compileStrategy('analysis', '分析', { unsupported: true }).issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'config_field_unknown' })]))
+    expect(compileStrategy('analysis', '分析', { trader_strategy_id: 'strategy-trader-1' })).toMatchObject({ valid: true, normalizedConfig: { trader_strategy_id: 'strategy-trader-1' } })
   })
 
   it('serves compile, detail and user strategy writes with strict CSRF/CAS boundaries', async () => {
@@ -156,12 +157,12 @@ describe('Stage 12Q strategy management', () => {
     await app.close()
   })
 
-  it('rejects an executable subscription without a trader strategy', async () => {
+  it('derives the executable trader from the selected strategy combination', async () => {
     const app = Fastify({ logger: false })
     await app.register(createStrategyHttp(new StrategyService(new MemoryStrategyRepository()), auth))
     const response = await app.inject({ method: 'POST', url: '/api/v4/strategy-subscriptions', headers: { 'x-csrf-token': 'csrf-token-123456789', 'idempotency-key': 'subscription-create-001' }, payload: { trading_account_id: 'account-1', symbol: 'XAUUSD', analysis_strategy_id: 'strategy-analysis-1', trader_enabled: true } })
-    expect(response.statusCode).toBe(422)
-    expect(response.json()).toMatchObject({ code: 'subscription_trader_required' })
+    expect(response.statusCode).toBe(201)
+    expect(response.json().data).toMatchObject({ trader_strategy_id: 'strategy-trader-1', trader_enabled: true, trade_send_enabled: true })
     const ended = await app.inject({ method: 'POST', url: '/api/v4/strategy-subscriptions', headers: { 'x-csrf-token': 'csrf-token-123456789', 'idempotency-key': 'subscription-create-001' }, payload: { trading_account_id: 'account-1', symbol: 'XAUUSD', analysis_strategy_id: 'strategy-analysis-1', status: 'ended' } })
     expect(ended.statusCode).toBe(422)
     await app.close()
@@ -190,7 +191,7 @@ describe('Stage 12Q strategy management', () => {
     repository.subscriptions[0] = { ...repository.subscriptions[0]!, status: 'active', traderEnabled: false }
     await service.updateSubscription({
       userId: 42, idempotencyKey: 'subscription-update-001', subscriptionId: 'subscription-1', expectedRevision: 4,
-      analysisStrategyId: analysisVersion.strategyId, traderStrategyId: traderVersion.strategyId,
+      analysisStrategyId: analysisVersion.strategyId,
     })
     expect(repository.updatedSubscriptionInput).not.toHaveProperty('analysisStrategyVersionId')
     expect(repository.updatedSubscriptionInput).not.toHaveProperty('traderStrategyVersionId')

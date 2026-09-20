@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { AlertCircle, BrainCircuit, CheckCircle2, Library, Network } from '@lucide/vue'
-import type { StrategyKind, StrategySummary } from '@aurum/contracts'
+import type { StrategySummary } from '@aurum/contracts'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Alert, AlertDescription, AlertTitle } from '@aurum/ui/alert'
@@ -24,7 +24,7 @@ const editorOpen = ref(false)
 let editorGeneration = 0
 watch(editorOpen, () => { editorGeneration++ }, { flush: 'sync' })
 const editorMode = ref<'create' | 'version'>('create')
-const editorKind = ref<StrategyKind>('analysis')
+const editorKind = ref<'analysis' | 'trader'>('analysis')
 const editorBase = ref<StrategyDetailView | null>(null)
 const metadataOpen = ref(false)
 const metadataStrategy = ref<StrategySummary | null>(null)
@@ -35,7 +35,6 @@ const editingSubscription = ref<StrategySubscriptionView | null>(null)
 const endingSubscription = ref<StrategySubscriptionView | null>(null)
 
 const section = computed<StrategySection>(() => route.query.section === 'subscriptions' ? 'subscriptions' : 'library')
-const kind = computed<StrategyKind>(() => route.query.kind === 'trader' ? 'trader' : 'analysis')
 const selectedStrategyId = computed(() => typeof route.query.strategy_id === 'string' ? route.query.strategy_id : '')
 const selectedAccountId = computed(() => typeof route.query.account_id === 'string' ? route.query.account_id : '')
 const latestVersion = computed(() => editorBase.value?.versions.reduce((latest, item) => !latest || item.versionNumber > latest.versionNumber ? item : latest, undefined as StrategyDetailView['versions'][number] | undefined) ?? null)
@@ -54,17 +53,12 @@ function changeSection(value: string | number) {
   if (value === 'subscriptions') updateQuery({ section: 'subscriptions' })
 }
 
-function changeKind(value: StrategyKind) {
-  const first = workspace.strategies.value.find((item) => item.kind === value)
-  updateQuery({ kind: value === 'analysis' ? undefined : value, strategy_id: first?.id })
-}
-
 function selectStrategy(id: string) { updateQuery({ strategy_id: id }) }
 
-function openCreate(value: StrategyKind) {
+function openCreate() {
   workspace.clearCompile()
   editorMode.value = 'create'
-  editorKind.value = value
+  editorKind.value = 'analysis'
   editorBase.value = null
   editorOpen.value = true
 }
@@ -87,7 +81,7 @@ async function saveStrategy(draft: StrategyDraft) {
   if (generation !== editorGeneration || !editorOpen.value || target !== editorBase.value?.strategy.id || (target && target !== workspace.detail.value?.strategy.id)) return
   if (editorMode.value === 'create') {
     const id = await workspace.createStrategy(draft)
-    if (id) { editorOpen.value = false; updateQuery({ kind: draft.kind === 'analysis' ? undefined : draft.kind, strategy_id: id }) }
+    if (id) { editorOpen.value = false; updateQuery({ strategy_id: id }) }
   } else if (await workspace.createVersion(draft)) editorOpen.value = false
 }
 
@@ -105,9 +99,9 @@ function openSubscriptionEditor(item?: StrategySubscriptionView) { editingSubscr
 async function saveSubscription(draft: SubscriptionDraft) { if (await workspace.saveSubscription(draft, editingSubscription.value)) subscriptionOpen.value = false }
 async function endSubscription() { if (endingSubscription.value && await workspace.endSubscription(endingSubscription.value)) endingSubscription.value = null }
 
-watch([() => workspace.loading.value, () => workspace.strategies.value, kind], ([loading]) => {
+watch([() => workspace.loading.value, () => workspace.strategies.value], ([loading]) => {
   if (loading) return
-  const visible = workspace.strategies.value.filter((item) => item.kind === kind.value)
+  const visible = workspace.strategies.value.filter((item) => item.kind === 'analysis')
   if (!visible.some((item) => item.id === selectedStrategyId.value)) updateQuery({ strategy_id: visible[0]?.id })
 }, { immediate: true })
 watch(selectedAccountId, () => { subscriptionOpen.value = false; editingSubscription.value = null; endingSubscription.value = null })
@@ -126,7 +120,7 @@ watch([() => workspace.loading.value, () => workspace.accounts.value, selectedAc
       <div>
         <div class="flex items-center gap-2 text-xs font-medium text-primary"><BrainCircuit class="size-4" aria-hidden="true" />AI 交易团队</div>
         <h1 class="mt-1 text-2xl font-semibold tracking-tight">AI 策略师</h1>
-        <p class="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">选择策略、查看版本，再为交易账户配置订阅。</p>
+        <p class="mt-1 max-w-3xl text-sm leading-6 text-muted-foreground">选择一套策略组合，查看可验证效果，并应用到交易账户。</p>
       </div>
 
     </header>
@@ -137,13 +131,13 @@ watch([() => workspace.loading.value, () => workspace.accounts.value, selectedAc
 
     <Tabs class="flex min-w-0 flex-col" :model-value="section" @update:model-value="changeSection">
       <TabsList class="h-auto w-full justify-start overflow-x-auto sm:w-auto">
-        <TabsTrigger value="library" class="min-h-11"><Library />策略库</TabsTrigger>
+        <TabsTrigger value="library" class="min-h-11"><Library />策略组合</TabsTrigger>
         <TabsTrigger value="subscriptions" class="min-h-11"><Network />账户订阅</TabsTrigger>
       </TabsList>
 
       <TabsContent value="library" class="mt-4">
         <div class="grid min-w-0 gap-4 lg:grid-cols-[19rem_minmax(0,1fr)]">
-          <StrategyCatalog :items="workspace.strategies.value" :selected-id="selectedStrategyId" :loading="workspace.loading.value" :kind="kind" @select="selectStrategy" @create="openCreate" @kind-change="changeKind" />
+          <StrategyCatalog :items="workspace.strategies.value" :selected-id="selectedStrategyId" :loading="workspace.loading.value" @select="selectStrategy" @create="openCreate" />
           <StrategyDetail :detail="workspace.detail.value" :loading="workspace.detailLoading.value" :busy="workspace.submitting.value" @subscriptions="changeSection('subscriptions')" @edit-meta="openMetadata" @new-version="openVersion" @publish="pendingPublishVersionId = $event" @retire="retireOpen = true" />
         </div>
       </TabsContent>
@@ -174,6 +168,7 @@ watch([() => workspace.loading.value, () => workspace.accounts.value, selectedAc
       :strategy-status="editorBase?.strategy.status"
       :platform="editorBase?.strategy.scope === 'platform'"
       :base-version="editorMode === 'version' ? latestVersion : null"
+      :trader-strategies="workspace.strategies.value.filter(item => item.kind === 'trader')"
       :compile-result="workspace.compileResult.value"
       :compiling="workspace.compiling.value"
       :submitting="workspace.submitting.value"

@@ -41,18 +41,18 @@ function accountChange(value: unknown) { const id = String(value); if (id && id 
     </Card>
 
     <Card class="min-w-0 shadow-none">
-      <CardHeader class="border-b"><CardTitle>账户策略订阅</CardTitle><CardDescription>为当前账户选择策略、设置分析时间和 AI 交易员。</CardDescription></CardHeader>
+      <CardHeader class="border-b"><CardTitle>账户策略组合</CardTitle><CardDescription>每个订阅只选择一套组合；分析与执行引擎由组合统一管理。</CardDescription></CardHeader>
       <CardContent class="p-0">
         <div v-if="loading" class="grid gap-2 p-4" aria-busy="true"><div v-for="index in 3" :key="index" class="h-20 animate-pulse rounded-lg bg-muted motion-reduce:animate-none" /></div>
-        <Empty v-else-if="!subscriptions.length" class="min-h-80"><EmptyHeader><EmptyMedia variant="icon"><Bot /></EmptyMedia><EmptyTitle>这个账户还没有策略订阅</EmptyTitle><EmptyDescription>先选择已发布的行情分析策略；需要自动管理交易时，再绑定交易执行策略。</EmptyDescription></EmptyHeader></Empty>
+        <Empty v-else-if="!subscriptions.length" class="min-h-80"><EmptyHeader><EmptyMedia variant="icon"><Bot /></EmptyMedia><EmptyTitle>这个账户还没有策略组合</EmptyTitle><EmptyDescription>选择一套已发布的组合，再设置品种、分析时间与自动交易。</EmptyDescription></EmptyHeader></Empty>
         <template v-else>
           <div class="hidden overflow-x-auto md:block">
             <Table>
-              <TableHeader><TableRow><TableHead>品种</TableHead><TableHead>行情分析</TableHead><TableHead>AI 交易员</TableHead><TableHead>状态</TableHead><TableHead class="text-right">操作</TableHead></TableRow></TableHeader>
+              <TableHeader><TableRow><TableHead>品种</TableHead><TableHead>策略组合</TableHead><TableHead>运行方式</TableHead><TableHead>状态</TableHead><TableHead class="text-right">操作</TableHead></TableRow></TableHeader>
               <TableBody><TableRow v-for="item in subscriptions" :key="item.id">
                 <TableCell class="font-mono font-semibold">{{ item.symbol }}</TableCell>
                 <TableCell><div class="font-medium">{{ findStrategyName(strategies, item.analysisStrategyId) }}</div><span class="text-xs text-muted-foreground">{{ item.analysisEnabled ? `每 ${Math.round(item.cadenceSeconds / 60)} 分钟` : '已关闭' }}</span></TableCell>
-                <TableCell>{{ item.traderEnabled ? findStrategyName(strategies, item.traderStrategyId) : '仅分析' }}</TableCell>
+                <TableCell>{{ item.traderEnabled ? '自动分析 + 自动交易' : '仅自动分析' }}</TableCell>
                 <TableCell><Badge variant="outline">{{ subscriptionStatusLabel[item.status] }}</Badge></TableCell>
                 <TableCell><div class="flex justify-end gap-2"><Button variant="ghost" size="sm" :disabled="item.status === 'ended'" @click="emit('edit', item)"><Pencil />编辑</Button><Button variant="ghost" size="sm" :disabled="item.status === 'ended'" @click="emit('end', item)"><StopCircle />结束</Button></div></TableCell>
               </TableRow></TableBody>

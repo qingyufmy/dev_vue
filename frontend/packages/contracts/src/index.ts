@@ -447,6 +447,10 @@ export const auditEventDetailResponseSchema = z.object({ data: z.object({
 export const strategyKindSchema = z.enum(['analysis', 'trader'])
 export const strategyScopeSchema = z.enum(['platform', 'user'])
 export const strategyStatusSchema = z.enum(['draft', 'active', 'retired'])
+export const strategyPairedTraderSchema = z.object({
+  id: z.string().min(1), name: z.string().min(1).max(191), status: strategyStatusSchema,
+  active_version_id: z.string().min(1).nullable(),
+}).strict().transform(value => ({ id: value.id, name: value.name, status: value.status, activeVersionId: value.active_version_id }))
 export const strategySummarySchema = z.object({
   id: z.string().min(1),
   kind: strategyKindSchema,
@@ -456,10 +460,12 @@ export const strategySummarySchema = z.object({
   description: z.string().max(2000),
   status: strategyStatusSchema,
   active_version_id: z.string().min(1).nullable(),
+  paired_trader_strategy: strategyPairedTraderSchema.nullable(),
   revision: numericRevisionSchema,
 }).transform((value) => ({
   id: value.id, kind: value.kind, scope: value.scope, ownerUserId: value.owner_user_id, name: value.name,
-  description: value.description, status: value.status, activeVersionId: value.active_version_id, revision: value.revision,
+  description: value.description, status: value.status, activeVersionId: value.active_version_id,
+  pairedTraderStrategy: value.paired_trader_strategy, revision: value.revision,
 }))
 export const strategiesResponseSchema = z.object({ data: z.object({ items: z.array(strategySummarySchema) }), meta: responseMetaSchema })
 
@@ -478,12 +484,24 @@ export const strategyVersionSchema = z.object({
 export const strategyDetailSchema = z.object({
   id: z.string().min(1), kind: strategyKindSchema, scope: strategyScopeSchema, owner_user_id: z.string().min(1).nullable(),
   name: z.string().min(1).max(191), description: z.string().max(2000), status: strategyStatusSchema,
-  active_version_id: z.string().min(1).nullable(), revision: numericRevisionSchema,
+  active_version_id: z.string().min(1).nullable(), paired_trader_strategy: strategyPairedTraderSchema.nullable(), revision: numericRevisionSchema,
+  performance: z.object({
+    status: z.enum(['available', 'insufficient', 'mixed_currency']), currency: z.string().min(1).max(16).nullable(),
+    currencies: z.array(z.string().min(1).max(16)), net_profit: decimalSchema.nullable(), max_drawdown: decimalSchema.nullable(),
+    return_percent: decimalSchema.nullable(), max_drawdown_percent: decimalSchema.nullable(), trade_count: z.number().int().nonnegative(),
+    win_rate_percent: decimalSchema.nullable(), profit_factor: decimalSchema.nullable(),
+    period_start: z.iso.datetime({ offset: true }).nullable(), period_end: z.iso.datetime({ offset: true }).nullable(),
+  }).strict(),
   versions: z.array(strategyVersionSchema),
 }).strict().transform((value) => ({
   id: value.id, kind: value.kind, scope: value.scope, ownerUserId: value.owner_user_id, name: value.name,
-  description: value.description, status: value.status, activeVersionId: value.active_version_id, revision: value.revision,
-  versions: value.versions,
+  description: value.description, status: value.status, activeVersionId: value.active_version_id,
+  pairedTraderStrategy: value.paired_trader_strategy, revision: value.revision,
+  performance: { status: value.performance.status, currency: value.performance.currency, currencies: value.performance.currencies,
+    netProfit: value.performance.net_profit, maxDrawdown: value.performance.max_drawdown, returnPercent: value.performance.return_percent,
+    maxDrawdownPercent: value.performance.max_drawdown_percent, tradeCount: value.performance.trade_count,
+    winRatePercent: value.performance.win_rate_percent, profitFactor: value.performance.profit_factor,
+    periodStart: value.performance.period_start, periodEnd: value.performance.period_end }, versions: value.versions,
 }))
 export const strategyDetailResponseSchema = z.object({ data: strategyDetailSchema, meta: responseMetaSchema })
 

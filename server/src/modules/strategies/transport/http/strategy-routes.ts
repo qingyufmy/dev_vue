@@ -32,9 +32,7 @@ export const strategyRoutes: FastifyPluginAsync<StrategyRoutesOptions> = async (
       if (Object.keys(request.query).some(key => key !== 'kind')) throw new HttpContractError('api_request_invalid', 400)
       contract.request('listStrategies', request)
       if (request.query.kind !== undefined) assertStrategyKind(request.query.kind)
-      const items = (await options.service.list(userId, request.query.kind)).map(value => ({ id: value.id, kind: value.kind,
-        scope: value.scope, owner_user_id: value.ownerUserId === null ? null : String(value.ownerUserId), name: value.name,
-        description: value.description, status: value.status, active_version_id: value.activeVersionId, revision: String(value.revision) }))
+      const items = (await options.service.list(userId, request.query.kind)).map(summaryDto)
       return contract.response('listStrategies', response(request.id, { items }))
     } catch (error) { return listProblem(error, request.id, reply, contract, 'listStrategies') }
   })
@@ -254,11 +252,22 @@ function ifMatch(value: unknown) {
 function etag(revision: number) { return `"${revision}"` }
 
 export function detailDto(value: StrategyDetail) {
-  return { ...summaryDto(value.summary), versions: value.versions.map(versionDto) }
+  const performance = value.performance ?? { status: 'insufficient' as const, currency: null, currencies: [], netProfit: null, maxDrawdown: null,
+    returnPercent: null, maxDrawdownPercent: null, tradeCount: 0, winRatePercent: null, profitFactor: null, periodStart: null, periodEnd: null }
+  return { ...summaryDto(value.summary), performance: {
+    status: performance.status, currency: performance.currency, currencies: performance.currencies,
+    net_profit: performance.netProfit, max_drawdown: performance.maxDrawdown,
+    return_percent: performance.returnPercent, max_drawdown_percent: performance.maxDrawdownPercent,
+    trade_count: performance.tradeCount, win_rate_percent: performance.winRatePercent,
+    profit_factor: performance.profitFactor, period_start: performance.periodStart, period_end: performance.periodEnd,
+  }, versions: value.versions.map(versionDto) }
 }
 
 export function summaryDto(value: StrategyDetail['summary']) {
-  return { id: value.id, kind: value.kind, scope: value.scope, owner_user_id: value.ownerUserId === null ? null : String(value.ownerUserId), name: value.name, description: value.description, status: value.status, active_version_id: value.activeVersionId, revision: String(value.revision) }
+  return { id: value.id, kind: value.kind, scope: value.scope, owner_user_id: value.ownerUserId === null ? null : String(value.ownerUserId), name: value.name, description: value.description, status: value.status, active_version_id: value.activeVersionId,
+    paired_trader_strategy: value.pairedTraderStrategy ? { id: value.pairedTraderStrategy.id, name: value.pairedTraderStrategy.name,
+      status: value.pairedTraderStrategy.status, active_version_id: value.pairedTraderStrategy.activeVersionId } : null,
+    revision: String(value.revision) }
 }
 
 function versionDto(value: StrategyVersionDetail) {

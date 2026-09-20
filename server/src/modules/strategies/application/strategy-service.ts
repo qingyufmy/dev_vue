@@ -122,11 +122,15 @@ function normalizeConfig(kind: StrategyKind, config: Record<string, unknown>, is
     try { return canonicalClone(config) }
     catch { issues.push(issue('error', 'config_json_invalid', '策略配置必须是可序列化的 JSON 对象', 'config')); return {} }
   }
-  const allowed = new Set(['symbols', 'model_profile_id', 'interval_minutes', 'timeframes', 'candle_limit', 'macro_evidence', 'market_data_plan', 'ema34_evidence', 'chan_evidence', 'price_action_evidence'])
+  const allowed = new Set(['symbols', 'model_profile_id', 'interval_minutes', 'timeframes', 'candle_limit', 'macro_evidence', 'market_data_plan', 'ema34_evidence', 'chan_evidence', 'price_action_evidence', 'trader_strategy_id'])
   for (const key of Object.keys(config)) {
     if (!allowed.has(key)) issues.push(issue('error', 'config_field_unknown', `不支持的配置字段：${key}`, `config.${key}`))
   }
-  let indicators = common
+  if (config.trader_strategy_id !== undefined && config.trader_strategy_id !== null
+    && (typeof config.trader_strategy_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,190}$/.test(config.trader_strategy_id))) {
+    issues.push(issue('error', 'trader_strategy_id_invalid', '请选择有效的交易执行策略', 'config.trader_strategy_id'))
+  }
+  let indicators: Record<string, unknown> = { ...common, ...(typeof config.trader_strategy_id === 'string' ? { trader_strategy_id: config.trader_strategy_id } : {}) }
   if (config.interval_minutes !== undefined) {
     const minutes = config.interval_minutes
     if (typeof minutes !== 'number' || !Number.isSafeInteger(minutes) || minutes < 1 || minutes > 1440) issues.push(issue('error', 'interval_minutes_invalid', '运行间隔须为 1 至 1440 分钟的整数', 'config.interval_minutes'))
@@ -315,42 +319,59 @@ export class StrategyService {
   listSubscriptions(userId: number, tradingAccountId?: string) { return management(this.catalog).listSubscriptions(userId, tradingAccountId) }
 
   async createSubscription(userId: number, input: Omit<CreateStrategySubscriptionInput, 'userId'>) {
-    return management(this.catalog).createSubscription({ ...input, userId }, () => {
-      const status = input.status ?? 'active'
+    const analysis = await this.catalog.findActiveVersion(userId, input.analysisStrategyId)
+    const pairedTraderStrategyId = analysis?.kind === 'analysis' && typeof analysis.config.trader_strategy_id === 'string'
+      ? analysis.config.trader_strategy_id : null
+    if (input.traderStrategyId !== undefined && input.traderStrategyId !== null && input.traderStrategyId !== pairedTraderStrategyId) {
+      throw new StrategyAccessError('subscription_trader_binding_mismatch', 422)
+    }
+    const resolvedInput = { ...input, traderStrategyId: pairedTraderStrategyId }
+    return management(this.catalog).createSubscription({ ...resolvedInput, userId }, () => {
+      const status = resolvedInput.status ?? 'active'
       if (status !== 'active' && status !== 'paused') throw new StrategyAccessError('subscription_status_invalid', 422)
-      for (const value of [input.analysisEnabled, input.traderEnabled, input.tradeSendEnabled]) {
+      for (const value of [resolvedInput.analysisEnabled, resolvedInput.traderEnabled, resolvedInput.tradeSendEnabled]) {
         if (value !== undefined && typeof value !== 'boolean') throw new StrategyAccessError('request_field_invalid', 422)
       }
-      const analysisEnabled = input.analysisEnabled ?? true, traderEnabled = input.traderEnabled ?? false
-      const tradeSendEnabled = traderEnabled, traderStrategyId = input.traderStrategyId ?? null
+      const analysisEnabled = resolvedInput.analysisEnabled ?? true, traderEnabled = resolvedInput.traderEnabled ?? false
+      const tradeSendEnabled = traderEnabled, traderStrategyId = pairedTraderStrategyId
       if (!analysisEnabled && traderEnabled) throw new StrategyAccessError('subscription_analysis_required', 422)
       if (traderEnabled && !traderStrategyId) throw new StrategyAccessError('subscription_trader_required', 422)
-      const standardSymbol = typeof input.standardSymbol === 'string' ? input.standardSymbol.trim().toUpperCase() : ''
+      const standardSymbol = typeof resolvedInput.standardSymbol === 'string' ? resolvedInput.standardSymbol.trim().toUpperCase() : ''
       if (!/^[A-Z0-9._-]{1,64}$/.test(standardSymbol) || /[^A-Z0-9._-]/.test(standardSymbol)) throw new StrategyAccessError('request_field_invalid', 422)
-      return { ...prepareTimeWindow(input.receiveWindow ?? { enabled: false }), standardSymbol, traderStrategyId, analysisEnabled, traderEnabled, tradeSendEnabled, status,
+      return { ...prepareTimeWindow(resolvedInput.receiveWindow ?? { enabled: false }), standardSymbol, traderStrategyId, analysisEnabled, traderEnabled, tradeSendEnabled, status,
         nextDueAt: status === 'active' && analysisEnabled ? nextScheduleDue(this.now(), 300) : null }
     })
   }
 
   async updateSubscription(input: UpdateStrategySubscriptionInput) {
-    return management(this.catalog).updateSubscription(input, current => {
+    const current = await management(this.catalog).findSubscription(input.userId, input.subscriptionId)
+    if (!current) throw new StrategyAccessError('strategy_subscription_not_found', 404)
+    const analysisStrategyId = input.analysisStrategyId ?? current.analysisStrategyId
+    const analysis = await this.catalog.findActiveVersion(input.userId, analysisStrategyId)
+    const pairedTraderStrategyId = analysis?.kind === 'analysis' && typeof analysis.config.trader_strategy_id === 'string'
+      ? analysis.config.trader_strategy_id : null
+    if (input.traderStrategyId !== undefined && input.traderStrategyId !== null && input.traderStrategyId !== pairedTraderStrategyId) {
+      throw new StrategyAccessError('subscription_trader_binding_mismatch', 422)
+    }
+    const resolvedInput = { ...input, analysisStrategyId, traderStrategyId: pairedTraderStrategyId }
+    return management(this.catalog).updateSubscription(resolvedInput, current => {
       if (current.status === 'ended') throw new StrategyAccessError('strategy_subscription_ended', 409)
-      const analysisStrategyId = input.analysisStrategyId ?? current.analysisStrategyId
-      const traderStrategyId = input.traderStrategyId === undefined ? current.traderStrategyId : input.traderStrategyId
-      for (const value of [input.analysisEnabled, input.traderEnabled, input.tradeSendEnabled]) {
+      const analysisStrategyId = resolvedInput.analysisStrategyId
+      const traderStrategyId = resolvedInput.traderStrategyId
+      for (const value of [resolvedInput.analysisEnabled, resolvedInput.traderEnabled, resolvedInput.tradeSendEnabled]) {
         if (value !== undefined && typeof value !== 'boolean') throw new StrategyAccessError('request_field_invalid', 422)
       }
-      const analysisEnabled = input.analysisEnabled ?? current.analysisEnabled
-      const traderEnabled = input.traderEnabled ?? current.traderEnabled
+      const analysisEnabled = resolvedInput.analysisEnabled ?? current.analysisEnabled
+      const traderEnabled = resolvedInput.traderEnabled ?? current.traderEnabled
       const tradeSendEnabled = traderEnabled
       if (!analysisEnabled && traderEnabled) throw new StrategyAccessError('subscription_analysis_required', 422)
       if (traderEnabled && !traderStrategyId) throw new StrategyAccessError('subscription_trader_required', 422)
-      const status = input.status ?? current.status
+      const status = resolvedInput.status ?? current.status
       if (!['active', 'paused', 'ended'].includes(status)) throw new StrategyAccessError('subscription_status_invalid', 422)
-      const standardSymbol = input.standardSymbol === undefined ? current.standardSymbol : input.standardSymbol.trim().toUpperCase()
+      const standardSymbol = resolvedInput.standardSymbol === undefined ? current.standardSymbol : resolvedInput.standardSymbol.trim().toUpperCase()
       if (!/^[A-Z0-9._-]{1,64}$/.test(standardSymbol) || /[^A-Z0-9._-]/.test(standardSymbol)) throw new StrategyAccessError('request_field_invalid', 422)
-      return { ...prepareTimeWindow(input.receiveWindow ?? current.schedule.receiveWindow), analysisStrategyId, traderStrategyId, analysisEnabled, traderEnabled, tradeSendEnabled, status, standardSymbol,
-        nextDueAt: status !== 'active' || !analysisEnabled ? null : input.receiveWindow !== undefined || analysisEnabled !== current.analysisEnabled || status !== current.status || analysisStrategyId !== current.analysisStrategyId
+      return { ...prepareTimeWindow(resolvedInput.receiveWindow ?? current.schedule.receiveWindow), analysisStrategyId, traderStrategyId, analysisEnabled, traderEnabled, tradeSendEnabled, status, standardSymbol,
+        nextDueAt: status !== 'active' || !analysisEnabled ? null : resolvedInput.receiveWindow !== undefined || analysisEnabled !== current.analysisEnabled || status !== current.status || analysisStrategyId !== current.analysisStrategyId
           ? nextScheduleDue(this.now(), current.schedule.cadenceSeconds) : current.schedule.nextDueAt }
     })
   }

@@ -1108,6 +1108,7 @@
           "description",
           "status",
           "active_version_id",
+          "paired_trader_strategy",
           "revision"
         ],
         "additionalProperties": false,
@@ -1166,6 +1167,12 @@
               }
             ]
           },
+          "paired_trader_strategy": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/StrategyPairedTrader" },
+              { "type": "null" }
+            ]
+          },
           "revision": {
             "$ref": "#/components/schemas/Revision"
           }
@@ -1195,6 +1202,41 @@
           "meta": {
             "$ref": "#/components/schemas/Meta"
           }
+        }
+      },
+      "StrategyPairedTrader": {
+        "type": "object",
+        "required": ["id", "name", "status", "active_version_id"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "$ref": "#/components/schemas/OpaqueId" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 191 },
+          "status": { "type": "string", "enum": ["draft", "active", "retired"] },
+          "active_version_id": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/OpaqueId" },
+              { "type": "null" }
+            ]
+          }
+        }
+      },
+      "StrategyPerformance": {
+        "type": "object",
+        "required": ["status", "currency", "currencies", "net_profit", "max_drawdown", "return_percent", "max_drawdown_percent", "trade_count", "win_rate_percent", "profit_factor", "period_start", "period_end"],
+        "additionalProperties": false,
+        "properties": {
+          "status": { "type": "string", "enum": ["available", "insufficient", "mixed_currency"] },
+          "currency": { "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 16 }, { "type": "null" }] },
+          "currencies": { "type": "array", "items": { "type": "string", "minLength": 1, "maxLength": 16 } },
+          "net_profit": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "max_drawdown": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "return_percent": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "max_drawdown_percent": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "trade_count": { "type": "integer", "minimum": 0 },
+          "win_rate_percent": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "profit_factor": { "oneOf": [{ "$ref": "#/components/schemas/Decimal" }, { "type": "null" }] },
+          "period_start": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] },
+          "period_end": { "oneOf": [{ "$ref": "#/components/schemas/UtcDateTime" }, { "type": "null" }] }
         }
       },
       "StrategyVersion": {
@@ -1274,6 +1316,8 @@
           "status",
           "active_version_id",
           "revision",
+          "paired_trader_strategy",
+          "performance",
           "versions"
         ],
         "additionalProperties": false,
@@ -1332,8 +1376,17 @@
               }
             ]
           },
+          "paired_trader_strategy": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/StrategyPairedTrader" },
+              { "type": "null" }
+            ]
+          },
           "revision": {
             "$ref": "#/components/schemas/Revision"
+          },
+          "performance": {
+            "$ref": "#/components/schemas/StrategyPerformance"
           },
           "versions": {
             "type": "array",
