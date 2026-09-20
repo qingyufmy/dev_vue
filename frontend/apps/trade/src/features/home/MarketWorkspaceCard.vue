@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader } from '@aurum/ui/card'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '@aurum/ui/select'
 import TradingChart from './TradingChart.vue'
 import { chartReferenceLevels } from './chart-reference-levels'
+import { presentChanTrend } from './chan-trend-presentation'
 import { activeTerminalDisplayTimezone } from '~/lib/laboratory-display-time'
 import { terminalDisplayDate, terminalDisplayTimezone } from '~/lib/terminal-display-time'
 
@@ -52,16 +53,7 @@ const layerCounts = computed(() => {
     fractal: lines.filter(line => line.kind.startsWith('fractal_')).length,
   }
 })
-const trendLabel = computed(() => {
-  const trend = props.structure?.trend
-  if (!trend) return '待确认'
-  if (trend.phase === 'range') return '盘整'
-  if (trend.direction === 'up') return '向上'
-  if (trend.direction === 'down') return '向下'
-  return '方向未定'
-})
-const trendTone = computed(() => props.structure?.trend?.direction === 'up' ? 'bg-trade-up'
-  : props.structure?.trend?.direction === 'down' ? 'bg-trade-down' : 'bg-muted-foreground')
+const trendPresentation = computed(() => presentChanTrend(props.structure))
 </script>
 
 <template>
@@ -76,7 +68,11 @@ const trendTone = computed(() => props.structure?.trend?.direction === 'up' ? 'b
           <SelectTrigger aria-label="K 线周期" class="min-h-11 w-20 bg-transparent"><SelectValue /></SelectTrigger>
           <SelectContent><SelectGroup><SelectItem v-for="item in periods" :key="item" :value="item">{{ item }}</SelectItem></SelectGroup></SelectContent>
         </Select>
-        <Badge variant="outline" class="ml-auto min-h-7 gap-1.5 border-transparent bg-muted/50" :title="structure?.trend ? `确定性走势判断：${structure.trend.state}` : '当前没有可用的确定性走势判断'"><span class="size-1.5 rounded-full" :class="trendTone" aria-hidden="true" />走势 {{ trendLabel }}</Badge>
+        <div class="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1" role="status" :aria-label="trendPresentation.ariaLabel" :title="trendPresentation.title">
+          <Badge variant="outline" class="min-h-7 gap-1.5 border-transparent bg-muted/50"><span class="size-1.5 rounded-full" :class="trendPresentation.tone" aria-hidden="true" />{{ trendPresentation.primary }}</Badge>
+          <Badge v-if="trendPresentation.phase" variant="outline" class="min-h-7 border-border/70 bg-background/70 text-foreground">{{ trendPresentation.phase }}</Badge>
+          <span v-if="trendPresentation.quality.length" class="px-1 text-xs text-muted-foreground">{{ trendPresentation.quality.join(' · ') }}</span>
+        </div>
         <div v-if="quote && quoteCurrent && !loading" class="flex min-w-0 flex-wrap items-center rounded-lg border bg-muted/20">
             <div class="px-3 py-1.5 text-center"><p class="text-[11px] text-muted-foreground">卖出</p><p class="font-mono text-sm font-semibold tabular-nums text-trade-down">{{ price(quote.bid) }}</p></div>
             <div class="border-x px-3 py-1.5 text-center"><p class="text-[11px] text-muted-foreground">买入</p><p class="font-mono text-sm font-semibold tabular-nums text-trade-up">{{ price(quote.ask) }}</p></div>
