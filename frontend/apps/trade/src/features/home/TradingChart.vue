@@ -15,8 +15,6 @@ let renderedCandles: ChartCandle[] = []
 let historyRendering = false
 let olderTimer: ReturnType<typeof setTimeout> | undefined
 const host = ref<HTMLElement | null>(null)
-const detailHost = ref<HTMLElement | null>(null)
-let detailObserver: ResizeObserver | undefined
 const hoveredTime = ref<number | null>(null)
 const detailCandle = computed(() => (hoveredTime.value === null ? null
   : props.candles.find(candle => toTime(candle.openTime) === hoveredTime.value)) ?? props.candles.at(-1))
@@ -287,16 +285,6 @@ onMounted(() => {
   volumeSeries.priceScale().applyOptions({ scaleMargins: { top: 0.15, bottom: 0 } })
   chart.panes()[0]?.setStretchFactor(4)
   chart.panes()[1]?.setStretchFactor(1)
-  // Reserve only the height the wrapping detail strip actually needs.
-  detailObserver = new ResizeObserver(() => {
-    const paneHeight = chart?.panes()[0]?.getHeight() ?? 0
-    if (!paneHeight || !detailHost.value) return
-    candleSeries?.priceScale().applyOptions({ scaleMargins: {
-      top: Math.min(0.4, Math.max(0.1, (detailHost.value.offsetHeight + 18) / paneHeight)), bottom: 0.08,
-    } })
-  })
-  detailObserver.observe(host.value)
-  if (detailHost.value) detailObserver.observe(detailHost.value)
   renderHistory(props.candles)
   renderReferenceLevels()
   chart.timeScale().subscribeVisibleLogicalRangeChange(range => {
@@ -313,14 +301,14 @@ watch(() => props.candles, () => renderLatest(props.candles), { deep: false })
 watch(() => props.structure, renderStructure, { deep: false })
 watch(() => props.layers, renderStructure, { deep: true })
 watch(() => [props.referenceLevels, props.layers.levels], renderReferenceLevels)
-onBeforeUnmount(() => { clearTimeout(olderTimer); detailObserver?.disconnect(); chart?.unsubscribeCrosshairMove(showCandleDetails); structureMarkers?.detach(); chart?.remove(); chart = null })
+onBeforeUnmount(() => { clearTimeout(olderTimer); chart?.unsubscribeCrosshairMove(showCandleDetails); structureMarkers?.detach(); chart?.remove(); chart = null })
 </script>
 
 <template>
   <div class="absolute inset-0">
     <div ref="host" class="absolute inset-0 h-full w-full" role="img" aria-label="实时 K 线、成交量与缠论结构图表" />
-    <div v-if="detailCandle" ref="detailHost" class="pointer-events-none absolute left-2 right-20 top-2 z-10 rounded-md bg-card/85 px-2 py-1.5 text-xs leading-relaxed" aria-label="K 线详情">
-      <dl class="flex flex-wrap items-baseline gap-x-3 gap-y-0.5">
+    <div v-if="detailCandle" class="pointer-events-none absolute left-2 top-2 z-20 w-fit max-w-[calc(100%_-_4.5rem)] rounded-md bg-card/80 px-2 py-1.5 text-xs leading-relaxed shadow-sm ring-1 ring-border/60 backdrop-blur-sm" aria-label="K 线详情">
+      <dl class="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
         <div class="flex items-baseline gap-1.5 whitespace-nowrap"><dt class="text-muted-foreground">{{ detailSelected ? '所选' : '最新' }}</dt><dd class="font-mono font-medium tabular-nums">{{ detailTime }}</dd></div>
         <div v-for="(label, field) in { open: '开', high: '高', low: '低', close: '收' }" :key="field" class="flex items-baseline gap-1 whitespace-nowrap"><dt class="text-muted-foreground">{{ label }}</dt><dd class="font-mono tabular-nums" :class="field === 'high' ? 'text-trade-up' : field === 'low' ? 'text-trade-down' : 'text-foreground'">{{ detailPrice(detailCandle[field]) }}</dd></div>
         <div class="flex items-baseline gap-1 whitespace-nowrap"><dt class="text-muted-foreground">Tick 量</dt><dd class="font-mono tabular-nums">{{ Number(detailCandle.tickVolume).toLocaleString('zh-CN') }}</dd></div>
