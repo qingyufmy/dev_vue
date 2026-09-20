@@ -348,17 +348,22 @@ def _history_item_in_utc_range(item: Any, range_start: int, range_end: int,
     return False
 
 
-def sample_clock_evidence(mt5, clock_msc):
+def sample_clock_evidence(mt5, clock_msc, preferred_symbol: str | None = None):
     """Capture bounded evidence without assuming tick time is broker wall time."""
     started = int(clock_msc())
     sample = None
+    symbol_names: list[str] = []
+    if preferred_symbol and 0 < len(preferred_symbol) <= 64:
+        symbol_names.append(preferred_symbol)
     symbols = mt5.symbols_get() or ()
     for item in symbols[:32]:
         if not getattr(item, "visible", False):
             continue
         name = str(getattr(item, "name", "") or "")
-        if not name or len(name) > 64:
+        if not name or len(name) > 64 or name in symbol_names:
             continue
+        symbol_names.append(name)
+    for name in symbol_names:
         tick = mt5.symbol_info_tick(name)
         raw = getattr(tick, "time_msc", None) if tick else None
         if isinstance(raw, bool) or not isinstance(raw, int) or not 0 < raw <= 253402300799999:
@@ -492,6 +497,7 @@ class ReadOnlyMt5Adapter:
         self.route = route
         self.clock = BrokerClock(clock_state_path, clock_msc)
         self._resolved_symbols: dict[str, str] = {}
+        self._preferred_clock_symbol: str | None = None
         self._history_orders_by_ticket: dict[int, dict[str, Any]] = {}
         self._history_positions: dict[int, dict[str, Any]] = {}
         self._history_window_cursor: tuple[int, int] | None = None
@@ -564,7 +570,8 @@ class ReadOnlyMt5Adapter:
             evidence = None
             check_now = time.monotonic()
             if check_now >= getattr(self, "_next_display_clock_check", 0):
-                evidence = sample_clock_evidence(self.mt5, self.clock.now_utc_msc)
+                evidence = sample_clock_evidence(
+                    self.mt5, self.clock.now_utc_msc, self._preferred_clock_symbol)
             if evidence and evidence["sample_status"] == "captured":
                 payload["clock_sample"] = {
                     "symbol": evidence["symbol"],
@@ -678,6 +685,7 @@ class ReadOnlyMt5Adapter:
     def quote(self, requested_symbol: str) -> dict[str, Any]:
         self._ensure_identity()
         symbol = self._resolve_symbol(requested_symbol)
+        self._preferred_clock_symbol = symbol
         self._calibrate_terminal_clock(symbol)
         tick = self.mt5.symbol_info_tick(symbol)
         if tick is None:
@@ -998,7 +1006,8 @@ class ReadOnlyMt5Adapter:
             evidence = None
             check_now = time.monotonic()
             if check_now >= getattr(self, "_next_display_clock_check", 0):
-                evidence = sample_clock_evidence(self.mt5, self.clock.now_utc_msc)
+                evidence = sample_clock_evidence(
+                    self.mt5, self.clock.now_utc_msc, self._preferred_clock_symbol)
             self._ensure_identity()
             return evidence
         if action == "rates":
@@ -1026,6 +1035,7 @@ class ReadOnlyMt5Adapter:
         if set(params) - allowed:
             raise WorkerError("worker_rates_params_invalid")
         symbol = self._resolve_symbol(params.get("symbol"))
+        self._preferred_clock_symbol = symbol
         timeframe = str(params.get("timeframe") or "").strip().upper()
         try:
             count = int(params.get("count"))
@@ -1100,6 +1110,7 @@ class ReadOnlyMt5Adapter:
         if set(params) != {"symbol"}:
             raise WorkerError("worker_symbol_snapshot_params_invalid")
         symbol = self._resolve_symbol(params.get("symbol"))
+        self._preferred_clock_symbol = symbol
         info = self.mt5.symbol_info(symbol)
         account = self.mt5.account_info()
         tick = self.mt5.symbol_info_tick(symbol)

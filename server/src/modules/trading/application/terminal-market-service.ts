@@ -47,6 +47,9 @@ export class TerminalMarketService {
   const directory = await this.symbols(userId, accountId, null)
   const actualSymbol = resolveMarketSymbol(symbol, directory.items)
   if (!actualSymbol) invalid()
+  const instrument = await this.read(userId, accountId, { kind: 'instrument', symbol: actualSymbol, timeframe: null, before: null, limit: 1, cursor: null })
+  const identity = instrument.items[0]?.symbol ?? instrument.items[0]?.name
+  if (instrument.items.length !== 1 || identity !== actualSymbol || instrument.nextCursor !== null) invalid()
   return this.resolvedCandles(userId, accountId, actualSymbol, timeframe, before, limit)
  }
  // Internal callers already hold a selected, instrument-verified broker symbol.

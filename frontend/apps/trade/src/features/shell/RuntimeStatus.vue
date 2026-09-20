@@ -2,13 +2,17 @@
 const RuntimeControls = defineAsyncComponent(() => import('~/features/strategist').then(module => module.RuntimeControls))
 import { computed, defineAsyncComponent, ref, onBeforeUnmount, watch } from 'vue'
 import { createApiClient } from '@aurum/api-client'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 import { Cable, ChevronDown } from '@lucide/vue'
 import { Button } from '@aurum/ui/button'
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuItem } from '@aurum/ui/dropdown-menu'
 import { tradingAccounts, tradingContext } from '~/features/trading-context'
 import { publicMarketStates, activeMarketSymbol, activeTerminalMarketObservation, applyTerminalMarketObservation } from '~/features/trading-context'
+import { useTradeSession } from '~/features/auth'
+import { readHomePreferences } from '~/features/home/home-preferences'
 const client = createApiClient()
+const { session } = useTradeSession()
+const route = useRoute()
 const now = ref(Date.now())
 const timer = setInterval(() => { now.value = Date.now() }, 1000)
 const market = computed(() => publicMarketStates.value.find(item => item.symbol === activeMarketSymbol.value))
@@ -19,6 +23,17 @@ const marketState = computed(() => terminalMarketCurrent.value ? 'open'
 const marketLabel = computed(() => ({ open: '交易中', closed: '休市', restricted: '交易受限', stale: '报价待更新', unknown: '待确认' }[marketState.value]))
 
 const currentAccount = computed(() => tradingAccounts.value.find(item => item.id === tradingContext.value?.accountId) ?? null)
+watch(() => `${session.value?.user.id ?? ''}:${tradingContext.value?.mode ?? ''}:${tradingContext.value?.accountId ?? ''}:${tradingContext.value?.observerChannelId ?? ''}`,
+  () => {
+    const userId = String(session.value?.user.id ?? '')
+    const context = tradingContext.value
+    if (!userId || !context) return
+    const scope = context.mode === 'observer' && context.observerChannelId
+      ? `observer:${context.observerChannelId}` : context.accountId ? `account:${context.accountId}` : ''
+    if (!scope) return
+    const stored = readHomePreferences(localStorage, userId, scope)
+    if (stored?.symbol) activeMarketSymbol.value = stored.symbol
+  }, { immediate: true })
 let quoteGeneration = 0
 async function refreshTerminalMarket() {
   const generation = ++quoteGeneration
@@ -32,8 +47,15 @@ async function refreshTerminalMarket() {
     }
   } catch { /* The last observation expires naturally; public market state remains the fallback. */ }
 }
-watch(() => `${currentAccount.value?.id ?? ''}:${currentAccount.value?.bridgeState ?? ''}:${activeMarketSymbol.value}:${tradingContext.value?.mode ?? ''}`,
-  () => { void refreshTerminalMarket() }, { immediate: true })
+async function primeTerminalClockSymbol() {
+  const accountId = currentAccount.value?.id
+  const symbol = activeMarketSymbol.value
+  if (route.path === '/' || !accountId || currentAccount.value?.bridgeState !== 'online' || !symbol || tradingContext.value?.mode === 'observer') return
+  try { await client.getTerminalMarketWindow(accountId, symbol, 'M1', Date.now(), 2) }
+  catch { /* Sampling preference is opportunistic; account and page reads remain independent. */ }
+}
+watch(() => `${currentAccount.value?.id ?? ''}:${currentAccount.value?.bridgeState ?? ''}:${activeMarketSymbol.value}:${tradingContext.value?.mode ?? ''}:${route.path}`,
+  () => { void refreshTerminalMarket(); void primeTerminalClockSymbol() }, { immediate: true })
 const quoteTimer = setInterval(() => { void refreshTerminalMarket() }, 15000)
 onBeforeUnmount(() => { quoteGeneration++; clearInterval(timer); clearInterval(quoteTimer) })
 const bridgeLabel = computed(() => currentAccount.value ? {

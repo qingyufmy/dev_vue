@@ -22,14 +22,18 @@ describe('terminal market Chan chart', () => {
   it.each(Object.keys(durations))('calculates %s structure for a non-public terminal symbol', async timeframe => {
     const before = Date.now()
     const duration = durations[timeframe]!
+    const reads: string[] = []
     const rows = Array.from({ length: 100 }, (_, index) => {
       const base = 80_000 + Math.sin(index / 4) * 2_000 + index * 10
       return { symbol: 'BTCUST', timeframe, open_time_utc_msc: before - (100 - index) * duration,
         open: base, high: base + 500, low: base - 500, close: base + Math.sin(index) * 200, tick_volume: 10, closed: true }
     })
-    const reader = { read: async (_userId: number, _accountId: string, query: { kind: string }) => query.kind === 'symbols'
-      ? { items: [{ symbol: 'BTCUST', description: 'Bitcoin', selected: true, visible: true, trade_mode: 4 }], nextCursor: null, observedAt: before }
-      : { items: rows, nextCursor: null, observedAt: before } }
+    const reader = { read: async (_userId: number, _accountId: string, query: { kind: string }) => {
+      reads.push(query.kind)
+      if (query.kind === 'symbols') return { items: [{ symbol: 'BTCUST', description: 'Bitcoin', selected: true, visible: true, trade_mode: 4 }], nextCursor: null, observedAt: before }
+      if (query.kind === 'instrument') return { items: [{ name: 'BTCUST' }], nextCursor: null, observedAt: before }
+      return { items: rows, nextCursor: null, observedAt: before }
+    } }
     const accounts = { ownedAccount: async () => ({ id: '8', platform: 'mt5' as const }) }
     const service = new TerminalMarketService(accounts as never, reader as never, {
       calculate: input => publicChanChart({ ...input, clock: null }),
@@ -37,6 +41,7 @@ describe('terminal market Chan chart', () => {
 
     const result = await service.candles(9, '8', 'BTCUST', timeframe, before, 500)
 
+    expect(reads).toEqual(['symbols', 'instrument', 'candles'])
     expect(result.structure).toMatchObject({ algorithm: 'chan_structure_v8', based_on_closed_bars: 100 })
     expect(result.structure).toHaveProperty('lines')
   })

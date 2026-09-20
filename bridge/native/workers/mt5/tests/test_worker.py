@@ -287,6 +287,21 @@ class WorkerTests(unittest.TestCase):
             self.assertEqual("unavailable", result["sample_status"])
             self.assertIsNone(result["raw_tick_time_msc"])
 
+    def test_clock_evidence_prefers_active_symbol_and_falls_back(self):
+        requested: list[str] = []
+        api = SimpleNamespace(
+            symbols_get=lambda: [SimpleNamespace(name="XAUUSD", visible=True)],
+            symbol_info_tick=lambda name: (
+                requested.append(name) or
+                (SimpleNamespace(time_msc=self.now) if name == "XAUUSD" else None)
+            ),
+        )
+
+        result = sample_clock_evidence(api, lambda: self.now, "BTCUST")
+
+        self.assertEqual(["BTCUST", "XAUUSD"], requested)
+        self.assertEqual("XAUUSD", result["symbol"])
+
     def test_clock_evidence_is_bounded_and_tolerates_no_tick(self):
         calls = []
         api = SimpleNamespace(symbols_get=lambda: [SimpleNamespace(name=str(i), visible=True) for i in range(100)],
@@ -572,6 +587,11 @@ class WorkerTests(unittest.TestCase):
             self.adapter.collect_snapshot(["account"])
             self.assertEqual(4, probe.call_count)
 
+    def test_quote_selection_becomes_preferred_clock_sample_symbol(self):
+        self.adapter.quote("XAUUSD")
+
+        self.assertEqual("XAUUSD.s", self.adapter._preferred_clock_symbol)
+
     def test_snapshot_preserves_account_positions_and_orders(self):
         response = self.worker.handle(self.request("collect_snapshot", {
             "streams": ["account", "positions", "orders"]
@@ -723,6 +743,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual("XAUUSD.s", symbol["symbol"])
         self.assertEqual(0.01, symbol["instrument"]["volume_min"])
         self.assertEqual(10_000.0, symbol["account"]["balance"])
+        self.assertEqual("XAUUSD.s", self.adapter._preferred_clock_symbol)
 
         diagnostics = self.worker.handle(self.request("data", {
             "action": "diagnostics", "params": {},

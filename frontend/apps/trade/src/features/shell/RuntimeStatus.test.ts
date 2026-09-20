@@ -1,9 +1,12 @@
 import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick, ref } from 'vue'
-import { expect, it, vi } from 'vitest'
+import { beforeEach, expect, it, vi } from 'vitest'
 const quote = vi.hoisted(() => vi.fn(async () => ({ data: null })))
-vi.mock('@aurum/api-client', () => ({ createApiClient: () => ({ getMarketQuote: quote }) }))
+const terminalWindow = vi.hoisted(() => vi.fn(async () => ({ data: { items: [], before: '0', structure: null } })))
+vi.mock('@aurum/api-client', () => ({ createApiClient: () => ({ getMarketQuote: quote, getTerminalMarketWindow: terminalWindow }) }))
+vi.mock('vue-router', () => ({ RouterLink: { template: '<a><slot /></a>' }, useRoute: () => ({ path: '/trades' }) }))
 vi.mock('~/features/strategist', () => ({ RuntimeControls: { props: ['marketStates'], template: '<span data-runtime-market>{{ marketStates?.[0]?.state }}</span>' } }))
+vi.mock('~/features/auth', () => ({ useTradeSession: () => ({ session: ref({ user: { id: 9 } }) }) }))
 vi.mock('~/features/trading-context', () => ({
   tradingAccounts: ref([{ id: 'a1', bridgeState: 'online', tradePermission: true }]),
   tradingContext: ref({ accountId: 'a1', mode: 'full' }),
@@ -11,7 +14,16 @@ vi.mock('~/features/trading-context', () => ({
   publicMarketStates: ref([]), activeMarketSymbol: ref('XAUUSD'), activeTerminalMarketObservation: ref(null), applyTerminalMarketObservation: vi.fn(),
 }))
 import { activeMarketSymbol, activeTerminalMarketObservation, publicMarketStates, realtimeState, tradingAccounts } from '~/features/trading-context'
+import { writeHomePreferences } from '~/features/home/home-preferences'
 import RuntimeStatus from './RuntimeStatus.vue'
+beforeEach(() => {
+  localStorage.clear()
+  quote.mockClear()
+  terminalWindow.mockClear()
+  ;(tradingAccounts as any).value = [{ id: 'a1', bridgeState: 'online', tradePermission: true }]
+  ;(activeMarketSymbol as any).value = 'XAUUSD'
+  ;(activeTerminalMarketObservation as any).value = null
+})
 it('keeps header connection status independent of page realtime teardown', async () => {
   const wrapper = mount(RuntimeStatus)
   try {
@@ -52,4 +64,19 @@ it('uses a fresh terminal quote for the selected non-public symbol status', asyn
     ;(activeMarketSymbol as any).value = 'XAUUSD'
     ;(activeTerminalMarketObservation as any).value = null
   }
+})
+
+it('restores the account home symbol for header and terminal sampling on every page', async () => {
+  writeHomePreferences(localStorage, '9', 'account:a1', {
+    symbol: 'BTCUST', timeframe: 'M5',
+    layers: { bi: true, segment: true, center: true, fractal: true, levels: true },
+  })
+
+  const wrapper = mount(RuntimeStatus)
+  try {
+    await flushPromises()
+    expect(activeMarketSymbol.value).toBe('BTCUST')
+    expect(quote).toHaveBeenCalledWith('a1', 'BTCUST')
+    expect(terminalWindow).toHaveBeenCalledWith('a1', 'BTCUST', 'M1', expect.any(Number), 2)
+  } finally { wrapper.unmount() }
 })
