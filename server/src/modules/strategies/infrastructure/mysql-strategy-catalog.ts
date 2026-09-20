@@ -289,17 +289,16 @@ export async function readStrategyDetail(reader: Pick<PoolConnection, 'execute'>
   const row = rows[0]
   if (!row) return null
   const [versions] = await reader.execute<VersionDetailRow[]>(versionSelect + ' WHERE v.strategy_id=? ORDER BY v.version_number DESC,v.id DESC', [strategyId])
-  return { summary: summary(row), versions: versions.map(versionDetail), performance: await readPerformance(reader, userId, row.id, row.paired_trader_id) }
+  return { summary: summary(row), versions: versions.map(versionDetail), performance: await readPerformance(reader, row.id) }
 }
 
-async function readPerformance(reader: Pick<PoolConnection, 'execute'>, userId: number, analysisStrategyId: string, traderStrategyId: string | null) {
+async function readPerformance(reader: Pick<PoolConnection, 'execute'>, analysisStrategyId: string) {
   const insufficient = { status: 'insufficient' as const, currency: null, currencies: [], netProfit: null, maxDrawdown: null,
     returnPercent: null, maxDrawdownPercent: null, tradeCount: 0, winRatePercent: null, profitFactor: null, periodStart: null, periodEnd: null }
-  if (!traderStrategyId) return insufficient
   const [rows] = await reader.execute<PerformanceRow[]>(`WITH attributed AS (
       SELECT r.id,r.account_currency,r.net_profit,r.closed_at_utc
       FROM account_trade_records_v4 r
-      WHERE r.user_id=? AND r.status='closed' AND r.source_classification='system'
+      WHERE r.status='closed' AND r.source_classification='system'
         AND r.attribution_status='exact' AND r.evidence_status='complete' AND r.account_currency IS NOT NULL
         AND EXISTS (SELECT 1 FROM account_trade_attributions_v4 a
           INNER JOIN bridge_commands_v4 bc ON bc.id=a.source_id
@@ -307,7 +306,7 @@ async function readPerformance(reader: Pick<PoolConnection, 'execute'>, userId: 
           INNER JOIN trade_decisions td ON td.id=ei.trade_decision_id
           INNER JOIN market_analyses ma ON ma.id=td.market_analysis_id
           WHERE a.trade_record_id=r.id AND a.source_kind='bridge_command' AND a.relation_kind='opened'
-            AND CAST(ma.strategy_id AS CHAR)=? AND CAST(td.strategy_id AS CHAR)=? )
+            AND CAST(ma.strategy_id AS CHAR)=? )
     ), curve AS (
       SELECT id,account_currency,net_profit,closed_at_utc,
         SUM(net_profit) OVER (PARTITION BY account_currency ORDER BY closed_at_utc,id) cumulative_profit
@@ -321,11 +320,15 @@ async function readPerformance(reader: Pick<PoolConnection, 'execute'>, userId: 
       CAST(ABS(SUM(CASE WHEN net_profit<0 THEN net_profit ELSE 0 END)) AS CHAR) gross_loss,
       CAST(MAX(peak_profit-cumulative_profit) AS CHAR) max_drawdown,
       MIN(closed_at_utc) period_start,MAX(closed_at_utc) period_end
-    FROM peaks GROUP BY account_currency ORDER BY account_currency`, [userId, analysisStrategyId, traderStrategyId])
+    FROM peaks GROUP BY account_currency ORDER BY account_currency`, [analysisStrategyId])
   if (!rows.length) return insufficient
   const currencies = rows.map(item => item.account_currency)
   const tradeCount = rows.reduce((total, item) => total + Number(item.trade_count), 0)
-  if (rows.length !== 1) return { ...insufficient, status: 'mixed_currency' as const, currencies, tradeCount }
+  if (rows.length !== 1) {
+    const wins = rows.reduce((total, item) => total + Number(item.winning_count), 0)
+    return { ...insufficient, status: 'mixed_currency' as const, currencies, tradeCount,
+      winRatePercent: tradeCount ? (wins * 100 / tradeCount).toFixed(2) : null }
+  }
   const value = rows[0]!, losses = Number(value.gross_loss), count = Number(value.trade_count), wins = Number(value.winning_count)
   return { status: 'available' as const, currency: value.account_currency, currencies, netProfit: value.net_profit,
     maxDrawdown: value.max_drawdown, returnPercent: null, maxDrawdownPercent: null, tradeCount: count,

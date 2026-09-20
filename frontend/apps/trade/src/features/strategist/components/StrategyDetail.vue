@@ -34,9 +34,9 @@ const metrics = computed(() => {
   return [
     { label: '净收益', value: amount(value?.netProfit), icon: CircleDollarSign },
     { label: '最大回撤', value: amount(value?.maxDrawdown), icon: TrendingDown },
-    { label: '已平仓做单', value: value?.status === 'available' ? String(value.tradeCount) : '—', icon: Activity },
+    { label: '已平仓做单', value: value && value.status !== 'insufficient' ? String(value.tradeCount) : '—', icon: Activity },
     { label: '盈亏比', value: value?.profitFactor ? Number(value.profitFactor).toFixed(2) : '—', icon: Scale },
-    { label: '胜率', value: value?.winRatePercent ? `${Number(value.winRatePercent).toFixed(1)}%` : '—', icon: Percent },
+    { label: '胜率', value: value?.winRatePercent !== null && value?.winRatePercent !== undefined ? `${Number(value.winRatePercent).toFixed(1)}%` : '—', icon: Percent },
   ]
 })
 const viewingVersionId = ref<string | null>(null)
@@ -71,7 +71,7 @@ watch(() => props.detail?.strategy.id, () => { viewingVersionId.value = null })
       <CardContent class="grid gap-6 pt-6">
         <section aria-labelledby="performance-title">
           <div class="flex flex-wrap items-end justify-between gap-3">
-            <div><h3 id="performance-title" class="font-semibold">我的实盘效果</h3><p class="mt-1 text-xs text-muted-foreground">仅统计当前用户已平仓、终端证据完整且精确归因的交易。</p></div>
+            <div><h3 id="performance-title" class="font-semibold">平台实盘效果</h3><p class="mt-1 text-xs text-muted-foreground">汇总平台内所有用户和账户使用该策略组合产生的已平仓交易，仅纳入终端证据完整且精确归因的数据。</p></div>
             <Badge variant="outline">{{ detail.performance.status === 'available' ? `${detail.performance.currency} · ${formatDateTime(detail.performance.periodStart)} 至 ${formatDateTime(detail.performance.periodEnd)}` : detail.performance.status === 'mixed_currency' ? '多币种暂不合并' : '精确样本不足' }}</Badge>
           </div>
           <div class="mt-3 grid grid-cols-2 gap-3 xl:grid-cols-5">
@@ -80,7 +80,7 @@ watch(() => props.detail?.strategy.id, () => { viewingVersionId.value = null })
               <p class="mt-4 text-xs text-muted-foreground">{{ metric.label }}</p><strong class="mt-1 block text-lg tabular-nums">{{ metric.value }}</strong>
             </div>
           </div>
-          <p v-if="detail.performance.status !== 'available'" class="mt-3 rounded-lg bg-muted/40 px-3 py-2 text-xs leading-5 text-muted-foreground">{{ detail.performance.status === 'mixed_currency' ? `检测到 ${detail.performance.currencies.join('、')}，金额和比例不做跨币种合并。` : '当前还没有足够的精确归因实盘记录；这里不会使用账户总收益或估算值代替。' }}</p>
+          <p v-if="detail.performance.status !== 'available'" class="mt-3 rounded-lg bg-muted/40 px-3 py-2 text-xs leading-5 text-muted-foreground">{{ detail.performance.status === 'mixed_currency' ? `平台数据包含 ${detail.performance.currencies.join('、')}，做单数和胜率按全平台统计；金额、回撤和盈亏比不做跨币种合并。` : '平台内当前还没有足够的精确归因实盘记录；这里不会使用账户总收益或估算值代替。' }}</p>
         </section>
 
         <section class="grid gap-3 rounded-xl border p-4" aria-labelledby="strategy-pair-title">
