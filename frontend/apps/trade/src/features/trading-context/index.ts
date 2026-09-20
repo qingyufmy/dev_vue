@@ -13,6 +13,11 @@ const publicMarkets = ref<import('@aurum/contracts').PublicMarketState[]>([])
 export const publicMarketStates = readonly(publicMarkets)
 export const activeMarketSymbol = ref('XAUUSD')
 export function applyPublicMarketStates(value: import('@aurum/contracts').PublicMarketState[]) { publicMarkets.value = value }
+const terminalMarketObservation = ref<{ symbol: string; observedAt: string } | null>(null)
+export const activeTerminalMarketObservation = readonly(terminalMarketObservation)
+export function applyTerminalMarketObservation(value: { symbol: string; observedAt: string } | null) {
+  terminalMarketObservation.value = value ? { ...value } : null
+}
 
 export const tradingContext = readonly(context)
 export const tradingAccounts = readonly(accounts)

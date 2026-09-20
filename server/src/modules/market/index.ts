@@ -17,6 +17,7 @@ export { MarketReadError } from './domain/calendar.js'
 export { projectChanStructureForModel, projectStrategyContextChanForModel } from './domain/chan-model-projection.js'
 
 export { calculateChanMarketEvidence, chanHistoryTarget } from './application/chan-market-evidence.js'
+export { publicChanChart } from './application/public-chan-chart.js'
 export { captureChanCalculation, replayChanCalculation, replayChanChart, type ChanCalculationArchive } from './application/chan-calculation-archive.js'
 
 export { capturePriceActionEvidence, replayPriceActionEvidence } from './application/price-action-evidence.js'

@@ -1,6 +1,7 @@
 import type { PublicMarketSnapshotData as Snapshot, PublicMarketRealtimeEvent as Event, Timeframe } from '@aurum/contracts'
 import type { ChartCandle } from './home-runtime'
 import { marketQuote, marketCandles, marketSourceKey, marketStructure, resourceRevisions } from './home-runtime'
+import { applyTerminalMarketObservation } from '~/features/trading-context'
 function quote(value: NonNullable<Snapshot['quote']>, symbol: string) {
   return { symbol, bid: value.bid, ask: value.ask, last: value.last, spread: value.spread, observedAt: value.observed_at, revision: Number(value.revision) }
 }
@@ -86,6 +87,7 @@ export function mergePublicHistory(data: Snapshot) {
   return true
 }
 export function applyPublicSnapshot(data: Snapshot) {
+  applyTerminalMarketObservation(null)
   const preserve = data.source_key === marketSourceKey.value && marketCandles.value[0]?.symbol === data.symbol && marketCandles.value[0]?.timeframe === data.timeframe
   const previousStructure = marketStructure.value
   const newerQuote = preserve && marketQuote.value && data.quote

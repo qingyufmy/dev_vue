@@ -16,7 +16,7 @@ export const terminalMarketRoutes: FastifyPluginAsync<{ service: TerminalMarketS
   try { const { userId } = await auth.authenticate(request); contract.request('getTerminalMarketWindow', request)
    const result = await service.candles(userId, request.query.account_id, request.query.symbol, request.query.timeframe, Number(request.query.before), Number(request.query.page_size ?? 200))
    const items = result.items.map(c => ({ account_id: c.accountId, symbol: c.symbol, timeframe: c.timeframe, open_time: c.openTime, open: c.open, high: c.high, low: c.low, close: c.close, tick_volume: c.tickVolume, closed: c.closed, revision: String(c.revision) }))
-   return contract.response('getTerminalMarketWindow', response(request.id, { items, before: String(result.before) }))
+   return contract.response('getTerminalMarketWindow', response(request.id, { items, before: String(result.before), structure: result.structure }))
   } catch (error) { return contract.problem('getTerminalMarketWindow', error, request, reply) }
  })
 }

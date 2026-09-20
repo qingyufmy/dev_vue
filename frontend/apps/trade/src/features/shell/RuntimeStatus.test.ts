@@ -6,9 +6,9 @@ vi.mock('~/features/trading-context', () => ({
   tradingAccounts: ref([{ id: 'a1', bridgeState: 'online', tradePermission: true }]),
   tradingContext: ref({ accountId: 'a1', mode: 'full' }),
   realtimeState: ref('live'), currentAccount: ref(null),
-  publicMarketStates: ref([]), activeMarketSymbol: ref('XAUUSD'),
+  publicMarketStates: ref([]), activeMarketSymbol: ref('XAUUSD'), activeTerminalMarketObservation: ref(null),
 }))
-import { publicMarketStates, realtimeState, tradingAccounts } from '~/features/trading-context'
+import { activeMarketSymbol, activeTerminalMarketObservation, publicMarketStates, realtimeState, tradingAccounts } from '~/features/trading-context'
 import RuntimeStatus from './RuntimeStatus.vue'
 it('keeps header connection status independent of page realtime teardown', async () => {
   const wrapper = mount(RuntimeStatus)
@@ -34,5 +34,20 @@ it('passes an authoritative closed session to automatic runtime controls', async
   } finally {
     wrapper.unmount()
     ;(publicMarketStates as any).value = []
+  }
+})
+
+it('uses a fresh terminal quote for the selected non-public symbol status', async () => {
+  ;(activeMarketSymbol as any).value = 'BTCUST'
+  ;(activeTerminalMarketObservation as any).value = { symbol: 'BTCUST', observedAt: new Date().toISOString() }
+  const wrapper = mount(RuntimeStatus)
+  try {
+    await nextTick()
+    expect(wrapper.text()).toContain('交易中')
+    expect(wrapper.get('[title*="BTCUST"]').attributes('title')).toContain('当前账户终端报价确认')
+  } finally {
+    wrapper.unmount()
+    ;(activeMarketSymbol as any).value = 'XAUUSD'
+    ;(activeTerminalMarketObservation as any).value = null
   }
 })

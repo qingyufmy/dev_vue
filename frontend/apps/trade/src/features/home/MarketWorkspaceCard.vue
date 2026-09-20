@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { LoaderCircle } from '@lucide/vue'
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import type { PublicMarketSnapshotData, Timeframe } from '@aurum/contracts'
 import type { ChartCandle, ChartQuote } from './home-runtime'
 import { Badge } from '@aurum/ui/badge'
@@ -13,11 +13,11 @@ import { chartReferenceLevels } from './chart-reference-levels'
 import { presentChanTrend } from './chan-trend-presentation'
 import { activeTerminalDisplayTimezone } from '~/lib/laboratory-display-time'
 import { terminalDisplayDate, terminalDisplayTimezone } from '~/lib/terminal-display-time'
+import type { StructureLayers } from './home-preferences'
 
-const props = defineProps<{ symbols: string[]; symbol: string; timeframe: Timeframe; quote: ChartQuote | null; candles: ChartCandle[]; structure: PublicMarketSnapshotData['structure']; realtime: string; historyVersion: number; marketSource?: 'public' | 'terminal'; timezoneOffsetMinutes?: number | null; loading?: boolean; error?: string; historyLoading?: boolean; historyMessage?: string; symbolDirectoryNotice?: string }>()
-const emit = defineEmits<{ symbol: [value: string]; timeframe: [value: Timeframe]; retry: []; older: [] }>()
+const props = defineProps<{ symbols: string[]; symbol: string; timeframe: Timeframe; quote: ChartQuote | null; candles: ChartCandle[]; structure: PublicMarketSnapshotData['structure']; layers: StructureLayers; realtime: string; historyVersion: number; marketSource?: 'public' | 'terminal'; timezoneOffsetMinutes?: number | null; loading?: boolean; error?: string; historyLoading?: boolean; historyMessage?: string; symbolDirectoryNotice?: string }>()
+const emit = defineEmits<{ symbol: [value: string]; timeframe: [value: Timeframe]; layer: [value: keyof StructureLayers]; retry: []; older: [] }>()
 const periods: Timeframe[] = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1']
-const layers = reactive({ bi: true, segment: true, center: true, fractal: true, levels: true })
 const layerOptions = [{ key: 'bi', label: '笔', tone: 'bg-chart-1' }, { key: 'segment', label: '段', tone: 'bg-chart-3' }, { key: 'center', label: '中枢', tone: 'bg-chart-2' }, { key: 'fractal', label: '分型', tone: 'bg-chart-3' }] as const
 const now = ref(Date.now())
 const clockDetails = ref(false)
@@ -87,8 +87,8 @@ const trendPresentation = computed(() => presentChanTrend(props.structure))
       </div>
       <p v-if="symbolDirectoryNotice" class="text-xs text-amber-600 dark:text-amber-400" role="status">{{ symbolDirectoryNotice }}</p>
       <div class="flex flex-wrap items-center gap-1 rounded-lg bg-muted/35 p-1" role="group" aria-label="缠论图层">
-        <Button v-for="layer in layerOptions" :key="layer.key" type="button" size="sm" variant="ghost" class="min-h-11 flex-1 gap-2 px-2 text-xs transition-colors motion-reduce:transition-none sm:px-3" :class="layers[layer.key] ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'" :aria-pressed="layers[layer.key]" :aria-label="`${layer.label}图层，${layerCounts[layer.key]} 项${layers[layer.key] ? '，已显示' : '，已隐藏'}`" @click="layers[layer.key] = !layers[layer.key]"><span class="h-0.5 w-3 rounded-full" :class="[layer.tone, layers[layer.key] ? 'opacity-100' : 'opacity-35']" aria-hidden="true" />{{ layer.label }}</Button>
-        <Button type="button" size="sm" variant="ghost" class="min-h-11 flex-1 px-2 text-xs transition-colors motion-reduce:transition-none sm:px-3" :class="layers.levels ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'" :aria-pressed="layers.levels" :aria-label="`支撑压力图层，${referenceCount} 项${layers.levels ? '，已显示' : '，已隐藏'}`" @click="layers.levels = !layers.levels">支撑 / 压力</Button>
+        <Button v-for="layer in layerOptions" :key="layer.key" type="button" size="sm" variant="ghost" class="min-h-11 flex-1 gap-2 px-2 text-xs transition-colors motion-reduce:transition-none sm:px-3" :class="layers[layer.key] ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'" :aria-pressed="layers[layer.key]" :aria-label="`${layer.label}图层，${layerCounts[layer.key]} 项${layers[layer.key] ? '，已显示' : '，已隐藏'}`" @click="emit('layer', layer.key)"><span class="h-0.5 w-3 rounded-full" :class="[layer.tone, layers[layer.key] ? 'opacity-100' : 'opacity-35']" aria-hidden="true" />{{ layer.label }}</Button>
+        <Button type="button" size="sm" variant="ghost" class="min-h-11 flex-1 px-2 text-xs transition-colors motion-reduce:transition-none sm:px-3" :class="layers.levels ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'" :aria-pressed="layers.levels" :aria-label="`支撑压力图层，${referenceCount} 项${layers.levels ? '，已显示' : '，已隐藏'}`" @click="emit('layer', 'levels')">支撑 / 压力</Button>
       </div>
       <div v-if="layers.levels" class="grid grid-cols-2 divide-x rounded-lg border bg-muted/10" aria-label="支撑与压力参考">
         <div v-for="(label, key) in { support: '参考支撑', resistance: '参考压力' }" :key="key" class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 px-3 py-2">

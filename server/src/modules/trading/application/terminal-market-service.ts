@@ -3,8 +3,22 @@ import type { TradingService } from './trading-service.js'
 import type { TerminalMarketReader } from './terminal-market-reader.js'
 import { assertSymbol, TradingAccessError, type MarketCandle, type Timeframe } from '../domain/trading.js'
 const minutes: Record<string, number> = { M1: 1, M5: 5, M15: 15, M30: 30, H1: 60, H4: 240, D1: 1440 }
+export interface TerminalChanChartCalculator {
+ calculate(input: { accountId: string; platform: 'mt4' | 'mt5'; timeframe: string; candles: readonly MarketCandle[]; referenceTime: string; includeDeveloping: boolean }): unknown
+}
 export class TerminalMarketService {
- constructor(private readonly accounts: Pick<TradingService, 'ownedAccount'>, private readonly reader: TerminalMarketReader) {}
+ constructor(private readonly accounts: Pick<TradingService, 'ownedAccount'>, private readonly reader: TerminalMarketReader,
+  private readonly chanChart?: TerminalChanChartCalculator,
+  private readonly wait = (milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, milliseconds))) {}
+ private async read(userId: number, accountId: string, input: Parameters<TerminalMarketReader['read']>[2]) {
+  for (let attempt = 0; ; attempt += 1) {
+   try { return await this.reader.read(userId, accountId, input) }
+   catch (error) {
+    if (!(error instanceof TradingAccessError) || error.code !== 'terminal_market_busy' || attempt >= 4) throw error
+    await this.wait(150 * (attempt + 1))
+   }
+  }
+ }
  async symbols(userId: number, accountId: string, cursor: string | null) {
   await this.accounts.ownedAccount(userId, accountId)
   if (cursor !== null && !/^[0-9]{1,5}$/.test(cursor)) invalid()
@@ -12,7 +26,7 @@ export class TerminalMarketService {
   let next: string | null = null, observedAt = Date.now()
   const deadline = Date.now() + 20_000
   do {
-   const page = await this.reader.read(userId, accountId, { kind: 'symbols', symbol: null, timeframe: null, before: null, limit: 500, cursor: next })
+   const page = await this.read(userId, accountId, { kind: 'symbols', symbol: null, timeframe: null, before: null, limit: 500, cursor: next })
    if (page.nextCursor !== null && page.nextCursor === next || pages.length + page.items.length > 5000 || Date.now() > deadline) invalid()
    pages.push(...page.items); next = page.nextCursor; observedAt = Math.min(observedAt, page.observedAt)
   } while (next !== null)
@@ -37,11 +51,11 @@ export class TerminalMarketService {
  }
  // Internal callers already hold a selected, instrument-verified broker symbol.
  async resolvedCandles(userId: number, accountId: string, symbol: string, timeframe: string, before: number, limit: number) {
-  await this.accounts.ownedAccount(userId, accountId); symbol = assertSymbol(symbol)
+  const account = await this.accounts.ownedAccount(userId, accountId); symbol = assertSymbol(symbol)
   if (!Object.hasOwn(minutes, timeframe) || !Number.isSafeInteger(before) || before <= 0 || before > Date.now() + 15_000 || !Number.isInteger(limit) || limit < 2 || limit > 500) invalid()
   const start = before - minutes[timeframe]! * 60_000 * (limit - 1)
   if (start < 1) invalid()
-  const page = await this.reader.read(userId, accountId, { kind: 'candles', symbol, timeframe, before, limit, cursor: null })
+  const page = await this.read(userId, accountId, { kind: 'candles', symbol, timeframe, before, limit, cursor: null })
   if (page.nextCursor !== null) invalid()
   const items: MarketCandle[] = page.items.map(row => {
    if (row.symbol !== symbol || row.timeframe !== timeframe || !Number.isSafeInteger(row.open_time_utc_msc) || Number(row.open_time_utc_msc) < start || Number(row.open_time_utc_msc) >= before || typeof row.closed !== 'boolean') invalid()
@@ -51,7 +65,9 @@ export class TerminalMarketService {
   }).sort((a, b) => a.openTime.localeCompare(b.openTime))
   if (new Set(items.map(item => item.openTime)).size !== items.length) invalid()
   await this.accounts.ownedAccount(userId, accountId)
-  return { items, before: start }
+  const structure = account.platform && this.chanChart ? this.chanChart.calculate({ accountId, platform: account.platform,
+   timeframe, candles: items, referenceTime: new Date(before).toISOString(), includeDeveloping: Date.now() - before <= 30_000 }) : null
+  return { items, before: start, structure }
  }
 }
 function decimal(value: unknown): string { const number = Number(value); if ((typeof value !== 'number' && typeof value !== 'string') || !Number.isFinite(number) || number <= 0 || number >= 1e16) invalid(); return number.toFixed(8).replace(/\.?0+$/, '') }

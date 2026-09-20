@@ -97,7 +97,7 @@ describe('trade home observer realtime adapter', () => {
   })
 
   it('subscribes an owned non-public symbol to terminal quote and candle resources', async () => {
-    applyTerminalMarketSnapshot({ accountId: '7', symbol: 'BTCUST', timeframe: 'M5', candles: [], quote: null })
+    applyTerminalMarketSnapshot({ accountId: '7', symbol: 'BTCUST', timeframe: 'M5', candles: [], quote: null, structure: null })
     await startTradingRealtime(session, '7', 'BTCUST', 'M5', null, async () => undefined, undefined, 'terminal')
     options.onOpen(socket as never)
     const { targets } = JSON.parse(socket.send.mock.calls[0]![0])

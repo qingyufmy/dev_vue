@@ -6,8 +6,8 @@ import type { ChartCandle } from './home-runtime'
 import { chartDisplayTime } from './chart-display-time'
 import type { IPriceLine, MouseEventParams } from 'lightweight-charts'
 import type { ChartReferenceLevels } from './chart-reference-levels'
+import type { StructureLayers } from './home-preferences'
 
-type StructureLayers = { bi: boolean; segment: boolean; center: boolean; fractal: boolean; levels: boolean }
 const props = defineProps<{ candles: ChartCandle[]; structure: PublicMarketSnapshotData['structure']; layers: StructureLayers; referenceLevels: ChartReferenceLevels; historyVersion: number; timezoneOffsetMinutes?: number | null }>()
 const emit = defineEmits<{ older: [] }>()
 let renderedTimes: string[] = []

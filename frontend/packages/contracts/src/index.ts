@@ -1756,7 +1756,9 @@ export * from './bridge-installation.js'
 export const terminalMarketSymbolSchema = z.object({ symbol: z.string().min(1).max(64), description: z.string(), selected: z.boolean(), visible: z.boolean(), trade_mode: z.number().int().min(0).max(4).nullable(), currency_base: z.string().nullable(), currency_profit: z.string().nullable() })
 export type TerminalMarketSymbol = z.infer<typeof terminalMarketSymbolSchema>
 export const terminalMarketSymbolsResponseSchema = z.object({ data: z.object({ items: z.array(terminalMarketSymbolSchema).max(5000), next_cursor: z.string().nullable(), observed_at: z.string() }), meta: responseMetaSchema })
-export const terminalMarketWindowResponseSchema = z.object({ data: z.object({ items: z.array(marketCandleSchema), before: z.string() }), meta: responseMetaSchema })
+export const terminalMarketWindowResponseSchema = z.object({ data: z.object({
+  items: z.array(marketCandleSchema), before: z.string(), structure: publicMarketStructureSchema.nullable(),
+}), meta: responseMetaSchema })
 
 export * from './model-selection.js'
 

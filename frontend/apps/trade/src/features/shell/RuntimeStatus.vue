@@ -6,12 +6,15 @@ import { Cable, ChevronDown } from '@lucide/vue'
 import { Button } from '@aurum/ui/button'
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuItem } from '@aurum/ui/dropdown-menu'
 import { tradingAccounts, tradingContext } from '~/features/trading-context'
-import { publicMarketStates, activeMarketSymbol } from '~/features/trading-context'
+import { publicMarketStates, activeMarketSymbol, activeTerminalMarketObservation } from '~/features/trading-context'
 const now = ref(Date.now())
 const timer = setInterval(() => { now.value = Date.now() }, 1000)
 onBeforeUnmount(() => clearInterval(timer))
 const market = computed(() => publicMarketStates.value.find(item => item.symbol === activeMarketSymbol.value))
-const marketState = computed(() => market.value?.checked_at && now.value - Date.parse(market.value.checked_at) <= 45000 ? market.value.state : 'unknown')
+const terminalMarketCurrent = computed(() => activeTerminalMarketObservation.value?.symbol === activeMarketSymbol.value
+  && now.value - Date.parse(activeTerminalMarketObservation.value.observedAt) <= 45_000)
+const marketState = computed(() => terminalMarketCurrent.value ? 'open'
+  : market.value?.checked_at && now.value - Date.parse(market.value.checked_at) <= 45000 ? market.value.state : 'unknown')
 const marketLabel = computed(() => ({ open: '交易中', closed: '休市', restricted: '交易受限', stale: '报价待更新', unknown: '待确认' }[marketState.value]))
 
 const currentAccount = computed(() => tradingAccounts.value.find(item => item.id === tradingContext.value?.accountId) ?? null)
@@ -42,7 +45,7 @@ const permissionLabel = computed(() => tradingContext.value?.mode === 'observer'
       </DropdownMenuContent>
     </DropdownMenu>
     <RuntimeControls :market-states="publicMarketStates" />
-    <span class="flex h-8 items-center gap-2 whitespace-nowrap sm:border-l sm:pl-4" :title="`${activeMarketSymbol} · 由管理员桥接确认`">
+    <span class="flex h-8 items-center gap-2 whitespace-nowrap sm:border-l sm:pl-4" :title="`${activeMarketSymbol} · ${terminalMarketCurrent ? '当前账户终端报价确认' : '平台公共行情确认'}`">
       <span class="size-1.5 rounded-full" :class="marketState === 'open' ? 'bg-system-ok' : 'bg-muted-foreground'" aria-hidden="true" />
       <span>{{ marketLabel }}</span>
     </span>

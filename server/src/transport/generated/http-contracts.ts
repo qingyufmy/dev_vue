@@ -10624,11 +10624,22 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
                   "$ref": "#/components/schemas/Candle"
                 },
                 "type": "array"
+              },
+              "structure": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/PublicMarketStructure"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
               "items",
-              "before"
+              "before",
+              "structure"
             ],
             "type": "object"
           },

@@ -1,4 +1,4 @@
-import { TerminalMarketService } from './application/terminal-market-service.js'
+import { TerminalMarketService, type TerminalChanChartCalculator } from './application/terminal-market-service.js'
 import { MysqlMarketHistoryWriter } from './infrastructure/mysql-market-history-writer.js'
 export function createMarketHistoryIO(pool: Pool, cache: Redis, accounts: Pick<TradingReadRepository, 'findOwnedAccount'>) {
   const reader = new TerminalMarketService({ ownedAccount: async (userId, accountId) => {
@@ -85,7 +85,7 @@ export function createTradingReader(pool: Pool, leases: GatewayLeases | undefine
   return new MysqlTradingRepository(pool, leases, new MysqlObserverSnapshotReader(pool, principals))
 }
 
-export function createTradingApiModule(pool: Pool, cache: Redis, auth: { trade: TradeSessionAuthenticator; admin: ObserverManagementRequestAuthenticator }, leases: GatewayLeases, principalAccess: (connection: PoolConnection) => ActivePrincipalAccess, principals: (connection: PoolConnection) => AccountPrincipalReader, administrators: (executor: Pick<PoolConnection, 'execute'>) => AdminPrincipalAccess, strategyAccess: (connection: PoolConnection) => AnalysisStrategyAccess): {
+export function createTradingApiModule(pool: Pool, cache: Redis, auth: { trade: TradeSessionAuthenticator; admin: ObserverManagementRequestAuthenticator }, leases: GatewayLeases, principalAccess: (connection: PoolConnection) => ActivePrincipalAccess, principals: (connection: PoolConnection) => AccountPrincipalReader, administrators: (executor: Pick<PoolConnection, 'execute'>) => AdminPrincipalAccess, strategyAccess: (connection: PoolConnection) => AnalysisStrategyAccess, chanChart?: TerminalChanChartCalculator): {
   trading: TradingService
   connectionCapacity: ConnectionCapacityService
   observerManagement: ObserverManagementService
@@ -107,7 +107,7 @@ export function createTradingApiModule(pool: Pool, cache: Redis, auth: { trade: 
   const tradeAuth = auth.trade
   const observerAdminAuth = auth.admin
   return { trading, connectionCapacity, observerManagement, tradeAuth, observerAdminAuth,
-    tradeHttp: createTradingHttp(trading, connectionCapacity, tradeAuth, createTradingContextWriter(pool, leases, principalAccess, principals), new TerminalMarketService(trading, new RedisTerminalMarketReader(cache))),
+    tradeHttp: createTradingHttp(trading, connectionCapacity, tradeAuth, createTradingContextWriter(pool, leases, principalAccess, principals), new TerminalMarketService(trading, new RedisTerminalMarketReader(cache), chanChart)),
     observerHttp: createObserverManagementHttp(observerManagement, observerAdminAuth),
   }
 }

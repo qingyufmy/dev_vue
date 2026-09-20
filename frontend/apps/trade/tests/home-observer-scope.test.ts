@@ -4,6 +4,7 @@ import { ApiClientError } from '@aurum/api-client'
 import { useHomeWorkspace } from '../src/features/home/use-home-workspace'
 import { accountSnapshot, clearAccountRuntime, marketQuote } from '../src/features/home/home-runtime'
 import { applyAccountSnapshot } from '../src/features/trading-context'
+import { writeHomePreferences } from '../src/features/home/home-preferences'
 
 const mocks = vi.hoisted(() => ({
   session: null as any,
@@ -41,6 +42,7 @@ function latestResync(): () => Promise<void> {
 }
 
 beforeEach(() => {
+  localStorage.clear()
   mocks.session = ref({ csrf_token: 'test-csrf', user: { id: '9' } })
   Object.values(mocks.api).forEach(mock => mock.mockReset())
   mocks.start.mockReset()
@@ -56,7 +58,7 @@ beforeEach(() => {
   mocks.api.quotePayload.mockImplementation(async (accountId: string, symbol: string) => ({ data: { accountId, symbol, revision: 1 } }))
   mocks.api.getPublicMarketSymbols.mockResolvedValue({ data: { items: ['XAUUSD', 'EURUSD', 'GBPUSD'] } })
   mocks.api.getTerminalMarketSymbols.mockResolvedValue({ data: { items: ['XAUUSD', 'EURUSD', 'GBPUSD'].map(symbol => ({ symbol, description: '', selected: true, visible: true, trade_mode: 4, currency_base: symbol.slice(0, 3), currency_profit: symbol.slice(3) })), next_cursor: null, observed_at: '2026-09-14T00:00:00Z' } })
-  mocks.api.getTerminalMarketWindow.mockResolvedValue({ data: { items: [], before: String(Date.now() - 300_000) } })
+  mocks.api.getTerminalMarketWindow.mockResolvedValue({ data: { items: [], before: String(Date.now() - 300_000), structure: null } })
   mocks.api.getMarketQuote.mockResolvedValue({ data: null })
   mocks.api.getPublicMarketSnapshot.mockImplementation(async (symbol: string, timeframe: string) => {
     const { data } = await mocks.api.quotePayload('public', symbol)
@@ -242,6 +244,29 @@ describe('observer HTTP resync scope protection', () => {
     await home.selectSymbol('BTCUST')
     expect(mocks.api.getTerminalMarketWindow).toHaveBeenCalledWith('2', 'BTCUST', 'M5', expect.any(Number), 500)
     expect(home.marketSourceKey.value).toBe('terminal:2:BTCUST:M5')
+    expect(mocks.api.listMarketAnalyses).toHaveBeenLastCalledWith({ pageSize: 1, symbol: 'BTCUST' })
+    home.stop()
+  })
+
+  it('restores the account-scoped symbol, timeframe and Chan layers before the first market read', async () => {
+    mocks.api.getTradingContext.mockResolvedValue({ data: { mode: 'full', accountId: '2', observerChannelId: null, revision: 1 } })
+    mocks.api.listTradingAccounts.mockResolvedValue({ data: { items: [{ id: '2', bridgeState: 'online' }] } })
+    mocks.api.getTerminalMarketSymbols.mockResolvedValue({ data: { items: [
+      { symbol: 'XAUUSD', description: 'Gold', selected: true, visible: true, trade_mode: 4, currency_base: 'XAU', currency_profit: 'USD' },
+      { symbol: 'BTCUST', description: 'Bitcoin', selected: true, visible: true, trade_mode: 4, currency_base: 'BTC', currency_profit: 'UST' },
+    ], next_cursor: null, observed_at: '2026-09-14T00:00:00Z' } })
+    writeHomePreferences(localStorage, '9', 'account:2', {
+      symbol: 'BTCUST', timeframe: 'H1', layers: { bi: false, segment: true, center: false, fractal: true, levels: false },
+    })
+    const home = useHomeWorkspace()
+
+    await home.load()
+
+    expect(home.symbol.value).toBe('BTCUST')
+    expect(home.timeframe.value).toBe('H1')
+    expect({ ...home.chartLayers }).toEqual({ bi: false, segment: true, center: false, fractal: true, levels: false })
+    expect(mocks.api.getTerminalMarketWindow).toHaveBeenCalledWith('2', 'BTCUST', 'H1', expect.any(Number), 500)
+    expect(mocks.api.listMarketAnalyses).toHaveBeenLastCalledWith({ pageSize: 1, symbol: 'BTCUST' })
     home.stop()
   })
 

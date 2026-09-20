@@ -4521,6 +4521,7 @@ export interface components {
             data: {
                 before: string;
                 items: components["schemas"]["Candle"][];
+                structure: components["schemas"]["PublicMarketStructure"] | null;
             };
             meta: components["schemas"]["Meta"];
         };

@@ -113,7 +113,7 @@ async function connect(session: TradeSessionSnapshot, accountId: string, symbol:
       return
     }
     if (marketSource === 'terminal' && (event.type === 'market.quote.updated' || event.type === 'market.candle.updated' || event.type === 'market.candle.closed')) {
-      applyTerminalMarketEvent(event, accountId, symbol, timeframe)
+      if (applyTerminalMarketEvent(event, accountId, symbol, timeframe) === 'resync') void requestSnapshotResync()
       return
     }
     if (event.type === 'observer.publication.changed') {
