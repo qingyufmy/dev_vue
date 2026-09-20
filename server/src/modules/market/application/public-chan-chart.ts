@@ -101,6 +101,7 @@ export function publicChanChart(input: {
   candles: readonly Candle[]
   clock: PublicSourceClock | null
   referenceTime: string
+  includeDeveloping?: boolean
 }) {
   const target = chanHistoryTarget(input.timeframe)
   const duration = timeframeMs[input.timeframe]
@@ -153,13 +154,14 @@ export function publicChanChart(input: {
     const row = object(segment)
     add('segment', row.start_time_utc_msc ?? row.start_time, row.end_time_utc_msc ?? row.end_time, row.start_price, row.end_price)
   }
+  const includeDeveloping = input.includeDeveloping !== false
   const candidate = object(result.candidate_segment)
-  if (candidate.active_for_current_state !== false) {
+  if (includeDeveloping && candidate.active_for_current_state !== false) {
     add('forming_segment', candidate.start_time_utc_msc ?? candidate.start_time, candidate.end_time_utc_msc ?? candidate.end_time, candidate.start_price, candidate.end_price)
   }
   const confirmedCenters = (result as unknown as { _confirmed_centers?: readonly unknown[] })._confirmed_centers
   const centers = Array.isArray(confirmedCenters) ? confirmedCenters.slice(-3) : []
-  if (result.active_center) centers.push(result.active_center)
+  if (includeDeveloping && result.active_center) centers.push(result.active_center)
   for (const value of centers) {
     const center = object(value)
     const centerFrom = center.start_time_utc_msc ?? center.start_time

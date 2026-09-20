@@ -9,6 +9,33 @@ function candle(value: Snapshot['candles'][number], symbol: string, timeframe: S
     tickVolume: value.tick_volume, closed: value.closed, revision: Number(value.revision) }
 }
 
+type Structure = Snapshot['structure']
+type StructureLine = NonNullable<Structure>['lines'][number]
+
+function lineKey(line: StructureLine) {
+  return `${line.kind}:${line.from}:${line.to}:${line.start}:${line.end}`
+}
+
+function mergeLines(...groups: readonly StructureLine[][]) {
+  const lines = new Map<string, StructureLine>()
+  for (const group of groups) for (const line of group) lines.set(lineKey(line), line)
+  return [...lines.values()].sort((a, b) => Date.parse(a.from) - Date.parse(b.from)
+    || Date.parse(a.to) - Date.parse(b.to) || a.kind.localeCompare(b.kind))
+}
+
+function mergeHistoricalStructure(current: Structure, historical: Structure) {
+  if (!current || !historical || current.algorithm !== historical.algorithm) return current
+  const confirmed = historical.lines.filter(line => line.kind !== 'forming_segment')
+  return { ...current, lines: mergeLines(confirmed, current.lines) }
+}
+
+function retainLoadedHistory(current: Structure, previous: Structure, currentWindowStart: string | undefined) {
+  if (!current || !previous || current.algorithm !== previous.algorithm || !currentWindowStart) return current
+  const cutoff = Date.parse(currentWindowStart)
+  const historical = previous.lines.filter(line => line.kind !== 'forming_segment' && Date.parse(line.to) < cutoff)
+  return { ...current, lines: mergeLines(historical, current.lines) }
+}
+
 const TIMEFRAME_MS: Record<Timeframe, number> = { M1: 60_000, M5: 300_000, M15: 900_000, M30: 1_800_000, H1: 3_600_000, H4: 14_400_000, D1: 86_400_000 }
 
 /** Sync the last candle's OHLC with the latest real-time quote bid price. */
@@ -55,15 +82,17 @@ export function mergePublicHistory(data: Snapshot) {
     if (!items.has(time) || items.get(time)!.revision <= next.revision) items.set(time, next)
   }
   marketCandles.value = [...items.values()].sort((a, b) => a.openTime.localeCompare(b.openTime))
+  marketStructure.value = mergeHistoricalStructure(marketStructure.value, data.structure)
   return true
 }
 export function applyPublicSnapshot(data: Snapshot) {
   const preserve = data.source_key === marketSourceKey.value && marketCandles.value[0]?.symbol === data.symbol && marketCandles.value[0]?.timeframe === data.timeframe
+  const previousStructure = marketStructure.value
   const newerQuote = preserve && marketQuote.value && data.quote
     && marketQuote.value.revision > Number(data.quote.revision) ? marketQuote.value : null
   marketSourceKey.value = data.source_key
   marketQuote.value = newerQuote ?? (data.quote ? quote(data.quote, data.symbol) : null)
-  marketStructure.value = data.structure
+  marketStructure.value = preserve ? retainLoadedHistory(data.structure, previousStructure, data.candles[0]?.open_time) : data.structure
   if (preserve) mergePublicHistory(data)
   else marketCandles.value = data.candles.map(value => candle(value, data.symbol, data.timeframe))
   resourceRevisions.value.quote = marketQuote.value?.revision ?? 0

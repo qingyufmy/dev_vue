@@ -120,9 +120,12 @@ describe('shared public market cache', () => {
     await app.register(publicMarketRoutes, { service: f.service, auth: { authenticate: async () => ({ userId: 99 }) } })
     try {
       const before = '2026-09-14T01:00:00.000Z'
-      expect((await app.inject(`/market/public-snapshot?symbol=XAUUSD&timeframe=M5&page_size=200&before=${before}`)).statusCode).toBe(200)
+      const response = await app.inject(`/market/public-snapshot?symbol=XAUUSD&timeframe=M5&page_size=200&before=${before}`)
+      expect(response.statusCode).toBe(200)
+      expect(response.json().data.structure).toMatchObject({ algorithm: 'chan_structure_v8', based_on_closed_bars: 1 })
       expect(f.cache.listCandles).toHaveBeenCalledWith('20', 'XAUUSD.s', 'M5', 200, before)
-      expect(f.cache.getPublicSourceClock).not.toHaveBeenCalled()
+      expect(f.cache.listCandles).toHaveBeenCalledWith('20', 'XAUUSD.s', 'M5', 1800, before)
+      expect(f.cache.getPublicSourceClock).toHaveBeenCalled()
       expect((await app.inject('/market/public-snapshot?symbol=XAUUSD&timeframe=M5&before=invalid')).statusCode).toBe(400)
       expect((await app.inject('/market/public-snapshot?symbol=XAUUSD&timeframe=M5&page_size=501')).statusCode).toBe(400)
     } finally { await app.close() }

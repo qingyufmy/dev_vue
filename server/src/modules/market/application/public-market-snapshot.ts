@@ -74,38 +74,50 @@ export class PublicMarketSnapshot {
     if (!await authorized()) throw new Error('public_market_source_changed')
     if (quote && (quote.accountId !== source.accountId || quote.symbol !== source.resolvedSymbol)
       || candles.some(c => c.accountId !== source.accountId || c.symbol !== source.resolvedSymbol || c.timeframe !== timeframe)) throw new Error('public_market_scope_invalid')
-    const structureTarget = before === undefined ? chanHistoryTarget(timeframe) : 0
+    const structureTarget = chanHistoryTarget(timeframe)
     let structure: ReturnType<typeof publicChanChart> = null
     if (structureTarget > 0) {
-      const latestClosed = [...candles].reverse().find(candle => candle.closed)
-      const structureKey = `${publicCacheKey(symbol, source.accountId, source.resolvedSymbol)}:${timeframe}`
-      const revision = latestClosed ? `${latestClosed.openTime}:${latestClosed.revision}` : 'empty'
-      const cached = this.structureCache.get(structureKey)
-      // Snapshot sizes differ (relay: 2, chart: 500). Compare each returned
-      // closed bar with the calculation window, rather than hashing the page
-      // or only checking the newest bar and missing a preceding correction.
-      if (cached?.revision === revision && candles.every(candle => !candle.closed
-        || cached.closedRevisions.get(candle.openTime) === candle.revision)) structure = cached.value
-      else {
+      if (before !== undefined) {
         const [structureCandles, clock] = await Promise.all([
-          this.trading.listCandles(source.accountId, source.resolvedSymbol, timeframe, structureTarget),
+          this.trading.listCandles(source.accountId, source.resolvedSymbol, timeframe, structureTarget, before),
           this.trading.getPublicSourceClock(source.ownerUserId, source.accountId),
         ])
         if (!await authorized()) throw new Error('public_market_source_changed')
         if (structureCandles.some(c => c.accountId !== source.accountId || c.symbol !== source.resolvedSymbol || c.timeframe !== timeframe)) throw new Error('public_market_scope_invalid')
-        const lastStructureBar = structureCandles.at(-1)
-        const quoteTime = Date.parse(quote?.observedAt ?? '')
-        const closedThrough = lastStructureBar?.closed
-          ? Date.parse(lastStructureBar.openTime) + (timeframe === 'M1' ? 60_000 : timeframe === 'M5' ? 300_000
-            : timeframe === 'M15' ? 900_000 : timeframe === 'M30' ? 1_800_000 : timeframe === 'H1' ? 3_600_000
-              : timeframe === 'H4' ? 14_400_000 : 86_400_000)
-          : Date.parse(lastStructureBar?.openTime ?? '')
-        const referenceTime = new Date(Math.max(Number.isFinite(quoteTime) ? quoteTime : 0,
-          Number.isFinite(closedThrough) ? closedThrough : 0, Date.now())).toISOString()
+        const causalClock = clock && Date.parse(clock.checkedAt) <= Date.parse(before) ? clock : null
         structure = publicChanChart({ accountId: source.accountId, platform: source.platform,
-          timeframe, candles: structureCandles, clock, referenceTime })
-        this.structureCache.set(structureKey, { revision,
-          closedRevisions: new Map(structureCandles.filter(candle => candle.closed).map(candle => [candle.openTime, candle.revision])), value: structure })
+          timeframe, candles: structureCandles, clock: causalClock, referenceTime: before, includeDeveloping: false })
+      } else {
+        const latestClosed = [...candles].reverse().find(candle => candle.closed)
+        const structureKey = `${publicCacheKey(symbol, source.accountId, source.resolvedSymbol)}:${timeframe}`
+        const revision = latestClosed ? `${latestClosed.openTime}:${latestClosed.revision}` : 'empty'
+        const cached = this.structureCache.get(structureKey)
+        // Snapshot sizes differ (relay: 2, chart: 500). Compare each returned
+        // closed bar with the calculation window, rather than hashing the page
+        // or only checking the newest bar and missing a preceding correction.
+        if (cached?.revision === revision && candles.every(candle => !candle.closed
+          || cached.closedRevisions.get(candle.openTime) === candle.revision)) structure = cached.value
+        else {
+          const [structureCandles, clock] = await Promise.all([
+            this.trading.listCandles(source.accountId, source.resolvedSymbol, timeframe, structureTarget),
+            this.trading.getPublicSourceClock(source.ownerUserId, source.accountId),
+          ])
+          if (!await authorized()) throw new Error('public_market_source_changed')
+          if (structureCandles.some(c => c.accountId !== source.accountId || c.symbol !== source.resolvedSymbol || c.timeframe !== timeframe)) throw new Error('public_market_scope_invalid')
+          const lastStructureBar = structureCandles.at(-1)
+          const quoteTime = Date.parse(quote?.observedAt ?? '')
+          const closedThrough = lastStructureBar?.closed
+            ? Date.parse(lastStructureBar.openTime) + (timeframe === 'M1' ? 60_000 : timeframe === 'M5' ? 300_000
+              : timeframe === 'M15' ? 900_000 : timeframe === 'M30' ? 1_800_000 : timeframe === 'H1' ? 3_600_000
+                : timeframe === 'H4' ? 14_400_000 : 86_400_000)
+            : Date.parse(lastStructureBar?.openTime ?? '')
+          const referenceTime = new Date(Math.max(Number.isFinite(quoteTime) ? quoteTime : 0,
+            Number.isFinite(closedThrough) ? closedThrough : 0, Date.now())).toISOString()
+          structure = publicChanChart({ accountId: source.accountId, platform: source.platform,
+            timeframe, candles: structureCandles, clock, referenceTime })
+          this.structureCache.set(structureKey, { revision,
+            closedRevisions: new Map(structureCandles.filter(candle => candle.closed).map(candle => [candle.openTime, candle.revision])), value: structure })
+        }
       }
     }
     return { symbol, timeframe, source_key: publicCacheKey(symbol, source.accountId, source.resolvedSymbol), source_generation: '1', status: 'cached' as const,

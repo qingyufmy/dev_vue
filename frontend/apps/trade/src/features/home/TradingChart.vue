@@ -36,6 +36,7 @@ let volumeSeries: ISeriesApi<'Histogram'> | null = null
 let structureSeries: ISeriesApi<'Line'>[] = []
 let structureMarkers: ISeriesMarkersPluginApi<Time> | null = null
 let centerBands: ISeriesPrimitive<Time> | null = null
+let referenceBands: ISeriesPrimitive<Time> | null = null
 let renderedKey = ''
 const referencePriceLines = new Map<string, IPriceLine>()
 let referenceKey = ''
@@ -45,18 +46,29 @@ function renderReferenceLevels() {
   const nextKey = JSON.stringify([props.layers.levels, props.referenceLevels])
   if (nextKey === referenceKey) return
   referenceKey = nextKey
+  if (referenceBands) candleSeries.detachPrimitive(referenceBands)
+  referenceBands = null
+  const bands: HorizontalReferenceBand[] = []
   for (const [kind, label] of [['support', '参考支撑'], ['resistance', '参考压力']] as const) {
-    const level = props.layers.levels ? props.referenceLevels[kind] : null
+    const candidate = props.layers.levels ? props.referenceLevels[kind] : null
+    const level = candidate && Number.isFinite(candidate.low) && Number.isFinite(candidate.high) ? candidate : null
     const previous = referencePriceLines.get(kind)
     if (!level) {
       if (previous) candleSeries.removePriceLine(previous)
       referencePriceLines.delete(kind)
       continue
     }
-    const options = { price: level.price, color: color(kind === 'support' ? '--chart-1' : '--chart-3'),
-      lineWidth: 1 as const, lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: label }
+    const tone = kind === 'support' ? '--chart-1' : '--chart-3'
+    const boundary = kind === 'support' ? level.high : level.low
+    if (level.high > level.low) bands.push({ low: level.low, high: level.high, fill: color(tone, 0.09), stroke: color(tone, 0.5) })
+    const options = { price: boundary, color: color(tone), lineWidth: 1 as const,
+      lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: level.high > level.low ? `${label}区` : label }
     if (previous) previous.applyOptions(options)
     else referencePriceLines.set(kind, candleSeries.createPriceLine(options))
+  }
+  if (bands.length) {
+    referenceBands = new HorizontalReferenceBandPrimitive(bands)
+    candleSeries.attachPrimitive(referenceBands)
   }
 }
 
@@ -96,6 +108,38 @@ function layerVisible(kind: string) {
 }
 
 interface CenterBand { from: UTCTimestamp; to: UTCTimestamp; high: number; low: number; level: 'segment' | 'bi' }
+interface HorizontalReferenceBand { high: number; low: number; fill: string; stroke: string }
+
+class HorizontalReferenceBandPrimitive implements ISeriesPrimitive<Time> {
+  private series?: SeriesAttachedParameter<Time>['series']
+  constructor(private readonly bands: HorizontalReferenceBand[]) {}
+  attached(param: SeriesAttachedParameter<Time>) { this.series = param.series }
+  detached() { this.series = undefined }
+  paneViews() {
+    const renderer: IPrimitivePaneRenderer = {
+      draw: () => {},
+      drawBackground: target => target.useBitmapCoordinateSpace(scope => {
+        if (!this.series) return
+        const context = scope.context
+        for (const band of this.bands) {
+          const top = this.series.priceToCoordinate(band.high)
+          const bottom = this.series.priceToCoordinate(band.low)
+          if (top == null || bottom == null) continue
+          const y = Math.round(Math.min(top, bottom) * scope.verticalPixelRatio)
+          const height = Math.max(1, Math.round(Math.abs(bottom - top) * scope.verticalPixelRatio))
+          context.fillStyle = band.fill
+          context.fillRect(0, y, context.canvas.width, height)
+          context.strokeStyle = band.stroke
+          context.lineWidth = Math.max(1, scope.verticalPixelRatio)
+          context.setLineDash([4 * scope.horizontalPixelRatio, 3 * scope.horizontalPixelRatio])
+          context.strokeRect(0, y, context.canvas.width, height)
+          context.setLineDash([])
+        }
+      }),
+    }
+    return [{ zOrder: () => 'bottom' as const, renderer: () => renderer }]
+  }
+}
 
 class CenterBandPrimitive implements ISeriesPrimitive<Time> {
   private chart?: SeriesAttachedParameter<Time>['chart']

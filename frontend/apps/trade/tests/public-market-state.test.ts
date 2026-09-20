@@ -1,7 +1,7 @@
 import { beforeEach, expect, it } from 'vitest'
 import type { PublicMarketRealtimeEvent, PublicMarketSnapshotData } from '@aurum/contracts'
 import { mergePublicHistory, applyPublicMarketEvent, applyPublicSnapshot } from '../src/features/home/public-market-state'
-import { clearAccountRuntime, marketQuote, marketCandles } from '../src/features/home/home-runtime'
+import { clearAccountRuntime, marketQuote, marketCandles, marketStructure } from '../src/features/home/home-runtime'
 
 const snapshot: PublicMarketSnapshotData = { symbol: 'XAUUSD', timeframe: 'M5', status: 'cached',
   source_key: 'a'.repeat(64), source_generation: '1', candles: [], structure: null,
@@ -103,4 +103,18 @@ it('deduplicates historical pages and retains older candles when the latest snap
   expect(mergePublicHistory({ ...snapshot, source_key: 'b'.repeat(64), candles: [older] })).toBe(false)
   applyPublicSnapshot({ ...snapshot, source_key: 'b'.repeat(64), candles: [candle] })
   expect(marketCandles.value).toHaveLength(1)
+})
+
+it('merges confirmed historical Chan lines and retains them across a latest snapshot refresh', () => {
+  const candle = { open_time: '2026-09-14T08:00:00Z', open: '2500', high: '2501', low: '2499', close: '2500', tick_volume: '10', closed: true, revision: '1' }
+  const currentLine = { kind: 'bi' as const, from: '2026-09-14T07:00:00Z', to: candle.open_time, start: 2490, end: 2501 }
+  const historicalLine = { kind: 'segment' as const, from: '2026-09-13T06:00:00Z', to: '2026-09-13T07:00:00Z', start: 2480, end: 2490 }
+  const staleForming = { kind: 'forming_segment' as const, from: '2026-09-13T07:00:00Z', to: '2026-09-13T08:00:00Z', start: 2490, end: 2485 }
+  const structure = { algorithm: 'chan_structure_v8' as const, status: 'ok', reliability: 'high' as const,
+    based_on_closed_bars: 1800, trend: null, lines: [currentLine] }
+  applyPublicSnapshot({ ...snapshot, candles: [candle], structure })
+  expect(mergePublicHistory({ ...snapshot, candles: [], structure: { ...structure, lines: [historicalLine, staleForming] } })).toBe(true)
+  expect(marketStructure.value?.lines).toEqual([historicalLine, currentLine])
+  applyPublicSnapshot({ ...snapshot, candles: [candle], structure })
+  expect(marketStructure.value?.lines).toEqual([historicalLine, currentLine])
 })

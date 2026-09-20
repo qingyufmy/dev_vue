@@ -43,14 +43,22 @@ function price(value?: string | null) {
   const [whole, fraction = ''] = value.split('.')
   return `${whole}.${fraction.replace(/0+$/, '').padEnd(2, '0')}`
 }
+function referencePrice(key: 'support' | 'resistance') {
+  const level = referenceLevels.value[key]
+  if (!level || !Number.isFinite(level.low) || !Number.isFinite(level.high)) return '暂无'
+  const low = price(String(level.low)), high = price(String(level.high))
+  return level.low === level.high ? low : `${low}–${high}`
+}
 const layerCounts = computed(() => {
   const lines = props.structure?.lines ?? []
-  const centers = new Set(lines.filter(line => line.kind === 'center' || line.kind === 'bi_center').map(line => `${line.kind}:${line.from}:${line.to}`)).size
+  const visibleTimes = new Set(props.candles.map(candle => candle.openTime))
+  const visible = lines.filter(line => visibleTimes.has(line.from) && visibleTimes.has(line.to))
+  const centers = new Set(visible.filter(line => line.kind === 'center' || line.kind === 'bi_center').map(line => `${line.kind}:${line.from}:${line.to}`)).size
   return {
-    bi: lines.filter(line => line.kind === 'bi').length,
-    segment: lines.filter(line => line.kind === 'segment' || line.kind === 'forming_segment').length,
+    bi: visible.filter(line => line.kind === 'bi').length,
+    segment: visible.filter(line => line.kind === 'segment' || line.kind === 'forming_segment').length,
     center: centers,
-    fractal: lines.filter(line => line.kind.startsWith('fractal_')).length,
+    fractal: visible.filter(line => line.kind.startsWith('fractal_')).length,
   }
 })
 const trendPresentation = computed(() => presentChanTrend(props.structure))
@@ -86,7 +94,7 @@ const trendPresentation = computed(() => presentChanTrend(props.structure))
       <div v-if="layers.levels" class="grid grid-cols-2 divide-x rounded-lg border bg-muted/10" aria-label="支撑与压力参考">
         <div v-for="(label, key) in { support: '参考支撑', resistance: '参考压力' }" :key="key" class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 px-3 py-2">
           <span class="text-xs text-muted-foreground">{{ label }}</span>
-          <strong class="font-mono text-sm tabular-nums" :class="key === 'support' ? 'text-chart-1' : 'text-chart-3'">{{ referenceLevels[key] ? price(String(referenceLevels[key].price)) : '暂无' }}</strong>
+          <strong class="font-mono text-sm tabular-nums" :class="key === 'support' ? 'text-chart-1' : 'text-chart-3'">{{ referencePrice(key) }}</strong>
           <span v-if="referenceLevels[key]" class="text-xs text-muted-foreground">{{ referenceLevels[key].source }}</span>
         </div>
       </div>

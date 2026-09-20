@@ -36,6 +36,13 @@ describe('public Chan chart projection', () => {
     expect(result).toHaveProperty('trend')
   })
 
+  it('omits developing geometry from causal historical pages', () => {
+    const result = publicChanChart({ accountId: '1', platform: 'mt5', timeframe: 'M5', candles: candles(300),
+      clock: { offset: 180, checkedAt: '2026-09-02T00:00:00.000Z' }, referenceTime: '2026-09-02T00:00:00.000Z',
+      includeDeveloping: false })
+    expect(result?.lines.some(line => line.kind === 'forming_segment')).toBe(false)
+  })
+
   it('projects every recent confirmed bi endpoint as a de-duplicated fractal', () => {
     const start = Date.UTC(2026, 8, 18, 10)
     const lines = recentBiFractalLines([

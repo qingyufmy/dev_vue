@@ -12,17 +12,17 @@ const through = '2026-09-19T00:00:00Z'
 
 describe('chart reference levels', () => {
   it('selects nearest structural boundaries on both sides and changes side after price crosses', () => {
-    expect(chartReferenceLevels(structure, 100, through)).toMatchObject({ support: { price: 98, source: '笔中枢' }, resistance: { price: 105 } })
-    expect(chartReferenceLevels(structure, 107, through)).toMatchObject({ support: { price: 105 }, resistance: { price: 110, source: '顶分型' } })
+    expect(chartReferenceLevels(structure, 100, through)).toMatchObject({ support: { low: 95, high: 95 }, resistance: { low: 110, high: 110 } })
+    expect(chartReferenceLevels(structure, 107, through)).toMatchObject({ support: { low: 98, high: 105, source: '笔中枢' }, resistance: { low: 110, source: '顶分型' } })
   })
   it('uses only latest pivots and center pair, excluding older, future and forming geometry', () => {
     const data = { ...structure, lines: [...structure.lines, line('fractal_bottom', 99, 17), line('bi_center', 99.5, 16, 15),
       line('forming_segment', 99.8), line('fractal_top', 100.1, 20)] }
-    expect(chartReferenceLevels(data, 100, through)).toMatchObject({ support: { price: 98 }, resistance: { price: 105 } })
+    expect(chartReferenceLevels(data, 100, through)).toMatchObject({ support: { low: 95 }, resistance: { low: 110 } })
   })
   it('does not manufacture a level for an absent side, exact touch, or invalid input', () => {
     expect(chartReferenceLevels({ ...structure, lines: [line('fractal_bottom', 95)] }, 95, through)).toEqual({ support: null, resistance: null })
-    expect(chartReferenceLevels(structure, 120, through)).toMatchObject({ support: { price: 110 }, resistance: null })
+    expect(chartReferenceLevels(structure, 120, through)).toMatchObject({ support: { low: 110 }, resistance: null })
     expect(chartReferenceLevels(null, 100, through)).toEqual({ support: null, resistance: null })
     expect(chartReferenceLevels(structure, NaN, through)).toEqual({ support: null, resistance: null })
   })

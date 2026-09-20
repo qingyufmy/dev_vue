@@ -1,7 +1,7 @@
 import type { PublicMarketSnapshotData } from '@aurum/contracts'
 
 type Structure = PublicMarketSnapshotData['structure']
-export interface ChartReferenceLevel { price: number; source: string; at: string }
+export interface ChartReferenceLevel { low: number; high: number; source: string; at: string }
 export interface ChartReferenceLevels { support: ChartReferenceLevel | null; resistance: ChartReferenceLevel | null }
 
 /** Display references only: recent confirmed pivots and latest center bounds.
@@ -18,12 +18,12 @@ export function chartReferenceLevels(structure: Structure, price: number, throug
     const group = lines.filter(line => line.kind === kind).sort((a, b) => Date.parse(b.to) - Date.parse(a.to) || Date.parse(b.from) - Date.parse(a.from))
     const latest = group[0]
     if (!latest) continue
-    for (const line of group.filter(line => line.from === latest.from && line.to === latest.to)) {
-      candidates.push({ price: line.start, source, at: line.to })
-    }
+    const latestLines = group.filter(line => line.from === latest.from && line.to === latest.to)
+    const prices = latestLines.map(line => line.start).filter(Number.isFinite)
+    if (prices.length) candidates.push({ low: Math.min(...prices), high: Math.max(...prices), source, at: latest.to })
   }
   return {
-    support: candidates.filter(level => level.price < price).sort((a, b) => b.price - a.price || Date.parse(b.at) - Date.parse(a.at))[0] ?? null,
-    resistance: candidates.filter(level => level.price > price).sort((a, b) => a.price - b.price || Date.parse(b.at) - Date.parse(a.at))[0] ?? null,
+    support: candidates.filter(level => level.high < price).sort((a, b) => b.high - a.high || Date.parse(b.at) - Date.parse(a.at))[0] ?? null,
+    resistance: candidates.filter(level => level.low > price).sort((a, b) => a.low - b.low || Date.parse(b.at) - Date.parse(a.at))[0] ?? null,
   }
 }
