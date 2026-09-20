@@ -5,6 +5,7 @@ import type { AnalysisContextBuilder } from './analysis-context-builder.js'
 import type { InferenceRepository } from './inference-ports.js'
 import type { InferenceService } from './inference-service.js'
 import type { AnalysisWindowGuard } from './analysis-window-guard.js'
+import type { AutomaticMarketSessionGuard } from './analysis-scheduler.js'
 import { analysisModelSnapshot } from './analysis-model-snapshot.js'
 
 export interface AnalysisModelGateway {
@@ -37,11 +38,15 @@ export class AnalysisWorker {
     private readonly windows: AnalysisWindowGuard,
     private readonly currentTime: () => Date = () => new Date(),
     private readonly wait: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms)),
+    private readonly marketSessions?: AutomaticMarketSessionGuard,
   ) {}
 
   async process(runId: string, now = new Date()) {
     const run = await this.repository.getAnalysisRun(runId)
     if (!run || run.status !== 'queued') return { status: 'ignored' as const }
+    if (run.trigger !== 'manual' && this.marketSessions && !(await this.marketSessions.check(run)).allowed) {
+      return { status: 'deferred' as const, retryAfterMs: 30_000 }
+    }
 
     let strategy
     try {
@@ -51,6 +56,10 @@ export class AnalysisWorker {
     } catch (error) {
       await this.repository.failQueuedAnalysis(run.id, errorCode(error))
       return { status: 'failed' as const, code: errorCode(error) }
+    }
+
+    if (run.trigger !== 'manual' && this.marketSessions && !(await this.marketSessions.check(run)).allowed) {
+      return { status: 'deferred' as const, retryAfterMs: 30_000 }
     }
 
     let model
@@ -108,7 +117,9 @@ export class AnalysisWorker {
       }
 
       try {
-        const completed = await this.inference.completeAnalysis(claim, output.result, output.usage)
+        const allowAutomaticTraderDispatch = run.trigger === 'manual' || !this.marketSessions
+          || (await this.marketSessions.check(run)).allowed
+        const completed = await this.inference.completeAnalysis(claim, output.result, output.usage, allowAutomaticTraderDispatch)
         return { status: 'succeeded' as const, ...completed }
       } catch (error) {
         if (error instanceof InferenceError && error.status === 409) {

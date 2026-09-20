@@ -5,6 +5,10 @@ import { evaluateSubscriptionWindow, type SubscriptionWindowClock } from '../../
 import type { AnalysisScheduleStore, DueAnalysisSchedule } from '../../strategies/index.js'
 export type { AnalysisScheduleStore as AnalysisScheduleRepository, DueAnalysisSchedule } from '../../strategies/index.js'
 
+export interface AutomaticMarketSessionGuard {
+  check(input: { userId: number; strategyId: string; strategyVersionId: string; symbol: string }): Promise<{ allowed: boolean; reason: string }>
+}
+
 export function scheduleSlotUtc(now: Date, cadenceSeconds: number) {
   if (!Number.isSafeInteger(cadenceSeconds) || cadenceSeconds < 60) throw new Error('analysis_cadence_invalid')
   return new Date(Math.floor(now.getTime() / (cadenceSeconds * 1000)) * cadenceSeconds * 1000).toISOString()
@@ -16,7 +20,8 @@ export function nextScheduleSlotUtc(now: Date, cadenceSeconds: number) {
 
 export class AnalysisScheduler {
   constructor(private readonly schedules: AnalysisScheduleStore, private readonly inference: InferenceService,
-    private readonly readClock: (accountId: string, userId: number) => Promise<SubscriptionWindowClock | null> = async () => null) {}
+    private readonly readClock: (accountId: string, userId: number) => Promise<SubscriptionWindowClock | null> = async () => null,
+    private readonly marketSessions?: AutomaticMarketSessionGuard) {}
 
   async tick(now = new Date(), limit = 100) {
     const due = await this.schedules.listDue(now.toISOString(), Math.min(Math.max(limit, 1), 500))
@@ -29,6 +34,10 @@ export class AnalysisScheduler {
         if (decision.reason === 'clock_unverified') decision = evaluateSubscriptionWindow(item.receiveWindow, item.receiveTimezone, now,
           await this.readClock(item.marketSourceAccountId, item.userId))
         if (!decision.inferenceAllowed) {
+          await this.schedules.advance(item.subscriptionId, item.nextDueAt, nextScheduleSlotUtc(now, item.cadenceSeconds))
+          continue
+        }
+        if (this.marketSessions && !(await this.marketSessions.check(item)).allowed) {
           await this.schedules.advance(item.subscriptionId, item.nextDueAt, nextScheduleSlotUtc(now, item.cadenceSeconds))
           continue
         }

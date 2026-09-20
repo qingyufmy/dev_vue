@@ -42,7 +42,8 @@ export class InferenceService {
     })
   }
 
-  async completeAnalysis(claim: AnalysisWorkClaim, result: MarketAnalysisResult, usage: JsonObject | null = null) {
+  async completeAnalysis(claim: AnalysisWorkClaim, result: MarketAnalysisResult, usage: JsonObject | null = null,
+    allowAutomaticTraderDispatch = true) {
     assertMarketAnalysisResult(result)
     assertConfidence(result.confidence)
     const analyzedAt = Date.parse(result.analyzedAt)
@@ -51,7 +52,7 @@ export class InferenceService {
     return this.repository.completeAnalysis({
       runId: claim.run.id, userId: claim.run.userId, expectedRevision: claim.run.revision,
       marketAnalysisId: randomUUID(), taskId: claim.taskId, attemptId: claim.attemptId,
-      fencingToken: claim.fencingToken, usage, result,
+      fencingToken: claim.fencingToken, usage, result, allowAutomaticTraderDispatch,
     })
   }
 

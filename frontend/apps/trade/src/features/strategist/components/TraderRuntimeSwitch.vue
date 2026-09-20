@@ -7,7 +7,7 @@ import { Button } from '@aurum/ui/button'
 import { useTradeSession } from '~/features/auth'
 import { currentAccount } from '~/features/trading-context'
 import { strategistApi } from '../api/strategist-api'
-const props = defineProps<{ items: StrategySubscription[]; loading: boolean; readonly: boolean }>()
+const props = defineProps<{ items: StrategySubscription[]; loading: boolean; readonly: boolean; pauseLabel?: string }>()
 const emit = defineEmits<{ configure: []; saved: [] }>()
 const { session } = useTradeSession()
 const busy = ref(false), error = ref('')
@@ -46,6 +46,7 @@ async function save() {
   <div class="flex h-11 items-center gap-2.5 whitespace-nowrap rounded-lg border border-border/70 bg-card/60 px-3" title="控制当前账户的 AI 自动评估与交易；不影响手动操作">
     <Bot class="size-4 shrink-0 text-primary" aria-hidden="true" />
     <label for="runtime-ai-trader" class="text-xs font-medium" :class="readonly ? 'cursor-not-allowed' : 'cursor-pointer'">自动交易</label>
+    <span v-if="enabled && pauseLabel" class="text-xs text-muted-foreground" role="status">{{ pauseLabel }}</span>
     <Switch id="runtime-ai-trader" aria-label="自动交易" :aria-busy="busy" :model-value="enabled" :disabled="readonly || loading || busy || !!pending"
       :class="readonly ? 'cursor-not-allowed' : 'cursor-pointer data-disabled:cursor-pointer'" @update:model-value="toggle" />
   </div>

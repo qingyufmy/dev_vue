@@ -17,10 +17,15 @@ export function createPublicMarketHttp(pool: Pool, providers: { list(): Promise<
   }
 }
 import { MarketSourceSelector } from './application/market-source-selector.js'
+import { AutomaticMarketSessionGate } from './application/automatic-market-session-gate.js'
+import type { MarketStrategyAccess } from './application/market-source-access.js'
 import { MysqlMarketSourceStore } from './infrastructure/mysql-market-source-store.js'
 import type { MarketSourceCandidates } from './application/market-source-ports.js'
 export function createMarketSourceSelector(pool: Pool, candidates: MarketSourceCandidates) {
   return new MarketSourceSelector(new MysqlMarketSourceStore(pool), candidates)
+}
+export function createAutomaticMarketSessionGate(pool: Pool, strategies: MarketStrategyAccess) {
+  return new AutomaticMarketSessionGate(strategies, new MysqlMarketSourceStore(pool))
 }
 import type { FastifyPluginAsync } from 'fastify'
 import { CalendarService } from './application/calendar-service.js'

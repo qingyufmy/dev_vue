@@ -41,7 +41,7 @@ const permissionLabel = computed(() => tradingContext.value?.mode === 'observer'
         <DropdownMenuItem as-child><RouterLink to="/bridge">管理量见智桥</RouterLink></DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
-    <RuntimeControls />
+    <RuntimeControls :market-state="marketState" />
     <span class="flex h-8 items-center gap-2 whitespace-nowrap sm:border-l sm:pl-4" :title="`${activeMarketSymbol} · 由管理员桥接确认`">
       <span class="size-1.5 rounded-full" :class="marketState === 'open' ? 'bg-system-ok' : 'bg-muted-foreground'" aria-hidden="true" />
       <span>{{ marketLabel }}</span>

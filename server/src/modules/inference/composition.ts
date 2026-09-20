@@ -52,8 +52,9 @@ export function createTransactionTradeDecisionOriginReader(connection: PoolConne
 }
 
 export function createAnalysisScheduler(schedules: AnalysisScheduleStore, service: InferenceService,
-  readClock: (accountId: string, userId: number) => Promise<SubscriptionWindowClock | null>): Pick<AnalysisScheduler, 'tick'> {
-  return new AnalysisScheduler(schedules, service, readClock)
+  readClock: (accountId: string, userId: number) => Promise<SubscriptionWindowClock | null>,
+  marketSessions?: import('./application/analysis-scheduler.js').AutomaticMarketSessionGuard): Pick<AnalysisScheduler, 'tick'> {
+  return new AnalysisScheduler(schedules, service, readClock, marketSessions)
 }
 
 export function createMysqlModelTaskRecovery(pool: Pool, accounts: (connection: PoolConnection) => Pick<AccountInventorySummaryReader, 'lockAccount'>): Pick<ModelTaskRecovery, 'expireOverdue'> {

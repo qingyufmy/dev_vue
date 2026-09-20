@@ -57,6 +57,7 @@ describe('analysis dispatch through module ports', () => {
       const input = { runId: 'run', userId: 7, expectedRevision: 2, taskId: 'task', attemptId: 'attempt', fencingToken: 1,
         marketAnalysisId: 'analysis', result: { marketBias: 'neutral', opportunity: scenario === 'entry' ? 'long_setup' : 'none',
           confidence: 70, summary: 'fixture', analyzedAt: now.toISOString(), validUntil: new Date(now.getTime() + 60000).toISOString() }, usage: null,
+        allowAutomaticTraderDispatch: true,
       } as Parameters<InferenceRepository['completeAnalysis']>[0]
       if (scenario === 'revoked') {
         await expect(repository.completeAnalysis(input)).rejects.toMatchObject({ code: 'trader_account_forbidden' })
@@ -73,4 +74,34 @@ describe('analysis dispatch through module ports', () => {
       }
     })
   }
+
+  it('stores a scheduled analysis without dispatching traders after the market closes', async () => {
+    let active = false
+    const events: unknown[] = []
+    const now = new Date()
+    const connection = {
+      async beginTransaction() { active = true }, async commit() { active = false }, async rollback() { active = false }, release() {},
+      async execute(sql: string, args: unknown[] = []) {
+        expect(active).toBe(true)
+        if (sql.includes('FROM ai_analysis_runs r')) return [[{ id: 'run', user_id: 7, strategy_id: '1', strategy_version_id: '11',
+          standard_symbol: 'XAUUSD', revision: 2, status: 'running', input_snapshot_id: 'snapshot', model_task_id: 'task', trigger_type: 'scheduled' }]]
+        if (sql.includes('FROM ai_model_tasks WHERE')) return [[{ status: 'running', fencing_token: 1, deadline_at_utc: new Date(Date.now() + 60_000) }]]
+        if (sql.includes('FROM market_analyses a')) return [[{ id: 'analysis', owner_user_id: 7, strategy_id: '1', strategy_version_id: '11',
+          standard_symbol: 'XAUUSD', market_bias: 'neutral', opportunity: 'long_setup', confidence: 70, summary: 'fixture',
+          analyzed_at_utc: now, valid_until_utc: now, input_snapshot_hash: 'a'.repeat(64), revision: 1 }]]
+        if (/^(INSERT|UPDATE)/.test(sql)) { if (sql.startsWith('INSERT INTO outbox_events')) events.push(args[3]); return [{ affectedRows: 1 }] }
+        throw Error('unexpected SQL')
+      },
+    } as unknown as PoolConnection
+    const unused = () => { throw Error('automatic trader dependencies must not be read') }
+    const repository = createMysqlInferenceRepository({ async getConnection() { return connection } } as unknown as Pool,
+      () => ({ async read() { throw Error('disabled') } }), unused, unused,
+      { subscribers: unused, inventory: unused, risks: unused })
+    await repository.completeAnalysis({ runId: 'run', userId: 7, expectedRevision: 2, taskId: 'task', attemptId: 'attempt',
+      fencingToken: 1, marketAnalysisId: 'analysis', usage: null, allowAutomaticTraderDispatch: false,
+      result: { marketBias: 'neutral', opportunity: 'long_setup', confidence: 70, summary: 'fixture', marketRegime: 'range',
+        supportingEvidence: [], counterEvidence: [], keyLevels: {}, invalidation: {}, dataGaps: [], analysisBody: 'fixture',
+        analyzedAt: now.toISOString(), validUntil: new Date(now.getTime() + 60_000).toISOString() } })
+    expect(events).toEqual(['market_analysis.created'])
+  })
 })

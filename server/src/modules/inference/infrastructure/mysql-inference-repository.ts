@@ -296,7 +296,7 @@ export class MysqlInferenceRepository implements InferenceRepository {
       await connection.execute(`UPDATE ai_model_tasks SET status='succeeded',lease_owner=NULL,lease_expires_at_utc=NULL,updated_at_utc=UTC_TIMESTAMP(3),completed_at_utc=UTC_TIMESTAMP(3) WHERE id=?`, [input.taskId])
       await connection.execute(`UPDATE ai_analysis_runs SET status='succeeded',revision=revision+1,updated_at_utc=UTC_TIMESTAMP(3),completed_at_utc=UTC_TIMESTAMP(3) WHERE id=?`, [input.runId])
       const createdTraderRuns: TraderRun[] = []
-      if (row.trigger_type !== 'manual') {
+      if (row.trigger_type !== 'manual' && input.allowAutomaticTraderDispatch) {
         const subscriptions = await this.dispatch.subscribers(connection).list({ userId: input.userId,
           analysisStrategyVersionId: row.strategy_version_id, symbol: row.standard_symbol })
         for (const subscription of subscriptions) {

@@ -16,6 +16,8 @@ import {
 } from '../modules/inference/index.js'
 import { createMysqlAnalysisScheduleStore, createSubscriptionPreferencesReader, createMysqlStrategyService } from '../modules/strategies/composition.js'
 import { createTradingReader } from '../modules/trading/composition.js'
+import { createAutomaticMarketSessionGate } from '../modules/market/composition.js'
+import { MysqlMarketStrategyAccess } from '../modules/strategies/composition.js'
 
 loadServerEnvironment()
 
@@ -31,6 +33,7 @@ async function main() {
     createMysqlAnalysisScheduleStore(pool),
     new InferenceService(createMysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader, createSubscriptionExecutionWindowReader, { subscribers: createAnalysisSubscriberReader, inventory: createAccountInventorySummaryReader, risks: createAccountRiskSummaryReader }), strategies),
     (accountId, userId) => trading.getAccountSnapshot(accountId, userId),
+    createAutomaticMarketSessionGate(pool, new MysqlMarketStrategyAccess(pool)),
   )
   const recovery = createMysqlModelTaskRecovery(pool, createAccountInventorySummaryReader)
   const usage = createMysqlModelUsageLedger(pool, { principals: createModelPrincipals, active: createModelActive })

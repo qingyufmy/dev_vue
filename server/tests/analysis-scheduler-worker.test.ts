@@ -74,6 +74,39 @@ describe('Stage 12B analysis scheduling and worker', () => {
     expect(advanced.sort()).toEqual(['s-7', 's-8'])
   })
 
+  it('advances a closed-market schedule without creating automatic analysis', async () => {
+    const now = new Date('2026-09-20T02:02:31.000Z')
+    const queued: unknown[] = [], advanced: string[] = []
+    const scheduler = new AnalysisScheduler({
+      async listDue() { return [{ subscriptionId: 's-7', receiveTimezone: 'UTC', receiveWindow: { enabled: false }, userId: 42,
+        marketSourceAccountId: '7', strategyId: '10', strategyVersionId: '11', symbol: 'XAUUSD', cadenceSeconds: 300,
+        nextDueAt: '2026-09-20T02:00:00.000Z' }] },
+      async advance(id) { advanced.push(id); return true },
+    }, { async requestScheduledAnalysis(input: unknown) { queued.push(input); return run('unexpected') } } as unknown as InferenceService,
+    async () => null, { async check() { return { allowed: false, reason: 'market_session_closed' } } })
+    await expect(scheduler.tick(now)).resolves.toMatchObject({ runs: [], failures: [] })
+    expect(queued).toEqual([])
+    expect(advanced).toEqual(['s-7'])
+  })
+
+  it('defers queued scheduled analysis while closed but leaves manual analysis available', async () => {
+    const scheduled = run('closed-scheduled')
+    const repo = repository({
+      async getAnalysisRun(id) { return id === scheduled.id ? scheduled : run(id, 'manual') },
+      async beginAnalysis() { throw new InferenceError('manual_reached_preparation', 409) },
+      async failQueuedAnalysis() {},
+    })
+    const strategies = new StrategyService(new Strategies())
+    const contexts = new AnalysisContextBuilder({ async read() { throw new Error('context_must_not_be_read') } }, { async latest() { return null } })
+    const model = { profileId: null, provider: 'test', model: 'analysis', timeoutMs: 1000, maxAttempts: 1,
+      async analyze() { throw new Error('model_must_not_run') } }
+    const gate = { async check() { return { allowed: false, reason: 'market_session_closed' } } }
+    const worker = new AnalysisWorker(repo, new InferenceService(repo, strategies), strategies, contexts, model, 'worker',
+      { async assertAllowed() {} }, undefined, undefined, gate)
+    await expect(worker.process(scheduled.id)).resolves.toEqual({ status: 'deferred', retryAfterMs: 30_000 })
+    await expect(worker.process('manual')).resolves.toEqual({ status: 'failed', code: 'context_must_not_be_read' })
+  })
+
   it('freezes explicit market and macro inputs without provider conversation state', async () => {
     const macroVersion = { ...version, config: {
       ...version.config, macro_evidence: { mode: 'context', accepted_schema_versions: [1], max_age_seconds: 172800 },

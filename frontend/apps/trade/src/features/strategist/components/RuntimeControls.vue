@@ -10,6 +10,7 @@ import type { StrategySubscription } from '@aurum/contracts'
 import { Button } from '@aurum/ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@aurum/ui/sheet'
 import { strategistApi } from '../api/strategist-api'
+const props = defineProps<{ marketState?: 'open' | 'closed' | 'restricted' | 'stale' | 'unknown' }>()
 const { session } = useTradeSession()
 const items = ref<StrategySubscription[]>([]), error = ref(''), loading = ref(false), open = ref(false)
 const editorFocus = ref<'analysis' | 'trader'>('analysis')
@@ -28,6 +29,9 @@ let generation = 0
 const runningJobs = ref<Record<string, number>>({})
 let analysisConnection: ReturnType<typeof createAnalysisStatusRealtime> | undefined
 const analyzing = computed(() => enabledAnalysis.value.length > 0 && Object.values(runningJobs.value).some(at => now.value - at < 15 * 60000))
+const marketPauseLabel = computed(() => props.marketState && props.marketState !== 'open'
+  ? { closed: '休市暂停', restricted: '受限暂停', stale: '行情待确认', unknown: '行情待确认' }[props.marketState]
+  : '')
 async function load() {
   const captured = scope.value, version = ++generation, account = currentAccount.value?.id
   if (!account || !session.value || readonly.value) return
@@ -97,10 +101,10 @@ function label(enabled: number) { return !currentAccount.value ? '待选择账�
       <span v-if="analyzing" aria-hidden="true" class="analysis-sweep absolute inset-y-0 left-0 -z-10 w-1/2 bg-primary/15" />
       <BrainCircuit class="size-4 text-primary" aria-hidden="true" />
       <span>自动分析</span>
-      <span class="text-xs" :class="enabledAnalysis.length ? 'text-primary' : 'text-muted-foreground'">{{ analyzing ? '分析中' : !error && enabledAnalysis.length && countdown ? countdown : label(enabledAnalysis.length) }}</span>
+      <span class="text-xs" :class="marketPauseLabel && enabledAnalysis.length ? 'text-muted-foreground' : enabledAnalysis.length ? 'text-primary' : 'text-muted-foreground'">{{ marketPauseLabel && enabledAnalysis.length ? marketPauseLabel : analyzing ? '分析中' : !error && enabledAnalysis.length && countdown ? countdown : label(enabledAnalysis.length) }}</span>
       <ChevronDown class="size-3.5 text-muted-foreground" aria-hidden="true" />
     </Button>
-    <TraderRuntimeSwitch :items="items" :loading="loading || !!error" :readonly="readonly" @configure="edit(items.find(item => item.status === 'active')?.id ?? items[0]?.id ?? null, currentAccount?.id, 'trader')" @saved="load" />
+    <TraderRuntimeSwitch :items="items" :loading="loading || !!error" :readonly="readonly" :pause-label="marketPauseLabel" @configure="edit(items.find(item => item.status === 'active')?.id ?? items[0]?.id ?? null, currentAccount?.id, 'trader')" @saved="load" />
   </div>
   <p v-if="error" role="alert" class="text-xs text-destructive">{{ error }}<Button variant="link" size="sm" @click="load">刷新</Button></p>
   <AnalysisSettingsPanel v-if="editorOpen && editingAccount" :key="editingAccount" v-model:open="editorOpen" :account-id="editingAccount" :subscription-id="editingId" :focus="editorFocus" @saved="load" />

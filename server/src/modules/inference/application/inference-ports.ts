@@ -40,6 +40,7 @@ export interface CompleteAnalysisInput {
   fencingToken: number
   usage: JsonObject | null
   result: MarketAnalysisResult
+  allowAutomaticTraderDispatch: boolean
 }
 
 export interface FailAnalysisAttemptInput {
