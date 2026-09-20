@@ -42,11 +42,6 @@ function price(value?: string | null) {
   const [whole, fraction = ''] = value.split('.')
   return `${whole}.${fraction.replace(/0+$/, '').padEnd(2, '0')}`
 }
-const structureSummary = computed(() => {
-  if (!props.structure) return '结构数据准备中'
-  if (!props.structure.lines.length) return `结构证据不足 · ${props.structure.based_on_closed_bars} 根已收盘 K 线`
-  return `缠论结构 · ${props.structure.based_on_closed_bars} 根已收盘 K 线`
-})
 const layerCounts = computed(() => {
   const lines = props.structure?.lines ?? []
   const centers = new Set(lines.filter(line => line.kind === 'center' || line.kind === 'bi_center').map(line => `${line.kind}:${line.from}:${line.to}`)).size
@@ -70,39 +65,36 @@ const trendTone = computed(() => props.structure?.trend?.direction === 'up' ? 'b
 </script>
 
 <template>
-  <Card class="min-w-0 overflow-hidden shadow-none">
-    <CardHeader class="shrink-0 border-b p-3 sm:p-4">
+  <Card class="min-w-0 gap-0 overflow-hidden py-0 shadow-none">
+    <CardHeader class="shrink-0 gap-3 border-b p-3 sm:p-4">
       <div class="flex flex-wrap items-center gap-2">
         <Select :model-value="symbol" @update:model-value="(value) => value && emit('symbol', String(value))">
-          <SelectTrigger aria-label="行情品种" class="min-h-11 w-32"><SelectValue placeholder="品种" /></SelectTrigger>
+          <SelectTrigger aria-label="行情品种" class="min-h-11 w-32 bg-transparent font-semibold"><SelectValue placeholder="品种" /></SelectTrigger>
           <SelectContent><SelectGroup><SelectItem v-for="item in symbols" :key="item" :value="item">{{ item }}</SelectItem></SelectGroup></SelectContent>
         </Select>
         <Select :model-value="timeframe" @update:model-value="(value) => emit('timeframe', value as Timeframe)">
-          <SelectTrigger aria-label="K 线周期" class="min-h-11 w-24"><SelectValue /></SelectTrigger>
+          <SelectTrigger aria-label="K 线周期" class="min-h-11 w-20 bg-transparent"><SelectValue /></SelectTrigger>
           <SelectContent><SelectGroup><SelectItem v-for="item in periods" :key="item" :value="item">{{ item }}</SelectItem></SelectGroup></SelectContent>
         </Select>
-        <div class="ml-auto flex min-w-0 items-center rounded-lg border bg-muted/30">
-          <template v-if="quote && quoteCurrent && !loading">
+        <Badge variant="outline" class="ml-auto min-h-7 gap-1.5 border-transparent bg-muted/50" :title="structure?.trend ? `确定性走势判断：${structure.trend.state}` : '当前没有可用的确定性走势判断'"><span class="size-1.5 rounded-full" :class="trendTone" aria-hidden="true" />走势 {{ trendLabel }}</Badge>
+        <div v-if="quote && quoteCurrent && !loading" class="flex min-w-0 flex-wrap items-center rounded-lg border bg-muted/20">
             <div class="px-3 py-1.5 text-center"><p class="text-[11px] text-muted-foreground">卖出</p><p class="font-mono text-sm font-semibold tabular-nums text-trade-down">{{ price(quote.bid) }}</p></div>
             <div class="border-x px-3 py-1.5 text-center"><p class="text-[11px] text-muted-foreground">买入</p><p class="font-mono text-sm font-semibold tabular-nums text-trade-up">{{ price(quote.ask) }}</p></div>
             <div class="px-3 py-1.5 text-center"><p class="text-[11px] text-muted-foreground">点差</p><p class="font-mono text-sm tabular-nums">{{ price(quote.spread) }}</p></div>
-          </template>
-          <span v-else role="status" class="flex items-center gap-2 px-3 py-3 text-xs text-muted-foreground"><LoaderCircle v-if="loading" class="size-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />{{ loading ? '报价加载中' : '等待最新报价' }}</span>
         </div>
       </div>
-      <div class="flex flex-wrap items-center gap-1.5 border-t pt-3">
-        <span class="mr-1 text-xs font-medium">缠论结构</span>
-        <Button v-for="layer in layerOptions" :key="layer.key" type="button" size="sm" class="min-h-11 gap-2 px-3" :variant="layers[layer.key] ? 'secondary' : 'ghost'" :aria-pressed="layers[layer.key]" :aria-label="`${layer.label}图层，${layerCounts[layer.key]} 项${layers[layer.key] ? '，已显示' : '，已隐藏'}`" @click="layers[layer.key] = !layers[layer.key]"><span class="size-1.5 rounded-full" :class="[layer.tone, layers[layer.key] ? 'opacity-100' : 'opacity-35']" aria-hidden="true" />{{ layer.label }}<span class="font-mono text-[10px] text-muted-foreground">{{ layerCounts[layer.key] }}</span></Button>
-        <Badge variant="outline" class="min-h-7 gap-1.5" :title="structure?.trend ? `确定性走势判断：${structure.trend.state}` : '当前没有可用的确定性走势判断'"><span class="size-1.5 rounded-full" :class="trendTone" aria-hidden="true" />走势 {{ trendLabel }}</Badge>
-        <span class="ml-auto text-xs text-muted-foreground">{{ structureSummary }}</span>
+      <div class="flex flex-wrap items-center gap-1 rounded-lg bg-muted/35 p-1" role="group" aria-label="缠论图层">
+        <Button v-for="layer in layerOptions" :key="layer.key" type="button" size="sm" variant="ghost" class="min-h-11 flex-1 gap-2 px-2 text-xs transition-colors motion-reduce:transition-none sm:px-3" :class="layers[layer.key] ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'" :aria-pressed="layers[layer.key]" :aria-label="`${layer.label}图层，${layerCounts[layer.key]} 项${layers[layer.key] ? '，已显示' : '，已隐藏'}`" @click="layers[layer.key] = !layers[layer.key]"><span class="h-0.5 w-3 rounded-full" :class="[layer.tone, layers[layer.key] ? 'opacity-100' : 'opacity-35']" aria-hidden="true" />{{ layer.label }}</Button>
+        <Button type="button" size="sm" variant="ghost" class="min-h-11 flex-1 px-2 text-xs transition-colors motion-reduce:transition-none sm:px-3" :class="layers.levels ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'" :aria-pressed="layers.levels" :aria-label="`支撑压力图层，${referenceCount} 项${layers.levels ? '，已显示' : '，已隐藏'}`" @click="layers.levels = !layers.levels">支撑 / 压力</Button>
       </div>
-      <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground" aria-label="支撑与压力参考">
-        <Button type="button" size="sm" class="min-h-11 px-3" :variant="layers.levels ? 'secondary' : 'ghost'" :aria-pressed="layers.levels" :aria-label="`支撑压力图层，${referenceCount} 项${layers.levels ? '，已显示' : '，已隐藏'}`" @click="layers.levels = !layers.levels">支撑 / 压力</Button>
-        <template v-if="layers.levels">
-          <span v-for="(label, key) in { support: '参考支撑', resistance: '参考压力' }" :key="key">{{ label }} <strong class="font-mono text-foreground">{{ referenceLevels[key] ? price(String(referenceLevels[key].price)) : '暂无' }}</strong><span v-if="referenceLevels[key]" class="ml-1">· {{ referenceLevels[key].source }}</span></span>
-        </template>
-        <span class="ml-auto" title="报价更新当前 K 线及价位关系；收盘或数据修正后重算确认结构。虚线段是形成中的结构，支撑压力只是结构参考。">收盘确认 · 行情更新后自动同步</span>
+      <div v-if="layers.levels" class="grid grid-cols-2 divide-x rounded-lg border bg-muted/10" aria-label="支撑与压力参考">
+        <div v-for="(label, key) in { support: '参考支撑', resistance: '参考压力' }" :key="key" class="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 px-3 py-2">
+          <span class="text-xs text-muted-foreground">{{ label }}</span>
+          <strong class="font-mono text-sm tabular-nums" :class="key === 'support' ? 'text-chart-1' : 'text-chart-3'">{{ referenceLevels[key] ? price(String(referenceLevels[key].price)) : '暂无' }}</strong>
+          <span v-if="referenceLevels[key]" class="text-xs text-muted-foreground">{{ referenceLevels[key].source }}</span>
+        </div>
       </div>
+      <p v-if="structure && !structure.lines.length" role="status" class="text-xs text-muted-foreground">当前结构证据不足，等待后续行情确认。</p>
     </CardHeader>
     <CardContent class="flex flex-1 flex-col p-0" :aria-busy="loading">
       <div v-if="error" role="alert" class="flex min-h-[25rem] flex-1 flex-col items-center justify-center gap-3 p-4 text-center">
@@ -113,17 +105,12 @@ const trendTone = computed(() => props.structure?.trend?.direction === 'up' ? 'b
       <div v-else role="status" class="flex min-h-[25rem] flex-1 flex-col items-center justify-center gap-2 text-center text-muted-foreground">
         <LoaderCircle class="size-6 animate-spin motion-reduce:animate-none" aria-hidden="true" /><p class="text-sm">{{ symbol }} {{ timeframe }} 行情加载中…</p>
       </div>
-      <div class="flex min-h-11 shrink-0 items-center gap-2 border-t px-4 text-xs text-muted-foreground">
-        <Badge variant="outline">{{ timeframe }}</Badge><span role="status">{{ marketStatus }}</span>
-        <div v-if="structure?.lines.length" class="ml-auto hidden items-center gap-3 lg:flex" aria-label="缠论结构图例">
-          <span class="flex items-center gap-1.5"><i class="block h-px w-4 bg-chart-1" />笔</span>
-          <span class="flex items-center gap-1.5"><i class="block h-0.5 w-4 bg-chart-3" />段</span>
-          <span class="flex items-center gap-1.5" title="深色为段级中枢，浅色为笔级中枢"><i class="block size-2 rounded-sm border border-chart-2 bg-chart-2/15" />中枢（含笔级）</span>
-        </div>
-        <Button variant="ghost" size="sm" class="min-h-11 font-mono text-xs" :class="structure?.lines.length ? '' : 'ml-auto'" aria-label="查看行情时区确认信息" :aria-expanded="clockDetails" @click="clockDetails = !clockDetails">{{ terminalDisplayDate(new Date(now), timezoneOffsetMinutes).toLocaleTimeString('zh-CN', { hour12: false, timeZone: 'UTC' }) }} {{ terminalDisplayTimezone(timezoneOffsetMinutes).label }}</Button>
+      <div class="flex min-h-11 shrink-0 flex-wrap items-center justify-between gap-x-2 border-t px-3 text-xs text-muted-foreground">
+        <span role="status">{{ marketStatus }}</span>
+        <Button variant="ghost" size="sm" class="min-h-11 px-1 font-mono text-xs" aria-label="查看行情时区确认信息" :aria-expanded="clockDetails" @click="clockDetails = !clockDetails">{{ terminalDisplayDate(new Date(now), timezoneOffsetMinutes).toLocaleTimeString('zh-CN', { hour12: false, timeZone: 'UTC' }) }} {{ terminalDisplayTimezone(timezoneOffsetMinutes).label }}</Button>
 
       </div>
-      <p v-if="clockDetails" class="shrink-0 border-t px-4 py-3 text-xs text-muted-foreground">公共行情时区 {{ displayTimezone.label }} · {{ displayTimezone.statusLabel }}。由管理员终端确认，前端本地走时。</p>
+      <p v-if="clockDetails" class="shrink-0 border-t px-4 py-3 text-xs leading-relaxed text-muted-foreground">公共行情时区 {{ displayTimezone.label }} · {{ displayTimezone.statusLabel }}。由管理员终端确认，前端本地走时。收盘或数据修正后自动更新确认结构；虚线段为形成中结构，中枢包含段级与笔级，支撑压力仅作结构参考。</p>
     </CardContent>
   </Card>
 </template>
