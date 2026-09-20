@@ -216,7 +216,7 @@ onMounted(() => {
   chart = createChart(host.value, {
     kineticScroll: { mouse: false, touch: false },
     autoSize: true, layout: { attributionLogo: false, background: { type: ColorType.Solid, color: 'transparent' }, textColor: color('--muted-foreground') },
-    grid: { vertLines: { color: color('--border') }, horzLines: { color: color('--border') } },
+    grid: { vertLines: { visible: false }, horzLines: { visible: false } },
     rightPriceScale: { borderColor: color('--border') }, timeScale: { borderColor: color('--border'), timeVisible: true, secondsVisible: false, minBarSpacing: 2 },
     crosshair: { mode: CrosshairMode.Normal, vertLine: { labelBackgroundColor: color('--primary') }, horzLine: { labelBackgroundColor: color('--primary') } },
   })
