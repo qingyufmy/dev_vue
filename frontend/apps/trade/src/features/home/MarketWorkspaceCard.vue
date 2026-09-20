@@ -15,7 +15,7 @@ const props = defineProps<{ symbols: string[]; symbol: string; timeframe: Timefr
 const emit = defineEmits<{ symbol: [value: string]; timeframe: [value: Timeframe]; retry: []; older: [] }>()
 const periods: Timeframe[] = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1']
 const layers = reactive({ bi: true, segment: true, center: true, fractal: false })
-const layerOptions = [{ key: 'bi', label: '笔' }, { key: 'segment', label: '线段' }, { key: 'center', label: '中枢' }, { key: 'fractal', label: '分型' }] as const
+const layerOptions = [{ key: 'bi', label: '笔', tone: 'bg-chart-1' }, { key: 'segment', label: '段', tone: 'bg-chart-3' }, { key: 'center', label: '中枢', tone: 'bg-chart-2' }, { key: 'fractal', label: '分型', tone: 'bg-chart-3' }] as const
 const now = ref(Date.now())
 const clockDetails = ref(false)
 const displayTimezone = computed(activeTerminalDisplayTimezone)
@@ -41,6 +41,16 @@ const structureSummary = computed(() => {
   if (!props.structure.lines.length) return `结构证据不足 · ${props.structure.based_on_closed_bars} 根已收盘 K 线`
   return `缠论结构 · ${props.structure.based_on_closed_bars} 根已收盘 K 线`
 })
+const layerCounts = computed(() => {
+  const lines = props.structure?.lines ?? []
+  const centers = new Set(lines.filter(line => line.kind === 'center').map(line => `${line.from}:${line.to}`)).size
+  return {
+    bi: lines.filter(line => line.kind === 'bi').length,
+    segment: lines.filter(line => line.kind === 'segment' || line.kind === 'forming_segment').length,
+    center: centers,
+    fractal: lines.filter(line => line.kind.startsWith('fractal_')).length,
+  }
+})
 </script>
 
 <template>
@@ -65,8 +75,8 @@ const structureSummary = computed(() => {
         </div>
       </div>
       <div class="flex flex-wrap items-center gap-1.5 border-t pt-3">
-        <span class="mr-1 text-xs font-medium">结构图层</span>
-        <Button v-for="layer in layerOptions" :key="layer.key" type="button" size="sm" class="min-h-11 px-3" :variant="layers[layer.key] ? 'secondary' : 'ghost'" :aria-pressed="layers[layer.key]" @click="layers[layer.key] = !layers[layer.key]">{{ layer.label }}</Button>
+        <span class="mr-1 text-xs font-medium">缠论结构</span>
+        <Button v-for="layer in layerOptions" :key="layer.key" type="button" size="sm" class="min-h-11 gap-2 px-3" :variant="layers[layer.key] ? 'secondary' : 'ghost'" :aria-pressed="layers[layer.key]" :aria-label="`${layer.label}图层，${layerCounts[layer.key]} 项${layers[layer.key] ? '，已显示' : '，已隐藏'}`" @click="layers[layer.key] = !layers[layer.key]"><span class="size-1.5 rounded-full" :class="[layer.tone, layers[layer.key] ? 'opacity-100' : 'opacity-35']" aria-hidden="true" />{{ layer.label }}<span class="font-mono text-[10px] text-muted-foreground">{{ layerCounts[layer.key] }}</span></Button>
         <span class="ml-auto text-xs text-muted-foreground">{{ structureSummary }}</span>
       </div>
     </CardHeader>
@@ -81,10 +91,14 @@ const structureSummary = computed(() => {
       </div>
       <div class="flex min-h-11 shrink-0 items-center gap-2 border-t px-4 text-xs text-muted-foreground">
         <Badge variant="outline">{{ timeframe }}</Badge><span role="status">{{ marketStatus }}</span>
-        <Button variant="ghost" size="sm" class="ml-auto min-h-11 font-mono text-xs" aria-label="查看行情时区确认信息" :aria-expanded="clockDetails" @click="clockDetails = !clockDetails">{{ terminalDisplayDate(new Date(now), timezoneOffsetMinutes).toLocaleTimeString('zh-CN', { hour12: false, timeZone: 'UTC' }) }} {{ terminalDisplayTimezone(timezoneOffsetMinutes).label }}</Button>
+        <div v-if="structure?.lines.length" class="ml-auto hidden items-center gap-3 lg:flex" aria-label="缠论结构图例">
+          <span class="flex items-center gap-1.5"><i class="block h-px w-4 bg-chart-1" />笔</span>
+          <span class="flex items-center gap-1.5"><i class="block h-0.5 w-4 bg-chart-3" />段</span>
+          <span class="flex items-center gap-1.5"><i class="block size-2 rounded-sm border border-chart-2 bg-chart-2/15" />中枢</span>
+        </div>
+        <Button variant="ghost" size="sm" class="min-h-11 font-mono text-xs" :class="structure?.lines.length ? '' : 'ml-auto'" aria-label="查看行情时区确认信息" :aria-expanded="clockDetails" @click="clockDetails = !clockDetails">{{ terminalDisplayDate(new Date(now), timezoneOffsetMinutes).toLocaleTimeString('zh-CN', { hour12: false, timeZone: 'UTC' }) }} {{ terminalDisplayTimezone(timezoneOffsetMinutes).label }}</Button>
 
       </div>
-      <p v-if="structure?.lines.length" class="shrink-0 border-t px-4 py-2 text-xs leading-5 text-muted-foreground">蓝色实线：笔 · 黄色实线：已确认线段 · 黄色虚线：形成中线段 · 灰色虚线：中枢 · 圆点：确认分型。结构仅使用已收盘 K 线。</p>
       <p v-if="clockDetails" class="shrink-0 border-t px-4 py-3 text-xs text-muted-foreground">公共行情时区 {{ displayTimezone.label }} · {{ displayTimezone.statusLabel }}。由管理员终端确认，前端本地走时。</p>
     </CardContent>
   </Card>

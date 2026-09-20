@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CandlestickSeries, ColorType, HistogramSeries, LineSeries, LineStyle, createChart, createSeriesMarkers, type IChartApi, type ISeriesApi, type ISeriesMarkersPluginApi, type SeriesMarker, type UTCTimestamp, type Time, type TickMarkType } from 'lightweight-charts'
+import { CandlestickSeries, ColorType, HistogramSeries, LineSeries, LineStyle, createChart, createSeriesMarkers, type IChartApi, type IPrimitivePaneRenderer, type ISeriesApi, type ISeriesMarkersPluginApi, type ISeriesPrimitive, type SeriesAttachedParameter, type SeriesMarker, type UTCTimestamp, type Time, type TickMarkType } from 'lightweight-charts'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { PublicMarketSnapshotData } from '@aurum/contracts'
 import type { ChartCandle } from './home-runtime'
@@ -18,6 +18,7 @@ let candleSeries: ISeriesApi<'Candlestick'> | null = null
 let volumeSeries: ISeriesApi<'Histogram'> | null = null
 let structureSeries: ISeriesApi<'Line'>[] = []
 let structureMarkers: ISeriesMarkersPluginApi<Time> | null = null
+let centerBands: ISeriesPrimitive<Time> | null = null
 let renderedKey = ''
 
 function displayOptions() {
@@ -28,9 +29,10 @@ function displayOptions() {
 }
 
 const chartColors = new Map<string, string>()
-function color(name: string) {
+function color(name: string, opacity?: number) {
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim()
-  const cached = chartColors.get(value)
+  const key = `${value}:${opacity ?? 'source'}`
+  const cached = chartColors.get(key)
   if (cached) return cached
   // Canvas resolves the design system's OKLCH colors into sRGB, which the
   // chart library's own color parser accepts. Preserve alpha for border tokens.
@@ -41,8 +43,8 @@ function color(name: string) {
   context.fillStyle = value
   context.fillRect(0, 0, 1, 1)
   const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data
-  const resolved = `rgba(${red}, ${green}, ${blue}, ${(alpha ?? 255) / 255})`
-  chartColors.set(value, resolved)
+  const resolved = `rgba(${red}, ${green}, ${blue}, ${opacity ?? (alpha ?? 255) / 255})`
+  chartColors.set(key, resolved)
   return resolved
 }
 function toTime(value: string) { return Math.floor(new Date(value).getTime() / 1000) as UTCTimestamp }
@@ -54,12 +56,77 @@ function layerVisible(kind: string) {
   return props.layers[kind === 'forming_segment' ? 'segment' : kind as keyof StructureLayers]
 }
 
+interface CenterBand { from: UTCTimestamp; to: UTCTimestamp; high: number; low: number }
+
+class CenterBandPrimitive implements ISeriesPrimitive<Time> {
+  private chart?: SeriesAttachedParameter<Time>['chart']
+  private series?: SeriesAttachedParameter<Time>['series']
+  constructor(private readonly bands: CenterBand[], private readonly fill: string, private readonly stroke: string) {}
+  attached(param: SeriesAttachedParameter<Time>) { this.chart = param.chart; this.series = param.series }
+  detached() { this.chart = undefined; this.series = undefined }
+  paneViews() {
+    const renderer: IPrimitivePaneRenderer = {
+      draw: () => {},
+      drawBackground: target => target.useBitmapCoordinateSpace(scope => {
+        if (!this.chart || !this.series) return
+        const context = scope.context
+        for (const band of this.bands) {
+          const left = this.chart.timeScale().timeToCoordinate(band.from)
+          const right = this.chart.timeScale().timeToCoordinate(band.to)
+          const top = this.series.priceToCoordinate(band.high)
+          const bottom = this.series.priceToCoordinate(band.low)
+          if ([left, right, top, bottom].some(value => value == null)) continue
+          const x = Math.round(Math.min(left!, right!) * scope.horizontalPixelRatio)
+          const y = Math.round(Math.min(top!, bottom!) * scope.verticalPixelRatio)
+          const width = Math.max(1, Math.round(Math.abs(right! - left!) * scope.horizontalPixelRatio))
+          const height = Math.max(1, Math.round(Math.abs(bottom! - top!) * scope.verticalPixelRatio))
+          context.fillStyle = this.fill
+          context.fillRect(x, y, width, height)
+          context.strokeStyle = this.stroke
+          context.lineWidth = Math.max(1, scope.horizontalPixelRatio)
+          context.setLineDash([4 * scope.horizontalPixelRatio, 3 * scope.horizontalPixelRatio])
+          context.strokeRect(x, y, width, height)
+          context.setLineDash([])
+        }
+      }),
+    }
+    return [{ zOrder: () => 'bottom' as const, renderer: () => renderer }]
+  }
+}
+
+function visibleCenterBands() {
+  const groups = new Map<string, { from: UTCTimestamp; to: UTCTimestamp; values: number[] }>()
+  const visibleTimes = new Set(renderedTimes.map(toTime))
+  for (const line of props.structure?.lines ?? []) {
+    if (line.kind !== 'center') continue
+    const from = toTime(line.from), to = toTime(line.to)
+    if (!visibleTimes.has(from) || !visibleTimes.has(to)) continue
+    const key = `${line.from}:${line.to}`
+    const group = groups.get(key) ?? { from, to, values: [] }
+    group.values.push(line.start, line.end)
+    groups.set(key, group)
+  }
+  return [...groups.values()].flatMap(group => {
+    const values = [...new Set(group.values.filter(Number.isFinite))]
+    return values.length >= 2 ? [{ from: group.from, to: group.to, high: Math.max(...values), low: Math.min(...values) }] : []
+  })
+}
+
 function renderStructure() {
   if (!chart || !candleSeries) return
   for (const series of structureSeries) chart.removeSeries(series)
   structureSeries = []
+  if (centerBands) candleSeries.detachPrimitive(centerBands)
+  centerBands = null
   const visibleTimes = new Set(renderedTimes.map(toTime))
   const markers: SeriesMarker<Time>[] = []
+  if (props.layers.center) {
+    const bands = visibleCenterBands()
+    if (bands.length) {
+      centerBands = new CenterBandPrimitive(bands, color('--chart-2', 0.1), color('--chart-2', 0.58))
+      candleSeries.attachPrimitive(centerBands)
+    }
+  }
   for (const line of props.structure?.lines ?? []) {
     if (!layerVisible(line.kind)) continue
     const from = toTime(line.from)
@@ -69,10 +136,11 @@ function renderStructure() {
       continue
     }
     if (!visibleTimes.has(from) || !visibleTimes.has(to)) continue
+    if (line.kind === 'center') continue
     const series = chart.addSeries(LineSeries, {
-      color: line.kind === 'center' ? color('--muted-foreground') : line.kind === 'bi' ? color('--chart-1') : color('--chart-3'),
-      lineWidth: line.kind === 'segment' ? 2 : 1,
-      lineStyle: line.kind === 'bi' || line.kind === 'segment' ? LineStyle.Solid : LineStyle.Dashed,
+      color: line.kind === 'bi' ? color('--chart-1', 0.72) : color('--chart-3', line.kind === 'forming_segment' ? 0.78 : 1),
+      lineWidth: line.kind === 'segment' ? 3 : line.kind === 'forming_segment' ? 2 : 1,
+      lineStyle: line.kind === 'forming_segment' ? LineStyle.Dashed : LineStyle.Solid,
       priceLineVisible: false,
       lastValueVisible: false,
       crosshairMarkerVisible: false,
@@ -97,7 +165,9 @@ function renderHistory(items: ChartCandle[]) {
   candleSeries.setData(items.map(candleData)); volumeSeries.setData(items.map(volumeData))
   renderStructure()
   if (preserve) chart.timeScale().setVisibleLogicalRange({ from: range.from + shift, to: range.to + shift })
-  else if (items.length) chart.timeScale().setVisibleLogicalRange({ from: Math.max(-3, items.length - 120), to: items.length + 3 })
+  // Keep enough recent history in view to make higher-level segments readable;
+  // users can still zoom in for candle detail or scroll left for older evidence.
+  else if (items.length) chart.timeScale().setVisibleLogicalRange({ from: Math.max(-3, items.length - 200), to: items.length + 3 })
   historyRendering = false
 }
 function renderLatest(items: ChartCandle[]) {
