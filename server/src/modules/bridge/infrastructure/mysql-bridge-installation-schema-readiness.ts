@@ -12,7 +12,7 @@ const schemaHash = (ddl: string) => createHash('sha256').update(ddl.replace(/\r\
 
 /** Read-only admission under the same named lock used by the inplace upgrader. */
 export async function assertBridgeInstallationSchema(pool: Pick<Pool, 'getConnection'>, schema: BridgeInstallationSchemaRequirements): Promise<void> {
-  if (schema.steps.length !== 278 || new Set(schema.steps.map(row => row.id)).size !== 278
+  if (schema.steps.length !== 279 || new Set(schema.steps.map(row => row.id)).size !== 279
     || !schema.steps.some(row => row.id === 'inplace_080_01a_limits_collation_correction')
     || schema.tables.length !== names.length || new Set(schema.tables.map(row => row.table)).size !== names.length
     || schema.tables.some(row => !names.includes(row.table))) throw Error('bridge_installation_schema_not_ready')

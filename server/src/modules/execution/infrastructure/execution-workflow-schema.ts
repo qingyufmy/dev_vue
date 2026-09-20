@@ -1381,7 +1381,7 @@ export const executionWorkflowSchema = {
     },
     {
       "table": "strategy_write_receipts_v4",
-      "schemaSha256": "5cbd19e2157474ed07d3e464019a3bdca937e976ce97a1c400b04f747219ea02"
+      "schemaSha256": "484029b5a70bf77f84f65f43523c025ede04ab56021323dff5b23a5f32c03735"
     },
     {
       "table": "subscription_execution_preferences",

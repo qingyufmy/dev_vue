@@ -6,7 +6,7 @@ import { assertBridgeInstallationSchema, type BridgeInstallationSchemaRequiremen
 const names = ['bridge_installation_request_limits', 'bridge_installation_authorizations', 'bridge_installation_requests', 'bridge_refresh_sessions']
 function fixture() {
   const ddls = new Map(names.map(table => [table, `CREATE TABLE \`${table}\` (\n  \`id\` bigint NOT NULL\n) ENGINE=InnoDB`]))
-  const steps = Array.from({ length: 278 }, (_, index) => ({ id: index === 271 ? 'inplace_080_01a_limits_collation_correction' : `step-${index + 1}`, checksum: String(index + 1).padStart(64, '0') }))
+  const steps = Array.from({ length: 279 }, (_, index) => ({ id: index === 271 ? 'inplace_080_01a_limits_collation_correction' : `step-${index + 1}`, checksum: String(index + 1).padStart(64, '0') }))
   const requirements: BridgeInstallationSchemaRequirements = { steps, tables: [...ddls].map(([table, ddl]) => ({ table, schemaSha256: createHash('sha256').update(ddl).digest('hex') })) }
   const state = { db: 'reference_only', history: steps.map(row => ({ ...row, status: 'completed' })), lock: 1, release: 1, timezone: '+00:00', triggers: [] as { tableName: string }[] }
   const query = vi.fn(async (sql: string) => {
@@ -25,7 +25,7 @@ function fixture() {
   return { requirements, ddls, state, connection, pool }
 }
 describe('Bridge installation startup admission (read-only SQL doubles)', () => {
-  it('requires all 278 completed checksums including correction and four actual table hashes without writing', async () => {
+  it('requires all 279 completed checksums including correction and four actual table hashes without writing', async () => {
     const f = fixture()
     await assertBridgeInstallationSchema(f.pool, f.requirements)
     expect(f.connection.query.mock.calls.filter(([sql]) => sql.startsWith('SHOW CREATE TABLE'))).toHaveLength(4)
