@@ -1,6 +1,6 @@
 import type { Pool, RowDataPacket } from 'mysql2/promise'
 import type { TradeHistoryRepository, TradeHistoryRepositoryPage } from '../application/trade-history-ports.js'
-import { ownHistoryAccountSql, provenHistoryRecordSql } from './trade-history-ownership-sql.js'
+import { currentHistoryAccountOwnerSql, ownHistoryAccountSql, visibleHistoryRecordSql } from './trade-history-ownership-sql.js'
 import type {
   TradeHistoryDailyPoint, TradeHistoryFilter, TradeHistoryFreshness, TradeHistorySummary,
   TradeRecordAttribution, TradeRecordDeal, TradeRecordDetail, TradeRecordSummary,
@@ -25,7 +25,7 @@ export class MysqlTradeHistoryRepository implements TradeHistoryRepository {
   constructor(private readonly pool: Pool) {}
 
   async canReadHistoryAccount(userId: number, accountId: string) {
-    const [rows] = await this.pool.execute<RowDataPacket[]>(ownHistoryAccountSql(), [userId, accountId])
+    const [rows] = await this.pool.execute<RowDataPacket[]>(ownHistoryAccountSql(), [accountId, userId])
     return Boolean(rows[0])
   }
 
@@ -87,17 +87,17 @@ export class MysqlTradeHistoryRepository implements TradeHistoryRepository {
 
   async find(userId: number, recordId: string): Promise<TradeRecordDetail | null> {
     const [records, deals, attributions] = await Promise.all([
-      this.pool.execute<TradeRow[]>(`${tradeSelect()} WHERE r.user_id=? AND r.id=? AND ${provenHistoryRecordSql()} LIMIT 1`, [userId, recordId]),
+      this.pool.execute<TradeRow[]>(`${tradeSelect()} WHERE r.id=? AND ${currentHistoryAccountOwnerSql()} AND ${visibleHistoryRecordSql()} LIMIT 1`, [recordId, userId, userId]),
       this.pool.execute<DealRow[]>(`SELECT d.account_currency,d.currency_evidence,d.id,d.deal_ticket,d.order_ticket,x.role,d.side,d.entry_kind,CAST(d.volume AS CHAR) volume,CAST(d.price AS CHAR) price,
         CAST(d.gross_profit AS CHAR) gross_profit,CAST(d.commission AS CHAR) commission,CAST(d.swap_amount AS CHAR) swap_amount,
         CAST(d.fee_amount AS CHAR) fee_amount,d.occurred_at_utc FROM account_trade_record_deals_v4 x
-        INNER JOIN account_trade_records_v4 r ON r.id=x.trade_record_id AND r.user_id=?
+        INNER JOIN account_trade_records_v4 r ON r.id=x.trade_record_id
         INNER JOIN terminal_history_deals_v4 d ON d.id=x.terminal_deal_id AND d.trading_account_id=r.trading_account_id
-        WHERE x.trade_record_id=? AND ${provenHistoryRecordSql()}
-          AND d.occurred_at_utc>=r.opened_at_utc AND d.occurred_at_utc<=r.closed_at_utc ORDER BY x.sequence_number`, [userId, recordId]),
+        WHERE x.trade_record_id=? AND ${currentHistoryAccountOwnerSql()} AND ${visibleHistoryRecordSql()}
+          AND d.occurred_at_utc>=r.opened_at_utc AND d.occurred_at_utc<=r.closed_at_utc ORDER BY x.sequence_number`, [recordId, userId, userId]),
       this.pool.execute<AttributionRow[]>(`SELECT a.source_kind,a.source_id,a.relation_kind,a.proof_kind FROM account_trade_attributions_v4 a
-        INNER JOIN account_trade_records_v4 r ON r.id=a.trade_record_id AND r.user_id=?
-        WHERE a.trade_record_id=? AND ${provenHistoryRecordSql()} ORDER BY a.id`, [userId, recordId]),
+        INNER JOIN account_trade_records_v4 r ON r.id=a.trade_record_id
+        WHERE a.trade_record_id=? AND ${currentHistoryAccountOwnerSql()} AND ${visibleHistoryRecordSql()} ORDER BY a.id`, [recordId, userId, userId]),
     ])
     const row = records[0][0]
     if (!row) return null
@@ -116,8 +116,8 @@ function tradeSelect() { return `SELECT r.account_currency,r.currency_evidence,r
   r.terminal_timezone_offset_minutes,r.evidence_sha256,r.revision FROM account_trade_records_v4 r` }
 
 function criteria(userId: number, filter: TradeHistoryFilter, includeCursor: boolean) {
-  const conditions = ['r.user_id=?', 'r.trading_account_id=?', "r.status='closed'", 'r.closed_at_utc IS NOT NULL', 'r.closed_at_utc<=?', provenHistoryRecordSql()]
-  const params: Array<string | number> = [userId, filter.accountId, filter.capturedEnd]
+  const conditions = ['r.trading_account_id=?', currentHistoryAccountOwnerSql(), visibleHistoryRecordSql(), "r.status='closed'", 'r.closed_at_utc IS NOT NULL', 'r.closed_at_utc<=?']
+  const params: Array<string | number> = [filter.accountId, userId, userId, filter.capturedEnd]
   if (filter.symbol) { conditions.push('r.symbol=?'); params.push(filter.symbol) }
   if (filter.side) { conditions.push('r.side=?'); params.push(filter.side) }
   if (filter.source) { conditions.push('r.source_classification=?'); params.push(filter.source) }

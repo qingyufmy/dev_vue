@@ -844,6 +844,7 @@ class ReadOnlyMt5Adapter:
         cache_key = (range_start, range_end, cursor_time, cursor_ticket)
         range_cache_hit = self._history_range_cache_key == cache_key
         bulk_raw_orders: list[dict[str, Any]] = []
+        entry_order_by_position: dict[int, int] = {}
         if not range_cache_hit:
             server_from = self.clock.server_from_utc(max(0, range_start - 1_000))
             server_to = self.clock.server_from_utc(range_end + 999)
@@ -873,12 +874,16 @@ class ReadOnlyMt5Adapter:
                     self._history_order_row(value),
                 )
             rows: list[tuple[int, int, int, dict[str, Any]]] = []
+            entry_in = int(getattr(self.mt5, "DEAL_ENTRY_IN", 0))
             for value in raw_deals:
                 raw = _plain(value)
                 if not isinstance(raw, dict):
                     raise WorkerError("mt5_history_deal_invalid")
                 try:
                     ticket = int(raw.get("ticket") or 0)
+                    order_ticket = int(raw.get("order") or 0)
+                    position_id = int(raw.get("position_id") or 0)
+                    entry = int(raw.get("entry") if raw.get("entry") is not None else -1)
                     event_server_msc = int(
                         raw.get("time_msc") or int(raw.get("time") or 0) * 1000
                     )
@@ -886,6 +891,8 @@ class ReadOnlyMt5Adapter:
                     raise WorkerError("mt5_history_deal_invalid") from error
                 if ticket <= 0 or event_server_msc <= 0:
                     raise WorkerError("mt5_history_deal_invalid")
+                if entry == entry_in and position_id > 0 and order_ticket > 0:
+                    entry_order_by_position[position_id] = order_ticket
                 event_utc_msc = self.clock.normalize(event_server_msc)
                 if (range_start <= event_utc_msc < range_end
                         and (event_utc_msc, ticket) > (cursor_time, cursor_ticket)):
@@ -921,9 +928,24 @@ class ReadOnlyMt5Adapter:
             self._history_range_cache_key = cache_key
 
         rows = self._history_range_rows
+        for _, _, kind, raw in rows:
+            if kind != 0:
+                continue
+            entry = int(raw.get("entry") if raw.get("entry") is not None else -1)
+            position_id = int(raw.get("position_id") or 0)
+            order_ticket = int(raw.get("order") or 0)
+            if entry == int(getattr(self.mt5, "DEAL_ENTRY_IN", 0)) \
+                    and position_id > 0 and order_ticket > 0:
+                entry_order_by_position[position_id] = order_ticket
         selected: list[tuple[int, int, int, dict[str, Any]]] = []
         selected_deal_count = 0
         selected_order_count = 0
+        selected_order_tickets: set[int] = set()
+        exit_entries = {
+            int(getattr(self.mt5, "DEAL_ENTRY_OUT", 1)),
+            int(getattr(self.mt5, "DEAL_ENTRY_INOUT", 2)),
+            int(getattr(self.mt5, "DEAL_ENTRY_OUT_BY", 3)),
+        }
         index = 0
         while index < len(rows):
             group_key = rows[index][:2]
@@ -933,14 +955,38 @@ class ReadOnlyMt5Adapter:
             group = rows[index:group_end]
             group_deals = sum(item[2] == 0 for item in group)
             group_orders = sum(item[2] == 1 for item in group)
+            group_order_tickets: set[int] = set()
+            for _, _, kind, raw in group:
+                if kind == 1:
+                    group_order_tickets.add(int(raw.get("ticket") or 0))
+                    continue
+                order_ticket = int(raw.get("order") or 0)
+                if order_ticket > 0:
+                    group_order_tickets.add(order_ticket)
+                entry = int(raw.get("entry") if raw.get("entry") is not None else -1)
+                position_id = int(raw.get("position_id") or 0)
+                if entry in exit_entries and position_id > 0:
+                    origin_order = entry_order_by_position.get(position_id, 0)
+                    context = self._history_positions.get(position_id)
+                    if isinstance(context, dict):
+                        origin = context.get("origin")
+                        if isinstance(origin, dict):
+                            origin_order = int(origin.get("order") or origin_order)
+                    if origin_order > 0:
+                        group_order_tickets.add(origin_order)
+            projected_order_count = len(selected_order_tickets | group_order_tickets)
             if group_deals > page_limit or group_orders > page_limit:
                 raise WorkerError("mt5_history_range_too_dense")
             if selected and (selected_deal_count + group_deals > page_limit
-                             or selected_order_count + group_orders > page_limit):
+                             or selected_order_count + group_orders > page_limit
+                             or projected_order_count > page_limit):
                 break
+            if not selected and projected_order_count > page_limit:
+                raise WorkerError("mt5_history_range_too_dense")
             selected.extend(group)
             selected_deal_count += group_deals
             selected_order_count += group_orders
+            selected_order_tickets.update(group_order_tickets)
             index = group_end
             if selected_deal_count == page_limit and selected_order_count == page_limit:
                 break

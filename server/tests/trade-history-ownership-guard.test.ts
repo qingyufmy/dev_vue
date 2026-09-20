@@ -6,7 +6,7 @@ import { resolveTradeRecordOwner } from '../src/modules/trade-history/applicatio
 import { decodeTerminalHistoryPage, projectMt4Trade } from '../src/modules/trade-history/domain/terminal-history-projection.js'
 import { MysqlTradeHistoryCollectorRepository } from '../src/modules/trade-history/infrastructure/mysql-trade-history-collector-repository.js'
 import { MysqlTradeHistoryRepository } from '../src/modules/trade-history/infrastructure/mysql-trade-history-repository.js'
-import { provenHistoryRecordSql } from '../src/modules/trade-history/infrastructure/trade-history-ownership-sql.js'
+import { currentHistoryAccountOwnerSql, provenHistoryRecordSql, visibleHistoryRecordSql } from '../src/modules/trade-history/infrastructure/trade-history-ownership-sql.js'
 import { TradeHistoryService } from '../src/modules/trade-history/application/trade-history-service.js'
 
 const at = (hour: number) => new Date(`2026-09-05T${String(hour).padStart(2, '0')}:00:00.000Z`)
@@ -92,7 +92,7 @@ describe('P3 MySQL adapter statements using offline fixtures (not a SQL engine)'
     expect(insert.params.at(-3)).toBeNull()
     expect(f.committed()).toBe(true)
   })
-  it('keeps history access independent of current owner and restricts all list/summary/freshness queries', async () => {
+  it('shows unassigned terminal history only to the current account owner', async () => {
     const calls: string[] = []
     const pool = { execute: async (sql: string, params: unknown[]) => {
       calls.push(sql)
@@ -103,14 +103,17 @@ describe('P3 MySQL adapter statements using offline fixtures (not a SQL engine)'
     const page = await service.records(1, { accountId: '42' })
     expect(page.items).toEqual([])
     expect(calls[0]).toContain('trading_account_ownership_intervals')
-    expect(calls[0]).not.toContain('revoked_at_utc')
+    expect(calls[0]).toContain('ho.revoked_at_utc IS NULL')
+    expect(calls[0]).toContain('hi.ended_at_utc IS NULL')
     expect(calls).toHaveLength(5)
     expect(calls[2]).toContain('history_collection_tasks_v4')
     expect(calls[2]).toContain('trade_history_sync_states_v4')
     expect(calls[2]).not.toContain('account_trade_records_v4')
     for (const sql of [calls[1], ...calls.slice(3)]) {
       expect(sql).toContain(provenHistoryRecordSql())
-      expect(sql).toContain('r.user_id=?')
+      expect(sql).toContain(visibleHistoryRecordSql())
+      expect(sql).toContain(currentHistoryAccountOwnerSql())
+      expect(sql).toContain('r.user_id IS NULL')
       expect(sql).toContain('r.trading_account_id=?')
       expect(sql).not.toContain('SELECT *')
     }
@@ -120,7 +123,10 @@ describe('P3 MySQL adapter statements using offline fixtures (not a SQL engine)'
     const pool = { execute: async (sql: string) => { calls.push(sql); return [[], []] } } as unknown as Pool
     expect(await new MysqlTradeHistoryRepository(pool).find(1, 'record-1')).toBeNull()
     expect(calls).toHaveLength(3)
-    for (const sql of calls) expect(sql).toContain(provenHistoryRecordSql())
+    for (const sql of calls) {
+      expect(sql).toContain(visibleHistoryRecordSql())
+      expect(sql).toContain(currentHistoryAccountOwnerSql())
+    }
     expect(calls[1]).toContain('d.trading_account_id=r.trading_account_id')
     expect(calls[1]).toContain('d.occurred_at_utc>=r.opened_at_utc')
     expect(calls[1]).toContain('d.occurred_at_utc<=r.closed_at_utc')

@@ -20,6 +20,18 @@ it('records exact immutable route, response correlation and raw fact hash', () =
 it('keeps evidence hash stable across receipt retries', () => {
   expect(historyDealProvenance({ ...input, receivedAt: new Date(now.getTime() + 5000) }).provenanceHash).toBe(historyDealProvenance(input).provenanceHash)
 })
+it('normalizes finite MT5 JSON numbers to the eight-place decimal contract', () => {
+  const fact = decodeTerminalHistoryPage('deals', [{
+    ...raw, profit: 6.8100000000000005, commission: -0, swap: 1e-8,
+  }])[0] as TerminalDealFact
+  expect(fact.grossProfit).toBe('6.81')
+  expect(fact.commission).toBe('0')
+  expect(fact.swap).toBe('0.00000001')
+})
+it('keeps external decimal strings strict', () => {
+  expect(() => decodeTerminalHistoryPage('deals', [{ ...raw, profit: '6.8100000000000005' }]))
+    .toThrow('trade_history_decimal_invalid')
+})
 it.each([{ terminalInstanceId: 't2' }, { brokerServer: 'broker' }, { login: '124' }, { connectionEpoch: 10 }, { ownershipRevision: '0' }])(
   'rejects mismatched or invalid route %j', patch => {
     expect(() => historyDealProvenance({ ...input, route: { ...route, ...patch } })).toThrow('trade_history_deal_provenance_invalid')

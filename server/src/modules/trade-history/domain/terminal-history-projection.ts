@@ -236,7 +236,17 @@ function side(value: unknown): TerminalDealFact['side'] {
 }
 function id(value: Record<string, unknown>, fields: string[]) { const result = nullableId(value, fields); if (!result) throw new Error('trade_history_ticket_invalid'); return result }
 function nullableId(value: Record<string, unknown>, fields: string[]) { for (const field of fields) { const current = value[field]; if (current !== null && current !== undefined && String(current).trim()) { const result = String(current).trim(); if (!/^[A-Za-z0-9._:-]{1,64}$/.test(result)) throw new Error('trade_history_ticket_invalid'); return result } } return null }
-function decimal(value: unknown) { if (value === null || value === undefined || value === '') return null; const result = String(value); if (!/^-?\d{1,24}(?:\.\d{1,8})?$/.test(result)) throw new Error('trade_history_decimal_invalid'); return result }
+function decimal(value: unknown) {
+  if (value === null || value === undefined || value === '') return null
+  let result: string
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new Error('trade_history_decimal_invalid')
+    result = value.toFixed(8).replace(/(?:\.0+|(?<=[0-9])0+)$/, '').replace(/\.$/, '')
+    if (result === '-0') result = '0'
+  } else result = String(value)
+  if (!/^-?\d{1,24}(?:\.\d{1,8})?$/.test(result)) throw new Error('trade_history_decimal_invalid')
+  return result
+}
 function requiredDecimal(value: unknown, code: string) { try { const result = decimal(value); if (!result) throw new Error(code); return result } catch { throw new Error(code) } }
 function integerText(value: unknown) { if (value === null || value === undefined || value === '') return null; const result = String(value); if (!/^-?\d{1,19}$/.test(result)) throw new Error('trade_history_integer_invalid'); return result }
 function text(value: unknown, maximum: number) { if (value === null || value === undefined || value === '') return null; const result = String(value); if (result.length > maximum) throw new Error('trade_history_text_invalid'); return result }

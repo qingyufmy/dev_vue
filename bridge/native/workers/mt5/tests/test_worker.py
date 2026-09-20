@@ -911,6 +911,63 @@ class WorkerTests(unittest.TestCase):
             compound_batch["next_cursor"],
         )
 
+    def test_history_range_reserves_page_space_for_deal_order_context(self):
+        start = self.now - 10_000
+
+        def order(ticket: int, event_utc_msc: int) -> HistoryOrder:
+            server_seconds = event_utc_msc // 1000 + 180 * 60
+            return HistoryOrder(
+                ticket, 0, "XAUUSD.s", 2, 2, 234000, 0, "cancelled",
+                0.01, 0.0, 2280.0, 0.0, 0.0,
+                server_seconds, server_seconds,
+                server_seconds * 1000, server_seconds * 1000,
+            )
+
+        deal_time = start + 1_000
+        deal_server_seconds = deal_time // 1000 + 180 * 60
+        self.mt5.history_deals = [Deal(
+            5400, 3403, 4400, "XAUUSD.s", 0, 0, 234000, 0, "open",
+            0.01, 2280.0, 0.0, 0.0, 0.0, 0.0, 2270.0, 2290.0,
+            deal_server_seconds, deal_server_seconds * 1000,
+        )]
+        self.mt5.history_orders = {
+            3401: order(3401, start + 2_000),
+            3402: order(3402, start + 3_000),
+            3403: order(3403, start + 4_000),
+        }
+        payload = {
+            "range_start_utc_msc": start,
+            "range_end_utc_msc": self.now,
+            "cursor": {"time_msc": start, "ticket": "0"},
+            "limit": 2,
+        }
+        first = self.archive_worker.handle(self.request(
+            "history_range_sync", payload, "request_01JCONTEXT01",
+        ))
+        self.assertEqual("history_batch", first["outcome"], first)
+        first_batch = first["payload"]["batch"]
+        self.assertEqual(1, len(first_batch["deals"]))
+        self.assertEqual(
+            {3401, 3403},
+            {item["ticket"] for item in first_batch["history_orders"]},
+        )
+        self.assertTrue(first_batch["has_more"])
+
+        second = self.archive_worker.handle(self.request(
+            "history_range_sync",
+            {**payload, "cursor": first_batch["next_cursor"]},
+            "request_01JCONTEXT02",
+        ))
+        self.assertEqual("history_batch", second["outcome"], second)
+        second_batch = second["payload"]["batch"]
+        self.assertLessEqual(len(second_batch["history_orders"]), 2)
+        self.assertEqual(
+            {3401, 3402, 3403},
+            {item["ticket"] for item in first_batch["history_orders"]}
+            | {item["ticket"] for item in second_batch["history_orders"]},
+        )
+        self.assertFalse(second_batch["has_more"])
+
     def test_history_range_rejects_fanout_instead_of_slicing_wire_items(self):
         event = self.now - 3_000
         original_batch = self.adapter._history_batch
