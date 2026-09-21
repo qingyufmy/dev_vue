@@ -12,7 +12,7 @@ const legacyProofKey = (r: Request) => 'aurum:v4:market-gap:confirmed:1:' + crea
   r.selection.pool, r.selection.state.source, r.selection.state.resolvedSymbol, r.timeframe, r.gap,
 ])).digest('hex')
 export class MarketGapConfirmations {
-  constructor(private readonly cache: Redis, private readonly waitForConfirmationMs = 5000,
+  constructor(private readonly cache: Redis, private readonly waitForConfirmationMs = 20000,
     private readonly wait = (milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, milliseconds))) {}
   async read(selection: Selection, timeframe: string, items: Array<{ openTime: string }>, step: number) {
     const requests: Request[] = []
@@ -49,15 +49,15 @@ export class MarketGapConfirmations {
   async tick(selector: MarketSourceSelector, routes: { current(accountId: string): Promise<TerminalFactRoute | null> },
     io: { read(user: number, account: string, symbol: string, tf: string, before: number, limit: number): Promise<{ items: MarketCandle[] }>; write(route: TerminalFactRoute, items: MarketCandle[]): Promise<void> }) {
     const [raw] = await this.cache.zrangebyscore(QUEUE, '-inf', Date.now(), 'LIMIT', 0, 1)
-    if (!raw) return
+    if (!raw) return false
     const r = JSON.parse(raw) as Request, captured = r.selection.state
-    if (await this.readProof(r)) { await this.cache.zrem(QUEUE, raw); return }
+    if (await this.readProof(r)) { await this.cache.zrem(QUEUE, raw); return true }
     const scope = { pool: r.selection.pool, symbol: r.selection.standardSymbol }
-    if (!captured.source || !captured.resolvedSymbol || !await selector.isCurrent(scope, captured)) { await this.cache.zrem(QUEUE, raw); return }
+    if (!captured.source || !captured.resolvedSymbol || !await selector.isCurrent(scope, captured)) { await this.cache.zrem(QUEUE, raw); return true }
     const source = captured.source, route = await routes.current(source.accountId)
     if (!route || route.userId !== source.ownerUserId || route.connectionId !== source.connectionId || route.connectionEpoch !== source.connectionEpoch) {
       await this.cache.zrem(QUEUE, raw)
-      return
+      return true
     }
     try {
       // Query both known endpoints; no-data responses without these anchors cannot prove coverage.
@@ -84,6 +84,7 @@ export class MarketGapConfirmations {
         await this.cache.set(proofKey({ ...r, gap }), JSON.stringify({ gap, checkedAt: new Date().toISOString(), source: captured.source }))
       }
       await this.cache.zrem(QUEUE, raw)
+      return true
     } catch (error) {
       if (error instanceof Error && error.message === 'market_gap_source_changed') await this.cache.zrem(QUEUE, raw)
       else await this.cache.zadd(QUEUE, Date.now() + 60000, raw)

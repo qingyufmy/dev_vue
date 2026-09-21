@@ -37,7 +37,14 @@ async function main() {
   const gapConfirmations = new MarketGapConfirmations(cache)
   const gapIO = createMarketHistoryIO(pool, cache, createTradingReader(pool, routes, createAccountPrincipalReader))
   const historyLoop = new AsyncPollLoop(async () => {
-    try { await history.tick(); await gapConfirmations.tick(selector, routes, gapIO) } catch (error) {
+    try {
+      await history.tick()
+      // Keep Bridge reads serial, but drain a bounded batch so the analysis that
+      // discovered the gaps can observe the terminal confirmation before freezing.
+      for (let index = 0; index < 8; index++) {
+        if (!await gapConfirmations.tick(selector, routes, gapIO)) break
+      }
+    } catch (error) {
       health.workFailed('market_history_backfill_failed')
       const message = error instanceof Error ? error.message : ''
       console.warn('[market-history]', /^[a-z0-9_]{3,100}$/.test(message) ? message : 'market_history_backfill_failed')
