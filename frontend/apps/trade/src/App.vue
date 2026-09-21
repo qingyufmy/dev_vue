@@ -216,6 +216,6 @@ const navGroups = [
       </main>
       <MobileNavigation :groups="navGroups" />
     </SidebarInset>
-    <Toaster class="pointer-events-auto" position="top-right" rich-colors close-button />
+    <Toaster class="pointer-events-auto" position="top-right" close-button close-button-position="top-right" />
   </SidebarProvider>
 </template>
