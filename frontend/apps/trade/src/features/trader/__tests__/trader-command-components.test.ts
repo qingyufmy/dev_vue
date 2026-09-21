@@ -61,6 +61,9 @@ describe('trader command components', () => {
     expect(source).toContain('watch(commands.operations')
     expect(source).toContain('terminalOperationStatuses.has(operation.status)')
     expect(source).toContain('workspace.reconcileInventory')
+    expect(source).toContain("payload: { strategy_id: draft.strategy_id, command: buildDistributionEntryCommand(draft) }")
+    expect(source).toContain("payload: buildAccountEntryCommand(draft, context)")
+    expect(source).not.toContain('const command = buildDistributionEntryCommand(draft)')
   })
 
   it('renders every operation state and calls uncertain out as no-replay', () => {
@@ -117,7 +120,9 @@ describe('trader command components', () => {
     await setInput('command-stop-loss', '2290.00')
     const form = document.body.querySelector('form')
     expect(form).not.toBeNull()
-    form?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    const submitButton = form?.querySelector<HTMLButtonElement>('button[data-slot="button"]:last-child')
+    expect(submitButton?.textContent).toContain('核对并继续')
+    submitButton?.click()
     await Promise.resolve()
 
     const events = wrapper.emitted('submit')

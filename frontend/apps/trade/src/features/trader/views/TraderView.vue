@@ -105,7 +105,6 @@ async function changeCommandSymbol(symbol: string) {
 function requestEntryConfirmation(draft: TraderEntryCommandDraft, distribution: boolean) {
   const context = commands.commandContext.value
   if (!context || context.symbol !== draft.symbol) return failAction('交易上下文已变化，请重新选择品种后再提交。')
-  const command = buildDistributionEntryCommand(draft)
   const summary: ConfirmSummary = {
     command: draft.command_type,
     symbol: draft.symbol,
@@ -120,7 +119,11 @@ function requestEntryConfirmation(draft: TraderEntryCommandDraft, distribution: 
     if (!draft.strategy_id) return failAction('请选择用于分发的交易策略。')
     const preview = commands.distributionPreview.value
     if (!preview || preview.strategyId !== draft.strategy_id || preview.symbol !== draft.symbol) return failAction('请先刷新并核对当前策略的分发目标预览。')
-    pendingAction.value = { kind: 'distribution', payload: { strategy_id: draft.strategy_id, command }, summary }
+    pendingAction.value = {
+      kind: 'distribution',
+      payload: { strategy_id: draft.strategy_id, command: buildDistributionEntryCommand(draft) },
+      summary,
+    }
   } else {
     pendingAction.value = { kind: 'command', accountId: context.accountId, payload: buildAccountEntryCommand(draft, context), summary }
   }

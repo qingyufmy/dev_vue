@@ -96,7 +96,7 @@ const referencePrice = computed(() => props.initial?.reference_price
 const stopLimitVisible = computed(() => commandType.value === 'pending_order' && orderType.value.endsWith('stop_limit'))
 const needsPendingPrice = computed(() => commandType.value === 'pending_order')
 const title = computed(() => props.distribution ? '分发交易指令' : commandType.value === 'market_order' ? '新建市价单' : '新建挂单')
-const submitLabel = computed(() => props.submitting ? '正在提交…' : props.distribution ? '确认并分发' : '确认提交')
+const submitLabel = computed(() => props.submitting ? '正在提交…' : props.distribution ? '核对分发指令' : '核对并继续')
 const previewReadyCount = computed(() => props.distributionPreview?.targets.filter((target) => target.ready).length ?? 0)
 const previewUnavailableCount = computed(() => (props.distributionPreview?.targetCount ?? 0) - previewReadyCount.value)
 const previewMissingResources = computed(() => {
@@ -436,7 +436,7 @@ function pendingTypeLabel(value: PendingOrderType) {
 
           <SheetFooter class="-mx-4 border-t px-4 pb-1 sm:-mx-6 sm:px-6">
             <Button type="button" variant="outline" size="lg" class="min-h-11" @click="emit('update:open', false)">取消</Button>
-            <Button type="submit" size="lg" class="min-h-11" :disabled="!canSubmit || submitting">
+            <Button type="button" size="lg" class="min-h-11" :disabled="!canSubmit || submitting" @click="submit">
               <Send data-icon="inline-start" />{{ submitLabel }}
             </Button>
           </SheetFooter>
