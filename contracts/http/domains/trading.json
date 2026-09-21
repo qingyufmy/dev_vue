@@ -4441,7 +4441,7 @@
           "start": { "type": "number" },
           "end": { "type": "number" },
           "developing": { "type": "boolean" },
-          "basis": { "type": "string", "enum": ["segment", "centers"] }
+          "basis": { "type": "string", "enum": ["bi", "segment", "centers"] }
         }
       },
       "PublicMarketStructure": {

@@ -7417,6 +7417,7 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         "properties": {
           "basis": {
             "enum": [
+              "bi",
               "segment",
               "centers"
             ],

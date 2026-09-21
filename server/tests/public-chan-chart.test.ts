@@ -64,19 +64,38 @@ describe('public Chan chart projection', () => {
       start: 4300, end: 4330, developing: false, basis: 'segment' })
   })
 
-  it('extends a reversal-watch guide through the latest confirmed bi without promoting the forming segment', () => {
-    const start = Date.UTC(2026, 8, 4, 1)
-    const latest = Date.UTC(2026, 8, 21, 1)
+  it('uses the current developing bi for reversal watch instead of a detached long-running segment candidate', () => {
+    const detachedStart = Date.UTC(2026, 8, 4, 1)
+    const developingStart = Date.UTC(2026, 8, 21, 1)
+    const developingEnd = Date.UTC(2026, 8, 21, 4)
     const trend = { state:'up_reversal_watch', direction:'up' as const, phase:'transition',
       confidence:'low' as const, reason:'forming_opposite_segment_unconfirmed' }
     expect(publicTrendGuide({
       trend_state:{ reversal_bias:'down', candidate_direction:'down', segment_id:8 },
       candidate_segment:{ dir:'down', active_for_current_state:true,
+        confirmation_state:'awaiting_segment_chain_connection',
+        start_time_utc_msc:detachedStart, start_price:4487.17, end_time_utc_msc:Date.UTC(2026,8,14,13), end_price:4253.61 },
+      developing_bi:{ dir:'down', start_time_utc_msc:developingStart, end_time_utc_msc:developingEnd,
+        start_price:4383.32, end_price:4355.06 },
+      recent_bis:[{ end_time_utc_msc:developingStart, end_price:4383.32 }],
+      _confirmed_segments:[{ id:8, dir:'up', start_time_utc_msc:detachedStart - 10_000,
+        end_time_utc_msc:detachedStart, start_price:4310.92, end_price:4428.85 }],
+    }, trend)).toEqual({ direction:'down', from:new Date(developingStart).toISOString(), to:new Date(developingEnd).toISOString(),
+      start:4383.32, end:4355.06, developing:true, basis:'bi' })
+  })
+
+  it('does not use a detached segment candidate as the current trend guide', () => {
+    const start = Date.UTC(2026, 8, 4, 1)
+    const trend = { state:'up_reversal_watch', direction:'up' as const, phase:'transition',
+      confidence:'low' as const, reason:'forming_opposite_segment_unconfirmed' }
+    expect(publicTrendGuide({
+      trend_state:{ reversal_bias:'down', candidate_direction:'down', segment_id:8 },
+      candidate_segment:{ dir:'down', active_for_current_state:true,
+        confirmation_state:'awaiting_segment_chain_connection',
         start_time_utc_msc:start, start_price:4487.17, end_time_utc_msc:Date.UTC(2026,8,14,13), end_price:4253.61 },
-      recent_bis:[{ end_time_utc_msc:latest, end_price:4383.32 }],
+      recent_bis:[{ end_time_utc_msc:Date.UTC(2026,8,21,1), end_price:4383.32 }],
       _confirmed_segments:[{ id:8, dir:'up', start_time_utc_msc:start - 10_000,
         end_time_utc_msc:start, start_price:4310.92, end_price:4428.85 }],
-    }, trend)).toEqual({ direction:'down', from:new Date(start).toISOString(), to:new Date(latest).toISOString(),
-      start:4487.17, end:4383.32, developing:true, basis:'segment' })
+    }, trend)).toBeNull()
   })
 })

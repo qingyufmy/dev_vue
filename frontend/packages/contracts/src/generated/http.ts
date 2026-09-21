@@ -3844,7 +3844,7 @@ export interface components {
         };
         PublicMarketTrendGuide: {
             /** @enum {string} */
-            basis: "segment" | "centers";
+            basis: "bi" | "segment" | "centers";
             developing: boolean;
             /** @enum {string} */
             direction: "up" | "down" | "range";

@@ -39,7 +39,7 @@ export interface PublicChanTrendGuide {
   start: number
   end: number
   developing: boolean
-  basis: 'segment' | 'centers'
+  basis: 'bi' | 'segment' | 'centers'
 }
 
 const timeframeMs: Record<string, number> = {
@@ -102,14 +102,24 @@ export function publicTrendGuide(resultValue: unknown, trend: PublicChanTrend | 
     ? rawTrend.reversal_bias as 'up' | 'down'
     : ['up', 'down'].includes(String(rawTrend.candidate_direction))
       ? rawTrend.candidate_direction as 'up' | 'down' : null
+  const reversalWatch = trend.state === 'up_reversal_watch' || trend.state === 'down_reversal_watch'
+  const developingBi = object(result.developing_bi)
+  if (reversalWatch && developingDirection && developingBi.dir === developingDirection) {
+    const developingBiGuide = point(developingBi.start_time_utc_msc ?? developingBi.start_time,
+      developingBi.end_time_utc_msc ?? developingBi.end_time,
+      developingBi.start_price, developingBi.end_price, developingDirection, true, 'bi')
+    if (developingBiGuide) return developingBiGuide
+  }
   const latestBi = recentBis.at(-1)
   if (candidate.active_for_current_state !== false
+    && candidate.confirmation_state !== 'awaiting_segment_chain_connection'
     && developingDirection && candidate.dir === developingDirection && latestBi) {
     const developingGuide = point(candidate.start_time_utc_msc ?? candidate.start_time,
       latestBi.end_time_utc_msc ?? latestBi.end_time,
       candidate.start_price, latestBi.end_price, developingDirection, true, 'segment')
     if (developingGuide) return developingGuide
   }
+  if (reversalWatch) return null
   if (trend.direction === 'neutral' && latestCenter) {
     const middle = (number(latestCenter.zl) + number(latestCenter.zh)) / 2
     return point(latestCenter.start_time_utc_msc ?? latestCenter.start_time,
@@ -220,7 +230,8 @@ export function publicChanChart(input: {
   }
   const includeDeveloping = input.includeDeveloping !== false
   const candidate = object(result.candidate_segment)
-  if (includeDeveloping && candidate.active_for_current_state !== false) {
+  if (includeDeveloping && candidate.active_for_current_state !== false
+    && candidate.confirmation_state !== 'awaiting_segment_chain_connection') {
     add('forming_segment', candidate.start_time_utc_msc ?? candidate.start_time, candidate.end_time_utc_msc ?? candidate.end_time, candidate.start_price, candidate.end_price)
   }
   const confirmedCenters = (result as unknown as { _confirmed_centers?: readonly unknown[] })._confirmed_centers

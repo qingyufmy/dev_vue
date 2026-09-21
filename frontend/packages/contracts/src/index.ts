@@ -185,7 +185,7 @@ export const publicMarketStructureLineSchema = z.strictObject({
 export const publicMarketTrendGuideSchema = z.strictObject({
   direction: z.enum(['up', 'down', 'range']),
   from: z.iso.datetime({ offset: true }), to: z.iso.datetime({ offset: true }), start: z.number(), end: z.number(),
-  developing: z.boolean(), basis: z.enum(['segment', 'centers']),
+  developing: z.boolean(), basis: z.enum(['bi', 'segment', 'centers']),
 })
 export const publicMarketStructureSchema = z.strictObject({
   algorithm: z.literal('chan_structure_v8'), status: z.string().min(1).max(64), reliability: z.enum(['high', 'medium', 'low']),

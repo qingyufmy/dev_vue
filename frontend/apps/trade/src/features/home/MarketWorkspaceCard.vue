@@ -19,7 +19,7 @@ const props = defineProps<{ symbols: string[]; symbol: string; timeframe: Timefr
 const emit = defineEmits<{ symbol: [value: string]; timeframe: [value: Timeframe]; layer: [value: keyof StructureLayers]; retry: []; older: [] }>()
 const periods: Timeframe[] = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1']
 const layerOptions = [{ key: 'bi', label: '笔', tone: 'bg-chart-1' }, { key: 'segment', label: '段', tone: 'bg-chart-3' },
-  { key: 'trend', label: '走势', tone: 'bg-primary' }, { key: 'center', label: '中枢', tone: 'bg-chart-2' },
+  { key: 'trend', label: '走势指引', tone: 'bg-primary', description: '由最新形成中笔绘制，不代表新段已经确认' }, { key: 'center', label: '中枢', tone: 'bg-chart-2' },
   { key: 'fractal', label: '分型', tone: 'bg-chart-3' }] as const
 const now = ref(Date.now())
 const clockDetails = ref(false)
@@ -86,9 +86,12 @@ const trendPresentation = computed(() => presentChanTrend(props.structure))
             </span>
           </div>
           <div class="flex min-w-0 flex-wrap items-center gap-1" role="status" :aria-label="trendPresentation.ariaLabel" :title="trendPresentation.title">
-            <span class="mr-1 text-xs text-muted-foreground">结构</span>
+            <span class="mr-1 text-xs text-muted-foreground">{{ trendPresentation.primaryCaption }}</span>
             <Badge variant="outline" class="min-h-7 gap-1.5 border-transparent bg-muted/50"><span class="size-1.5 rounded-full" :class="trendPresentation.tone" aria-hidden="true" />{{ trendPresentation.primary }}</Badge>
-            <Badge v-if="trendPresentation.phase" variant="outline" class="min-h-7 border-border/70 bg-background/70 text-foreground">{{ trendPresentation.phase }}</Badge>
+            <template v-if="trendPresentation.phase">
+              <span class="ml-1 text-xs text-muted-foreground">{{ trendPresentation.phaseCaption }}</span>
+              <Badge variant="outline" class="min-h-7 border-border/70 bg-background/70 text-foreground">{{ trendPresentation.phase }}</Badge>
+            </template>
             <span v-if="trendPresentation.quality.length" class="px-1 text-xs text-muted-foreground">{{ trendPresentation.quality.join(' · ') }}</span>
           </div>
         </div>
@@ -121,7 +124,7 @@ const trendPresentation = computed(() => presentChanTrend(props.structure))
         </div>
         <div class="flex flex-wrap items-center gap-1" role="group" aria-label="缠论图层">
           <span class="mr-1 text-xs text-muted-foreground">图层</span>
-          <Button v-for="layer in layerOptions" :key="layer.key" type="button" size="sm" variant="ghost" class="min-h-11 min-w-16 gap-2 rounded-lg px-3 text-xs transition-colors motion-reduce:transition-none" :class="layers[layer.key] ? 'bg-muted text-foreground' : 'text-muted-foreground'" :aria-pressed="layers[layer.key]" :aria-label="`${layer.label}图层，${layerCounts[layer.key]} 项${layers[layer.key] ? '，已显示' : '，已隐藏'}`" @click="emit('layer', layer.key)"><span class="h-0.5 w-3 rounded-full" :class="[layer.tone, layers[layer.key] ? 'opacity-100' : 'opacity-35']" aria-hidden="true" />{{ layer.label }}</Button>
+          <Button v-for="layer in layerOptions" :key="layer.key" type="button" size="sm" variant="ghost" class="min-h-11 min-w-16 gap-2 rounded-lg px-3 text-xs transition-colors motion-reduce:transition-none" :class="layers[layer.key] ? 'bg-muted text-foreground' : 'text-muted-foreground'" :aria-pressed="layers[layer.key]" :aria-label="`${layer.label}图层，${layerCounts[layer.key]} 项${layers[layer.key] ? '，已显示' : '，已隐藏'}${'description' in layer ? `，${layer.description}` : ''}`" :title="'description' in layer ? layer.description : undefined" @click="emit('layer', layer.key)"><span class="h-0.5 w-3 rounded-full" :class="[layer.tone, layers[layer.key] ? 'opacity-100' : 'opacity-35']" aria-hidden="true" />{{ layer.label }}</Button>
           <Button type="button" size="sm" variant="ghost" class="min-h-11 min-w-24 rounded-lg px-3 text-xs transition-colors motion-reduce:transition-none" :class="layers.levels ? 'bg-muted text-foreground' : 'text-muted-foreground'" :aria-pressed="layers.levels" :aria-label="`支撑压力图层，${referenceCount} 项${layers.levels ? '，已显示' : '，已隐藏'}`" @click="emit('layer', 'levels')">支撑 / 压力</Button>
         </div>
       </div>
