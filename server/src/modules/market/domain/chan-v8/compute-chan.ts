@@ -233,12 +233,7 @@ export function computeChan(rates: readonly ChanRate[], timeframe: string, macdH
       window_policy_version:windowPolicyVersion,
     })
   }
-  const sizes = validationWindowCounts.filter(size => size <= calculationWindowCount)
-  if (!sizes.includes(calculationWindowCount) && calculationWindowCount <= maximumHistoryCount) {
-    // A short source is still a valid fixed-window candidate only when its
-    // size is explicitly represented by the policy. Otherwise leave it out so
-    // validators never silently invent a new window size.
-  }
+  const sizes = candidateWindowCounts(validationWindowCounts, calculationWindowCount)
   const candidates = sizes.map(size => {
     if (size === calculationWindowCount) return primary
     const windowRates = calculationRates.slice(-size)
@@ -335,3 +330,15 @@ export function computeChan(rates: readonly ChanRate[], timeframe: string, macdH
     window_selection: 'full_window_cross_confirmed',
   })
 }
+
+function candidateWindowCounts(validationWindowCounts: readonly number[], calculationWindowCount: number) {
+  const sizes = validationWindowCounts.filter(size => size <= calculationWindowCount)
+  // The actual full calculation is always the authoritative candidate. A
+  // live source can be one closed bar short of its target; omitting that 1799
+  // (or equivalent) candidate made cross-window selection impossible because
+  // no supported group could contain the authoritative result.
+  if (!sizes.includes(calculationWindowCount)) sizes.push(calculationWindowCount)
+  return sizes.sort((a, b) => a - b)
+}
+
+export const __computeChanTest = { candidateWindowCounts }

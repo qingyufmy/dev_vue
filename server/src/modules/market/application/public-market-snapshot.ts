@@ -99,7 +99,10 @@ export class PublicMarketSnapshot {
           || cached.closedRevisions.get(candle.openTime) === candle.revision)) structure = cached.value
         else {
           const [structureCandles, clock] = await Promise.all([
-            this.trading.listCandles(source.accountId, source.resolvedSymbol, timeframe, structureTarget),
+            // The live tail normally contains one forming candle. Ask for one
+            // extra record so the closed-bar calculation still receives its
+            // complete policy window while the market is open.
+            this.trading.listCandles(source.accountId, source.resolvedSymbol, timeframe, structureTarget + 1),
             this.trading.getPublicSourceClock(source.ownerUserId, source.accountId),
           ])
           if (!await authorized()) throw new Error('public_market_source_changed')

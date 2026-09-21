@@ -8,7 +8,7 @@ import { createAccountInventorySummaryReader } from '../modules/trading/composit
 import { createSubscriptionExecutionWindowReader, createAnalysisSubscriberReader, createStrategyExecutionConfigReader } from '../modules/strategies/composition.js'
 import { createTransactionRiskDecisionExecutionWriter } from '../modules/risk/composition.js'
 import { createCalendarService, createMacroSnapshotService, createMacroSeriesService, createMarketHttp, createPublicMarketHttp } from '../modules/market/composition.js'
-import { publicChanChart } from '../modules/market/index.js'
+import { chanHistoryTarget, publicChanChart } from '../modules/market/index.js'
 import { createBridgeHttp, createBridgeInstallationService, createBridgeInstallationHttp } from '../modules/bridge/composition.js'
 import { createBridgeCredentialRepository, createBridgeGatewayLeases, createBridgeSessionTickets, createBridgePairingRepository } from '../modules/bridge/composition.js'
 import { createAnalysisStrategyAccess } from '../modules/strategies/composition.js'
@@ -59,6 +59,7 @@ async function main() {
 
   const auth = createAuthModule(pool, cache, web.auth, createBridgeDeviceRevoker(pool))
   const trading = createTradingApiModule(pool, cache, createBrowserRequestAccess(auth, web.secureCookies), createBridgeGatewayLeases(cache), createActivePrincipalAccess, createAccountPrincipalReader, createAdminPrincipalAccess, createAnalysisStrategyAccess, {
+    historyTarget: chanHistoryTarget,
     calculate: input => publicChanChart({ ...input, clock: null }),
   })
   const { tradeAuth, observerAdminAuth } = trading

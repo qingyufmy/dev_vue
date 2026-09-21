@@ -36,6 +36,7 @@ describe('terminal market Chan chart', () => {
     } }
     const accounts = { ownedAccount: async () => ({ id: '8', platform: 'mt5' as const }) }
     const service = new TerminalMarketService(accounts as never, reader as never, {
+      historyTarget: () => 100,
       calculate: input => publicChanChart({ ...input, clock: null }),
     })
 
@@ -44,5 +45,36 @@ describe('terminal market Chan chart', () => {
     expect(reads).toEqual(['symbols', 'instrument', 'candles'])
     expect(result.structure).toMatchObject({ algorithm: 'chan_structure_v8', based_on_closed_bars: 100 })
     expect(result.structure).toHaveProperty('lines')
+  })
+
+  it('keeps the display page bounded while paging enough terminal history for Chan', async () => {
+    const before = Date.now()
+    const duration = durations.M5!
+    const rows = Array.from({ length: 1_801 }, (_, index) => {
+      const base = 80_000 + Math.sin(index / 4) * 2_000 + index * 10
+      return { symbol: 'BTCUST', timeframe: 'M5', open_time_utc_msc: before - (1_801 - index) * duration,
+        open: base, high: base + 500, low: base - 500, close: base + Math.sin(index) * 200, tick_volume: 10, closed: true }
+    })
+    const candleQueries: Array<{ before: number; limit: number }> = []
+    const reader = { read: async (_userId: number, _accountId: string, query: { kind: string; before: number; limit: number }) => {
+      if (query.kind === 'symbols') return { items: [{ symbol: 'BTCUST', description: 'Bitcoin', selected: true, visible: true, trade_mode: 4 }], nextCursor: null, observedAt: before }
+      if (query.kind === 'instrument') return { items: [{ name: 'BTCUST' }], nextCursor: null, observedAt: before }
+      candleQueries.push({ before: query.before, limit: query.limit })
+      const start = query.before - duration * (query.limit - 1)
+      return { items: rows.filter(row => row.open_time_utc_msc >= start && row.open_time_utc_msc < query.before).slice(-query.limit), nextCursor: null, observedAt: before }
+    } }
+    let calculatedBars = 0
+    const service = new TerminalMarketService({ ownedAccount: async () => ({ id: '8', platform: 'mt5' as const }) } as never,
+      reader as never, {
+        historyTarget: () => 1_800,
+        calculate: input => { calculatedBars = input.candles.length; return { based_on_closed_bars: input.candles.filter(item => item.closed).length } },
+      })
+
+    const result = await service.candles(9, '8', 'BTCUST', 'M5', before, 500)
+
+    expect(result.items.length).toBeLessThanOrEqual(500)
+    expect(candleQueries.length).toBeGreaterThan(1)
+    expect(calculatedBars).toBe(1_800)
+    expect(result.structure).toEqual({ based_on_closed_bars: 1_800 })
   })
 })
