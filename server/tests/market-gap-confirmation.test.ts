@@ -9,12 +9,12 @@ function fixture() {
  zrangebyscore:vi.fn(async()=>[...queue.keys()].slice(0,1)), zrem:vi.fn(async(_k:string,r:string)=>{queue.delete(r)}) }
  const selection:any={pool:{kind:'public'},standardSymbol:'XAUUSD',state:{generation:1,revision:1,lastCheckedAt:1,resolvedSymbol:'XAUUSD.s',source:{ownerUserId:1,accountId:'1',connectionId:'c',connectionEpoch:1}}}
  const candle=(openTime:string)=>({accountId:'1',symbol:'XAUUSD.s',timeframe:'H1',openTime,open:'2',high:'3',low:'1',close:'2',tickVolume:'1',closed:true,revision:1})
- const items=[candle(from),candle(to)], service=new MarketGapConfirmations(cache as any)
+ const items=[candle(from),candle(to)], service=new MarketGapConfirmations(cache as any,0)
  const selector={isCurrent:vi.fn(async()=>true)}, route={accountId:'1',userId:1,connectionId:'c',connectionEpoch:1}, routes={current:vi.fn(async()=>route)}
  const io={read:vi.fn(async()=>({items})),write:vi.fn(async()=>{})}
  return {service,selection,items,selector,routes,io,cache,queue,candle}
 }
-it('confirms only after a successful comparison and reuses an exact-source marker',async()=>{
+it('confirms only after a successful comparison and reuses an exact-symbol marker',async()=>{
  const f=fixture();expect(await f.service.read(f.selection,'H1',f.items,step)).toEqual([])
  await f.service.read({...f.selection,state:{...f.selection.state,lastCheckedAt:99,revision:7}},'H1',f.items,step)
  expect(f.queue.size).toBe(1)
@@ -22,7 +22,30 @@ it('confirms only after a successful comparison and reuses an exact-source marke
  expect(f.io.read).toHaveBeenCalledTimes(1);expect(f.io.write).toHaveBeenCalled()
  const gaps=await f.service.read(f.selection,'H1',f.items,step)
  expect(gaps).toEqual([{from,to}]);expect(unresolvedMarketGap([Date.parse(from),Date.parse(to)],step,gaps)).toBe(false)
- expect(await f.service.read({...f.selection,state:{...f.selection.state,source:{...f.selection.state.source,accountId:'2'}}},'H1',f.items,step)).toEqual([])
+ expect(await f.service.read({...f.selection,state:{...f.selection.state,source:{...f.selection.state.source,accountId:'2'}}},'H1',f.items,step)).toEqual([{from,to}])
+})
+it('reuses a terminal proof across connections and accounts for the same resolved symbol',async()=>{
+ const f=fixture();await f.service.read(f.selection,'H1',f.items,step)
+ await f.service.tick(f.selector as any,f.routes as any,f.io as any)
+ const renewed={...f.selection,state:{...f.selection.state,source:{...f.selection.state.source,
+  ownerUserId:2,accountId:'2',connectionId:'renewed',connectionEpoch:2}}}
+ expect(await f.service.read(renewed,'H1',f.items,step)).toEqual([{from,to}])
+ expect(f.queue.size).toBe(0)
+ expect(await f.service.read({...renewed,state:{...renewed.state,resolvedSymbol:'BTCUSD'}},'H1',f.items,step)).toEqual([])
+ expect(f.queue.size).toBe(1)
+})
+it('waits briefly for the terminal confirmation before returning evidence',async()=>{
+ const f=fixture();let processed=false
+ const service=new MarketGapConfirmations(f.cache as any,1000,async()=>{
+  if(!processed){processed=true;await f.service.tick(f.selector as any,f.routes as any,f.io as any)}
+ })
+ expect(await service.read(f.selection,'H1',f.items,step)).toEqual([{from,to}])
+})
+it('drops a queued request when its captured route was replaced',async()=>{
+ const f=fixture();await f.service.read(f.selection,'H1',f.items,step)
+ f.routes.current.mockResolvedValue({...await f.routes.current(),connectionId:'renewed'})
+ await f.service.tick(f.selector as any,f.routes as any,f.io as any)
+ expect(f.queue.size).toBe(0)
 })
 it.each(['error','missing','changed'])('does not confirm %s response',async(kind)=>{
  const f=fixture();await f.service.read(f.selection,'H1',f.items,step)

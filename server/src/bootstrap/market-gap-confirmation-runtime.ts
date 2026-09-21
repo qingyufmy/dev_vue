@@ -6,19 +6,44 @@ type Selection = Parameters<StrategyMarketSourceAccess['assertCurrent']>[1]
 interface Request { selection: Selection; timeframe: string; step: number; gap: ConfirmedMarketGap }
 const QUEUE = 'aurum:v4:market-gap:pending:1'
 const proofKey = (r: Request) => 'aurum:v4:market-gap:confirmed:1:' + createHash('sha256').update(JSON.stringify([
+  r.selection.state.resolvedSymbol, r.timeframe, r.gap,
+])).digest('hex')
+const legacyProofKey = (r: Request) => 'aurum:v4:market-gap:confirmed:1:' + createHash('sha256').update(JSON.stringify([
   r.selection.pool, r.selection.state.source, r.selection.state.resolvedSymbol, r.timeframe, r.gap,
 ])).digest('hex')
 export class MarketGapConfirmations {
-  constructor(private readonly cache: Redis) {}
+  constructor(private readonly cache: Redis, private readonly waitForConfirmationMs = 5000,
+    private readonly wait = (milliseconds: number) => new Promise<void>(resolve => setTimeout(resolve, milliseconds))) {}
   async read(selection: Selection, timeframe: string, items: Array<{ openTime: string }>, step: number) {
-    const confirmed: ConfirmedMarketGap[] = []
+    const requests: Request[] = []
     for (let i = 1; i < items.length; i++) {
       if (Date.parse(items[i]!.openTime) - Date.parse(items[i-1]!.openTime) <= step) continue
       const stable = { ...selection, state: { ...selection.state, revision: 0, lastCheckedAt: 0, marketState: null } }
       const r: Request = { selection: stable, timeframe, step, gap: { from: items[i-1]!.openTime, to: items[i]!.openTime } }
-      if (await this.cache.get(proofKey(r))) confirmed.push(r.gap)
-      else await this.cache.zadd(QUEUE, 'NX', Date.now(), JSON.stringify(r))
+      requests.push(r)
+      if (!await this.readProof(r)) await this.cache.zadd(QUEUE, 'NX', Date.now(), JSON.stringify(r))
     }
+    let confirmed = await this.confirmed(requests)
+    if (confirmed.length === requests.length || this.waitForConfirmationMs <= 0) return confirmed
+    const deadline = Date.now() + this.waitForConfirmationMs
+    while (Date.now() < deadline) {
+      await this.wait(Math.min(100, deadline - Date.now()))
+      confirmed = await this.confirmed(requests)
+      if (confirmed.length === requests.length) break
+    }
+    return confirmed
+  }
+  private async readProof(r: Request) {
+    const current = await this.cache.get(proofKey(r))
+    if (current) return current
+    // Promote proofs written before connection identity was removed from the key.
+    const legacy = await this.cache.get(legacyProofKey(r))
+    if (legacy) await this.cache.set(proofKey(r), legacy)
+    return legacy
+  }
+  private async confirmed(requests: Request[]) {
+    const confirmed: ConfirmedMarketGap[] = []
+    for (const r of requests) if (await this.readProof(r)) confirmed.push(r.gap)
     return confirmed
   }
   async tick(selector: MarketSourceSelector, routes: { current(accountId: string): Promise<TerminalFactRoute | null> },
@@ -26,11 +51,14 @@ export class MarketGapConfirmations {
     const [raw] = await this.cache.zrangebyscore(QUEUE, '-inf', Date.now(), 'LIMIT', 0, 1)
     if (!raw) return
     const r = JSON.parse(raw) as Request, captured = r.selection.state
-    if (await this.cache.get(proofKey(r))) { await this.cache.zrem(QUEUE, raw); return }
+    if (await this.readProof(r)) { await this.cache.zrem(QUEUE, raw); return }
     const scope = { pool: r.selection.pool, symbol: r.selection.standardSymbol }
     if (!captured.source || !captured.resolvedSymbol || !await selector.isCurrent(scope, captured)) { await this.cache.zrem(QUEUE, raw); return }
     const source = captured.source, route = await routes.current(source.accountId)
-    if (!route || route.userId !== source.ownerUserId || route.connectionId !== source.connectionId || route.connectionEpoch !== source.connectionEpoch) return
+    if (!route || route.userId !== source.ownerUserId || route.connectionId !== source.connectionId || route.connectionEpoch !== source.connectionEpoch) {
+      await this.cache.zrem(QUEUE, raw)
+      return
+    }
     try {
       // Query both known endpoints; no-data responses without these anchors cannot prove coverage.
       const from = Date.parse(r.gap.from), to = Date.parse(r.gap.to)
@@ -57,7 +85,8 @@ export class MarketGapConfirmations {
       }
       await this.cache.zrem(QUEUE, raw)
     } catch (error) {
-      await this.cache.zadd(QUEUE, Date.now() + 60000, raw)
+      if (error instanceof Error && error.message === 'market_gap_source_changed') await this.cache.zrem(QUEUE, raw)
+      else await this.cache.zadd(QUEUE, Date.now() + 60000, raw)
       throw error
     }
   }
