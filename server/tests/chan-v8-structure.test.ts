@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildCenters } from '../src/modules/market/domain/chan-v8/centers.js'
-import { evaluateGapEndpointConfirmation } from '../src/modules/market/domain/chan-v8/features.js'
+import { evaluateGapEndpointConfirmation, normalizeFeatureSequence } from '../src/modules/market/domain/chan-v8/features.js'
 import { buildActiveSegmentCandidate, buildSegments, buildSegmentsFromAnchor } from '../src/modules/market/domain/chan-v8/segments.js'
 import type { ChanBi } from '../src/modules/market/domain/chan-v8/types.js'
 
@@ -10,7 +10,37 @@ const bi = (id: number, dir: 'up' | 'down', start: number, end: number): ChanBi 
   raw_end_idx: id * 5 + 5, confirmed: true,
 })
 
+const bisFromPoints = (points: readonly number[], mirror = false) => {
+  const values = points.map(value => mirror ? 20 - value : value)
+  return values.slice(0, -1).map((start, index) => bi(
+    index + 1,
+    values[index + 1]! > start ? 'up' : 'down',
+    start,
+    values[index + 1]!,
+  ))
+}
+
 describe('v8 structure semantics', () => {
+  it('keeps equal-edge features separate and preserves the high-side merge direction', () => {
+    const feature = (sourceIndex: number, high: number, low: number) => ({
+      source_start_index:sourceIndex,
+      source_end_index:sourceIndex,
+      high_source_index:sourceIndex,
+      low_source_index:sourceIndex,
+      high,
+      low,
+      start_price:low,
+      end_price:high,
+    })
+    expect(normalizeFeatureSequence([
+      feature(1, 10, 5),
+      feature(2, 10, 4),
+      feature(3, 9, 6),
+    ])).toEqual([
+      feature(1, 10, 5),
+      { ...feature(2, 10, 4), low:6, low_source_index:3, source_end_index:3 },
+    ])
+  })
   it('does not promote touching intervals into a center', () => {
     expect(buildCenters([bi(1, 'up', 0, 1), bi(2, 'down', 2, 1), bi(3, 'up', 0, 1)])).toEqual([])
   })
@@ -41,6 +71,35 @@ describe('v8 structure semantics', () => {
     const result = buildActiveSegmentCandidate(items, 0)
     expect(result.historicalCandidate).toMatchObject({ dir:'down', start_price:130 })
     expect(result.candidate).toMatchObject({ dir:'up', start_price:110, bi_ids:[2,3,4,5,6,7,8,9] })
+  })
+  it.each([false, true])('confirms the lesson-81 three-segment case when point 5 exceeds point 7 (mirror=%s)', mirror => {
+    const items = bisFromPoints([2, 3, 1, 10, 6.5, 8, 5, 8, 6.5, 9], mirror)
+    for (let length = 3; length < items.length; length++) {
+      expect(buildSegmentsFromAnchor(items.slice(0, length), { trustedStart:true }).segments).toEqual([])
+    }
+    const result = buildSegmentsFromAnchor(items, { trustedStart:true })
+    const firstDirection = mirror ? 'down' : 'up'
+    const secondDirection = mirror ? 'up' : 'down'
+
+    expect(result.segments.map(segment => [segment.dir, segment.start_bi_id, segment.end_bi_id]))
+      .toEqual([[firstDirection,1,3], [secondDirection,4,6]])
+    expect(result.candidate).toMatchObject({
+      dir:firstDirection,
+      start_price:mirror ? 15 : 5,
+      bi_ids:[7,8,9],
+    })
+  })
+  it.each([false, true])('keeps the lesson-81 equal-or-lower case as one forming segment (mirror=%s)', mirror => {
+    const items = bisFromPoints([2, 3, 1, 10, 6.5, 8, 5, 8, 6.5, 10.5], mirror)
+    const result = buildSegmentsFromAnchor(items, { trustedStart:true })
+
+    expect(result.segments).toEqual([])
+    expect(result.historicalCandidate).toBeNull()
+    expect(result.candidate).toMatchObject({
+      dir:mirror ? 'down' : 'up',
+      start_price:mirror ? 18 : 2,
+      bi_ids:items.map(item => item.id),
+    })
   })
   it.each([false, true])('keeps a locally confirmed detached tail out of the connected segment chain (mirror=%s)', mirror => {
     // Frozen H1 stroke endpoints from XAUUSD.s. Segment 115-119 is confirmed;

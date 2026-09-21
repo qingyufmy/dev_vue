@@ -3,6 +3,7 @@ import { findSegmentEndpoint, pendingSegmentConfirmation } from './features.js'
 
 const MIN_BIS_PER_SEGMENT = 3
 type SegmentOptions = { trustedStart?: boolean }
+type CandidateOptions = { allowReanchor?: boolean }
 export type Candidate = ReturnType<typeof pendingSegmentConfirmation> & { dir: 'up' | 'down'; bi_ids: number[]; start_price: number; end_price: number; endpoint_raw_idx: number | null }
 type AnchorResult = { segments: ChanSegment[]; candidate: Candidate | null; historicalCandidate: Candidate | null; resynced: boolean }
 type Validator = AnchorResult & { probeStart: number }
@@ -47,10 +48,15 @@ function candidateInvalidatingBi(candidate: Candidate | null, confirmedBis: read
 /** A retired candidate is historical evidence, not a permanent current-state
  * anchor. Re-anchor at the first opposite stroke that broke its origin and
  * repeat until the returned candidate is connected to the latest stroke. */
-export function buildActiveSegmentCandidate(confirmedBis: readonly ChanBi[], startIndex: number) {
+export function buildActiveSegmentCandidate(
+  confirmedBis: readonly ChanBi[],
+  startIndex: number,
+  options: CandidateOptions = {},
+) {
   let cursor = startIndex
   let candidate = segmentCandidate(confirmedBis, cursor)
   let historicalCandidate: Candidate | null = null
+  if (options.allowReanchor === false) return { candidate, historicalCandidate }
   for (let guard = 0; candidate && guard < confirmedBis.length; guard++) {
     const invalidatingBi = candidateInvalidatingBi(candidate, confirmedBis)
     if (!invalidatingBi) return { candidate, historicalCandidate }
@@ -133,7 +139,13 @@ export function buildSegmentsFromAnchor(confirmedBis: readonly ChanBi[], options
     startIndex = endpoint.endpointIndex
   }
 
-  const { candidate, historicalCandidate } = buildActiveSegmentCandidate(confirmedBis, startIndex)
+  // Before the first segment is confirmed, a later opposite stroke breaking
+  // the provisional origin is lesson-78/81 cancellation evidence: the whole
+  // sequence is still one forming segment. Re-anchoring is only meaningful
+  // after a confirmed chain gives the active candidate a fixed predecessor.
+  const { candidate, historicalCandidate } = buildActiveSegmentCandidate(confirmedBis, startIndex, {
+    allowReanchor: segments.length > 0 || startIndex > 0,
+  })
   return { segments, candidate:describeDetachedCandidate(candidate, confirmedBis, startIndex), historicalCandidate, resynced }
 }
 

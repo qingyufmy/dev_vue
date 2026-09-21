@@ -13,9 +13,18 @@ export function normalizeFeatureSequence(elements: readonly ChanFeature[]) {
   for (let i = 1; i < elements.length; i++) {
     const prev = merged[merged.length - 1]!
     const cur = elements[i]!
-    const included = (prev.high >= cur.high && prev.low <= cur.low) || (cur.high >= prev.high && cur.low <= prev.low)
+    // Feature-sequence elements straddling a prospective segment boundary
+    // are not ordinary K-lines.  Equal highs/lows retain structural meaning
+    // in the lesson-81 cancellation case, so only strict containment may
+    // merge them.  Inclusive containment erases the reverse feature fractal
+    // and can leave an otherwise confirmable segment permanently forming.
+    const included = (prev.high > cur.high && prev.low < cur.low)
+      || (cur.high > prev.high && cur.low < prev.low)
     if (!included) {
-      direction = cur.high > prev.high && cur.low > prev.low ? 1 : -1
+      // Feature-sequence direction follows the high-side ordering. Equality
+      // is still an independent element (not containment), but it must not
+      // flip an otherwise rising sequence before the next contained element.
+      direction = cur.high >= prev.high ? 1 : -1
       merged.push({ ...cur })
       continue
     }
@@ -56,9 +65,13 @@ export function findFeatureFractals(rawFeatures: readonly ChanFeature[], segment
     const prev = features[i - 1]!
     const cur = features[i]!
     const next = features[i + 1]!
+    // A segment's standard feature sequence only inspects the relevant
+    // extreme: top for an upward segment, bottom for a downward segment.
+    // Requiring the opposite edge to be strict as well rejects the official
+    // equal-edge cancellation boundary and delays a valid endpoint forever.
     const matched = segmentDirection === 'up'
-      ? cur.high > prev.high && cur.high > next.high && cur.low > prev.low && cur.low > next.low
-      : cur.low < prev.low && cur.low < next.low && cur.high < prev.high && cur.high < next.high
+      ? cur.high > prev.high && cur.high > next.high
+      : cur.low < prev.low && cur.low < next.low
     if (matched) fractals.push({ prev, cur, next, features })
   }
   return fractals
