@@ -20,7 +20,8 @@ export function resolveEntryEventClaims(result: { actions: readonly { actionId: 
     ids.add(id)
     if (!/^[A-Za-z0-9_-]{1,191}$/.test(action.actionId)) throw new InferenceError('entry_event_action_invalid', 422)
     const catalogue = snapshot.marketEntryEvents
-    if (!object(catalogue) || catalogue.analysisId !== snapshot.analysis.id || !object(catalogue.timeframes)) throw new InferenceError('entry_event_evidence_missing', 422)
+    if (!object(catalogue) || !object(catalogue.timeframes)
+      || (catalogue.analysisId !== snapshot.analysis.id && catalogue.source !== 'current_market/v2')) throw new InferenceError('entry_event_evidence_missing', 422)
     const matches: EntryEventClaim[] = []
     for (const [timeframe, raw] of Object.entries(catalogue.timeframes)) {
       if (!object(raw) || raw.state !== 'ready' || !Array.isArray(raw.events) || raw.timeframe !== timeframe

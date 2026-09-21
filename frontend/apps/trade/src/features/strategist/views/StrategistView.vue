@@ -22,7 +22,10 @@ const router = useRouter()
 const workspace = useStrategistWorkspace()
 const editorOpen = ref(false)
 let editorGeneration = 0
-watch(editorOpen, () => { editorGeneration++ }, { flush: 'sync' })
+watch(editorOpen, open => {
+  editorGeneration++
+  if (!open && route.query.editor) updateQuery({ editor: undefined })
+}, { flush: 'sync' })
 const editorMode = ref<'create' | 'version'>('create')
 const editorBase = ref<StrategyDetailView | null>(null)
 const editorTraderBase = ref<StrategyDetailView | null>(null)
@@ -62,6 +65,7 @@ function openCreate() {
   editorBase.value = null
   editorTraderBase.value = null
   editorOpen.value = true
+  updateQuery({ editor: 'new' })
 }
 
 async function openVersion(value: StrategyDetailView) {
@@ -76,6 +80,7 @@ async function openVersion(value: StrategyDetailView) {
     catch { workspace.actionError.value = '配套交易策略读取失败，已停止打开编辑器，避免覆盖原提示词。'; return }
   }
   editorOpen.value = true
+  updateQuery({ editor: 'edit' })
 }
 
 function openMetadata(value: StrategySummary) { metadataStrategy.value = value; metadataOpen.value = true }
@@ -111,6 +116,10 @@ watch([() => workspace.loading.value, () => workspace.strategies.value], ([loadi
 }, { immediate: true })
 watch(selectedAccountId, () => { subscriptionOpen.value = false; editingSubscription.value = null; endingSubscription.value = null })
 watch(selectedStrategyId, (id) => { void workspace.loadDetail(id) }, { immediate: true })
+watch([() => route.query.editor, () => workspace.detail.value], async ([editor, detail]) => {
+  if (editor === 'new' && !editorOpen.value) openCreate()
+  else if (editor === 'edit' && detail && !editorOpen.value) await openVersion(detail)
+}, { immediate: true })
 watch([() => workspace.loading.value, () => workspace.accounts.value, selectedAccountId, section], ([loading]) => {
   if (loading || section.value !== 'subscriptions') return
   const id = workspace.accounts.value.some((item) => item.id === selectedAccountId.value) ? selectedAccountId.value : workspace.accounts.value.find(item => item.id === currentAccount.value?.id)?.id ?? workspace.accounts.value[0]?.id ?? ''
@@ -121,7 +130,23 @@ watch([() => workspace.loading.value, () => workspace.accounts.value, selectedAc
 
 <template>
   <div class="mx-auto grid w-full max-w-[1680px] gap-4 p-3 sm:p-5 lg:p-6">
-    <header class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <StrategyEditorSheet
+      v-model:open="editorOpen"
+      :mode="editorMode"
+      :strategy-name="editorBase?.strategy.name"
+      :strategy-description="editorBase?.strategy.description"
+      :strategy-status="editorBase?.strategy.status"
+      :platform="editorBase?.strategy.scope === 'platform'"
+      :base-version="editorMode === 'version' ? latestVersion : null"
+      :trader-base-version="editorMode === 'version' ? latestTraderVersion : null"
+      :analysis-compile-result="workspace.analysisCompileResult.value"
+      :trader-compile-result="workspace.traderCompileResult.value"
+      :compiling="workspace.compiling.value"
+      :submitting="workspace.submitting.value"
+      :error="workspace.actionError.value"
+      @submit="saveStrategy"
+    />
+    <header v-if="!editorOpen" class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
       <div>
         <div class="flex items-center gap-2 text-xs font-medium text-primary"><BrainCircuit class="size-4" aria-hidden="true" />AI 交易团队</div>
         <h1 class="mt-1 text-2xl font-semibold tracking-tight">AI 策略师</h1>
@@ -130,11 +155,11 @@ watch([() => workspace.loading.value, () => workspace.accounts.value, selectedAc
 
     </header>
 
-    <Alert v-if="workspace.error.value" variant="destructive"><AlertCircle /><AlertTitle>策略工作区读取失败</AlertTitle><AlertDescription>{{ workspace.error.value }}</AlertDescription></Alert>
-    <Alert v-if="workspace.actionError.value" variant="destructive"><AlertCircle /><AlertTitle>策略操作没有完成</AlertTitle><AlertDescription>{{ workspace.actionError.value }}</AlertDescription></Alert>
-    <Alert v-if="workspace.notice.value"><CheckCircle2 /><AlertTitle>操作已完成</AlertTitle><AlertDescription>{{ workspace.notice.value }}</AlertDescription></Alert>
+    <Alert v-if="!editorOpen && workspace.error.value" variant="destructive"><AlertCircle /><AlertTitle>策略工作区读取失败</AlertTitle><AlertDescription>{{ workspace.error.value }}</AlertDescription></Alert>
+    <Alert v-if="!editorOpen && workspace.actionError.value" variant="destructive"><AlertCircle /><AlertTitle>策略操作没有完成</AlertTitle><AlertDescription>{{ workspace.actionError.value }}</AlertDescription></Alert>
+    <Alert v-if="!editorOpen && workspace.notice.value"><CheckCircle2 /><AlertTitle>操作已完成</AlertTitle><AlertDescription>{{ workspace.notice.value }}</AlertDescription></Alert>
 
-    <Tabs class="flex min-w-0 flex-col" :model-value="section" @update:model-value="changeSection">
+    <Tabs v-if="!editorOpen" class="flex min-w-0 flex-col" :model-value="section" @update:model-value="changeSection">
       <TabsList class="h-auto w-full justify-start overflow-x-auto sm:w-auto">
         <TabsTrigger value="library" class="min-h-11"><Library />策略组合</TabsTrigger>
         <TabsTrigger value="subscriptions" class="min-h-11"><Network />账户订阅</TabsTrigger>
@@ -164,22 +189,6 @@ watch([() => workspace.loading.value, () => workspace.accounts.value, selectedAc
       </TabsContent>
     </Tabs>
 
-    <StrategyEditorSheet
-      v-model:open="editorOpen"
-      :mode="editorMode"
-      :strategy-name="editorBase?.strategy.name"
-      :strategy-description="editorBase?.strategy.description"
-      :strategy-status="editorBase?.strategy.status"
-      :platform="editorBase?.strategy.scope === 'platform'"
-      :base-version="editorMode === 'version' ? latestVersion : null"
-      :trader-base-version="editorMode === 'version' ? latestTraderVersion : null"
-      :analysis-compile-result="workspace.analysisCompileResult.value"
-      :trader-compile-result="workspace.traderCompileResult.value"
-      :compiling="workspace.compiling.value"
-      :submitting="workspace.submitting.value"
-      :error="workspace.actionError.value"
-      @submit="saveStrategy"
-    />
     <StrategyMetadataSheet v-model:open="metadataOpen" :strategy="metadataStrategy" :submitting="workspace.submitting.value" :error="workspace.actionError.value" @submit="saveMetadata" />
     <SubscriptionEditorSheet
       v-model:open="subscriptionOpen"

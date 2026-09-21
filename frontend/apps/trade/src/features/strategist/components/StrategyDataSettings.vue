@@ -4,7 +4,7 @@ import { Input } from '@aurum/ui/input'
 import { Checkbox } from '@aurum/ui/checkbox'
 import { Switch } from '@aurum/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@aurum/ui/select'
-const props = defineProps<{ modelValue: Record<string, unknown> }>()
+const props = withDefaults(defineProps<{ modelValue: Record<string, unknown>; role?: 'analysis' | 'trader'; independent?: boolean }>(), { role: 'analysis', independent: false })
 const emit = defineEmits<{ 'update:modelValue': [value: Record<string, unknown>] }>()
 const periods = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1']
 type Row = { timeframe: string; kline_count: number }
@@ -31,8 +31,10 @@ function setEma(value: boolean) {
 <template>
   <section class="grid gap-5 rounded-xl border p-4">
     <h3 class="font-semibold">行情数据与运行设置</h3>
-    <label class="grid max-w-56 gap-2 text-sm">运行间隔（分钟）<Input aria-label="运行间隔（分钟）" type="number" min="1" max="1440" :model-value="Number(modelValue.interval_minutes ?? 5)" @update:model-value="patch({ interval_minutes: Number($event) })" /></label>
-    <p class="text-xs leading-5 text-muted-foreground">发布后，使用该版本的自动分析按此间隔运行。</p>
+    <template v-if="role === 'analysis'">
+      <label class="grid max-w-56 gap-2 text-sm">分析间隔（分钟）<Input aria-label="分析间隔（分钟）" type="number" min="1" max="1440" :model-value="Number(modelValue.interval_minutes ?? 60)" @update:model-value="patch({ interval_minutes: Number($event) })" /></label>
+      <p class="text-xs leading-5 text-muted-foreground">发布后，行情背景按此间隔更新。交易员的小周期行情独立读取。</p>
+    </template>
     <div class="grid gap-2 sm:grid-cols-2">
       <div v-for="period in periods" :key="period" class="flex min-h-12 items-center gap-3 rounded-lg border px-3 py-2">
         <label class="flex flex-1 cursor-pointer items-center gap-2 text-sm"><Checkbox :model-value="rows.some(r => r.timeframe === period)" @update:model-value="toggle(period, $event)" />{{ period }}</label>
@@ -41,10 +43,12 @@ function setEma(value: boolean) {
     </div>
     <label class="grid max-w-56 gap-2 text-sm">主周期<Select :model-value="primary" @update:model-value="plan(rows, String($event))"><SelectTrigger aria-label="主周期"><SelectValue /></SelectTrigger><SelectContent><SelectItem v-for="row in rows" :key="row.timeframe" :value="row.timeframe">{{ row.timeframe }}</SelectItem></SelectContent></Select></label>
     <div class="grid gap-4 border-t pt-4">
-      <label class="flex items-center justify-between gap-3 text-sm">提供缠论数据<Switch :model-value="enabled('chan_evidence')" @update:model-value="patch({ chan_evidence: { version: 1, enabled: $event } })" /></label>
+      <div v-if="independent && role === 'analysis'" class="flex items-center justify-between gap-3 rounded-lg border bg-muted/30 px-3 py-3 text-sm"><span><strong>缠论趋势分析</strong><span class="ml-2 text-muted-foreground">新版职责必需</span></span><span class="text-xs font-medium text-primary">已启用</span></div>
+      <label v-else-if="!(independent && role === 'trader')" class="flex items-center justify-between gap-3 text-sm">提供缠论数据<Switch :model-value="enabled('chan_evidence')" @update:model-value="patch({ chan_evidence: { version: 1, enabled: $event } })" /></label>
       <label class="flex items-center justify-between gap-3 text-sm">提供 EMA34 数据<Switch :model-value="!!ema" @update:model-value="setEma" /></label>
       <label v-if="ema" class="grid max-w-56 gap-2 text-sm">EMA34 计算周期<Select :model-value="ema.timeframe" @update:model-value="patch({ ema34_evidence: { version: 1, timeframe: String($event) } })"><SelectTrigger aria-label="EMA34 计算周期"><SelectValue /></SelectTrigger><SelectContent><SelectItem v-for="row in rows" :key="row.timeframe" :value="row.timeframe">{{ row.timeframe }}</SelectItem></SelectContent></Select></label>
-      <label class="flex items-center justify-between gap-3 text-sm">提供突破与回收数据<Switch :model-value="enabled('price_action_evidence')" @update:model-value="patch({ price_action_evidence: { version: 1, enabled: $event } })" /></label>
+      <div v-if="independent && role === 'trader'" class="flex items-center justify-between gap-3 rounded-lg border bg-muted/30 px-3 py-3 text-sm"><span><strong>价格行为事件</strong><span class="ml-2 text-muted-foreground">双 K 突破与严格回收</span></span><span class="text-xs font-medium text-primary">已启用</span></div>
+      <label v-else class="flex items-center justify-between gap-3 text-sm">提供突破与回收数据<Switch :model-value="enabled('price_action_evidence')" @update:model-value="patch({ price_action_evidence: { version: 1, enabled: $event } })" /></label>
       <p class="text-xs leading-5 text-muted-foreground">向 AI 提供已收盘 K 线的双 K 突破、突破后回收及确认结果，供策略判断，不会直接触发交易。</p>
     </div>
     <p class="text-xs leading-5 text-muted-foreground">开关控制模型收到的数据，不修改提示词中的规则。关闭某项后，请同步检查策略是否仍依赖它。</p>

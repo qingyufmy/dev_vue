@@ -52,6 +52,7 @@ interface RevisionRow extends RowDataPacket { revision: number }
 interface ActiveTraderTaskRow extends RowDataPacket { id: string; lease_expires_at_utc: Date }
 interface TraderAnalysisRevisionRow extends RowDataPacket {
   analysis_revision: number; valid_until_utc: Date; standard_symbol: string; content_sha256: string; strategy_version_id: string
+  responsibility_mode: string | null
 }
 type TraderRevisionReaders = { subscriptions: AnalysisSubscriberReader; trading: AccountInventorySummaryReader; risks: RiskRevisionReader }
 
@@ -98,8 +99,9 @@ async function outbox(connection: PoolConnection, aggregateType: string, aggrega
 
 async function traderContextRevisions(connection: PoolConnection, row: TraderRunRow, readers: TraderRevisionReaders) {
   const [rows] = await connection.execute<TraderAnalysisRevisionRow[]>(
-    `SELECT a.revision analysis_revision,a.valid_until_utc,a.standard_symbol,a.content_sha256,CAST(a.strategy_version_id AS CHAR) strategy_version_id
-      FROM market_analyses a WHERE a.id=? LIMIT 1 FOR SHARE`, [row.market_analysis_id])
+    `SELECT a.revision analysis_revision,a.valid_until_utc,a.standard_symbol,a.content_sha256,CAST(a.strategy_version_id AS CHAR) strategy_version_id,
+      JSON_UNQUOTE(JSON_EXTRACT(v.config_json,'$.responsibility_mode')) responsibility_mode
+      FROM market_analyses a INNER JOIN strategy_versions v ON v.id=? WHERE a.id=? LIMIT 1 FOR SHARE`, [row.strategy_version_id, row.market_analysis_id])
   const analysis = rows[0]
   if (!analysis) return null
   const subscription = await readers.subscriptions.readContextVersion({ subscriptionId: row.subscription_id, userId: row.user_id,
@@ -115,7 +117,8 @@ async function traderContextRevisions(connection: PoolConnection, row: TraderRun
 
 async function assertTraderSnapshotCurrent(connection: PoolConnection, row: TraderRunRow, snapshot: TraderInputSnapshot, readers: TraderRevisionReaders) {
   const current = await traderContextRevisions(connection, row, readers)
-  if (!current || current.valid_until_utc.getTime() <= Date.now()) throw new InferenceError('trader_analysis_expired', 409)
+  if (!current || (current.valid_until_utc.getTime() <= Date.now()
+    && !(current.responsibility_mode === 'independent_roles_v2' && snapshot.taskMode === 'manage'))) throw new InferenceError('trader_analysis_expired', 409)
   if (Number(current.analysis_revision) !== snapshot.analysisRevision || current.content_sha256 !== snapshot.analysis.contentHash) throw new InferenceError('trader_analysis_revision_conflict', 409)
   if (!current.ownership_active) throw new InferenceError('trader_account_forbidden', 409)
   if (current.subscription_status !== 'active' || Number(current.subscription_revision) !== snapshot.subscriptionRevision) throw new InferenceError('subscription_revision_conflict', 409)
@@ -129,7 +132,8 @@ async function assertTraderSnapshotCurrent(connection: PoolConnection, row: Trad
 async function traderStaleReason(connection: PoolConnection, row: TraderRunRow, readers: TraderRevisionReaders) {
   const current = await traderContextRevisions(connection, row, readers)
   if (!current) return 'trader_context_missing'
-  if (current.valid_until_utc.getTime() <= Date.now()) return 'analysis_expired'
+  if (current.valid_until_utc.getTime() <= Date.now()
+    && !(current.responsibility_mode === 'independent_roles_v2' && row.task_mode === 'manage')) return 'analysis_expired'
   if (Number(current.analysis_revision) !== Number(row.analysis_revision)) return 'analysis_changed'
   if (!current.ownership_active) return 'account_ownership_changed'
   if (current.subscription_status !== 'active' || Number(current.subscription_revision) !== Number(row.subscription_revision)) return 'subscription_changed'
@@ -303,7 +307,7 @@ export class MysqlInferenceRepository implements InferenceRepository {
           const inventory = await this.dispatch.inventory(connection).read({ userId: subscription.userId,
             accountId: subscription.accountId, symbol: row.standard_symbol })
           if (!inventory) throw new InferenceError('trader_account_forbidden', 409)
-          const taskMode = traderTaskMode(input.result.opportunity, inventory.hasPositions, inventory.hasPendingOrders)
+          const taskMode = traderTaskMode(input.result.opportunity, inventory.hasPositions, inventory.hasPendingOrders, subscription.independentRoles)
           if (!taskMode) continue
           if (!await traderWindowAllows(this.accountClock(connection), { user_id: subscription.userId,
             trading_account_id: subscription.accountId, receive_timezone: subscription.timezone, receive_window_json: subscription.window }, new Date())) continue
@@ -358,7 +362,8 @@ export class MysqlInferenceRepository implements InferenceRepository {
     return transaction(this.pool, async connection => {
       const [existing] = await connection.execute<TraderRunRow[]>(`${traderRunSelect} WHERE r.user_id=? AND r.idempotency_key=? LIMIT 1`, [input.userId, input.idempotencyKey])
       if (existing[0]) return traderRun(existing[0])
-      const [analyses] = await connection.execute<OpportunityRow[]>(`SELECT id,opportunity,revision,CAST(strategy_version_id AS CHAR) strategy_version_id,standard_symbol FROM market_analyses WHERE id=? AND owner_user_id=? AND valid_until_utc>? LIMIT 1 FOR SHARE`, [input.marketAnalysisId, input.userId, requestedAt])
+      const [analyses] = await connection.execute<(OpportunityRow & { background_valid: number })[]>(`SELECT id,opportunity,revision,CAST(strategy_version_id AS CHAR) strategy_version_id,standard_symbol,
+        IF(valid_until_utc>?,1,0) background_valid FROM market_analyses WHERE id=? AND owner_user_id=? LIMIT 1 FOR SHARE`, [requestedAt, input.marketAnalysisId, input.userId])
       const analysis = analyses[0]
       if (!analysis) throw new InferenceError('analysis_expired_or_forbidden', 409)
       const subscription = await this.dispatch.subscribers(connection).readForEvaluation({ subscriptionId: input.subscriptionId,
@@ -370,7 +375,9 @@ export class MysqlInferenceRepository implements InferenceRepository {
       if (concurrent[0]) return traderRun(concurrent[0])
       const inventory = await this.dispatch.inventory(connection).read({ userId: input.userId, accountId: input.tradingAccountId, symbol: analysis.standard_symbol })
       if (!inventory) throw new InferenceError('trader_account_forbidden', 409)
-      const taskMode = traderTaskMode(analysis.opportunity, inventory.hasPositions, inventory.hasPendingOrders) ?? 'entry'
+      const taskMode = traderTaskMode(analysis.opportunity, inventory.hasPositions, inventory.hasPendingOrders,
+        subscription.independentRoles, Boolean(analysis.background_valid))
+      if (!taskMode) throw new InferenceError(Boolean(analysis.background_valid) ? 'trader_no_actionable_context' : 'trader_analysis_expired', 409)
       await connection.execute(`INSERT INTO ai_trader_runs (id,user_id,trading_account_id,subscription_id,subscription_revision,market_analysis_id,strategy_id,strategy_version_id,task_mode,analysis_revision,positions_revision,pending_orders_revision,idempotency_key,status,revision,created_at_utc,updated_at_utc) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 'queued',1,?,?)`, [input.id, input.userId, input.tradingAccountId, input.subscriptionId, input.subscriptionRevision, input.marketAnalysisId, input.strategyId, input.strategyVersionId, taskMode, analysis.revision, inventory.positionsRevision, inventory.pendingOrdersRevision, input.idempotencyKey, requestedAt, requestedAt])
       await outbox(connection, 'trader', input.id, 'trader.requested', { trader_run_id: input.id, market_analysis_id: input.marketAnalysisId, trading_account_id: input.tradingAccountId, task_mode: taskMode })
       const [created] = await connection.execute<TraderRunRow[]>(`${traderRunSelect} WHERE r.id=?`, [input.id])
@@ -394,12 +401,15 @@ export class MysqlInferenceRepository implements InferenceRepository {
       if (input.snapshot.strategy.id !== row.strategy_id || input.snapshot.strategy.versionId !== row.strategy_version_id) throw new InferenceError('trader_strategy_snapshot_mismatch', 409)
       if (input.snapshot.subscriptionRevision !== Number(row.subscription_revision) || input.snapshot.analysis.id !== row.market_analysis_id) throw new InferenceError('trader_context_snapshot_mismatch', 409)
       if (input.snapshot.analysisRevision !== Number(row.analysis_revision)) throw new InferenceError('trader_projection_snapshot_mismatch', 409)
-      const [analysisRows] = await connection.execute<(HashRow & { revision: number; opportunity: MarketAnalysisSummary['opportunity']; standard_symbol: string })[]>('SELECT content_sha256,revision,opportunity,standard_symbol FROM market_analyses WHERE id=? AND valid_until_utc>UTC_TIMESTAMP(3) FOR SHARE', [row.market_analysis_id])
+      const [analysisRows] = await connection.execute<(HashRow & { revision: number; opportunity: MarketAnalysisSummary['opportunity']; standard_symbol: string; background_valid: number; responsibility_mode: string | null })[]>(`SELECT a.content_sha256,a.revision,a.opportunity,a.standard_symbol,
+        IF(a.valid_until_utc>UTC_TIMESTAMP(3),1,0) background_valid,JSON_UNQUOTE(JSON_EXTRACT(v.config_json,'$.responsibility_mode')) responsibility_mode
+        FROM market_analyses a INNER JOIN strategy_versions v ON v.id=? WHERE a.id=? FOR SHARE`, [row.strategy_version_id, row.market_analysis_id])
       if (analysisRows[0]?.content_sha256 !== input.snapshot.analysis.contentHash || Number(analysisRows[0]?.revision) !== input.snapshot.analysisRevision) throw new InferenceError('trader_analysis_hash_mismatch', 409)
       const analysis = analysisRows[0]!
       const inventory = await this.dispatch.inventory(connection).read({ userId: input.userId, accountId: row.trading_account_id, symbol: analysis.standard_symbol })
       if (!inventory) throw new InferenceError('trader_account_forbidden', 409)
-      if (input.snapshot.taskMode !== traderTaskMode(analysis.opportunity, inventory.hasPositions, inventory.hasPendingOrders)) throw new InferenceError('trader_projection_revision_conflict', 409)
+      if (input.snapshot.taskMode !== traderTaskMode(analysis.opportunity, inventory.hasPositions, inventory.hasPendingOrders,
+        analysis.responsibility_mode === 'independent_roles_v2', Boolean(analysis.background_valid))) throw new InferenceError('trader_projection_revision_conflict', 409)
       await assertTraderSnapshotCurrent(connection, row, input.snapshot, { subscriptions: this.dispatch.subscribers(connection), trading: this.dispatch.inventory(connection), risks: this.dispatch.risks(connection) })
       if (input.snapshot.subscriptionWindowHash !== await readTraderWindowFingerprint(this.accountClock(connection), this.windows(connection), traderRun(row), new Date())) throw new InferenceError('trader_schedule_changed', 409)
       await assertTraderPreferencesCurrent(connection, traderRun(row), input.snapshot.executionPreferences, this.preferences)

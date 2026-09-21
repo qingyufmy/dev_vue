@@ -105,6 +105,7 @@ export interface TraderDecisionResult {
 
 export interface AnalysisInputSnapshot {
   kind: 'analysis'
+  responsibilityMode?: 'independent_roles_v2'
   /** Historical absence is not a request to read today's memory. */
   strategyMemory?: JsonObject
   strategy: { id: string; versionId: string; promptHash: string; promptText: string }
@@ -114,6 +115,7 @@ export interface AnalysisInputSnapshot {
 }
 
 export interface TraderInputSnapshot {
+  responsibilityMode?: 'independent_roles_v2'
   entryEventUsage?: JsonObject
   entryEventPolicy?: { version: 1; mode: 'required'; timeframe: string }
   /** Objective event identities from the original analysis snapshot, not model-authored keys. */
@@ -269,6 +271,12 @@ export function assertTraderDecisionResult(value: TraderDecisionResult, snapshot
     if (!action.actionId || actionIds.has(action.actionId)) throw new InferenceError('trader_action_id_duplicate', 422)
     actionIds.add(action.actionId)
     if (!traderExecutableActionKinds.has(action.kind) || !isJsonObject(action.parameters) || !isJsonObject(action.expectedState)) throw new InferenceError('trader_action_structure_invalid', 422)
+    if (snapshot.responsibilityMode === 'independent_roles_v2' && (action.kind === 'market_order' || action.kind === 'pending_order')) {
+      if (!['trend', 'countertrend', 'range'].includes(String(action.parameters.entry_scenario))
+        || typeof action.parameters.scenario_invalidation !== 'string' || !action.parameters.scenario_invalidation.trim()) {
+        throw new InferenceError('entry_scenario_required', 422)
+      }
+    }
     assertTraderActionParameters(action.kind, action.parameters)
     if (Object.hasOwn(action.parameters, 'after_close_protection') && value.actions.filter(other =>
       ['close_position', 'modify_position'].includes(other.kind) && other.parameters.ticket === action.parameters.ticket).length !== 1) {
@@ -341,8 +349,11 @@ function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-export function traderTaskMode(opportunity: MarketOpportunity, hasPositions: boolean, hasPendingOrders: boolean): TraderTaskMode | null {
+export function traderTaskMode(opportunity: MarketOpportunity, hasPositions: boolean, hasPendingOrders: boolean,
+  independentOpportunity = false, backgroundValid = true): TraderTaskMode | null {
   const hasExposure = hasPositions || hasPendingOrders
+  if (!backgroundValid) return hasExposure ? 'manage' : null
+  if (independentOpportunity) return hasExposure ? 'both' : 'entry'
   if (opportunity === 'none') return hasExposure ? 'manage' : null
   return hasExposure ? 'both' : 'entry'
 }

@@ -56,6 +56,24 @@ it('does not keep requesting instrument facts after analysis expiry', async () =
   await expect(builder.build(run(), strategy, new Date('2026-09-03T08:06:00.000Z'))).rejects.toMatchObject({ code: 'trader_analysis_expired' })
   expect(request).not.toHaveBeenCalled()
 })
+
+it('allows only inventory management after an independent background expires', async () => {
+  const trading = tradingRepository({ account: 8, quote: 9, positions: 20, pending: 21 })
+  trading.listPositions = async () => ({ revision: 20, items: [{ ticket: 'position-1', accountId: '7', symbol: 'XAUUSD',
+    side: 'buy', volume: '0.01', openPrice: '3500', currentPrice: '3530', stopLoss: null, takeProfit: null,
+    floatingProfit: '30', openedAt: '2026-09-03T08:00:05.000Z', source: 'manual', signalId: null, revision: 20 }] })
+  const independent = { ...strategy, config: {
+    responsibility_mode: 'independent_roles_v2', symbols: ['XAUUSD'], entry_methods: ['market'],
+    market_data_plan: { version: 1, primary_timeframe: 'M5', timeframes: [
+      { timeframe: 'M5', kline_count: 300 }, { timeframe: 'M15', kline_count: 300 },
+    ] }, chan_evidence: { version: 1, enabled: false }, price_action_evidence: { version: 1, enabled: true },
+  } }
+  const snapshot = await new TraderContextBuilder(inferenceRepository({ getAnalysisDetail: async () => analysis }), trading,
+    { read: async () => ({ revision: 6, data: {} }) }, { read: async () => ({ revision: 7, data: {} }) })
+    .build(run(), independent, new Date('2026-09-03T08:06:00.000Z'))
+  expect(snapshot.taskMode).toBe('manage')
+  expect(snapshot).not.toHaveProperty('marketEntryEvents')
+})
 const analysis: MarketAnalysisDetail = {
   summary: { id: 'analysis-1', userId: 42, strategyId: '10', strategyVersionId: '11', symbol: 'XAUUSD', marketBias: 'bullish', opportunity: 'long_setup', confidence: 78, summary: '偏多候选', analyzedAt: '2026-09-03T08:00:00.000Z', validUntil: '2026-09-03T08:05:00.000Z', inputSnapshotHash: 'a'.repeat(64), revision: 2 },
   result: { marketBias: 'bullish', opportunity: 'long_setup', confidence: 78, summary: '偏多候选', marketRegime: 'trend', supportingEvidence: ['结构'], counterEvidence: [], keyLevels: { support: '3520' }, invalidation: { price: '3510' }, dataGaps: [], analysisBody: '正文', analyzedAt: '2026-09-03T08:00:00.000Z', validUntil: '2026-09-03T08:05:00.000Z' },
@@ -266,6 +284,25 @@ it('uses events pinned to the original analysis input and refuses a different so
   expect(JSON.stringify(snapshot.marketEntryEvents)).toContain('event:' + 'a'.repeat(64))
   source.snapshotHash = '0'.repeat(64)
   await expect(build()).rejects.toMatchObject({ code: 'analysis_source_evidence_invalid' })
+})
+
+it('freezes fresh M15/M5 price-action evidence for an independent trader even when background opportunity is none', async () => {
+  const detail = { ...analysis, summary: { ...analysis.summary, opportunity: 'none' as const } }
+  const trading = tradingRepository()
+  const candles = vi.spyOn(trading, 'listCandles').mockResolvedValue([])
+  const independent = { ...strategy, config: {
+    responsibility_mode: 'independent_roles_v2', symbols: ['XAUUSD'], entry_methods: ['market'],
+    market_data_plan: { version: 1, primary_timeframe: 'M5', timeframes: [
+      { timeframe: 'M5', kline_count: 300 }, { timeframe: 'M15', kline_count: 300 },
+    ] }, chan_evidence: { version: 1, enabled: false }, price_action_evidence: { version: 1, enabled: true },
+  } }
+  const snapshot = await new TraderContextBuilder(inferenceRepository({ getAnalysisDetail: async () => detail }), trading,
+    { read: async () => ({ revision: 6, data: {} }) }, { read: async () => ({ revision: 7, data: {} }) })
+    .build(run(), independent, new Date('2026-09-03T08:00:10.000Z'))
+  expect(snapshot).toMatchObject({ taskMode: 'entry', responsibilityMode: 'independent_roles_v2',
+    marketEntryEvents: { schemaVersion: 2, source: 'current_market/v2', sourceAccountId: '7' } })
+  expect(candles.mock.calls.map(call => call[2])).toEqual(['M5', 'M15'])
+  expect(snapshot.marketEntryEvents).not.toHaveProperty('analysisId')
 })
 
 it('still requests missing instrument facts when the quote is also absent', async () => {

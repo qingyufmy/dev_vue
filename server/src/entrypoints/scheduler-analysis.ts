@@ -4,7 +4,7 @@ import { createAccountInventorySummaryReader } from '../modules/trading/composit
 import { createSubscriptionExecutionWindowReader, createAnalysisSubscriberReader } from '../modules/strategies/composition.js'
 import { createAccountPrincipalReader } from '../modules/auth/composition.js'
 import { createMysqlModelUsageLedger } from '../modules/inference/composition.js'
-import { createMysqlInferenceRepository, createAnalysisScheduler, createMysqlModelTaskRecovery } from '../modules/inference/composition.js'
+import { createMysqlInferenceRepository, createAnalysisScheduler, createIndependentTraderScheduler, createMysqlModelTaskRecovery } from '../modules/inference/composition.js'
 import { createTransactionAccountClock } from '../modules/trading/composition.js'
 import {
   assertV4RuntimeEnabled, AsyncPollLoop, closeHttpServer, createMysqlPool,
@@ -29,12 +29,15 @@ async function main() {
   await pool.query('SELECT 1')
   const strategies = createMysqlStrategyService(pool)
   const trading = createTradingReader(pool, undefined, createAccountPrincipalReader)
+  const inference = new InferenceService(createMysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader, createSubscriptionExecutionWindowReader, { subscribers: createAnalysisSubscriberReader, inventory: createAccountInventorySummaryReader, risks: createAccountRiskSummaryReader }), strategies)
+  const marketSessions = createAutomaticMarketSessionGate(pool, new MysqlMarketStrategyAccess(pool))
   const scheduler = createAnalysisScheduler(
     createMysqlAnalysisScheduleStore(pool),
-    new InferenceService(createMysqlInferenceRepository(pool, createTransactionAccountClock, createSubscriptionPreferencesReader, createSubscriptionExecutionWindowReader, { subscribers: createAnalysisSubscriberReader, inventory: createAccountInventorySummaryReader, risks: createAccountRiskSummaryReader }), strategies),
+    inference,
     (accountId, userId) => trading.getAccountSnapshot(accountId, userId),
-    createAutomaticMarketSessionGate(pool, new MysqlMarketStrategyAccess(pool)),
+    marketSessions,
   )
+  const independentTraderScheduler = createIndependentTraderScheduler(pool, inference, marketSessions)
   const recovery = createMysqlModelTaskRecovery(pool, createAccountInventorySummaryReader)
   const usage = createMysqlModelUsageLedger(pool, { principals: createModelPrincipals, active: createModelActive })
   const loop = new AsyncPollLoop(async () => {
@@ -49,9 +52,13 @@ async function main() {
         console.error('[scheduler-analysis] abandoned model usage recovered', recoveredUsage)
       }
       const result = await scheduler.tick(now, config.analysisScheduleBatchSize)
+      const traderResult = await independentTraderScheduler.tick(now, config.analysisScheduleBatchSize)
       if (result.failures.length > 0) {
         health.workFailed('analysis_schedule_partial_failure')
         console.error('[scheduler-analysis] schedules failed', result.failures.length)
+      } else if (traderResult.failures.length > 0) {
+        health.workFailed('independent_trader_schedule_partial_failure')
+        console.error('[scheduler-analysis] independent trader schedules failed', traderResult.failures.length)
       } else if (recoveredUsage === 0) health.workSucceeded()
     } catch (error) {
       health.workFailed(publicError(error, 'analysis_scheduler_failed'))

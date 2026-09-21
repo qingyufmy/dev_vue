@@ -44,6 +44,8 @@ import { AnalysisScheduler } from './application/analysis-scheduler.js'
 import { ModelTaskRecovery } from './application/model-task-recovery.js'
 import type { AnalysisScheduleStore } from '../strategies/index.js'
 import { MysqlModelTaskRecoveryRepository } from './infrastructure/mysql-model-task-recovery-repository.js'
+import { IndependentTraderScheduler } from './application/independent-trader-scheduler.js'
+import { MysqlIndependentTraderScheduleStore } from './infrastructure/mysql-independent-trader-schedule-store.js'
 
 export { loadCredentialKeyring } from './infrastructure/mysql-model-gateway-resolver.js'
 
@@ -55,6 +57,11 @@ export function createAnalysisScheduler(schedules: AnalysisScheduleStore, servic
   readClock: (accountId: string, userId: number) => Promise<SubscriptionWindowClock | null>,
   marketSessions?: import('./application/analysis-scheduler.js').AutomaticMarketSessionGuard): Pick<AnalysisScheduler, 'tick'> {
   return new AnalysisScheduler(schedules, service, readClock, marketSessions)
+}
+
+export function createIndependentTraderScheduler(pool: Pool, service: InferenceService,
+  marketSessions?: import('./application/analysis-scheduler.js').AutomaticMarketSessionGuard): Pick<IndependentTraderScheduler, 'tick'> {
+  return new IndependentTraderScheduler(new MysqlIndependentTraderScheduleStore(pool), service, marketSessions)
 }
 
 export function createMysqlModelTaskRecovery(pool: Pool, accounts: (connection: PoolConnection) => Pick<AccountInventorySummaryReader, 'lockAccount'>): Pick<ModelTaskRecovery, 'expireOverdue'> {

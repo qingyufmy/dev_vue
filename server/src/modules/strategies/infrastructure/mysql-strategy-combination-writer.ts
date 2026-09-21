@@ -1,7 +1,7 @@
 import type { AdminPrincipalAccess } from '../../auth/index.js'
 import type { Pool, PoolConnection, ResultSetHeader, RowDataPacket } from 'mysql2/promise'
 import type { StrategyCombinationWriter } from '../application/strategy-combination-writer.js'
-import { compileStrategy } from '../application/strategy-service.js'
+import { compileStrategy, isIndependentRoleConfig } from '../application/strategy-service.js'
 import type { CreateStrategyCombinationInput, CreateStrategyCombinationVersionInput, StrategyCompileResult, StrategyDetail } from '../domain/strategy.js'
 import { StrategyAccessError } from '../domain/strategy.js'
 import { readStrategyDetail } from './mysql-strategy-catalog.js'
@@ -29,6 +29,7 @@ export function createStrategyCombinationWriter(pool: Pool,
         const trader = validCompile(compileStrategy('trader', input.traderPromptText, input.traderConfig))
         const traderId = await insertStrategy(connection, input.userId, 'user', 'trader', `${input.name.trim()} · 交易执行`, input.description.trim(), input.traderPromptText, trader)
         const analysis = validCompile(compileStrategy('analysis', input.analysisPromptText, { ...input.analysisConfig, trader_strategy_id: traderId }))
+        assertCompatibleCombination(analysis.normalizedConfig, trader.normalizedConfig)
         const analysisId = await insertStrategy(connection, input.userId, 'user', 'analysis', input.name.trim(), input.description.trim(), input.analysisPromptText, analysis)
         const detail = await readStrategyDetail(connection, input.userId, analysisId)
         if (!detail) throw new StrategyAccessError('strategy_write_result_invalid', 503)
@@ -63,6 +64,7 @@ export function createStrategyCombinationWriter(pool: Pool,
         }
 
         const analysis = validCompile(compileStrategy('analysis', input.analysisPromptText, { ...input.analysisConfig, trader_strategy_id: traderStrategyId }))
+        assertCompatibleCombination(analysis.normalizedConfig, trader.normalizedConfig)
         await insertVersion(connection, analysisRow.id, input.userId, input.analysisPromptText, analysis)
         await updateStrategy(connection, analysisRow, input.name.trim(), input.description.trim(), input.status)
         const detail = await readStrategyDetail(connection, input.userId, analysisRow.id)
@@ -99,6 +101,18 @@ function combinationPayload(input: CreateStrategyCombinationInput | CreateStrate
 function validCompile(result: StrategyCompileResult) {
   if (!result.valid) throw new StrategyAccessError('strategy_compile_invalid', 422, result.issues)
   return result
+}
+
+function assertCompatibleCombination(analysisConfig: Record<string, unknown>, traderConfig: Record<string, unknown>) {
+  if (isIndependentRoleConfig(analysisConfig) !== isIndependentRoleConfig(traderConfig)) {
+    throw new StrategyAccessError('strategy_responsibility_mode_mismatch', 422)
+  }
+  if (!isIndependentRoleConfig(analysisConfig)) return
+  const symbols = (value: Record<string, unknown>) => Array.isArray(value.symbols)
+    ? [...value.symbols].map(String).sort() : []
+  if (JSON.stringify(symbols(analysisConfig)) !== JSON.stringify(symbols(traderConfig))) {
+    throw new StrategyAccessError('strategy_symbol_scope_mismatch', 422)
+  }
 }
 
 async function insertStrategy(connection: PoolConnection, userId: number, scope: 'platform' | 'user', kind: 'analysis' | 'trader',

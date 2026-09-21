@@ -8,7 +8,7 @@ import { Checkbox } from '@aurum/ui/checkbox'
 import { Button } from '@aurum/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@aurum/ui/select'
 
-const props = defineProps<{ modelValue: Record<string, unknown>; trader: boolean; platform: boolean }>()
+const props = withDefaults(defineProps<{ modelValue: Record<string, unknown>; trader: boolean; platform: boolean; idPrefix?: string; showSymbols?: boolean }>(), { idPrefix: 'strategy', showSymbols: true })
 const emit = defineEmits<{ 'update:modelValue': [value: Record<string, unknown>] }>()
 const models = ref<ModelSelection['items']>([]), loading = ref(false), error = ref('')
 const entries = [{ id: 'market', label: '市价入场' }, { id: 'limit', label: '限价挂单' }, { id: 'stop', label: '突破挂单' }, { id: 'stop_limit', label: '止损限价挂单' }]
@@ -35,15 +35,15 @@ onMounted(load)
   <section class="grid gap-5 rounded-xl border bg-muted/15 p-4 sm:p-5">
     <div><h3 class="font-semibold">适用范围与模型</h3><p class="mt-1 text-xs text-muted-foreground">限定策略处理的品种，并选择本策略使用的模型。</p></div>
     <div class="grid gap-5 sm:grid-cols-2">
-      <Field>
-        <FieldLabel for="strategy-symbols">支持品种</FieldLabel>
-        <Input id="strategy-symbols" :model-value="symbols" placeholder="XAUUSD、EURUSD" @change="setSymbols(($event.target as HTMLInputElement).value)" />
+      <Field v-if="showSymbols">
+        <FieldLabel :for="`${idPrefix}-symbols`">支持品种</FieldLabel>
+        <Input :id="`${idPrefix}-symbols`" :model-value="symbols" placeholder="XAUUSD、EURUSD" @change="setSymbols(($event.target as HTMLInputElement).value)" />
         <FieldDescription>填写不带券商后缀的标准品种，用逗号分隔；留空表示不限制。</FieldDescription>
       </Field>
       <Field>
-        <FieldLabel for="strategy-model">使用模型</FieldLabel>
+        <FieldLabel :for="`${idPrefix}-model`">使用模型</FieldLabel>
         <Select :model-value="selectedModel" :disabled="loading" @update:model-value="set('model_profile_id', $event === 'default' ? null : $event)">
-          <SelectTrigger id="strategy-model"><SelectValue :placeholder="loading ? '正在读取模型…' : '请选择模型'" /></SelectTrigger>
+          <SelectTrigger :id="`${idPrefix}-model`"><SelectValue :placeholder="loading ? '正在读取模型…' : '请选择模型'" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="default">按用途分配的模型</SelectItem>
             <SelectItem v-if="selectedModel !== 'default' && !choices.some(item => item.id === selectedModel)" :value="selectedModel" disabled>原模型暂不可用</SelectItem>

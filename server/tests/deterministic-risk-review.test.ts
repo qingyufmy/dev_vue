@@ -60,7 +60,7 @@ function input(overrides: Partial<RiskEvaluationInput> = {}): RiskEvaluationInpu
     result: decision(), policy: policy(), summary: summary(),
     quote: { symbol: 'XAUUSD', bid: '3530.10', ask: '3530.20', observedAt: '2026-09-03T09:00:09.000Z', revision: 9 },
     instrument: { symbol: 'XAUUSD', point: '0.01', tickSize: '0.01', tickValue: '1', volumeMin: '0.01', volumeMax: '100', volumeStep: '0.01', tradeEnabled: true, revision: 7 },
-    positions: [{ ticket: 'p-1', side: 'buy', volume: '0.10', currentPrice: '3530.10', stopLoss: '3510' }], pendingOrders: [], currentRevisions: revisions,
+    positions: [{ ticket: 'p-1', side: 'buy', volume: '0.10', openPrice: '3530.20', currentPrice: '3530.10', stopLoss: '3510' }], pendingOrders: [], currentRevisions: revisions,
     ...overrides,
   }
 }
@@ -269,8 +269,13 @@ describe('Stage 12D deterministic risk review', () => {
     expect(evaluateRisk(input({ policy: policy({ accountKillSwitch: true }), result: decision([tighter]) }), now)).toMatchObject({ status: 'approved' })
     const takeProfitOnly = action({ kind: 'modify_position', parameters: { ticket: 'p-1', take_profit: '3650' } })
     expect(evaluateRisk(input({ policy: policy({ accountKillSwitch: true }), result: decision([takeProfitOnly]) }), now)).toMatchObject({ status: 'approved' })
+    const invalidTakeProfit = action({ kind: 'modify_position', parameters: { ticket: 'p-1', take_profit: '3500' } })
+    expect(evaluateRisk(input({ result: decision([invalidTakeProfit]) }), now)).toMatchObject({ rejectCode: 'RISK_TAKE_PROFIT_DIRECTION_INVALID' })
     const wider = action({ kind: 'modify_position', parameters: { ticket: 'p-1', stop_loss: '3500' } })
-    expect(evaluateRisk(input({ result: decision([wider]) }), now)).toMatchObject({ rejectCode: 'RISK_MODIFICATION_REQUIRES_DETERMINISTIC_DIFF' })
+    const smallPosition = [{ ticket: 'p-1', side: 'buy', volume: '0.01', openPrice: '3530.20', currentPrice: '3530.10', stopLoss: '3510' }]
+    expect(evaluateRisk(input({ positions: smallPosition, result: decision([wider]) }), now)).toMatchObject({ status: 'approved', rejectCode: null })
+    const excessive = action({ kind: 'modify_position', parameters: { ticket: 'p-1', stop_loss: '3400' } })
+    expect(evaluateRisk(input({ result: decision([excessive]) }), now)).toMatchObject({ rejectCode: 'RISK_PER_TRADE_LIMIT' })
   })
 
   it('persists one independent risk decision with frozen policy and account revisions and creates no execution intent', async () => {

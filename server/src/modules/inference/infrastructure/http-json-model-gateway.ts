@@ -1,5 +1,6 @@
 import { modelThinkingOptions } from './model-thinking-options.js'
 import { analysisContract, traderContract } from '../domain/model-context-contract.js'
+import { independentAnalysisContract, independentTraderContract } from '../domain/independent-model-contract.js'
 import { lookup } from 'node:dns/promises'
 import { analysisModelSnapshot } from '../application/analysis-model-snapshot.js'
 import { isIP } from 'node:net'
@@ -56,6 +57,7 @@ export class HttpJsonAnalysisModelGateway implements AnalysisModelGateway {
   async analyze(input: { taskId: string; attemptId: string; snapshot: AnalysisInputSnapshot; signal: AbortSignal }) {
     const output = await requestJson(this.profile, this.usageLedger, this.request, input.signal, [
       { role: 'system', content: input.snapshot.strategy.promptText },
+      ...(input.snapshot.responsibilityMode === 'independent_roles_v2' ? [{ role: 'system' as const, content: independentAnalysisContract }] : []),
       { role: 'system', content: analysisContract },
       { role: 'user', content: JSON.stringify(snapshotWithoutPrompt(input.snapshot)) },
     ], this.onUsageSettlementError)
@@ -86,6 +88,7 @@ export class HttpJsonTraderModelGateway implements TraderGateway {
   async decide(input: { taskId: string; attemptId: string; snapshot: TraderInputSnapshot; signal: AbortSignal }) {
     const output = await requestJson(this.profile, this.usageLedger, this.request, input.signal, [
       { role: 'system', content: input.snapshot.strategy.promptText },
+      ...(input.snapshot.responsibilityMode === 'independent_roles_v2' ? [{ role: 'system' as const, content: independentTraderContract }] : []),
       { role: 'system', content: traderContract },
       { role: 'user', content: JSON.stringify(snapshotWithoutPrompt(input.snapshot)) },
     ], this.onUsageSettlementError)

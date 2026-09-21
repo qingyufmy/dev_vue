@@ -73,6 +73,8 @@ const fieldLabels: Record<string, string> = {
   source: '来源',
   signal_id: '信号编号',
   reason: '原因',
+  entry_scenario: '入场场景',
+  scenario_invalidation: '场景失效条件',
   status: '状态',
   operation_id: '操作编号',
 }
@@ -178,7 +180,7 @@ export function readableRecord(value: Record<string, unknown>) {
   return Object.entries(value).map(([key, item]) => ({
     key,
     label: fieldLabels[key] ?? key.replaceAll('_', ' '),
-    value: readableValue(item),
+    value: key === 'entry_scenario' ? mappedLabel(item as NullableValue, { trend: '顺势', countertrend: '局部逆势', range: '区间' }) : readableValue(item),
   }))
 }
 

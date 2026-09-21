@@ -71,6 +71,12 @@ const DANGEROUS_CONFIG_KEYS = new Set([
   'command', 'commands', 'tool', 'tools', 'bridge', 'tradingtools', 'tradeapi', 'brokercommand',
 ])
 const DANGEROUS_CONFIG_STEMS = ['script', 'network', 'sql', 'file', 'filesystem', 'shell', 'exec', 'command', 'tool', 'bridge', 'tradeapi', 'brokercommand']
+export const INDEPENDENT_ROLE_MODE = 'independent_roles_v2' as const
+
+export function isIndependentRoleConfig(config: unknown): boolean {
+  return !!config && typeof config === 'object' && !Array.isArray(config)
+    && (config as Record<string, unknown>).responsibility_mode === INDEPENDENT_ROLE_MODE
+}
 
 export function compileStrategy(kind: StrategyKind, promptText: unknown, config: unknown): StrategyCompileResult {
   const issues: StrategyCompileIssue[] = []
@@ -86,8 +92,13 @@ export function compileStrategy(kind: StrategyKind, promptText: unknown, config:
   }
   if (parsedConfig) scanDangerousKeys(parsedConfig, 'config', issues)
 
-  const inputContractVersion = kind === 'analysis' ? 'market-analysis-input/v1' : 'account-trader-input/v1'
-  const outputContractVersion = kind === 'analysis' ? 'market-analysis/v1' : 'trade-decision/v1'
+  const independent = isIndependentRoleConfig(normalizedConfig)
+  const inputContractVersion = kind === 'analysis'
+    ? independent ? 'market-background-input/v2' : 'market-analysis-input/v1'
+    : independent ? 'independent-trader-input/v2' : 'account-trader-input/v1'
+  const outputContractVersion = kind === 'analysis'
+    ? independent ? 'market-background/v2' : 'market-analysis/v1'
+    : independent ? 'trade-decision/v2' : 'trade-decision/v1'
   return {
     valid: !issues.some(item => item.level === 'error'), kind,
     promptHash: createHash('sha256').update(prompt).digest('hex'), normalizedConfig,
@@ -119,10 +130,11 @@ function normalizeConfig(kind: StrategyKind, config: Record<string, unknown>, is
       try { parseStrategyEntryMethods(config.entry_methods) }
       catch { issues.push(issue('error', 'strategy_entry_methods_invalid', '请选择有效且不重复的入场方式', 'config.entry_methods')) }
     }
+    validateIndependentRoleConfig(kind, config, issues)
     try { return canonicalClone(config) }
     catch { issues.push(issue('error', 'config_json_invalid', '策略配置必须是可序列化的 JSON 对象', 'config')); return {} }
   }
-  const allowed = new Set(['symbols', 'model_profile_id', 'interval_minutes', 'timeframes', 'candle_limit', 'macro_evidence', 'market_data_plan', 'ema34_evidence', 'chan_evidence', 'price_action_evidence', 'trader_strategy_id'])
+  const allowed = new Set(['symbols', 'model_profile_id', 'interval_minutes', 'timeframes', 'candle_limit', 'macro_evidence', 'market_data_plan', 'ema34_evidence', 'chan_evidence', 'price_action_evidence', 'trader_strategy_id', 'responsibility_mode'])
   for (const key of Object.keys(config)) {
     if (!allowed.has(key)) issues.push(issue('error', 'config_field_unknown', `不支持的配置字段：${key}`, `config.${key}`))
   }
@@ -156,7 +168,12 @@ function normalizeConfig(kind: StrategyKind, config: Record<string, unknown>, is
   }
   if (config.market_data_plan !== undefined) {
     if (config.timeframes !== undefined || config.candle_limit !== undefined) issues.push(issue('error', 'market_data_plan_conflict', '市场数据计划不能同时使用统一周期或数量配置', 'config.market_data_plan'))
-    try { return { ...indicators, market_data_plan: parseStrategyMarketDataPlan(config.market_data_plan), macro_evidence: normalizeMacroEvidence(config.macro_evidence, issues) } }
+    try {
+      const result = { ...indicators, market_data_plan: parseStrategyMarketDataPlan(config.market_data_plan), macro_evidence: normalizeMacroEvidence(config.macro_evidence, issues),
+        ...(config.responsibility_mode === INDEPENDENT_ROLE_MODE ? { responsibility_mode: INDEPENDENT_ROLE_MODE } : {}) }
+      validateIndependentRoleConfig(kind, result, issues)
+      return result
+    }
     catch { issues.push(issue('error', 'strategy_market_data_plan_invalid', '请检查主周期及各周期的 K 线数量', 'config.market_data_plan')); return {} }
   }
   let timeframes = [...DEFAULT_ANALYSIS_TIMEFRAMES]
@@ -177,7 +194,47 @@ function normalizeConfig(kind: StrategyKind, config: Record<string, unknown>, is
       issues.push(issue('error', 'candle_limit_invalid', 'K 线数量必须是 50 到 1000 之间的整数', 'config.candle_limit'))
     } else candleLimit = value
   }
-  return { ...indicators, timeframes, candle_limit: candleLimit, macro_evidence: normalizeMacroEvidence(config.macro_evidence, issues) }
+  const result = { ...indicators, timeframes, candle_limit: candleLimit, macro_evidence: normalizeMacroEvidence(config.macro_evidence, issues),
+    ...(config.responsibility_mode === INDEPENDENT_ROLE_MODE ? { responsibility_mode: INDEPENDENT_ROLE_MODE } : {}) }
+  validateIndependentRoleConfig(kind, result, issues)
+  return result
+}
+
+function validateIndependentRoleConfig(kind: StrategyKind, config: Record<string, unknown>, issues: StrategyCompileIssue[]) {
+  if (config.responsibility_mode === undefined) return
+  if (config.responsibility_mode !== INDEPENDENT_ROLE_MODE) {
+    issues.push(issue('error', 'responsibility_mode_invalid', '不支持的职责模式', 'config.responsibility_mode'))
+    return
+  }
+  let plan: ReturnType<typeof parseStrategyMarketDataPlan> | null = null
+  try { plan = parseStrategyMarketDataPlan(config.market_data_plan) }
+  catch { issues.push(issue('error', 'independent_market_plan_required', '独立职责策略必须配置各自的行情数据计划', 'config.market_data_plan')) }
+  const chan = config.chan_evidence as { enabled?: unknown } | undefined
+  const priceAction = config.price_action_evidence as { enabled?: unknown } | undefined
+  if (kind === 'analysis') {
+    if (chan?.enabled !== true) issues.push(issue('error', 'background_chan_required', '行情分析师必须启用缠论趋势证据', 'config.chan_evidence'))
+    if (plan && (plan.primary_timeframe !== 'H1' || !['H1', 'H4'].every(timeframe => plan!.timeframes.some(row => row.timeframe === timeframe)))) {
+      issues.push(issue('error', 'background_timeframes_invalid', '行情分析师必须包含 H1、H4，并以 H1 为主周期', 'config.market_data_plan'))
+    }
+  } else {
+    try { parseChanEvidencePlan(config.chan_evidence) }
+    catch { issues.push(issue('error', 'chan_plan_invalid', '请检查缠论证据版本和开关', 'config.chan_evidence')) }
+    try { parsePriceActionEvidencePlan(config.price_action_evidence) }
+    catch { issues.push(issue('error', 'price_action_plan_invalid', '请检查价格事件证据版本和开关', 'config.price_action_evidence')) }
+    if (chan?.enabled === true) issues.push(issue('error', 'trader_chan_forbidden', '独立交易员不能启用缠论数据', 'config.chan_evidence'))
+    if (priceAction?.enabled !== true) issues.push(issue('error', 'trader_price_action_required', '独立交易员必须启用价格行为证据', 'config.price_action_evidence'))
+    if (plan && (plan.primary_timeframe !== 'M5' || !['M5', 'M15'].every(timeframe => plan!.timeframes.some(row => row.timeframe === timeframe)))) {
+      issues.push(issue('error', 'trader_timeframes_invalid', '独立交易员必须包含 M5、M15，并以 M5 为主周期', 'config.market_data_plan'))
+    }
+    if (config.ema34_evidence !== undefined) {
+      try {
+        const ema = parseEma34Plan(config.ema34_evidence)
+        if (plan && !plan.timeframes.some(row => row.timeframe === ema.timeframe)) {
+          issues.push(issue('error', 'ema34_timeframe_not_in_market_plan', 'EMA34 周期必须包含在交易员行情数据范围中', 'config.ema34_evidence'))
+        }
+      } catch { issues.push(issue('error', 'ema34_plan_invalid', '请检查 EMA34 证据版本和周期', 'config.ema34_evidence')) }
+    }
+  }
 }
 
 function normalizeMacroEvidence(value: unknown, issues: StrategyCompileIssue[]) {

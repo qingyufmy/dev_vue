@@ -6,4 +6,4 @@ export type AnalysisTradingReader = Pick<TradingReadRepository,
 
 /** Trader snapshots require account facts and revisions, never context writes. */
 export type TraderAccountReader = Pick<TradingReadRepository,
-  'findOwnedAccount' | 'getAccountSnapshot' | 'listPositions' | 'listPendingOrders' | 'getQuote' | 'latestRevision'>
+  'findOwnedAccount' | 'getAccountSnapshot' | 'listPositions' | 'listPendingOrders' | 'getQuote' | 'listCandles' | 'latestRevision'>

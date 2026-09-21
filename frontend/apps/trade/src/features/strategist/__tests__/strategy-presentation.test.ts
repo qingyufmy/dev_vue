@@ -3,8 +3,11 @@ import { defaultConfig, findStrategyName, formatDateTime, versionLabel } from '.
 
 describe('strategy presentation', () => {
   it('uses production-equivalent analysis data defaults', () => {
-    expect(defaultConfig('analysis')).toEqual({ timeframes: ['M5', 'M15', 'H1', 'H4'], candle_limit: 300 })
-    expect(defaultConfig('trader')).toEqual({})
+    expect(defaultConfig('analysis')).toMatchObject({ responsibility_mode: 'independent_roles_v2', interval_minutes: 60,
+      market_data_plan: { primary_timeframe: 'H1', timeframes: [{ timeframe: 'H1' }, { timeframe: 'H4' }] }, chan_evidence: { enabled: true } })
+    expect(defaultConfig('trader')).toMatchObject({ responsibility_mode: 'independent_roles_v2',
+      market_data_plan: { primary_timeframe: 'M5', timeframes: [{ timeframe: 'M5' }, { timeframe: 'M15' }] },
+      chan_evidence: { enabled: false }, price_action_evidence: { enabled: true } })
   })
 
   it('keeps deterministic fallbacks for missing relationships', () => {

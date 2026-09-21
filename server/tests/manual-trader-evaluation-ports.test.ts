@@ -25,8 +25,8 @@ describe('manual trader evaluation module ports', () => {
             return [scenario === 'replay' ? [run] : []]
           }
           if (sql.includes('FROM market_analyses WHERE')) {
-            expect(args).toEqual(['analysis', 7, '2026-09-10 00:00:00.123'])
-            return [[{ id: 'analysis', opportunity: 'none', revision: 6, strategy_version_id: '11', standard_symbol: 'XAUUSD' }]]
+            expect(args).toEqual(['2026-09-10 00:00:00.123', 'analysis', 7])
+            return [[{ id: 'analysis', opportunity: 'none', revision: 6, strategy_version_id: '11', standard_symbol: 'XAUUSD', background_valid: 1 }]]
           }
           if (sql.startsWith('INSERT')) { writes.push({ sql, args }); return [{ affectedRows: 1 }] }
           if (sql.includes('FROM ai_trader_runs r')) return [[run]]

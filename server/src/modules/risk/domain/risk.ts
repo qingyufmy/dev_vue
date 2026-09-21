@@ -396,7 +396,45 @@ function evaluateAction(action: RiskAction, input: RiskEvaluationInput, ask: num
   const rules: RiskRuleResult[] = []
   const fail = (code: string, details: RiskJsonObject = {}) => ({ rejectCode: code, addedVolume: 0, rules: [...rules, { code, outcome: 'rejected' as const, actionId: action.actionId, details }] })
   const pass = (code: string, details: RiskJsonObject = {}) => rules.push({ code, outcome: 'passed' as const, actionId: action.actionId, details })
-  if (action.kind === 'modify_position' || action.kind === 'modify_order') return fail('RISK_MODIFICATION_REQUIRES_DETERMINISTIC_DIFF')
+  if (action.kind === 'modify_position' || action.kind === 'modify_order') {
+    const inventory = action.kind === 'modify_position' ? input.positions : input.pendingOrders
+    const item = inventory.find(candidate => String(candidate.ticket ?? '') === String(action.parameters.ticket ?? ''))
+    if (!item) return fail('RISK_TARGET_NOT_FOUND')
+    if (action.parameters.remove_stop_loss === true) return fail('RISK_STOP_LOSS_REQUIRED')
+    const side = action.kind === 'modify_position'
+      ? String(item.side ?? '')
+      : String(item.type ?? '').startsWith('buy') ? 'buy' : String(item.type ?? '').startsWith('sell') ? 'sell' : ''
+    if (side !== 'buy' && side !== 'sell') return fail('RISK_ACTION_SIDE_INVALID')
+    const changesStop = action.parameters.stop_loss !== undefined || action.parameters.sl !== undefined
+    if (changesStop) {
+      const stop = decimal(action.parameters.stop_loss ?? action.parameters.sl, 'risk_action_stop_loss_invalid')
+      const entry = decimal(action.kind === 'modify_position'
+        ? item.openPrice ?? item.open_price ?? item.currentPrice ?? item.current_price
+        : action.parameters.price ?? item.price, 'risk_action_price_invalid')
+      const volume = decimal(action.parameters.volume ?? item.volume, 'risk_action_volume_invalid')
+      const current = side === 'buy' ? bid : ask
+      if (stop <= 0 || entry <= 0 || volume <= 0 || (side === 'buy' ? stop >= current : stop <= current)) return fail('RISK_STOP_LOSS_DIRECTION_INVALID')
+      if (action.kind === 'modify_order') {
+        const oldVolume = decimal(item.volume, 'risk_action_volume_invalid')
+        if (volume > oldVolume + 1e-9 || volume > input.policy.values.maxOrderVolume + 1e-9) return fail('RISK_ORDER_VOLUME_LIMIT')
+      }
+      const tickSize = decimal(input.instrument.tickSize, 'risk_instrument_tick_invalid')
+      const tickValue = decimal(input.instrument.tickValue, 'risk_instrument_tick_invalid')
+      const equity = decimal(input.summary.equity, 'risk_summary_equity_invalid')
+      if (tickSize <= 0 || tickValue <= 0 || equity <= 0) return fail('RISK_CALCULATION_DATA_INVALID')
+      const lossDistance = side === 'buy' ? Math.max(0, entry - stop) : Math.max(0, stop - entry)
+      const riskAmount = lossDistance / tickSize * tickValue * volume
+      const riskPercent = riskAmount / equity * 100
+      if (riskPercent > input.policy.values.maxRiskPerTradePercent + 1e-9) return fail('RISK_PER_TRADE_LIMIT', { risk_percent: Number(riskPercent.toFixed(6)) })
+      pass('RISK_MODIFICATION_RECALCULATED', { risk_amount: Number(riskAmount.toFixed(8)), risk_percent: Number(riskPercent.toFixed(6)) })
+    }
+    const takeProfit = action.parameters.take_profit ?? action.parameters.tp
+    if (takeProfit !== undefined && takeProfit !== null) {
+      const target = decimal(takeProfit, 'risk_action_take_profit_invalid')
+      if (target <= 0 || (side === 'buy' ? target <= bid : target >= ask)) return fail('RISK_TAKE_PROFIT_DIRECTION_INVALID')
+    }
+    return { rejectCode: null, addedVolume: 0, rules }
+  }
   if (action.kind !== 'market_order' && action.kind !== 'pending_order') return { rejectCode: null, addedVolume: 0, rules }
   const params = action.parameters
   const side = String(params.side ?? (String(params.type ?? '').startsWith('buy') ? 'buy' : String(params.type ?? '').startsWith('sell') ? 'sell' : ''))
@@ -458,11 +496,13 @@ function isRiskReducing(action: RiskAction, input: RiskEvaluationInput) {
     if (action.parameters.remove_stop_loss === true) return false
     const changesStop = action.parameters.stop_loss !== undefined && action.parameters.stop_loss !== null
       || action.parameters.sl !== undefined && action.parameters.sl !== null
-    const changesOnlyTakeProfit = !changesStop
-      && (action.parameters.take_profit !== undefined || action.parameters.tp !== undefined || action.parameters.remove_take_profit === true)
-    if (changesOnlyTakeProfit) return true
     const side = String(position.side ?? '')
     const currentPrice = Number(position.currentPrice ?? position.current_price)
+    if (!changesStop && action.parameters.remove_take_profit === true) return true
+    if (!changesStop && (action.parameters.take_profit !== undefined || action.parameters.tp !== undefined)) {
+      const target = Number(action.parameters.take_profit ?? action.parameters.tp)
+      return target > 0 && currentPrice > 0 && (side === 'buy' ? target > currentPrice : side === 'sell' ? target < currentPrice : false)
+    }
     const oldStop = Number(position.stopLoss ?? position.stop_loss ?? 0)
     const newStop = Number(action.parameters.stop_loss ?? action.parameters.sl)
     if (!(newStop > 0 && currentPrice > 0)) return false
@@ -478,10 +518,14 @@ function isRiskReducing(action: RiskAction, input: RiskEvaluationInput) {
       || action.parameters.stop_loss !== undefined && action.parameters.stop_loss !== null
       || action.parameters.sl !== undefined && action.parameters.sl !== null
     const changesOnlyNonRiskFields = !changesEntryRisk
-      && (action.parameters.take_profit !== undefined || action.parameters.tp !== undefined
-        || action.parameters.remove_take_profit === true || action.parameters.expiration_utc_msc !== undefined
+      && (action.parameters.remove_take_profit === true || action.parameters.expiration_utc_msc !== undefined
         || action.parameters.remove_expiration === true)
     if (changesOnlyNonRiskFields) return true
+    if (!changesEntryRisk && (action.parameters.take_profit !== undefined || action.parameters.tp !== undefined)) {
+      const target = Number(action.parameters.take_profit ?? action.parameters.tp), entry = Number(order.price)
+      const type = String(order.type ?? '')
+      return target > 0 && entry > 0 && (type.startsWith('buy') ? target > entry : type.startsWith('sell') ? target < entry : false)
+    }
     const type = String(order.type ?? '')
     const side = type.startsWith('buy') ? 'buy' : type.startsWith('sell') ? 'sell' : ''
     const oldEntry = Number(order.price)

@@ -27,6 +27,7 @@ const emit = defineEmits<{
 
 const { session } = useTradeSession()
 const activeVersion = computed(() => props.detail?.versions.find((item) => item.id === props.detail?.strategy.activeVersionId))
+const independentRoles = computed(() => activeVersion.value?.config.responsibility_mode === 'independent_roles_v2')
 const metrics = computed(() => {
   const value = props.detail?.performance
   const currency = value?.currency ?? ''
@@ -84,11 +85,11 @@ watch(() => props.detail?.strategy.id, () => { viewingVersionId.value = null })
         </section>
 
         <section class="grid gap-3 rounded-xl border p-4" aria-labelledby="strategy-pair-title">
-          <div><p class="text-xs font-medium text-primary">协同策略</p><h3 id="strategy-pair-title" class="mt-1 font-semibold">分析与执行，各自独立版本</h3></div>
+          <div><p class="text-xs font-medium text-primary">{{ independentRoles ? '独立职责组合' : '协同策略' }}</p><h3 id="strategy-pair-title" class="mt-1 font-semibold">分析与执行，各自独立版本</h3></div>
           <div class="grid gap-3 sm:grid-cols-[1fr_auto_1fr] sm:items-center">
-            <div class="rounded-lg bg-muted/35 p-3"><BrainCircuit class="size-4 text-primary" /><p class="mt-2 text-xs text-muted-foreground">行情分析引擎</p><strong class="mt-1 block text-sm">{{ detail.strategy.name }}</strong></div>
+            <div class="rounded-lg bg-muted/35 p-3"><BrainCircuit class="size-4 text-primary" /><p class="mt-2 text-xs text-muted-foreground">行情分析引擎</p><strong class="mt-1 block text-sm">{{ detail.strategy.name }}</strong><p v-if="independentRoles" class="mt-1 text-xs text-muted-foreground">H1/H4 · 缠论市场背景 · 每 {{ Number(activeVersion?.config.interval_minutes ?? 60) }} 分钟</p></div>
             <Link2 class="mx-auto size-4 text-muted-foreground" aria-hidden="true" />
-            <div class="rounded-lg bg-muted/35 p-3"><Bot class="size-4 text-primary" /><p class="mt-2 text-xs text-muted-foreground">交易执行引擎</p><strong class="mt-1 block text-sm">{{ detail.strategy.pairedTraderStrategy?.name ?? '待绑定' }}</strong><p class="mt-1 text-xs text-muted-foreground">{{ detail.strategy.pairedTraderStrategy?.activeVersionId ? '已发布可用' : '尚未发布可用版本' }}</p></div>
+            <div class="rounded-lg bg-muted/35 p-3"><Bot class="size-4 text-primary" /><p class="mt-2 text-xs text-muted-foreground">交易执行引擎</p><strong class="mt-1 block text-sm">{{ detail.strategy.pairedTraderStrategy?.name ?? '待绑定' }}</strong><p class="mt-1 text-xs text-muted-foreground">{{ independentRoles ? 'M15/M5 · 当前价格行为 · 不使用缠论' : detail.strategy.pairedTraderStrategy?.activeVersionId ? '已发布可用' : '尚未发布可用版本' }}</p></div>
           </div>
         </section>
 

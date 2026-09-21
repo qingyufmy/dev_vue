@@ -6,6 +6,7 @@ import { parseStrategyMarketDataPlan, parseEma34Plan, type Ema34Plan } from '../
 import type { AnalysisInputSnapshot, AnalysisRun, JsonObject } from '../domain/inference.js'
 import type { RuntimeStrategyMemoryReader } from '../../reviews/index.js'
 import { freezeStrategyMemory } from './freeze-strategy-memory.js'
+import { isIndependentRoleConfig } from '../../strategies/index.js'
 
 export interface AnalysisMarketPlan {
   timeframes: Array<'M1' | 'M5' | 'M15' | 'M30' | 'H1' | 'H4' | 'D1'>
@@ -74,6 +75,7 @@ export class AnalysisContextBuilder {
     const strategyMemory = await freezeStrategyMemory({ userId: run.userId, strategyId: strategy.strategyId, strategyKind: 'analysis' }, this.memory)
     return {
       kind: 'analysis',
+      ...(isIndependentRoleConfig(strategy.config) ? { responsibilityMode: 'independent_roles_v2' as const } : {}),
       ...(strategyMemory === undefined ? {} : { strategyMemory }),
       strategy: { id: strategy.strategyId, versionId: strategy.id, promptHash: strategy.promptHash, promptText: strategy.promptText },
       market: await this.market.read({ userId: run.userId, preferredAccountId: run.marketSourceAccountId, symbol: run.symbol, strategyId: strategy.strategyId, strategyVersionId: strategy.id, referenceTime: capturedAt, plan: marketPlan(strategy.config) }),
