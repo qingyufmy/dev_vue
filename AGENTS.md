@@ -64,6 +64,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\bridge\prototypes\net48-wi
 
 ### 实现约束
 
+- 每次新增或修改功能时，必须完整梳理该功能从入口、状态、权限、校验、持久化、异步任务、实时事件到界面反馈的现有逻辑，并核对相关合同、调用方、并发与异常路径；先消除新旧规则、重复状态和跨层判断之间的冲突，再实施并验证，禁止只修当前可见点而留下相互矛盾的行为。
 - TypeScript 使用严格模式、两空格缩进、无分号 ESM；变量与函数使用 `camelCase`，类型与类使用 `PascalCase`，模块文件使用 kebab-case。
 - 业务域不得跨层取巧：`domain` 不导入 Fastify、Vue、BullMQ、MySQL、Redis 或供应商 SDK；应用服务通过端口调用基础设施；路由和 Worker 只编排用例。
 - 修改一个功能模块不得依赖其它模块的内部文件。跨域协作使用明确的应用端口、版本化合同或 outbox 事件。
