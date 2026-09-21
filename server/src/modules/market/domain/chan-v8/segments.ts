@@ -63,6 +63,31 @@ export function buildActiveSegmentCandidate(confirmedBis: readonly ChanBi[], sta
   return { candidate, historicalCandidate }
 }
 
+function describeDetachedCandidate(candidate: Candidate | null, confirmedBis: readonly ChanBi[], stalledStartIndex: number): Candidate | null {
+  if (!candidate) return candidate
+  const candidateStartIndex = confirmedBis.findIndex(bi => bi.id === candidate.bi_ids[0])
+  if (candidateStartIndex <= stalledStartIndex) return candidate
+  const endpoint = findSegmentEndpoint(confirmedBis, candidateStartIndex, candidate.dir)
+  if (!endpoint) return candidate
+  const endpointFeatureBi = confirmedBis[endpoint.endpointIndex]
+  const endpointSegmentBi = confirmedBis[endpoint.endpointIndex - 1]
+  // The re-anchored tail has a locally confirmed endpoint, but the skipped
+  // invalid candidate means it is not connected to the published segment
+  // chain. Keep it forming and expose the real blocker instead of claiming
+  // that no first feature fractal exists.
+  return {
+    ...candidate,
+    confirmation_state:'awaiting_segment_chain_connection',
+    confirmation_required:'connected_segment_chain',
+    pending_endpoint_feature_gap:endpoint.hasGap,
+    pending_endpoint_feature_bi_id:endpointFeatureBi!.id,
+    pending_endpoint_segment_bi_id:endpointSegmentBi!.id,
+    pending_endpoint_price:Number(endpointSegmentBi!.end_price),
+    pending_endpoint_raw_idx:Number.isFinite(Number(endpointSegmentBi?.raw_end_idx))
+      ? Number(endpointSegmentBi!.raw_end_idx) : null,
+  }
+}
+
 export function buildSegmentsFromAnchor(confirmedBis: readonly ChanBi[], options: SegmentOptions = {}): AnchorResult {
   if (confirmedBis.length < MIN_BIS_PER_SEGMENT) return { segments: [], candidate: null, historicalCandidate: null, resynced: false }
   const trustedStart = options.trustedStart !== false
@@ -109,7 +134,7 @@ export function buildSegmentsFromAnchor(confirmedBis: readonly ChanBi[], options
   }
 
   const { candidate, historicalCandidate } = buildActiveSegmentCandidate(confirmedBis, startIndex)
-  return { segments, candidate, historicalCandidate, resynced }
+  return { segments, candidate:describeDetachedCandidate(candidate, confirmedBis, startIndex), historicalCandidate, resynced }
 }
 
 function sameSegmentBoundary(a: ChanSegment | undefined, b: ChanSegment | undefined) {

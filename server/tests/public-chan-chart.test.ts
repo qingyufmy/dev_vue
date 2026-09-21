@@ -63,4 +63,20 @@ describe('public Chan chart projection', () => {
     ] }, trend)).toEqual({ direction: 'up', from: new Date(start).toISOString(), to: new Date(start + 900_000).toISOString(),
       start: 4300, end: 4330, developing: false, basis: 'segment' })
   })
+
+  it('extends a reversal-watch guide through the latest confirmed bi without promoting the forming segment', () => {
+    const start = Date.UTC(2026, 8, 4, 1)
+    const latest = Date.UTC(2026, 8, 21, 1)
+    const trend = { state:'up_reversal_watch', direction:'up' as const, phase:'transition',
+      confidence:'low' as const, reason:'forming_opposite_segment_unconfirmed' }
+    expect(publicTrendGuide({
+      trend_state:{ reversal_bias:'down', candidate_direction:'down', segment_id:8 },
+      candidate_segment:{ dir:'down', active_for_current_state:true,
+        start_time_utc_msc:start, start_price:4487.17, end_time_utc_msc:Date.UTC(2026,8,14,13), end_price:4253.61 },
+      recent_bis:[{ end_time_utc_msc:latest, end_price:4383.32 }],
+      _confirmed_segments:[{ id:8, dir:'up', start_time_utc_msc:start - 10_000,
+        end_time_utc_msc:start, start_price:4310.92, end_price:4428.85 }],
+    }, trend)).toEqual({ direction:'down', from:new Date(start).toISOString(), to:new Date(latest).toISOString(),
+      start:4487.17, end:4383.32, developing:true, basis:'segment' })
+  })
 })

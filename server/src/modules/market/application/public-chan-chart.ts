@@ -87,6 +87,8 @@ export function publicTrendGuide(resultValue: unknown, trend: PublicChanTrend | 
   const rawTrend = object(result.trend_state)
   const segments = Array.isArray(result._confirmed_segments) ? result._confirmed_segments.map(object) : []
   const centers = Array.isArray(result._confirmed_centers) ? result._confirmed_centers.map(object) : []
+  const candidate = object(result.candidate_segment)
+  const recentBis = Array.isArray(result.recent_bis) ? result.recent_bis.map(object) : []
   const point = (from: unknown, to: unknown, start: unknown, end: unknown, direction: PublicChanTrendGuide['direction'],
     developing: boolean, basis: PublicChanTrendGuide['basis']): PublicChanTrendGuide | null => {
     const time = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value))
@@ -96,6 +98,18 @@ export function publicTrendGuide(resultValue: unknown, trend: PublicChanTrend | 
       ? { direction, from: fromIso, to: toIso, start: startPrice, end: endPrice, developing, basis } : null
   }
   const latestCenter = centers.at(-1)
+  const developingDirection = ['up', 'down'].includes(String(rawTrend.reversal_bias))
+    ? rawTrend.reversal_bias as 'up' | 'down'
+    : ['up', 'down'].includes(String(rawTrend.candidate_direction))
+      ? rawTrend.candidate_direction as 'up' | 'down' : null
+  const latestBi = recentBis.at(-1)
+  if (candidate.active_for_current_state !== false
+    && developingDirection && candidate.dir === developingDirection && latestBi) {
+    const developingGuide = point(candidate.start_time_utc_msc ?? candidate.start_time,
+      latestBi.end_time_utc_msc ?? latestBi.end_time,
+      candidate.start_price, latestBi.end_price, developingDirection, true, 'segment')
+    if (developingGuide) return developingGuide
+  }
   if (trend.direction === 'neutral' && latestCenter) {
     const middle = (number(latestCenter.zl) + number(latestCenter.zh)) / 2
     return point(latestCenter.start_time_utc_msc ?? latestCenter.start_time,
