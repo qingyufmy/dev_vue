@@ -14,6 +14,8 @@ let renderedTimes: string[] = []
 let renderedCandles: ChartCandle[] = []
 let historyRendering = false
 let olderTimer: ReturnType<typeof setTimeout> | undefined
+const defaultVisibleBars = 96
+const defaultRightSpaceBars = 12
 const host = ref<HTMLElement | null>(null)
 const hoveredTime = ref<number | null>(null)
 const detailCandle = computed(() => (hoveredTime.value === null ? null
@@ -248,9 +250,13 @@ function renderHistory(items: ChartCandle[]) {
   candleSeries.setData(items.map(candleData)); volumeSeries.setData(items.map(volumeData))
   renderStructure()
   if (preserve) chart.timeScale().setVisibleLogicalRange({ from: range.from + shift, to: range.to + shift })
-  // Keep enough recent history in view to make higher-level segments readable;
-  // users can still zoom in for candle detail or scroll left for older evidence.
-  else if (items.length) chart.timeScale().setVisibleLogicalRange({ from: Math.max(-3, items.length - 200), to: items.length + 3 })
+  // Keep the latest structure readable at the default desktop density and
+  // reserve a small projection area between the newest bar and the price axis.
+  // Users can still zoom for candle detail or scroll left for older evidence.
+  else if (items.length) chart.timeScale().setVisibleLogicalRange({
+    from: Math.max(-defaultRightSpaceBars, items.length - defaultVisibleBars),
+    to: items.length + defaultRightSpaceBars,
+  })
   historyRendering = false
 }
 function renderLatest(items: ChartCandle[]) {
