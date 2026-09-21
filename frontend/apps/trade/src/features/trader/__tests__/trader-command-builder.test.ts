@@ -36,6 +36,12 @@ describe('trader command builder', () => {
     expect(executionDistributionSchema.safeParse({ strategy_id: 'strategy-1', command: buildDistributionEntryCommand(draft) }).success).toBe(true)
   })
 
+  it('allows an account order without a stop loss but keeps it mandatory for strategy distribution', () => {
+    const draft = { command_type: 'market_order' as const, side: 'buy' as const, symbol: 'XAUUSD', volume: '0.10', reference_price: '2300.30' }
+    expect(executionCommandSchema.safeParse(buildAccountEntryCommand(draft, context())).success).toBe(true)
+    expect(() => buildDistributionEntryCommand(draft)).toThrow('distribution_stop_loss_required')
+  })
+
   it('binds resource commands to the exact ticket revision', () => {
     const positionCommand = buildResourceEditCommand(position, { stop_loss: '2295.00' }, context('501'))
     const orderCommand = buildResourceEditCommand(order, { price: '2282.00', remove_take_profit: true }, context('601'))

@@ -11,6 +11,7 @@ import {
 } from '@lucide/vue'
 import { reactiveOmit } from '@vueuse/core'
 import { Toaster as Sonner } from 'vue-sonner'
+import 'vue-sonner/style.css'
 import { cn } from '@/lib/utils'
 
 const props = defineProps<ToasterProps>()

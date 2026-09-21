@@ -291,6 +291,46 @@ class MemoryUserExecutionCommandRepository implements UserExecutionCommandReposi
 }
 
 describe('UserExecutionCommandService', () => {
+  it('refreshes a route-stale instrument before returning manual command context', async () => {
+    const stale = makeContext({
+      instrument: {
+        symbol: 'XAUUSD', point: '', tickSize: '', tickValue: '', volumeMin: '', volumeMax: '', volumeStep: '',
+        tradeEnabled: false, revision: 0,
+      },
+      currentRevisions: { ...currentRevisions, contract: 0 },
+    })
+    const fresh = makeContext()
+    let reads = 0
+    const repository = new MemoryUserExecutionCommandRepository(stale)
+    repository.loadContext = async () => reads++ === 0 ? stale : fresh
+    const requested: Array<{ userId: number; accountId: string; symbol: string }> = []
+    const service = new UserExecutionCommandService(repository, undefined, {
+      async request(input) { requested.push(input); return { requestId: 'instrument-request-1', created: true } },
+    }, async () => {})
+
+    const result = await service.commandContext({ userId: 7, accountId: '42', symbol: 'XAUUSD' })
+
+    expect(requested).toEqual([{ userId: 7, accountId: '42', symbol: 'XAUUSD' }])
+    expect(result.context.instrument).toMatchObject({ tradeEnabled: true, revision: currentRevisions.contract })
+  })
+
+  it('fails closed when a requested instrument refresh never becomes current', async () => {
+    const stale = makeContext({
+      instrument: {
+        symbol: 'XAUUSD', point: '', tickSize: '', tickValue: '', volumeMin: '', volumeMax: '', volumeStep: '',
+        tradeEnabled: false, revision: 0,
+      },
+      currentRevisions: { ...currentRevisions, contract: 0 },
+    })
+    const repository = new MemoryUserExecutionCommandRepository(stale)
+    const service = new UserExecutionCommandService(repository, undefined, {
+      async request() { return { requestId: 'instrument-request-2', created: true } },
+    }, async () => {})
+
+    await expect(service.commandContext({ userId: 7, accountId: '42', symbol: 'XAUUSD' }))
+      .rejects.toMatchObject({ code: 'user_command_instrument_refresh_incomplete', status: 503 })
+  })
+
   it('replays the same idempotent command and rejects a same-key different request', async () => {
     const repository = new MemoryUserExecutionCommandRepository(makeContext())
     const service = new UserExecutionCommandService(repository)
@@ -342,16 +382,15 @@ describe('UserExecutionCommandService', () => {
     expect(resourceRepository.records).toHaveLength(0)
   })
 
-  it('approves a market order with the actual account currency and creates one risk reservation', async () => {
+  it('approves a manual market order without creating a strategy risk reservation', async () => {
     const repository = new MemoryUserExecutionCommandRepository(makeContext())
     const result = await new UserExecutionCommandService(repository).execute(marketInput('market-approved-01'), now)
 
     expect(result.kind).toBe('prepared')
     if (result.kind !== 'prepared') return
-    expect(result.reservations).toHaveLength(1)
-    expect(result.reservations[0]?.accountCurrency).toBe('USD')
-    expect(result.reservations[0]?.reservedVolume).toBeCloseTo(0.01)
-    expect(result.intent.riskReservationId).toBe(result.reservations[0]?.id)
+    expect(result.reservations).toHaveLength(0)
+    expect(result.intent.riskReservationId).toBeNull()
+    expect(result.riskEvaluation.rules).toContainEqual(expect.objectContaining({ code: 'RISK_MANUAL_COMMAND_BYPASS' }))
     expect(repository.records).toHaveLength(1)
   })
 
@@ -373,12 +412,28 @@ describe('UserExecutionCommandService', () => {
     expect(repository.records).toHaveLength(1)
   })
 
-  it('still rejects new orders when the current risk policy blocks entry after the form was opened', async () => {
+  it('accepts a manual market order without a stop loss', async () => {
+    const repository = new MemoryUserExecutionCommandRepository(makeContext())
+    const input = marketInput('manual-no-stop')
+    input.parameters.stopLoss = null
+    const result = await new UserExecutionCommandService(repository).execute(input, now)
+    expect(result.kind).toBe('prepared')
+    if (result.kind !== 'prepared') return
+    expect(result.intent.action.parameters).not.toHaveProperty('stop_loss')
+    expect(result.reservations).toEqual([])
+  })
+
+  it('still applies deterministic risk to strategy distribution after the form was opened', async () => {
     const context = makeContext({ policy: makePolicy(true) })
     context.currentRevisions = { ...currentRevisions, account: 20, risk: 70 }
     context.summary.revision = 70
     const repository = new MemoryUserExecutionCommandRepository(context)
-    const result = await new UserExecutionCommandService(repository).execute(marketInput('live-risk-block'), now)
+    const input = marketInput('live-risk-block')
+    input.sourceType = 'strategy_distribution'
+    input.sourceId = 'distribution-target-1'
+    input.parentOperationId = 'distribution-operation-1'
+    input.distributionId = 'distribution-1'
+    const result = await new UserExecutionCommandService(repository).execute(input, now)
     expect(result.kind).toBe('rejected')
     expect(repository.records).toHaveLength(1)
   })
@@ -405,28 +460,27 @@ describe('UserExecutionCommandService', () => {
     expect(repository.records).toHaveLength(3)
   })
 
-  it('persists stop-loss widening as a rejected terminal operation without an intent or reservation', async () => {
+  it('allows a manual stop-loss widening without a strategy risk reservation', async () => {
     const repository = new MemoryUserExecutionCommandRepository(makeContext())
     const result = await new UserExecutionCommandService(repository).execute(widenStopInput('widen-stop-01'), now)
 
-    expect(result.kind).toBe('rejected')
-    if (result.kind !== 'rejected') return
-    expect(result.operation.status).toBe('rejected')
-    expect(result.operation.errorCode).toBeTruthy()
-    expect(result.intent).toBeNull()
+    expect(result.kind).toBe('prepared')
+    if (result.kind !== 'prepared') return
+    expect(result.operation.status).toBe('queued')
+    expect(result.intent.action.kind).toBe('modify_position')
     expect(result.reservations).toHaveLength(0)
     expect(repository.records).toHaveLength(1)
     expect(repository.records[0]?.result).toBe(result)
   })
 
-  it('persists widening a pending-order stop as a rejected terminal operation', async () => {
+  it('allows widening a manual pending-order stop', async () => {
     const repository = new MemoryUserExecutionCommandRepository(makeContext())
     const result = await new UserExecutionCommandService(repository).execute(widenPendingStopInput('widen-pending-01'), now)
 
-    expect(result.kind).toBe('rejected')
-    if (result.kind !== 'rejected') return
-    expect(result.operation.status).toBe('rejected')
-    expect(result.intent).toBeNull()
+    expect(result.kind).toBe('prepared')
+    if (result.kind !== 'prepared') return
+    expect(result.operation.status).toBe('queued')
+    expect(result.intent.action.kind).toBe('modify_order')
     expect(result.reservations).toHaveLength(0)
     expect(repository.records).toHaveLength(1)
   })

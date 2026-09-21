@@ -5137,7 +5137,6 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
           "side",
           "symbol",
           "volume",
-          "stop_loss",
           "reference_price",
           "expected_state"
         ],
@@ -6826,7 +6825,6 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
           "order_type",
           "symbol",
           "volume",
-          "stop_loss",
           "reference_price",
           "price",
           "expected_state"

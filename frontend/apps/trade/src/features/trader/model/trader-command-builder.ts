@@ -9,6 +9,7 @@ import type { TraderEntryCommandDraft, TraderResourceEditDraft } from './trader-
 import { isPosition } from './trader-presentation'
 
 export function buildDistributionEntryCommand(draft: TraderEntryCommandDraft): ExecutionDistribution['command'] {
+  if (!draft.stop_loss) throw new Error('distribution_stop_loss_required')
   if (draft.command_type === 'market_order') {
     return {
       command_type: 'market_order',
@@ -35,8 +36,31 @@ export function buildDistributionEntryCommand(draft: TraderEntryCommandDraft): E
 }
 
 export function buildAccountEntryCommand(draft: TraderEntryCommandDraft, context: ExecutionCommandContext): ExecutionCommand {
-  const command = buildDistributionEntryCommand(draft)
-  return { ...command, expected_state: context.expectedState }
+  if (draft.command_type === 'market_order') {
+    return {
+      command_type: 'market_order',
+      side: draft.side ?? 'buy',
+      symbol: draft.symbol,
+      volume: draft.volume,
+      reference_price: draft.reference_price,
+      ...(draft.stop_loss ? { stop_loss: draft.stop_loss } : {}),
+      ...(draft.take_profit ? { take_profit: draft.take_profit } : {}),
+      expected_state: context.expectedState,
+    }
+  }
+  return {
+    command_type: 'pending_order',
+    order_type: draft.order_type ?? 'buy_limit',
+    symbol: draft.symbol,
+    volume: draft.volume,
+    reference_price: draft.reference_price,
+    price: draft.price ?? '',
+    ...(draft.stop_limit_price ? { stop_limit_price: draft.stop_limit_price } : {}),
+    ...(draft.stop_loss ? { stop_loss: draft.stop_loss } : {}),
+    ...(draft.take_profit ? { take_profit: draft.take_profit } : {}),
+    ...(draft.expiration_utc_msc ? { expiration_utc_msc: draft.expiration_utc_msc } : {}),
+    expected_state: context.expectedState,
+  }
 }
 
 export function buildResourceEditCommand(

@@ -127,7 +127,7 @@ export class MysqlBridgeCommandRepository implements BridgeCommandRepository {
       let authority: PositionProtectionCommandReview | undefined
       if (intent.source_type === 'position_workflow') authority = await protection!.authorize(connection,command,intent.source_id)
       await assertExpectedStateMatchesSnapshot(connection, command, authority?.action ?? sourceAction)
-      if (command.action === 'order.place' && sourceAction.kind === 'pending_order') {
+      if (command.action === 'order.place' && sourceAction.kind === 'pending_order' && requiresOrderReview(intent.source_type)) {
         await this.reviewOrder(connection, command, new Date(command.issuedAt))
       }
       await connection.execute(`INSERT INTO bridge_commands_v4
@@ -195,7 +195,7 @@ export class MysqlBridgeCommandRepository implements BridgeCommandRepository {
           throw error
         }
       }
-      if (command.action === 'order.place') {
+      if (command.action === 'order.place' && requiresOrderReview(intent.source_type)) {
         await this.reviewOrder(connection, command, new Date(now))
       }
       const next = await moveCommand(connection, command, 'dispatched', now, null, { dispatched: now })
@@ -354,6 +354,10 @@ export class MysqlBridgeCommandRepository implements BridgeCommandRepository {
       return work(connection, mapCommand(rows[0]), intent)
     })
   }
+}
+
+function requiresOrderReview(sourceType: string) {
+  return sourceType !== 'user_command'
 }
 
 async function lockExactRoute(connection: PoolConnection, command: BridgeCommand) {

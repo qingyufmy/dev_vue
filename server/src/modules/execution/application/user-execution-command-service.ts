@@ -1,7 +1,7 @@
 import { userCommandTargetVersion } from '../domain/user-command-target-version.js'
-import { matchesMarketSymbol } from '../../trading/index.js'
+import { matchesMarketSymbol, type InstrumentCollectionRequester } from '../../trading/index.js'
 import { randomUUID } from 'node:crypto'
-import { evaluateRisk, type RiskEvaluationInput } from '../../risk/index.js'
+import { evaluateRisk, riskPolicyHash, type RiskEvaluationInput, type RiskEvaluationResult } from '../../risk/index.js'
 import type { TraderAction, TraderDecisionResult } from '../../inference/index.js'
 import {
   buildPreparedUserExecutionBundle,
@@ -31,14 +31,17 @@ const USER_COMMAND_RISK_REVISIONS: Array<keyof RiskEvaluationInput['currentRevis
 /**
  * Application boundary for authenticated single-account execution commands.
  *
- * This service performs validation and deterministic risk evaluation only.  It
- * never invokes Bridge or a terminal; the returned result is handed to the
- * execution preparation/dispatch workers by the composition root.
+ * This service validates ownership, current snapshots and exact resource
+ * versions. Strategy-originated commands receive deterministic risk review;
+ * direct user commands record an explicit risk bypass. It never invokes Bridge
+ * or a terminal; dispatch remains asynchronous.
  */
 export class UserExecutionCommandService {
   constructor(
     private readonly repository: UserExecutionCommandRepository,
     private readonly riskEvaluator: UserExecutionRiskEvaluator = { evaluate: evaluateRisk },
+    private readonly instrumentRequests?: InstrumentCollectionRequester,
+    private readonly pause: (milliseconds: number) => Promise<void> = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)),
   ) {}
 
   async commandContext(input: { userId: number; accountId: string; symbol?: string | null; ticket?: string | null }) {
@@ -50,8 +53,18 @@ export class UserExecutionCommandService {
     if (symbol !== null && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(symbol)) throw new UserExecutionCommandError('user_command_symbol_invalid', 400)
     if (ticket !== null && !/^[0-9A-Za-z._:-]{1,64}$/.test(ticket)) throw new UserExecutionCommandError('user_command_ticket_invalid', 400)
     if (symbol === null && ticket === null) throw new UserExecutionCommandError('user_command_target_required', 400)
-    const context = await this.repository.loadContext({ userId: input.userId, accountId, symbol, ticket })
+    let context = await this.repository.loadContext({ userId: input.userId, accountId, symbol, ticket })
     if (!context) throw new UserExecutionCommandError('user_command_account_not_found', 404)
+    if (symbol !== null && context.instrument.revision === 0 && this.instrumentRequests) {
+      await this.instrumentRequests.request({ userId: input.userId, accountId, symbol })
+      for (let attempt = 0; attempt < 8 && context.instrument.revision === 0; attempt++) {
+        await this.pause(250)
+        const refreshed = await this.repository.loadContext({ userId: input.userId, accountId, symbol, ticket })
+        if (!refreshed) throw new UserExecutionCommandError('user_command_account_not_found', 404)
+        context = refreshed
+      }
+      if (context.instrument.revision === 0) throw new UserExecutionCommandError('user_command_instrument_refresh_incomplete', 503)
+    }
     return { context, symbol, ticket }
   }
 
@@ -60,7 +73,7 @@ export class UserExecutionCommandService {
     if (this.repository.withAccountTransaction) {
       const normalized = normalizeUserExecutionCommand(input, randomUUID())
       return this.repository.withAccountTransaction(normalized,
-        repository => new UserExecutionCommandService(repository, this.riskEvaluator).execute(input, now))
+        repository => new UserExecutionCommandService(repository, this.riskEvaluator, this.instrumentRequests, this.pause).execute(input, now))
     }
     // A stale transaction rolls back before any command or outbox is committed.
     // Re-evaluate at most twice; never retry unknown outcomes or terminal operations.
@@ -129,7 +142,9 @@ export class UserExecutionCommandService {
     const action = userCommandAction(command)
     const riskAction = riskActionFor(command, action, context)
     const riskInput = riskInputFor(command, riskAction, context, now)
-    const riskEvaluation = this.riskEvaluator.evaluate(riskInput, now)
+    const riskEvaluation = command.sourceType === 'user_command'
+      ? manualCommandEvaluation(action, context, now)
+      : this.riskEvaluator.evaluate(riskInput, now)
     if (riskEvaluation.status === 'rejected') {
       const rejected = buildRejectedUserExecutionResult({ command, riskEvaluation, operationId: randomUUID(), now })
       return this.repository.persistCommand({ command, action, riskEvaluation, result: rejected, expected: command.expected })
@@ -150,12 +165,27 @@ export class UserExecutionCommandService {
   }
 }
 
+function manualCommandEvaluation(action: TraderAction, context: UserExecutionCommandContext, now: Date): RiskEvaluationResult {
+  return {
+    status: 'approved',
+    rejectCode: null,
+    rules: [{
+      code: 'RISK_MANUAL_COMMAND_BYPASS',
+      outcome: 'passed',
+      actionId: action.actionId,
+      details: { source_type: 'user_command' },
+    }],
+    approvedActions: [action],
+    evaluatedAt: now.toISOString(),
+    policyHash: riskPolicyHash(context.policy),
+    manualReleaseId: null,
+    manualReleaseRevision: null,
+  }
+}
+
 /**
- * Generic evaluateRisk intentionally rejects arbitrary modification actions.
- * User commands may still tighten protection, but only after an explicit
- * current-snapshot diff proves the operation reduces exposure.  The probe adds
- * a conservative stop-loss field solely for the generic evaluator; the
- * persisted action remains the original user action.
+ * Resource commands still bind the exact current ticket and validate close
+ * volume before either manual bypass or strategy risk evaluation is recorded.
  */
 function riskActionFor(command: NormalizedUserExecutionCommand, action: TraderAction, context: UserExecutionCommandContext): TraderAction {
   if (command.commandType === 'close_position' || command.commandType === 'cancel_order' || command.commandType === 'market_order' || command.commandType === 'pending_order') {

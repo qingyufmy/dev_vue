@@ -31,6 +31,7 @@ describe('trader presentation', () => {
   it('maps action, status, side, order type, and source to Chinese labels', () => {
     expect(actionLabel('market_order')).toBe('市价单')
     expect(actionLabel('modify_position')).toBe('修改持仓')
+    expect(actionLabel('distribution_close')).toBe('分发平仓')
     expect(decisionStatusLabel('risk_rejected')).toBe('风控拒绝')
     expect(statusLabel('uncertain')).toBe('待核实')
     expect(sideLabel('buy')).toBe('买入')

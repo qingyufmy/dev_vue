@@ -14,6 +14,28 @@ import { accountSnapshot, applyAccountSnapshot } from '~/features/trading-contex
 import { traderApi } from '../api/trader-api'
 import { createTraderRealtime, type TraderRealtimeState } from '../realtime/trader-realtime'
 
+export interface InventoryReconcileRequest {
+  command: string
+  ticket?: string
+  positionsRevision: number
+  pendingOrdersRevision: number
+}
+
+export function inventoryMatchesOperation(
+  request: InventoryReconcileRequest,
+  positions: OpenPosition[],
+  orders: PendingOrder[],
+  revisions: { positions: number; pendingOrders: number },
+) {
+  const position = request.ticket ? positions.some(item => item.ticket === request.ticket) : false
+  const order = request.ticket ? orders.some(item => item.ticket === request.ticket) : false
+  if (request.command === 'close_position') return !position
+  if (request.command === 'cancel_order') return !order
+  if (request.command === 'market_order' || request.command === 'modify_position') return revisions.positions > request.positionsRevision
+  if (request.command === 'pending_order' || request.command === 'modify_order') return revisions.pendingOrders > request.pendingOrdersRevision
+  return true
+}
+
 export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecision: (id: string) => void, operationChanged?: (operationId: string) => void) {
   const { session } = useTradeSession()
   const openPositions = ref<OpenPosition[]>([])
@@ -45,6 +67,10 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
     ?? tradingAccounts.value.find((item) => item.id === activeAccountId.value)
     ?? null)
   const isObserver = computed(() => tradingContext.value?.mode === 'observer')
+  const inventoryRevisions = computed(() => ({
+    positionsRevision: resourceRevisions.value.positions,
+    pendingOrdersRevision: resourceRevisions.value.pendingOrders,
+  }))
 
   async function load() {
     if (!session.value) return
@@ -161,6 +187,20 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
     finally { if (current()) refreshing.value = false }
   }
 
+  async function reconcileInventory(request: InventoryReconcileRequest) {
+    for (let attempt = 0; attempt < 8; attempt++) {
+      await syncWorkspace()
+      const reconciled = inventoryMatchesOperation(request, openPositions.value, pendingOrders.value, resourceRevisions.value)
+      if (reconciled) {
+        operationNotice.value = '交易执行结果与账户持仓、挂单已同步。'
+        return true
+      }
+      if (attempt < 7) await new Promise(resolve => setTimeout(resolve, 300))
+    }
+    operationNotice.value = '交易已完成，账户持仓仍在同步；页面会继续接收实时更新。'
+    return false
+  }
+
   async function selectAccount(accountId: string) {
     if (contextCommandState.value.busy) return
     if (!session.value || !tradingContext.value) return
@@ -229,9 +269,9 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
       onOperationChanged: (operationId) => {
         if (!current()) return
         executionRefreshVersion.value++
-        operationNotice.value = '交易执行状态已变化，账户资源已重新同步。'
+        operationNotice.value = '交易执行状态已变化，正在同步账户持仓与挂单。'
         operationChanged?.(operationId)
-        void Promise.all([syncWorkspace(), refreshDecisions()])
+        void refreshDecisions()
       },
       resync: () => {
         if (!current()) return Promise.resolve()
@@ -329,8 +369,10 @@ export function useTraderWorkspace(selectedDecisionId: Ref<string>, selectDecisi
     detailError,
     decisionsError,
     operationNotice,
+    inventoryRevisions,
     load,
     refresh,
+    reconcileInventory,
     selectAccount,
   }
 }

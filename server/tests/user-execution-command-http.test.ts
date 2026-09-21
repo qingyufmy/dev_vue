@@ -60,8 +60,8 @@ it('maps all six canonical command variants without losing explicit removal flag
   const f = await fixture(); try {
     const { resource_revision: _resource, ...expected } = body.expected_state
     const cases = [
-      { payload: { command_type: 'market_order', side: 'buy', symbol: 'XAUUSD', volume: '0.01', stop_loss: '2490', reference_price: '2500', expected_state: expected },
-        parameters: { volume: '0.01', stopLoss: '2490', referencePrice: '2500' } },
+      { payload: { command_type: 'market_order', side: 'buy', symbol: 'XAUUSD', volume: '0.01', reference_price: '2500', expected_state: expected },
+        parameters: { volume: '0.01', stopLoss: undefined, referencePrice: '2500' } },
       { payload: { command_type: 'pending_order', order_type: 'buy_limit', symbol: 'XAUUSD', volume: '0.01', stop_loss: '2480', reference_price: '2500', price: '2490', expected_state: expected },
         parameters: { orderType: 'buy_limit', price: '2490', volume: '0.01' } },
       { payload: { command_type: 'modify_position', ticket: '9001', remove_stop_loss: true, take_profit: '2510', expected_state: body.expected_state },

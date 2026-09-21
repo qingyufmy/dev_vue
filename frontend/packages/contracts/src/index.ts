@@ -1183,7 +1183,7 @@ export const marketOrderCommandSchema = z.object({
   side: executionSideSchema,
   symbol: executionSymbolSchema,
   volume: executionPositiveDecimalSchema,
-  stop_loss: executionPositiveDecimalSchema,
+  stop_loss: executionPositiveDecimalSchema.optional(),
   reference_price: executionPositiveDecimalSchema,
   take_profit: executionPositiveDecimalSchema.optional(),
   ...executionEntryExpectedCommandFields,
@@ -1194,7 +1194,7 @@ export const pendingOrderCommandSchema = z.object({
   order_type: executionOrderTypeSchema,
   symbol: executionSymbolSchema,
   volume: executionPositiveDecimalSchema,
-  stop_loss: executionPositiveDecimalSchema,
+  stop_loss: executionPositiveDecimalSchema.optional(),
   reference_price: executionPositiveDecimalSchema,
   price: executionPositiveDecimalSchema,
   stop_limit_price: executionPositiveDecimalSchema.optional(),
@@ -1282,8 +1282,12 @@ export const executionCommandSchema = z.discriminatedUnion('command_type', [
   cancelOrderCommandSchema,
 ])
 
-const distributionMarketOrderCommandSchema = marketOrderCommandSchema.omit({ expected_state: true })
-const distributionPendingOrderCommandSchema = pendingOrderCommandSchema.omit({ expected_state: true })
+const distributionMarketOrderCommandSchema = marketOrderCommandSchema.omit({ expected_state: true }).extend({
+  stop_loss: executionPositiveDecimalSchema,
+}).strict()
+const distributionPendingOrderCommandSchema = pendingOrderCommandSchema.omit({ expected_state: true }).extend({
+  stop_loss: executionPositiveDecimalSchema,
+}).strict()
 export const executionDistributionCommandSchema = z.discriminatedUnion('command_type', [
   distributionMarketOrderCommandSchema,
   distributionPendingOrderCommandSchema,

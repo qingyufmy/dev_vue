@@ -8,7 +8,7 @@ export interface TraderEntryCommandDraft {
   order_type?: TraderPendingOrderType
   symbol: string
   volume: string
-  stop_loss: string
+  stop_loss?: string
   reference_price: string
   price?: string
   stop_limit_price?: string

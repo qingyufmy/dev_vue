@@ -112,7 +112,7 @@ function prepared(command: NormalizedUserExecutionCommand): UserExecutionCommand
 }
 
 describe('user execution command MySQL boundary', () => {
-  it('rejects oversized orders before persisting operation or reservation even with an approved evaluation', async () => {
+  it('does not reapply the per-order strategy limit to a manual command', async () => {
     const command = marketCommand()
     if (!('volume' in command.parameters)) throw new Error('fixture requires volume')
     command.parameters.volume = '0.2'
@@ -120,8 +120,8 @@ describe('user execution command MySQL boundary', () => {
     const fake = fakePool()
     const repository = new MysqlUserExecutionCommandRepository(fake.pool, createTransactionAccountClock)
     await expect(repository.persistCommand({ command, action: userCommandAction(command), riskEvaluation: result.riskEvaluation, result, expected: command.expected }))
-      .rejects.toMatchObject({ code: 'user_command_order_volume_exceeded' })
-    expect(fake.calls.some(call => /INSERT INTO operations|INSERT INTO risk_reservations/i.test(call.sql))).toBe(false)
+      .resolves.toBe(result)
+    expect(fake.calls.some(call => /^\s*INSERT INTO operations/i.test(call.sql))).toBe(true)
   })
 
   it('locks the account first and persists an approved command, intent, payload, events and outbox atomically', async () => {

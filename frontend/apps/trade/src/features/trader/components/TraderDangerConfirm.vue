@@ -100,7 +100,7 @@ function display(value: string | number | null | undefined) {
         <CircleAlert aria-hidden="true" />
         <AlertTitle>{{ isDestructive ? '这是不可逆或有资金影响的操作' : '请确认交易参数' }}</AlertTitle>
         <AlertDescription>
-          {{ detail || '提交后请在执行记录中查看处理结果，并以终端成交及持仓更新为准。' }}
+          {{ detail || '提交后会在当前页面提示受理结果，并以终端成交及持仓更新为准。' }}
           <Badge v-if="isDestructive" variant="destructive" class="ml-1 align-middle">需要确认</Badge>
         </AlertDescription>
       </Alert>

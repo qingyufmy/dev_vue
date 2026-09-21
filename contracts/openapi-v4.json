@@ -5451,7 +5451,6 @@
           "side",
           "symbol",
           "volume",
-          "stop_loss",
           "reference_price",
           "expected_state"
         ],
@@ -7140,7 +7139,6 @@
           "order_type",
           "symbol",
           "volume",
-          "stop_loss",
           "reference_price",
           "price",
           "expected_state"

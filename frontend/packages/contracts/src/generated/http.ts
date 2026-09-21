@@ -3368,7 +3368,7 @@ export interface components {
             reference_price: components["schemas"]["PositiveDecimal"];
             /** @enum {string} */
             side: "buy" | "sell";
-            stop_loss: components["schemas"]["PositiveDecimal"];
+            stop_loss?: components["schemas"]["PositiveDecimal"];
             symbol: components["schemas"]["Symbol"];
             take_profit?: components["schemas"]["PositiveDecimal"];
             volume: components["schemas"]["PositiveDecimal"];
@@ -3721,7 +3721,7 @@ export interface components {
             price: components["schemas"]["PositiveDecimal"];
             reference_price: components["schemas"]["PositiveDecimal"];
             stop_limit_price?: components["schemas"]["PositiveDecimal"];
-            stop_loss: components["schemas"]["PositiveDecimal"];
+            stop_loss?: components["schemas"]["PositiveDecimal"];
             symbol: components["schemas"]["Symbol"];
             take_profit?: components["schemas"]["PositiveDecimal"];
             volume: components["schemas"]["PositiveDecimal"];

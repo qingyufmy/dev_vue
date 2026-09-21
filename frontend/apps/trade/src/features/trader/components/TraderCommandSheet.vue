@@ -173,7 +173,8 @@ function validate() {
   if (!positive(referencePrice.value)) next.reference_price = '当前没有可用的参考报价，请稍后重试'
   if (needsPendingPrice.value && !positive(pendingPrice.value)) next.price = '请输入大于 0 的挂单价'
   if (stopLimitVisible.value && !positive(stopLimitPrice.value)) next.stop_limit_price = '止损限价单必须填写止损限价'
-  if (!positive(stopLoss.value)) next.stop_loss = '止损价为必填项，且必须大于 0'
+  if (props.distribution && !positive(stopLoss.value)) next.stop_loss = '策略分发必须填写大于 0 的止损价'
+  if (!props.distribution && stopLoss.value && !positive(stopLoss.value)) next.stop_loss = '止损价必须大于 0'
   if (takeProfit.value && !positive(takeProfit.value)) next.take_profit = '止盈价必须大于 0'
   if (expirationEnabled.value && !expiration.value) next.expiration = '启用到期时间后，请选择具体时间'
   if (expirationEnabled.value && expiration.value && !Number.isFinite(expirationUtc())) next.expiration = '请填写有效的终端时间；账户或时区变化后请重新打开表单，未校准时暂不可设置有效期'
@@ -192,9 +193,9 @@ function submit() {
     command_type: commandType.value,
     symbol: symbol.value,
     volume: volume.value,
-    stop_loss: stopLoss.value,
     reference_price: referencePrice.value,
   }
+  if (stopLoss.value) draft.stop_loss = stopLoss.value
   if (commandType.value === 'market_order') draft.side = side.value
   if (commandType.value === 'pending_order') {
     draft.order_type = orderType.value
@@ -237,7 +238,7 @@ function pendingTypeLabel(value: PendingOrderType) {
           <Badge v-if="readOnly" variant="secondary"><ShieldCheck aria-hidden="true" />只读</Badge>
         </div>
         <SheetTitle>{{ title }}</SheetTitle>
-        <SheetDescription>填写交易参数后提交，服务端会再次校验账户状态、风险策略与最新资源版本。</SheetDescription>
+        <SheetDescription>{{ distribution ? '填写参数后分发，服务端会校验目标账户、风险策略与最新资源版本。' : '手动指令不经过策略风控；账户状态、资源版本和 MT5/券商规则仍会校验。' }}</SheetDescription>
       </SheetHeader>
 
       <div class="min-h-0 flex-1 overflow-y-auto">
@@ -349,9 +350,9 @@ function pendingTypeLabel(value: PendingOrderType) {
 
             <div class="grid gap-5 sm:grid-cols-2">
               <Field :data-invalid="Boolean(errors.stop_loss)">
-                <FieldLabel for="command-stop-loss">止损价 <span class="text-destructive">必填</span></FieldLabel>
-                <Input id="command-stop-loss" v-model="stopLoss" inputmode="decimal" placeholder="输入保护价" :disabled="readOnly" :aria-invalid="Boolean(errors.stop_loss)" />
-                <FieldDescription>用于限制单笔风险，服务端仍会执行最终风控。</FieldDescription>
+                <FieldLabel for="command-stop-loss">止损价 <span :class="distribution ? 'text-destructive' : 'text-muted-foreground'">{{ distribution ? '必填' : '可选' }}</span></FieldLabel>
+                <Input id="command-stop-loss" v-model="stopLoss" inputmode="decimal" :placeholder="distribution ? '输入保护价' : '可留空'" :disabled="readOnly" :aria-invalid="Boolean(errors.stop_loss)" />
+                <FieldDescription>{{ distribution ? '策略分发仍执行确定性风控。' : '留空表示不设置止损，由 MT5/券商校验最终指令。' }}</FieldDescription>
                 <FieldError :errors="errors.stop_loss ? [errors.stop_loss] : []" />
               </Field>
               <Field :data-invalid="Boolean(errors.take_profit)">

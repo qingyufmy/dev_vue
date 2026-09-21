@@ -157,7 +157,7 @@ function requestCancelOrder() {
                 <Button variant="destructive" size="lg" class="min-h-11" :disabled="readOnly" @click="requestCancelOrder"><Ban data-icon="inline-start" />撤单</Button>
               </div>
         </div>
-        <p v-if="resource && !readOnly" class="text-xs text-muted-foreground">提交前会再次确认，处理结果可在执行记录中查看。</p>
+        <p v-if="resource && !readOnly" class="text-xs text-muted-foreground">提交前会再次确认，提交结果会在当前页面提示。</p>
         <Button variant="outline" size="lg" @click="emit('update:open', false)">关闭</Button>
       </SheetFooter>
     </SheetContent>

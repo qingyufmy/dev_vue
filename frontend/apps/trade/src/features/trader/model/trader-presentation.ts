@@ -16,6 +16,7 @@ const actionLabels: Record<string, string> = {
   close_position: '平仓',
   modify_order: '修改挂单',
   cancel_order: '撤单',
+  distribution_close: '分发平仓',
 }
 
 const statusLabels: Record<string, string> = {

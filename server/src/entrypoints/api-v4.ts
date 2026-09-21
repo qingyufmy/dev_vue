@@ -15,7 +15,7 @@ import { createAnalysisStrategyAccess } from '../modules/strategies/composition.
 import { createAdminPrincipalAccess } from '../modules/auth/composition.js'
 import { createAccountPrincipalReader, createMysqlMarketProviders } from '../modules/auth/composition.js'
 import { createMysqlArchivedSignalReader, createMysqlMarketAnalysisList, createMysqlInferenceRepository, createInferenceHttp, createMysqlTradeDecisionRiskWriter } from '../modules/inference/composition.js'
-import { createTransactionAccountClock, createMysqlInstrumentSnapshotReader } from '../modules/trading/composition.js'
+import { createTransactionAccountClock, createMysqlInstrumentCollectionRequester, createMysqlInstrumentSnapshotReader } from '../modules/trading/composition.js'
 import { createMysqlLearningService, createMysqlLearningCompletionService, createLearningHttp } from '../modules/learning/composition.js'
 import { MysqlLearningMembershipReader, MysqlReferralRuleManagement, createReferralRuleHttp } from '../modules/commerce/composition.js'
 import { createMysqlSettingsModule, createSettingReader } from '../modules/settings/composition.js'
@@ -62,7 +62,11 @@ async function main() {
     calculate: input => publicChanChart({ ...input, clock: null }),
   })
   const { tradeAuth, observerAdminAuth } = trading
-  const userExecution = new UserExecutionCommandService(new MysqlUserExecutionCommandRepository(pool, createTransactionAccountClock, createMysqlInstrumentSnapshotReader(pool)))
+  const userExecution = new UserExecutionCommandService(
+    new MysqlUserExecutionCommandRepository(pool, createTransactionAccountClock, createMysqlInstrumentSnapshotReader(pool)),
+    undefined,
+    createMysqlInstrumentCollectionRequester(pool),
+  )
   const executionDistribution = new ExecutionDistributionService(new MysqlExecutionDistributionRepository(pool))
   const strategies = createMysqlStrategyService(pool)
   const app = Fastify({ logger: true, bodyLimit: 1024 * 1024, trustProxy: true })

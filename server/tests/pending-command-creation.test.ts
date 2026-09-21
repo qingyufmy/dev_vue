@@ -15,14 +15,14 @@ const action = { actionId: 'a1', kind: 'pending_order', parameters: { symbol: 'X
 const policy = resolveRiskPolicy({ userId: 7, accountId: '11', platformPolicyVersionId: '1', accountPolicyVersionId: null, policySetRevision: 1,
   platform: { values: DEFAULT_RISK_POLICY, globalKillSwitch: false, revision: 1 }, account: { tradeSendEnabled: true }, updatedAt: now.toISOString() })
 
-function fixture(reject: boolean, wired = true) {
+function fixture(reject: boolean, wired = true, sourceType = 'risk_decision') {
   const trace: string[] = []
   const execute = vi.fn(async (sql: string) => {
     trace.push(sql.startsWith('INSERT') ? 'insert' : 'read')
     if (sql.startsWith('SELECT id FROM trading_accounts') || sql.startsWith('SELECT a.id FROM trading_accounts')) return [[{ id: '11' }]]
     if (sql.includes('FROM bridge_commands_v4 c') || sql.startsWith('SELECT id FROM bridge_commands_v4')) return [[]]
     if (sql.startsWith('SELECT id,operation_id')) return [[{ id: command.executionIntentId, operation_id: 'op', user_id: 7,
-      trading_account_id: '11', action_kind: 'pending_order', source_type: 'risk_decision', source_id: 'risk', status: 'prepared', revision: 1,
+      trading_account_id: '11', action_kind: 'pending_order', source_type: sourceType, source_id: 'risk', status: 'prepared', revision: 1,
       expires_at_utc: new Date('2026-09-11T00:01:00.000Z') }]]
     if (sql.startsWith('SELECT action_json')) return [[{ action_json: action, action_sha256: sha256Canonical(action) }]]
     if (sql.startsWith('INSERT')) return [{ affectedRows: 1 }]
@@ -57,4 +57,11 @@ it('refuses unwired pending creation without writing a partial command', async (
   await expect(f.repository.create(command)).rejects.toMatchObject({ code: 'execution_pending_review_unavailable' })
   expect(f.trace).not.toContain('insert')
   expect(f.connection.rollback).toHaveBeenCalledOnce()
+})
+
+it('does not run strategy pending-order review for a direct manual command', async () => {
+  const f = fixture(true, false, 'user_command')
+  await expect(f.repository.create(command)).resolves.toEqual(command)
+  expect(f.review).not.toHaveBeenCalled()
+  expect(f.connection.commit).toHaveBeenCalledOnce()
 })

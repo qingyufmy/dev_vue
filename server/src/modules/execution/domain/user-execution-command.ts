@@ -34,7 +34,7 @@ export interface MarketOrderParameters {
   symbol: string
   side: 'buy' | 'sell'
   volume: string
-  stopLoss: string
+  stopLoss: string | null
   takeProfit: string | null
   referencePrice: string
   comment: string | null
@@ -46,7 +46,7 @@ export interface PendingOrderParameters {
   volume: string
   price: string
   stopLimitPrice: string | null
-  stopLoss: string
+  stopLoss: string | null
   takeProfit: string | null
   referencePrice: string
   expirationUtcMsc: number | null
@@ -246,6 +246,10 @@ export function normalizeUserExecutionCommand(input: UserExecutionCommandInput, 
   if (sourceType !== 'user_command' && (!input.sourceId || !parentOperationId || !distributionId)) throw commandError('user_command_distribution_context_required', 422)
   const expected = normalizeExpected(input.expected, commandType)
   const parameters = normalizeParameters(commandType, input.parameters)
+  if (sourceType !== 'user_command' && (commandType === 'market_order' || commandType === 'pending_order')
+    && (parameters as MarketOrderParameters | PendingOrderParameters).stopLoss === null) {
+    throw commandError('user_command_stop_loss_required', 422)
+  }
   const normalized = { userId: input.userId, accountId, commandType, idempotencyKey, expected, parameters, commandId: normalizedCommandId, requestHash: '', sourceType, sourceId, parentOperationId, distributionId }
   normalized.requestHash = userExecutionRequestHash(normalized)
   return normalized
@@ -411,7 +415,7 @@ function normalizeParameters(commandType: UserExecutionCommandType, value: UserE
       const source = value as Partial<MarketOrderParameters>
       return {
         symbol: symbol(source.symbol), side: side(source.side), volume: decimal(source.volume, 'user_command_volume_invalid'),
-        stopLoss: decimal(source.stopLoss, 'user_command_stop_loss_required'),
+        stopLoss: nullableDecimal(source.stopLoss, 'user_command_stop_loss_invalid'),
         takeProfit: nullableDecimal(source.takeProfit, 'user_command_take_profit_invalid'),
         referencePrice: decimal(source.referencePrice, 'user_command_reference_price_required'),
         comment: nullableText(source.comment, 128),
@@ -424,7 +428,7 @@ function normalizeParameters(commandType: UserExecutionCommandType, value: UserE
       const expirationUtcMsc = nullableEpochMsc(source.expirationUtcMsc, 'user_command_expiration_invalid')
       return {
         symbol: symbol(source.symbol), orderType, volume: decimal(source.volume, 'user_command_volume_invalid'),
-        price: decimal(source.price, 'user_command_price_required'), stopLimitPrice: nullableDecimal(source.stopLimitPrice, 'user_command_stop_limit_price_invalid'), stopLoss: decimal(source.stopLoss, 'user_command_stop_loss_required'),
+        price: decimal(source.price, 'user_command_price_required'), stopLimitPrice: nullableDecimal(source.stopLimitPrice, 'user_command_stop_limit_price_invalid'), stopLoss: nullableDecimal(source.stopLoss, 'user_command_stop_loss_invalid'),
         takeProfit: nullableDecimal(source.takeProfit, 'user_command_take_profit_invalid'),
         referencePrice: decimal(source.referencePrice, 'user_command_reference_price_required'), expirationUtcMsc,
         comment: nullableText(source.comment, 128),

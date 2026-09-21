@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { AccountExecutionHistory } from '~/features/audit'
 import { contextCommandState } from '~/features/trading-context'
-import type { ExecutionCommand, ExecutionDistribution, OpenPosition, PendingOrder } from '@aurum/contracts'
+import type { ExecutionCommand, ExecutionDistribution, OpenPosition, Operation, PendingOrder } from '@aurum/contracts'
 import { AlertCircle, Cable, Eye, HandCoins, Plus, RefreshCw } from '@lucide/vue'
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { toast } from '@aurum/ui/sonner'
 import { Alert, AlertDescription, AlertTitle } from '@aurum/ui/alert'
 import { Button } from '@aurum/ui/button'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@aurum/ui/tabs'
@@ -22,7 +23,7 @@ import { useTraderCommands } from '../composables/use-trader-commands'
 import { useTraderWorkspace } from '../composables/use-trader-workspace'
 import type { TraderEntryCommandDraft, TraderResourceEditDraft } from '../model/trader-command-drafts'
 import { buildAccountEntryCommand, buildDistributionEntryCommand, buildResourceDestructiveCommand, buildResourceEditCommand } from '../model/trader-command-builder'
-import { isPosition } from '../model/trader-presentation'
+import { actionLabel, isPosition, statusLabel } from '../model/trader-presentation'
 
 const route = useRoute()
 const router = useRouter()
@@ -39,6 +40,10 @@ type PendingAction =
   | { kind: 'distribution'; payload: ExecutionDistribution; summary: ConfirmSummary }
   | { kind: 'distribution_close'; distributionId: string; expectedRevision: string; summary: ConfirmSummary }
 const pendingAction = ref<PendingAction | null>(null)
+const terminalOperationStatuses = new Set(['succeeded', 'partially_succeeded', 'rejected', 'failed', 'uncertain', 'cancelled', 'expired'])
+type InventoryBaseline = { positionsRevision: number; pendingOrdersRevision: number }
+type OperationFeedback = { command: string; status: string; ticket?: string; baseline: InventoryBaseline }
+const pendingOperationFeedback = new Map<string, OperationFeedback>()
 const activeTab = computed({
   get: () => ['decisions','inventory','operations'].includes(String(route.query.tab)) ? String(route.query.tab) : 'decisions',
   set: (value: string) => {
@@ -169,18 +174,74 @@ function requestDistributionClose() {
 async function confirmAction() {
   const action = pendingAction.value
   if (!action) return
+  const baseline = workspace.inventoryRevisions.value
   const operation = action.kind === 'command'
     ? await commands.submitCommand(action.accountId, action.payload)
     : action.kind === 'distribution'
       ? await commands.submitDistributionCommand(action.payload)
       : await commands.submitDistributionClose(action.distributionId, action.expectedRevision)
-  if (!operation) return
+  if (!operation) {
+    toast.error('交易指令提交失败', {
+      description: commands.error.value || '请核对连接、账户状态和交易参数后重试。',
+      duration: 5000,
+    })
+    return
+  }
   pendingAction.value = null
   commandOpen.value = false
   distributionOpen.value = false
   resourceEditOpen.value = false
-  activeTab.value = 'operations'
-  await workspace.refresh()
+  showOperationFeedback(operation, action.summary.command)
+  if (!terminalOperationStatuses.has(operation.status)) {
+    pendingOperationFeedback.set(operation.operationId, {
+      command: action.summary.command,
+      status: operation.status,
+      ticket: action.summary.ticket,
+      baseline,
+    })
+    await workspace.refresh()
+    return
+  }
+  await refreshAfterTerminalOperation(operation, {
+    command: action.summary.command,
+    status: operation.status,
+    ticket: action.summary.ticket,
+    baseline,
+  })
+}
+
+async function refreshAfterTerminalOperation(operation: Operation, feedback: OperationFeedback) {
+  if (operation.status === 'succeeded') {
+    await workspace.reconcileInventory({
+      command: feedback.command,
+      ticket: feedback.ticket,
+      positionsRevision: feedback.baseline.positionsRevision,
+      pendingOrdersRevision: feedback.baseline.pendingOrdersRevision,
+    })
+  } else await workspace.refresh()
+  if (resourceSelection.value && !selectedResource.value) {
+    resourceOpen.value = false
+    resourceSelection.value = null
+  }
+  if (editingResource.value && !workspace.positions.value.some(item => item.ticket === editingResource.value?.ticket)
+    && !workspace.pendingOrders.value.some(item => item.ticket === editingResource.value?.ticket)) {
+    resourceEditOpen.value = false
+    editingResource.value = null
+    actionError.value = ''
+    commands.clearPreparedState()
+  }
+}
+
+function showOperationFeedback(operation: Operation, command: string) {
+  const feedback = {
+    description: `${actionLabel(command)}当前状态：${statusLabel(operation.status)}。当前页面会继续更新账户状态。`,
+    duration: 5000,
+    action: { label: '查看执行记录', onClick: () => { activeTab.value = 'operations' } },
+  }
+  if (operation.status === 'succeeded') toast.success('交易操作已完成', feedback)
+  else if (['rejected', 'failed', 'cancelled', 'expired'].includes(operation.status)) toast.error('交易指令未完成', feedback)
+  else if (['partially_succeeded', 'uncertain'].includes(operation.status)) toast.warning('交易结果需要核实', feedback)
+  else toast.info('交易指令已受理', feedback)
 }
 
 function failAction(message: string) {
@@ -197,8 +258,21 @@ watch(workspace.activeAccountId, () => {
   editingResource.value = null
   pendingAction.value = null
   actionError.value = ''
+  pendingOperationFeedback.clear()
   commands.clearPreparedState()
 })
+
+watch(commands.operations, (operations) => {
+  for (const operation of operations) {
+    const pending = pendingOperationFeedback.get(operation.operationId)
+    if (!pending || pending.status === operation.status) continue
+    pending.status = operation.status
+    if (!terminalOperationStatuses.has(operation.status)) continue
+    showOperationFeedback(operation, pending.command)
+    pendingOperationFeedback.delete(operation.operationId)
+    void refreshAfterTerminalOperation(operation, pending)
+  }
+}, { deep: true })
 </script>
 
 <template>
