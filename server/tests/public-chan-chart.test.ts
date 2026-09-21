@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { publicChanChart, recentBiFractalLines } from '../src/modules/market/application/public-chan-chart.js'
+import { publicChanChart, publicTrendGuide, recentBiFractalLines } from '../src/modules/market/application/public-chan-chart.js'
 
 function candles(count: number) {
   return Array.from({ length: count }, (_, index) => {
@@ -22,7 +22,7 @@ describe('public Chan chart projection', () => {
     const rows = [...candles(29), { ...candles(1)[0]!, openTime: '2026-09-01T02:30:00.000Z', closed: false }]
     expect(publicChanChart({ accountId: '1', platform: 'mt5', timeframe: 'M5', candles: rows, clock: null,
       referenceTime: '2026-09-02T00:00:00.000Z' })).toEqual({
-      algorithm: 'chan_structure_v8', status: 'insufficient_klines', reliability: 'low', based_on_closed_bars: 29, trend: null, lines: [],
+      algorithm: 'chan_structure_v8', status: 'insufficient_klines', reliability: 'low', based_on_closed_bars: 29, trend: null, trend_guide: null, lines: [],
     })
   })
 
@@ -34,6 +34,7 @@ describe('public Chan chart projection', () => {
     expect(result?.lines.length).toBeLessThanOrEqual(32)
     expect(result?.lines.every(line => ['bi', 'segment', 'forming_segment', 'center', 'bi_center', 'fractal_top', 'fractal_bottom'].includes(line.kind))).toBe(true)
     expect(result).toHaveProperty('trend')
+    expect(result).toHaveProperty('trend_guide')
   })
 
   it('omits developing geometry from causal historical pages', () => {
@@ -52,5 +53,14 @@ describe('public Chan chart projection', () => {
     expect(lines.map(line => [line.kind, line.start])).toEqual([
       ['fractal_bottom', 4300], ['fractal_top', 4310], ['fractal_bottom', 4298],
     ])
+  })
+
+  it('projects a distinct trend guide from the structure that produced the trend state', () => {
+    const start = Date.UTC(2026, 8, 18, 10)
+    const trend = { state: 'structural_rise', direction: 'up' as const, phase: 'structure', confidence: 'medium' as const, reason: 'segments_without_center' }
+    expect(publicTrendGuide({ trend_state: { segment_id: 7 }, _confirmed_segments: [
+      { id: 7, dir: 'up', start_time_utc_msc: start, end_time_utc_msc: start + 900_000, start_price: 4300, end_price: 4330 },
+    ] }, trend)).toEqual({ direction: 'up', from: new Date(start).toISOString(), to: new Date(start + 900_000).toISOString(),
+      start: 4300, end: 4330, developing: false, basis: 'segment' })
   })
 })

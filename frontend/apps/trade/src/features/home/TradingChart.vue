@@ -212,6 +212,23 @@ function renderStructure() {
       candleSeries.attachPrimitive(centerBands)
     }
   }
+  const trendGuide = props.layers.trend ? props.structure?.trend_guide : null
+  if (trendGuide) {
+    const from = toTime(trendGuide.from), to = toTime(trendGuide.to)
+    if (visibleTimes.has(from) && visibleTimes.has(to)) {
+      const tone = trendGuide.direction === 'up' ? '--trade-up' : trendGuide.direction === 'down' ? '--trade-down' : '--chart-2'
+      const series = chart.addSeries(LineSeries, {
+        color: color(tone, trendGuide.direction === 'range' ? 0.38 : 0.32),
+        lineWidth: 4,
+        lineStyle: trendGuide.developing ? LineStyle.Dashed : trendGuide.direction === 'range' ? LineStyle.Dotted : LineStyle.Solid,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      })
+      series.setData([{ time: from, value: trendGuide.start }, { time: to, value: trendGuide.end }])
+      structureSeries.push(series)
+    }
+  }
   for (const line of props.structure?.lines ?? []) {
     if (!layerVisible(line.kind)) continue
     const from = toTime(line.from)

@@ -1,6 +1,6 @@
 import type { Timeframe } from '@aurum/contracts'
 
-export type StructureLayers = { bi: boolean; segment: boolean; center: boolean; fractal: boolean; levels: boolean }
+export type StructureLayers = { bi: boolean; segment: boolean; trend: boolean; center: boolean; fractal: boolean; levels: boolean }
 
 export interface HomePreferences {
   symbol: string
@@ -11,6 +11,7 @@ export interface HomePreferences {
 export const defaultStructureLayers = (): StructureLayers => ({
   bi: true,
   segment: true,
+  trend: true,
   center: true,
   fractal: true,
   levels: true,
@@ -29,6 +30,7 @@ function normalizeLayers(value: unknown): StructureLayers {
   return {
     bi: typeof source.bi === 'boolean' ? source.bi : defaults.bi,
     segment: typeof source.segment === 'boolean' ? source.segment : defaults.segment,
+    trend: typeof source.trend === 'boolean' ? source.trend : defaults.trend,
     center: typeof source.center === 'boolean' ? source.center : defaults.center,
     fractal: typeof source.fractal === 'boolean' ? source.fractal : defaults.fractal,
     levels: typeof source.levels === 'boolean' ? source.levels : defaults.levels,

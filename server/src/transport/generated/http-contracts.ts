@@ -7252,6 +7252,16 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
               "object",
               "null"
             ]
+          },
+          "trend_guide": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PublicMarketTrendGuide"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -7399,6 +7409,51 @@ export const httpRuntimeContracts: HttpRuntimeContracts = {
         "required": [
           "data",
           "meta"
+        ],
+        "type": "object"
+      },
+      "PublicMarketTrendGuide": {
+        "additionalProperties": false,
+        "properties": {
+          "basis": {
+            "enum": [
+              "segment",
+              "centers"
+            ],
+            "type": "string"
+          },
+          "developing": {
+            "type": "boolean"
+          },
+          "direction": {
+            "enum": [
+              "up",
+              "down",
+              "range"
+            ],
+            "type": "string"
+          },
+          "end": {
+            "type": "number"
+          },
+          "from": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          },
+          "start": {
+            "type": "number"
+          },
+          "to": {
+            "$ref": "#/components/schemas/UtcDateTime"
+          }
+        },
+        "required": [
+          "direction",
+          "from",
+          "to",
+          "start",
+          "end",
+          "developing",
+          "basis"
         ],
         "type": "object"
       },

@@ -411,7 +411,9 @@ export class MysqlTradingRepository implements TradingReadRepository, TradingPro
 
   async listCandles(accountId: string, symbol: string, timeframe: Timeframe, limit: number, before?: string) {
     // Internal calculation windows may exceed the independently capped browser/model window.
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 2000) throw new TradingAccessError('market_candle_limit_invalid', 422)
+    // Chan's largest closed-bar policy is 2,000. A live calculation asks for
+    // one additional forming record so it does not displace a closed bar.
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 2001) throw new TradingAccessError('market_candle_limit_invalid', 422)
     const [rows] = await this.pool.execute<CandleRow[]>(`SELECT * FROM (SELECT CAST(trading_account_id AS CHAR) trading_account_id,symbol,timeframe,open_time_utc,open_price,high_price,low_price,close_price,tick_volume,closed,revision FROM market_candles WHERE trading_account_id=? AND symbol=? AND timeframe=? ${before ? 'AND open_time_utc < ?' : ''} ORDER BY open_time_utc DESC LIMIT ?) tail ORDER BY open_time_utc`, [accountId, symbol, timeframe, ...(before ? [new Date(before)] : []), String(limit)])
     return rows.map(row => ({ accountId: row.trading_account_id, symbol: row.symbol, timeframe: row.timeframe, openTime: utc(row.open_time_utc)!, open: String(row.open_price), high: String(row.high_price), low: String(row.low_price), close: String(row.close_price), tickVolume: String(row.tick_volume), closed: Boolean(row.closed), revision: Number(row.revision) }))
   }

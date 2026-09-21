@@ -63,6 +63,13 @@ describe('shared public market cache', () => {
     expect((await f.service.read('XAUUSD', 'M5')).candles).toHaveLength(1)
     expect(f.cache.getQuote).toHaveBeenCalled()
   })
+  it('loads the M15 live window with one forming-record allowance', async () => {
+    const f = fixture()
+    const row = (await f.cache.listCandles())[0]!
+    f.cache.listCandles.mockImplementation(async (_accountId, _symbol, timeframe) => [{ ...row, timeframe }])
+    await expect(f.service.read('XAUUSD', 'M15')).resolves.toMatchObject({ timeframe: 'M15', status: 'cached' })
+    expect(f.cache.listCandles).toHaveBeenCalledWith('20', 'XAUUSD.s', 'M15', 2001)
+  })
   it('reuses structure for quote changes and recalculates when a closed candle is revised or added', async () => {
     const f = fixture()
     const bar = (await f.cache.listCandles())[0]!

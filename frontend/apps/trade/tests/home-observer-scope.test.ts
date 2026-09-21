@@ -256,7 +256,7 @@ describe('observer HTTP resync scope protection', () => {
       { symbol: 'BTCUST', description: 'Bitcoin', selected: true, visible: true, trade_mode: 4, currency_base: 'BTC', currency_profit: 'UST' },
     ], next_cursor: null, observed_at: '2026-09-14T00:00:00Z' } })
     writeHomePreferences(localStorage, '9', 'account:2', {
-      symbol: 'BTCUST', timeframe: 'H1', layers: { bi: false, segment: true, center: false, fractal: true, levels: false },
+      symbol: 'BTCUST', timeframe: 'H1', layers: { bi: false, segment: true, trend: false, center: false, fractal: true, levels: false },
     })
     const home = useHomeWorkspace()
 
@@ -264,7 +264,7 @@ describe('observer HTTP resync scope protection', () => {
 
     expect(home.symbol.value).toBe('BTCUST')
     expect(home.timeframe.value).toBe('H1')
-    expect({ ...home.chartLayers }).toEqual({ bi: false, segment: true, center: false, fractal: true, levels: false })
+    expect({ ...home.chartLayers }).toEqual({ bi: false, segment: true, trend: false, center: false, fractal: true, levels: false })
     expect(mocks.api.getTerminalMarketWindow).toHaveBeenCalledWith('2', 'BTCUST', 'H1', expect.any(Number), 500)
     expect(mocks.api.listMarketAnalyses).toHaveBeenLastCalledWith({ pageSize: 1, symbol: 'BTCUST' })
     home.stop()

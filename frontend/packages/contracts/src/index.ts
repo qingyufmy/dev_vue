@@ -182,11 +182,17 @@ export const publicMarketStructureLineSchema = z.strictObject({
   kind: z.enum(['bi', 'segment', 'forming_segment', 'center', 'bi_center', 'fractal_top', 'fractal_bottom']),
   from: z.iso.datetime({ offset: true }), to: z.iso.datetime({ offset: true }), start: z.number(), end: z.number(),
 })
+export const publicMarketTrendGuideSchema = z.strictObject({
+  direction: z.enum(['up', 'down', 'range']),
+  from: z.iso.datetime({ offset: true }), to: z.iso.datetime({ offset: true }), start: z.number(), end: z.number(),
+  developing: z.boolean(), basis: z.enum(['segment', 'centers']),
+})
 export const publicMarketStructureSchema = z.strictObject({
   algorithm: z.literal('chan_structure_v8'), status: z.string().min(1).max(64), reliability: z.enum(['high', 'medium', 'low']),
   based_on_closed_bars: z.number().int().min(0).max(2000),
   trend: z.strictObject({ state: z.string().min(1).max(64), direction: z.enum(['up', 'down', 'neutral']), phase: z.string().min(1).max(64),
     confidence: z.enum(['high', 'medium', 'low']), reason: z.string().min(1).max(128) }).nullable().optional(),
+  trend_guide: publicMarketTrendGuideSchema.nullable().optional(),
   lines: z.array(publicMarketStructureLineSchema).max(32),
 })
 

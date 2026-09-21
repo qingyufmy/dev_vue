@@ -32,6 +32,16 @@ export interface PublicChanTrend {
   reason: string
 }
 
+export interface PublicChanTrendGuide {
+  direction: 'up' | 'down' | 'range'
+  from: string
+  to: string
+  start: number
+  end: number
+  developing: boolean
+  basis: 'segment' | 'centers'
+}
+
 const timeframeMs: Record<string, number> = {
   M1: 60_000,
   M5: 300_000,
@@ -69,6 +79,45 @@ function publicTrend(value: unknown): PublicChanTrend | null {
     confidence,
     reason: String(trend.reason || 'structure_unavailable').slice(0, 128),
   }
+}
+
+export function publicTrendGuide(resultValue: unknown, trend: PublicChanTrend | null): PublicChanTrendGuide | null {
+  if (!trend) return null
+  const result = object(resultValue)
+  const rawTrend = object(result.trend_state)
+  const segments = Array.isArray(result._confirmed_segments) ? result._confirmed_segments.map(object) : []
+  const centers = Array.isArray(result._confirmed_centers) ? result._confirmed_centers.map(object) : []
+  const point = (from: unknown, to: unknown, start: unknown, end: unknown, direction: PublicChanTrendGuide['direction'],
+    developing: boolean, basis: PublicChanTrendGuide['basis']): PublicChanTrendGuide | null => {
+    const time = (value: unknown) => typeof value === 'string' && Number.isFinite(Date.parse(value))
+      ? new Date(value).toISOString() : iso(value)
+    const fromIso = time(from), toIso = time(to), startPrice = number(start), endPrice = number(end)
+    return fromIso && toIso && Date.parse(fromIso) < Date.parse(toIso) && Number.isFinite(startPrice) && Number.isFinite(endPrice)
+      ? { direction, from: fromIso, to: toIso, start: startPrice, end: endPrice, developing, basis } : null
+  }
+  const latestCenter = centers.at(-1)
+  if (trend.direction === 'neutral' && latestCenter) {
+    const middle = (number(latestCenter.zl) + number(latestCenter.zh)) / 2
+    return point(latestCenter.start_time_utc_msc ?? latestCenter.start_time,
+      latestCenter.end_time_utc_msc ?? latestCenter.end_time, middle, middle, 'range', latestCenter.status !== 'closed', 'centers')
+  }
+  const direction = trend.direction === 'up' || trend.direction === 'down' ? trend.direction : null
+  if (!direction) return null
+  if (trend.phase === 'trend' && centers.length >= 2) {
+    const previous = centers.at(-2)!, latest = centers.at(-1)!
+    const previousMiddle = (number(previous.zl) + number(previous.zh)) / 2
+    const latestMiddle = (number(latest.zl) + number(latest.zh)) / 2
+    const centerGuide = point(previous.start_time_utc_msc ?? previous.start_time,
+      latest.end_time_utc_msc ?? latest.end_time, previousMiddle, latestMiddle, direction, false, 'centers')
+    if (centerGuide) return centerGuide
+  }
+  const trendSegmentId = number(rawTrend.segment_id)
+  const segment = segments.find(item => number(item.id) === trendSegmentId)
+    ?? [...segments].reverse().find(item => item.dir === direction)
+  if (!segment) return null
+  return point(segment.start_time_utc_msc ?? segment.start_time, segment.end_time_utc_msc ?? segment.end_time,
+    segment.start_price, segment.end_price, direction,
+    trend.phase === 'transition' || trend.phase === 'breakout_candidate', 'segment')
 }
 
 export function recentBiFractalLines(values: readonly unknown[]): PublicChanLine[] {
@@ -113,6 +162,7 @@ export function publicChanChart(input: {
     reliability: 'low',
     based_on_closed_bars: closed.length,
     trend: null,
+    trend_guide: null,
     lines: [] as PublicChanLine[],
   }
   const result = calculateChanChartStructure(closed, {
@@ -180,12 +230,15 @@ export function publicChanChart(input: {
     const at = fractal.time_utc_msc ?? fractal.time
     add(`fractal_${fractal.type}`, at, at, fractal.price, fractal.price, true)
   }
+  const trend = publicTrend(result.trend_state)
+  const trendGuide = publicTrendGuide(result, trend)
   return {
     algorithm: 'chan_structure_v8' as const,
     status: String(result.status || 'unavailable'),
     reliability: ['high', 'medium', 'low'].includes(String(result.reliability)) ? String(result.reliability) as 'high' | 'medium' | 'low' : 'low' as const,
     based_on_closed_bars: closed.length,
-    trend: publicTrend(result.trend_state),
+    trend,
+    trend_guide: input.includeDeveloping === false && trendGuide?.developing ? null : trendGuide,
     lines,
   }
 }

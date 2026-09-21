@@ -3811,6 +3811,7 @@ export interface components {
                 reason: string;
                 state: string;
             } | null;
+            trend_guide?: components["schemas"]["PublicMarketTrendGuide"] | null;
         };
         PublicMarketStructureLine: {
             end: number;
@@ -3840,6 +3841,17 @@ export interface components {
                 } | null;
             };
             meta: components["schemas"]["Meta"];
+        };
+        PublicMarketTrendGuide: {
+            /** @enum {string} */
+            basis: "segment" | "centers";
+            developing: boolean;
+            /** @enum {string} */
+            direction: "up" | "down" | "range";
+            end: number;
+            from: components["schemas"]["UtcDateTime"];
+            start: number;
+            to: components["schemas"]["UtcDateTime"];
         };
         Quote: {
             account_id: components["schemas"]["OpaqueId"];

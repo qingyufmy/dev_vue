@@ -4430,6 +4430,20 @@
           "end": { "type": "number" }
         }
       },
+      "PublicMarketTrendGuide": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["direction", "from", "to", "start", "end", "developing", "basis"],
+        "properties": {
+          "direction": { "type": "string", "enum": ["up", "down", "range"] },
+          "from": { "$ref": "#/components/schemas/UtcDateTime" },
+          "to": { "$ref": "#/components/schemas/UtcDateTime" },
+          "start": { "type": "number" },
+          "end": { "type": "number" },
+          "developing": { "type": "boolean" },
+          "basis": { "type": "string", "enum": ["segment", "centers"] }
+        }
+      },
       "PublicMarketStructure": {
         "type": "object",
         "additionalProperties": false,
@@ -4450,6 +4464,12 @@
               "confidence": { "type": "string", "enum": ["high", "medium", "low"] },
               "reason": { "type": "string", "minLength": 1, "maxLength": 128 }
             }
+          },
+          "trend_guide": {
+            "oneOf": [
+              { "$ref": "#/components/schemas/PublicMarketTrendGuide" },
+              { "type": "null" }
+            ]
           },
           "lines": {
             "type": "array",

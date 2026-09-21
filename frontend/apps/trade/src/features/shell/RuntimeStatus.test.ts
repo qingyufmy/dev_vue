@@ -69,7 +69,7 @@ it('uses a fresh terminal quote for the selected non-public symbol status', asyn
 it('restores the account home symbol for header and terminal sampling on every page', async () => {
   writeHomePreferences(localStorage, '9', 'account:a1', {
     symbol: 'BTCUST', timeframe: 'M5',
-    layers: { bi: true, segment: true, center: true, fractal: true, levels: true },
+    layers: { bi: true, segment: true, trend: true, center: true, fractal: true, levels: true },
   })
 
   const wrapper = mount(RuntimeStatus)

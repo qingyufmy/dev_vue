@@ -13,10 +13,10 @@ describe('home preferences', () => {
   it('round-trips symbol, timeframe and every Chan layer within an account scope', () => {
     const storage = memoryStorage()
     writeHomePreferences(storage, '9', 'account:8', {
-      symbol: 'BTCUST', timeframe: 'H1', layers: { bi: false, segment: true, center: false, fractal: true, levels: false },
+      symbol: 'BTCUST', timeframe: 'H1', layers: { bi: false, segment: true, trend: false, center: false, fractal: true, levels: false },
     })
     expect(readHomePreferences(storage, '9', 'account:8')).toEqual({
-      symbol: 'BTCUST', timeframe: 'H1', layers: { bi: false, segment: true, center: false, fractal: true, levels: false },
+      symbol: 'BTCUST', timeframe: 'H1', layers: { bi: false, segment: true, trend: false, center: false, fractal: true, levels: false },
     })
     expect(readHomePreferences(storage, '9', 'account:7')).toBeNull()
   })

@@ -18,7 +18,9 @@ import type { StructureLayers } from './home-preferences'
 const props = defineProps<{ symbols: string[]; symbol: string; timeframe: Timeframe; quote: ChartQuote | null; candles: ChartCandle[]; structure: PublicMarketSnapshotData['structure']; layers: StructureLayers; realtime: string; historyVersion: number; marketSource?: 'public' | 'terminal'; timezoneOffsetMinutes?: number | null; loading?: boolean; error?: string; historyLoading?: boolean; historyMessage?: string; symbolDirectoryNotice?: string }>()
 const emit = defineEmits<{ symbol: [value: string]; timeframe: [value: Timeframe]; layer: [value: keyof StructureLayers]; retry: []; older: [] }>()
 const periods: Timeframe[] = ['M1', 'M5', 'M15', 'M30', 'H1', 'H4', 'D1']
-const layerOptions = [{ key: 'bi', label: '笔', tone: 'bg-chart-1' }, { key: 'segment', label: '段', tone: 'bg-chart-3' }, { key: 'center', label: '中枢', tone: 'bg-chart-2' }, { key: 'fractal', label: '分型', tone: 'bg-chart-3' }] as const
+const layerOptions = [{ key: 'bi', label: '笔', tone: 'bg-chart-1' }, { key: 'segment', label: '段', tone: 'bg-chart-3' },
+  { key: 'trend', label: '走势', tone: 'bg-primary' }, { key: 'center', label: '中枢', tone: 'bg-chart-2' },
+  { key: 'fractal', label: '分型', tone: 'bg-chart-3' }] as const
 const now = ref(Date.now())
 const clockDetails = ref(false)
 const referenceLevels = computed(() => {
@@ -58,6 +60,8 @@ const layerCounts = computed(() => {
   return {
     bi: visible.filter(line => line.kind === 'bi').length,
     segment: visible.filter(line => line.kind === 'segment' || line.kind === 'forming_segment').length,
+    trend: props.structure?.trend_guide && visibleTimes.has(props.structure.trend_guide.from)
+      && visibleTimes.has(props.structure.trend_guide.to) ? 1 : 0,
     center: centers,
     fractal: visible.filter(line => line.kind.startsWith('fractal_')).length,
   }
